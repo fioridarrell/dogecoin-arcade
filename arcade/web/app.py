@@ -20520,6 +20520,13 @@ def create_app(state: AppState) -> FastAPI:
         rows = []
         day_ago = time.time() - 86400
         for m in state.xchain.book.markets():
+            if m["kind"] == "nft":
+                # A piece is not a pair (2026-10-11: "These NFTs are in the
+                # token exchange list, they should be in the recently sold NFTs
+                # list"): its sales are the Market tab's Recently sold
+                # (`_xchain_nft_sales`), and a standing order on it is on the
+                # piece's own page.
+                continue
             try:
                 a = _x_asset(m["kind"], m["asset"])
             except ValueError:
@@ -20795,8 +20802,12 @@ def create_app(state: AppState) -> FastAPI:
                 "txid": trade["txid"]})
         return points
 
-    def _recent_sales(index, trades, limit: int = 12) -> list[dict[str, Any]]:
+    def _recent_sales(index, trades, limit: int = 12, chain=None) -> list[dict[str, Any]]:
         """The last NFTs to change hands, newest first.
+
+        With the pieces sold on the cross-chain book among them when `chain` is
+        the chain that book sells from -- a sale is a sale whichever coin paid
+        for it, and that one says so with a MAINNET badge on its price.
 
         Read from the swaps the chain holds, like everything else here: a
         sale is a transaction both sides signed, so there is no list to keep
@@ -20834,6 +20845,53 @@ def create_app(state: AppState) -> FastAPI:
                 "seller": trade["seller"], "swap": trade["txid"]})
             if len(out) >= limit:
                 break
+        if chain is not None and chain.network == getattr(state.messaging, "network", None):
+            out += _xchain_nft_sales(index, limit=limit)
+            out.sort(key=lambda sale: -float(sale.get("when") or 0))
+            del out[limit:]
+        return out
+
+    def _xchain_nft_sales(index, limit: int = 12) -> list[dict[str, Any]]:
+        """Pieces sold on the cross-chain book: a piece here for PEP on mainnet.
+
+        2026-10-11: "These NFTs are in the token exchange list, they
+        should be in the recently sold NFTs list." A piece is not a pair, so a
+        fill on it is a sale and goes where sales go, not into the pairs table
+        (`_xchain_markets` leaves `nft` markets out). The seller is the sell
+        order's mainnet address, which is where its PEP went; the `swap` is
+        blank because the fill is the book's and not a transaction of the
+        chain's.
+        """
+        out: list[dict[str, Any]] = []
+        try:
+            book = state.xchain.book
+            markets = [m for m in book.markets() if m["kind"] == "nft" and m["trades"]]
+        except Exception:
+            return out
+        for m in markets:
+            try:
+                row = index.inscription(contentlib._key(str(m["asset"])))
+            except Exception:
+                row = None
+            if row is None:
+                continue
+            data = _fromjson(row["json"]) or {}
+            for fill in book.fills("nft", m["asset"], limit=limit):
+                try:
+                    seller = book.get(fill["seller"]) or {}
+                except Exception:
+                    seller = {}
+                pep = f"{int(fill['pepe']) / COIN:,.8f}".rstrip("0").rstrip(".")
+                out.append({
+                    "txid": row["txid"], "number": row["number"],
+                    "name": (data.get("name") if isinstance(data, dict) else None)
+                            or f"Inscription #{row['number']}",
+                    "collection": row["collection"], "edition": row["edition"],
+                    "creator": row["creator"], "owner": row["owner"],
+                    "held": row["held"], "content_type": row["content_type"],
+                    "price": f"{pep} PEP", "mainnet": True,
+                    "when": fill["created"], "height": 0,
+                    "seller": seller.get("pay_main", ""), "swap": ""})
         return out
 
     def _drawable(index, txid: str) -> str:
@@ -22534,7 +22592,7 @@ def create_app(state: AppState) -> FastAPI:
                 # (2026-09-28). No piece-by-piece list of what is for
                 # sale: a piece is bought on its collection's own page, which
                 # is where its price, its neighbours and its Buy button are.
-                data["sales"] = _recent_sales(index, trades, limit=8)
+                data["sales"] = _recent_sales(index, trades, limit=8, chain=chain)
                 data["tags"].update(_names_for(
                     index, [c["creator"] for c in data["collections"]]
                     + [s["seller"] for s in data["sales"]]

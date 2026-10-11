@@ -56,3 +56,35 @@ def test_the_operator_opens_the_book_and_its_markets_join_the_list(client, monke
     assert "MAINNET" in row and "PEP" in row
     market = app.get("/exchange/x/token/59").text
     assert "0.5" in market and "Not trustless" in market
+
+
+def test_a_piece_sold_for_mainnet_pep_is_a_sale_not_a_pair(client, monkeypatch):
+    """2026-10-11: "These NFTs are in the token exchange list, they should be in
+    the recently sold NFTs list." A piece is not a pair: its cross-chain sale is under
+    Recently sold on the Market tab, badged MAINNET, and never a row of the pairs table."""
+    app, state = client
+    import arcade.ledger as L
+    piece = "ab" * 32
+    row = {"txid": piece, "number": 2066, "json": '{"name": "Doge Punk #7"}',
+           "collection": "Doge Punks", "edition": 7, "creator": "nCreator", "owner": "nBuyer",
+           "held": 0, "content_type": "image/png"}
+    monkeypatch.setattr(L.LedgerIndex, "inscription", lambda self, key: row if key == piece else None)
+    book = state.xchain.book
+    sell = book.place(owner="aa" * 33, side="sell", kind="nft", asset=piece, amount=1,
+                      pepe=100 * COIN, pay_test="nSellerTest", pay_main="PSellerMain")
+    book.deposited(sell["id"], "dep-sell")
+    book.count_deposit(sell["id"])
+    buy = book.place(owner="bb" * 33, side="buy", kind="nft", asset=piece, amount=1,
+                     pepe=100 * COIN, pay_test="nBuyerTest", pay_main="PBuyerMain")
+    book.deposited(buy["id"], "dep-buy")
+    book.count_deposit(buy["id"])
+    assert book.fills("nft", piece), "the two orders matched"
+
+    pairs = app.get("/exchange?tab=tokens").text
+    assert f"/exchange/x/nft/{piece}" not in pairs and "inscription #2066" not in pairs, \
+        "a piece is not a row of the pairs table"
+    market = app.get("/exchange?tab=market").text
+    assert "Recently sold" in market, "the sale is on the Market tab"
+    sold = market[market.index("Recently sold"):][:4000]
+    assert "Doge Punk #7" in sold and "100 PEP" in sold and "MAINNET" in sold, sold
+    assert "PSellerMain" in sold, "the seller is the order's mainnet address"

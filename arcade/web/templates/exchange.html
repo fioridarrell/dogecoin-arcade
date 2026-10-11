@@ -642,7 +642,7 @@
       <td><a href="/inscriptions/{{ t.txid }}/view"><b>{{ wall(t.name) }}</b></a>
         <small>{% if t.collection %}{{ t.collection }}{% if t.edition is not none %} #{{ t.edition }}{% endif %} &middot; {% endif %}{{ t.when|ago }}
           &middot; from {{ t.seller|who }}</small></td>
-      <td class="ex-px">{{ t.price|replace(' coins', ' ' ~ coin_name) }}<div>{{ net_badge(chain) }}</div></td></tr>
+      <td class="ex-px">{{ t.price|replace(' coins', ' ' ~ coin_name) }}<div>{{ net_badge(true) if t.mainnet else net_badge(chain) }}</div></td></tr>
     {% endfor %}
   </table></div>
   {% endif %}
