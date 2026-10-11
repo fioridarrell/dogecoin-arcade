@@ -35,8 +35,9 @@ Shape of a run (one file):
 
 The coins come from the node's own wallet view: the address is imported there
 watch-only (`importaddress`, once; the node rescans), and `listunspent` names
-its coins. Nothing of the arcade's index is needed, so this runs against a
-bare node on another machine through an ssh tunnel.
+its coins -- so this runs against a bare node. Or, with `--index`, from the
+arcade's own ledger index, read-only: the one thing the arcade is asked for
+(2026-10-11), with the signing and the broadcast still here.
 """
 
 from __future__ import annotations
@@ -137,35 +138,24 @@ def payload_outputs(params: Params, address: str, pubkey: bytes, body: bytes) ->
     return outputs
 
 
-class NodeCoins:
-    """An address's confirmed coins, as the node's wallet sees them.
+class Coins:
+    """What a run knows about coins that the source does not yet: between a
+    broadcast and its block the source still lists the coin just spent and not
+    the change that came back."""
 
-    `watch` imports the address watch-only (idempotent; the first time the
-    node rescans, which on testnet is minutes and on regtest nothing).
-    Between a broadcast and its block the node still lists the coin just
-    spent and not the change that came back, so `spent` and `extra` carry
-    what this run knows and the wallet does not yet.
-    """
-
-    def __init__(self, rpc: RpcClient, address: str):
-        self.rpc, self.address = rpc, address
+    def __init__(self, address: str):
+        self.address = address
         self.spent: set[tuple[str, int]] = set()
         self.extra: list[dict] = []
 
-    def watch(self, rescan: bool = True) -> None:
-        try:
-            info = self.rpc.call("validateaddress", self.address)
-        except RpcError:
-            info = {}
-        if info.get("iswatchonly") or info.get("ismine"):
-            return
-        self.rpc.call("importaddress", self.address, "arcade-publish", rescan)
+    def watch(self) -> None:
+        pass
 
-    def unspent(self, minconf: int = 1) -> list[dict]:
-        rows = self.rpc.call("listunspent", minconf, 9_999_999, [self.address])
-        coins = [{"txid": str(r["txid"]), "vout": int(r["vout"]),
-                  "value": int(round(float(r["amount"]) * fees.COIN)),
-                  "address": self.address} for r in rows]
+    def listed(self) -> list[dict]:
+        raise NotImplementedError
+
+    def unspent(self) -> list[dict]:
+        coins = self.listed()
         have = {(c["txid"], c["vout"]) for c in coins}
         coins += [dict(c) for c in self.extra if (c["txid"], c["vout"]) not in have]
         return [c for c in coins if (c["txid"], c["vout"]) not in self.spent]
@@ -177,6 +167,65 @@ class NodeCoins:
         for n, (value, script) in enumerate(unsigned.outputs):
             if script == p2pkh_script(self.address) and value > 0:
                 self.extra.append({"txid": txid, "vout": n, "value": value, "address": self.address})
+
+
+class IndexCoins(Coins):
+    """An address's coins as the arcade's own index lists them (arcade/utxos.py).
+
+    The one thing the arcade may be asked for (2026-10-11: "You can use
+    the arcade wallet to get the UTXO's. But after that, it should not use the
+    arcade wallet"): the index file is opened read-only for the list, and
+    nothing else of the arcade is called. An address the index does not watch
+    has no coins listed there; say so rather than report it empty.
+    """
+
+    def __init__(self, index_path: str | os.PathLike, params: Params, address: str):
+        super().__init__(address)
+        self.index_path, self.params = Path(index_path), params
+
+    def listed(self) -> list[dict]:
+        import contextlib
+        from . import utxos
+        from .ledger import LedgerIndex
+        if not self.index_path.exists():
+            raise PublishError(f"there is no arcade index at {self.index_path}")
+        index = LedgerIndex(self.index_path, self.params, rpc_factory=lambda: None)
+        with contextlib.closing(index.open()) as db:
+            if self.address not in utxos.watching(db):
+                raise PublishError(f"the arcade index at {self.index_path} does not watch {self.address}; "
+                                   f"use the node's wallet instead (no --index)")
+            return [{"txid": str(r["txid"]), "vout": int(r["vout"]), "value": int(r["value"]),
+                     "address": self.address} for r in utxos.unspent(db, self.address)]
+
+
+class NodeCoins(Coins):
+    """An address's confirmed coins, as the node's wallet sees them.
+
+    `watch` imports the address watch-only (idempotent; the first time the
+    node rescans, which on testnet is minutes and on regtest nothing).
+    Between a broadcast and its block the node still lists the coin just
+    spent and not the change that came back, so `spent` and `extra` carry
+    what this run knows and the wallet does not yet.
+    """
+
+    def __init__(self, rpc: RpcClient, address: str):
+        super().__init__(address)
+        self.rpc = rpc
+
+    def watch(self, rescan: bool = True) -> None:
+        try:
+            info = self.rpc.call("validateaddress", self.address)
+        except RpcError:
+            info = {}
+        if info.get("iswatchonly") or info.get("ismine"):
+            return
+        self.rpc.call("importaddress", self.address, "arcade-publish", rescan)
+
+    def listed(self, minconf: int = 1) -> list[dict]:
+        rows = self.rpc.call("listunspent", minconf, 9_999_999, [self.address])
+        return [{"txid": str(r["txid"]), "vout": int(r["vout"]),
+                 "value": int(round(float(r["amount"]) * fees.COIN)),
+                 "address": self.address} for r in rows]
 
 
 def choose(coins: list[dict], target: int) -> list[dict]:
@@ -241,10 +290,11 @@ class Publisher:
     """One address publishing inscriptions through one node."""
 
     def __init__(self, rpc: RpcClient, params: Params, key: Key, journal: str | os.PathLike,
-                 rate: int = fees.MIN_FEE_PER_KB, say: Callable[[str], None] | None = None):
+                 rate: int = fees.MIN_FEE_PER_KB, say: Callable[[str], None] | None = None,
+                 index: str | os.PathLike | None = None):
         self.rpc, self.params, self.key = rpc, params, key
         self.address = key.address(params)
-        self.coins = NodeCoins(rpc, self.address)
+        self.coins: Coins = IndexCoins(index, params, self.address) if index else NodeCoins(rpc, self.address)
         self.journal_home = Path(journal)
         self.rate = rate
         self.say = say or (lambda s: None)
@@ -407,6 +457,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--rpc-user")
     ap.add_argument("--rpc-password", help="or ARCADE_RPC_PASSWORD in the environment")
     ap.add_argument("--rpc-cookie", help="the node's .cookie file, copied here")
+    ap.add_argument("--index", help="an arcade ledger index (e.g. ~/.dogecoinarcade/test-ledger.sqlite) to take the "
+                                    "coin list from, read-only, instead of the node's wallet")
     ap.add_argument("--journal", default=os.path.expanduser("~/.dogecoinarcade/publish"),
                     help="where what has gone out is written (default ~/.dogecoinarcade/publish)")
     ap.add_argument("--json", default="", help="the JSON beside the file")
@@ -419,7 +471,7 @@ def main(argv: list[str] | None = None) -> int:
         params = _params(args)
         key = Key.from_file(args.key)
         with _rpc(args, params) as rpc:
-            pub = Publisher(rpc, params, key, args.journal, say=lambda s: print("   " + s, flush=True))
+            pub = Publisher(rpc, params, key, args.journal, say=lambda s: print("   " + s, flush=True), index=args.index)
             if args.whoami or not args.file:
                 pub.coins.watch()
                 coins = pub.coins.unspent()

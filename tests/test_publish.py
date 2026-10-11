@@ -96,3 +96,28 @@ def test_a_file_too_small_to_pay_for_is_refused_before_anything_is_sent(publishe
     with pytest.raises(publish.PublishError, match="not enough confirmed coins"):
         poor.inscribe(b"anything", "text/plain", "", "x.txt")
     assert not node.rpc.call("getrawmempool")
+
+
+def test_the_arcade_index_may_name_the_coins_and_nothing_else(publisher, tmp_path):
+    """`--index`: the coin list from the arcade's ledger index (read-only); the
+    build, the signature and the broadcast stay here."""
+    from arcade import utxos
+    from arcade.ledger import LedgerIndex
+    pub, node, params, follower, path, address = publisher
+    index = LedgerIndex(path, params, rpc_factory=lambda: node.rpc)
+    import contextlib
+    with contextlib.closing(index.open()) as db:
+        utxos.watch(db, address, node.rpc.get_block_count() - 1, "test")   # from the block that funded it
+    follower.sync_once()                                                     # the follower indexes its coin
+    via_index = publish.Publisher(node.rpc, params, pub.key, tmp_path / "journal2", index=path)
+    assert isinstance(via_index.coins, publish.IndexCoins)
+    assert sum(c["value"] for c in via_index.coins.unspent()) == 60 * 100_000_000
+
+    out = via_index.inscribe(b"from the index", "text/plain", "", "idx.txt")
+    assert out["id"] in node.rpc.call("getrawmempool"), "broadcast through the node, not the arcade"
+    _sync(node, follower)
+    assert index.inscriptions()[-1]["txid"] == out["id"]
+
+    stranger = publish.Publisher(node.rpc, params, publish.Key(11), tmp_path / "j3", index=path)
+    with pytest.raises(publish.PublishError, match="does not watch"):
+        stranger.inscribe(b"x", "text/plain", "", "x.txt")
