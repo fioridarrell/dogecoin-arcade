@@ -121,12 +121,10 @@ def test_the_page_is_there_and_in_the_account_menu(public):
     assert "<h1>Wallet</h1>" in body
     assert 'href="/me/nfts"' in body, "and is reachable from the menu"
     assert 'href="/me/wallet"' in body and 'href="/me/wallet/tokens"' in body
-    # It says what an account cannot do rather than leaving a missing
-    # button to be discovered. One piece is no longer that sentence -- a
-    # split carries what does not fit -- and neither is a whole collection.
-    # What is left is a run's own rule, which the folder panel says out
-    # loud: one transaction per item, and an item cannot be a piece more.
-    assert "one transaction per item, so the node refuses" in body
+    # It says what a run is rather than leaving it to be discovered: every
+    # picture goes up as it is (never shrunk, 2026-10-08), nothing is
+    # uploaded ahead and the pictures stay in the browser (2026-10-11).
+    assert "never shrunk" in body and "Nothing is uploaded ahead" in body
     assert "Run a collection" in body
 
 
