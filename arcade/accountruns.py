@@ -43,6 +43,12 @@ Retention
 account deletes the run. Nothing ages it out yet -- an operator should know that
 a finished run keeps its images forever. `delete` removes rows only: a directory
 that has no rule written for it is not a directory to remove here.
+
+Since 2026-10-11 the wallet page writes a run down WITHOUT uploading (the operator: the
+pictures stay in the browser, and go up one piece at a time through
+`/account/inscribe`, the way one file does). Such a run has `folder = ''` and
+each piece carries the picture's `sha256`, which is what the bytes are checked
+against when they arrive. Nothing of it is ever on this disk.
 """
 
 from __future__ import annotations
@@ -102,6 +108,7 @@ CREATE TABLE IF NOT EXISTS piece (
     -- how many transactions this item takes: 1 goes out as one offer, more
     -- goes through the one-big-file path (see "Items of more than one piece")
     chunks       INTEGER NOT NULL DEFAULT 1,
+    sha256       TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (run_id, edition)
 );
 CREATE INDEX IF NOT EXISTS piece_status_idx ON piece(run_id, status);
@@ -155,12 +162,15 @@ class Runs:
     # -- writing a run down --
 
     def create(self, account: str, address: str, build: Any, network: str,
-               name: str = "", floor: int | None = None) -> str:
+               name: str = "", floor: int | None = None,
+               folder: str | None = None) -> str:
         """Write the run and every piece, each with the id its tx will carry.
 
         Takes the same `Build` object `collections.read_build` returns; the only
-        fields read off it are `folder`, `collection`, and the five fields of
-        each item, so a run can be written from a folder or from a test.
+        fields read off it are `folder`, `collection`, and the fields of each
+        item, so a run can be written from a folder or from a test. `folder`
+        given (and blank) means the pictures are not here: they are in the
+        browser that wrote the run down (`build_from_manifest`).
         """
         fee = dust = 0.0
         run_id = secrets.token_hex(6)
@@ -172,16 +182,18 @@ class Runs:
                 dust += est.dust
                 conn.execute(
                     "INSERT INTO piece (run_id, edition, name, image, content_type, "
-                    "size, json, inscription_id, status, chunks) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    "size, json, inscription_id, status, chunks, sha256) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                     (run_id, item.edition, item.name, item.image, item.content_type,
                      item.size, item.json, secrets.token_bytes(8).hex(), "pending",
-                     max(1, int(est.chunks))))
+                     max(1, int(est.chunks)), getattr(item, "sha256", "") or ""))
             conn.execute(
                 "INSERT INTO run (id, created, network, account, address, name, "
                 "folder, status, items, fee, dust, floor) "
                 "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (run_id, time.time(), network, account, address,
-                 name or build.collection, str(build.folder), "open",
+                 name or build.collection,
+                 str(build.folder) if folder is None else folder, "open",
                  len(build.items), round(fee, 8), round(dust, 8), floor))
             conn.execute("COMMIT")
         return run_id

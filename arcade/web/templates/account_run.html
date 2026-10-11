@@ -7,11 +7,11 @@
 .run-note{font-size:.9rem;color:var(--muted);min-height:1.3em}
 </style>
 <h1>{{ wall(run.name, 'collection name') }}</h1>
-<p class="sub">Every piece of this was written down the moment you uploaded
+<p class="sub">Every piece of this was written down the moment you chose
   the folder, and goes on the chain one transaction at a time &mdash; each one
-  built by this node out of coins only you can spend, and signed here. Leave
-  the tab, close the laptop, restart the node: the run is still here, at the
-  piece it stopped on.</p>
+  built by this node out of coins only you can spend, and signed in your
+  browser. Leave the tab, close the laptop, restart the node: the run is still
+  here, at the piece it stopped on.</p>
 
 <p class="muted" id="shut" hidden style="font-size:.86rem">
   Your wallet is locked. Press Unlock at the top of the page, or just carry on: anything that needs your key asks for your password first.
@@ -42,12 +42,21 @@
         <td>about {{ "%.2f"|format(run.fee + run.dust) }} in all,
           {{ "%.2f"|format(run.fee) }} once the dust is swept back</td></tr>
     <tr><td class="muted">Pictures</td>
+        {% if run.folder %}
         <td class="muted">the folder you uploaded, which this node keeps to
           build the rest of the pieces from. Removing the run below takes them
-          off this machine with it.</td></tr>
+          off this machine with it.</td>
+        {% else %}
+        <td class="muted">in the browser you chose the folder in &mdash; this node
+          keeps none of them. The run goes on from the
+          <a href="/me/nfts">wallet page</a> there, one piece at a time; if that
+          browser has lost them, choose the folder again on that page.</td>
+        {% endif %}</tr>
   </table>
   <div class="row" style="margin-top:14px">
-    {% if run.next %}
+    {% if run.next and not run.folder %}
+      <a class="btn" href="/me/nfts">Carry on from the wallet page</a>
+    {% elif run.next %}
       <button type="button" id="run-piece">Inscribe {% if run.sent %}the next
         piece{% else %}the first piece{% endif %}</button>
     {% endif %}

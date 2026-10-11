@@ -16,6 +16,9 @@ The fixtures are the one-piece test's, imported rather than repeated -- same
 seat, same address the node cannot sign for, same four coins.
 """
 
+import base64
+import hashlib
+import json
 import pathlib
 import sys
 
@@ -822,3 +825,127 @@ def test_asking_again_for_the_same_piece_is_not_charged_again(seated, tmp_path):
         assert asked.status_code == 200, asked.text
         assert asked.json()["piece"] == 1, "the same piece each time"
     assert charged() == before + 1, "one piece, one charge"
+
+
+# --- the pictures stay in the browser (2026-10-11) ---------------------------
+
+def _manifest(build):
+    """What the page reads off a chosen folder: each piece's JSON and its picture's
+    name, size and SHA-256 -- never the picture."""
+    items = []
+    for entry in json.loads((build / "json" / "_metadata.json").read_text()):
+        pic = build / "images" / f"{entry['edition']}.png"
+        items.append({"json": entry, "image": pic.name, "size": pic.stat().st_size,
+                      "content_type": "image/png",
+                      "sha256": hashlib.sha256(pic.read_bytes()).hexdigest()})
+    return items
+
+
+def _plan(app, build, **fields):
+    return app.post("/account/run/plan",
+                    json={"run_chain": "regtest", "items": _manifest(build), **fields})
+
+
+def _piece_bytes(app, run_id, build, edition, content=None):
+    """One browser-held piece the way the page sends it: the bytes to
+    /account/inscribe with the run and the piece named."""
+    pic = build / "images" / f"{edition}.png"
+    content = pic.read_bytes() if content is None else content
+    return app.post("/account/inscribe", json={
+        "content": base64.b64encode(content).decode(), "content_type": "image/png",
+        "name": pic.name, "chain": "regtest", "run": run_id, "piece": edition})
+
+
+def _upload_folders(state):
+    home = state.home / "collections"
+    return set(home.glob("*")) if home.is_dir() else set()
+
+
+def test_a_run_whose_pictures_stay_in_the_browser(seated, tmp_path):
+    """2026-10-11: a 6,480-picture folder never got past the upload (123 MB
+    through Cloudflare's 100 MB limit), and this node keeping everybody's pictures
+    was never wanted. The run is written down from names, sizes and hashes; each
+    picture arrives when its turn comes, is checked against its hash, lands under
+    the inscription id the run wrote down, and nothing of it is ever on this disk."""
+    app, state, rpc, pubkey, mine = seated
+    build = hashlips(tmp_path, count=2, prefix="Doge Punks Held", sizes={2: 30_000})
+    folders = _upload_folders(state)
+    answer = _plan(app, build)
+    assert answer.status_code == 200, answer.text
+    run_id = answer.json()["run"]
+    assert answer.json()["items"] == 2 and answer.json()["name"] == "Doge Punks Held"
+    book = _book(state)
+    assert book.get(run_id)["folder"] == "", "no folder: the pictures are in the browser"
+    assert _upload_folders(state) == folders, "nothing reached this node's upload folder"
+    held = lambda: {p["txid"] for p in
+                    app.get("/account/nfts").json()["chains"][0]["pieces"]}
+    before = held()
+
+    asked = app.post("/account/run/piece", json={"run": run_id})
+    assert asked.status_code == 200, asked.text
+    asked = asked.json()
+    assert asked["held"] == "browser" and asked["piece"] == 1 and "offer" not in asked
+    assert asked["image"] == "1.png" and asked["sha256"] == _manifest(build)[0]["sha256"]
+
+    wrong = _piece_bytes(app, run_id, build, 1, content=b"\x89PNG not that picture")
+    assert wrong.status_code == 400, wrong.text
+    assert "not the bytes of Doge Punks Held #1" in wrong.json()["detail"]
+    assert book.piece(run_id, 1)["status"] == "pending", "a refusal leaves the piece as it was"
+
+    offered = _piece_bytes(app, run_id, build, 1)
+    assert offered.status_code == 200, offered.text
+    offer = offered.json()
+    assert offer["chunks"] == 1 and offer["what"] == "inscribe Doge Punks Held #1"
+    assert book.piece(run_id, 1)["status"] == "sending"
+    # asked again before signing (a reload): the same piece, charged once
+    used = lambda: next(a for a in app.get("/account").json()["quota"]["actions"]
+                        if a["kind"] == "inscribe")["used"]
+    charged = used()
+    again = _piece_bytes(app, run_id, build, 1)
+    assert again.status_code == 200, again.text
+    assert used() == charged, "the same piece asked twice is one inscription"
+    done = _sign_and_send(app, pubkey, again.json())
+    assert done.status_code == 200, done.text
+    piece = book.piece(run_id, 1)
+    assert piece["status"] == "sent" and piece["txid"] == done.json()["txid"]
+    rpc.call("generate", 1)
+    _catch_up(state, rpc)
+    assert held() - before == {done.json()["txid"]}, "one piece, one inscription"
+
+    # #2 is more than one transaction: the same bytes start the one-big-file path
+    # (a split, which sets aside a coin or so per transaction: funded first)
+    big = app.post("/account/run/piece", json={"run": run_id}).json()
+    assert big["held"] == "browser" and big["piece"] == 2 and big["chunks"] > 1
+    rpc.call("sendtoaddress", mine, 12.0)
+    rpc.call("generate", 1)
+    _catch_up(state, rpc)
+    split = _piece_bytes(app, run_id, build, 2)
+    assert split.status_code == 200, split.text
+    assert split.json()["chunks"] == big["chunks"] and split.json()["part"]
+    assert book.piece(run_id, 2)["status"] == "sending"
+    # ...and the page reports its first transaction once the pieces are out
+    done2 = app.post("/account/run/done", json={"run": run_id, "piece": 2, "txid": "ab" * 32})
+    assert done2.status_code == 200, done2.text
+    over = app.post("/account/run/piece", json={"run": run_id}).json()
+    assert over["finished"] and over["sent"] == 2
+    # forgetting it has no folder to remove
+    gone = app.post("/account/run/delete", json={"run": run_id})
+    assert gone.status_code == 200 and gone.json()["forgotten"], gone.text
+    assert book.get(run_id) is None
+
+
+def test_a_manifest_is_checked_before_anything_is_written(seated, tmp_path):
+    """A hash that is not one, a picture named with a path, no items: refused with
+    the reason, and no run is written down."""
+    app, state, rpc, pubkey, mine = seated
+    build = hashlips(tmp_path, count=2, prefix="Doge Punks Checked")
+    items = _manifest(build)
+    said = app.post("/account/run/plan", json={"run_chain": "regtest",
+                                               "items": [dict(items[0], sha256="not a hash"), items[1]]})
+    assert said.status_code == 400 and "SHA-256" in said.json()["detail"], said.text
+    said = app.post("/account/run/plan", json={"run_chain": "regtest",
+                                               "items": [dict(items[0], image="../1.png"), items[1]]})
+    assert said.status_code == 400 and "plain file name" in said.json()["detail"], said.text
+    said = app.post("/account/run/plan", json={"run_chain": "regtest", "items": []})
+    assert said.status_code == 400
+    assert not [r for r in _book(state).list() if r["name"] == "Doge Punks Checked"]
