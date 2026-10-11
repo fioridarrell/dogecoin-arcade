@@ -5,11 +5,12 @@ follower it runs under. Until now nothing in the product ran either: the
 consensus code was exercised by the test suite and by nobody else. This module
 is the piece that puts them to work.
 
-One `LedgerIndex` per ledger chain. It owns nothing long-lived: every sync and
-every query opens its own connection to the index database, because sqlite
-connections are per-thread and the block watcher syncs on a thread of its own
-while requests read on theirs. WAL mode means the readers never block the
-writer.
+One `LedgerIndex` per ledger chain. It owns nothing long-lived itself: sqlite
+connections are per-thread, and the block watcher syncs on a thread of its
+own while requests read on theirs, so each THREAD keeps one connection to each
+index file and `open()` lends it out (D-193; until 2026-10-11 every call made a
+fresh one, and a page that opened the index sixty times paid for sixty). WAL
+mode means the readers never block the writer.
 
 Stopping is a feature
 ---------------------
@@ -26,6 +27,8 @@ from __future__ import annotations
 
 import logging
 import threading
+import sqlite3
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -100,8 +103,47 @@ _OFFERS_ON_IT = ("(SELECT COUNT(*) FROM nft_offer o "
                  "WHERE o.inscription = i.txid)")
 
 
-#: Index files whose tables this process has installed (LedgerIndex.open).
-_SCHEMA_INSTALLED: set[str] = set()
+#: Index files whose tables this process has installed (LedgerIndex.open):
+#: (resolved path, inode), so a file rebuilt at the same path is installed again.
+_SCHEMA_INSTALLED: set[tuple[str, int | None]] = set()
+
+#: The connections THIS thread keeps, by index file (LedgerIndex.open).
+_THREAD = threading.local()
+
+#: How many index files one thread keeps a connection to. Two chains in a
+#: running node; a test session opens hundreds of temporary ones and must not
+#: hold them all.
+KEPT_PER_THREAD = 8
+
+
+class _Kept:
+    """One thread's connection to one index file, lent out by `open()`.
+
+    Walks and talks like the `Database` it wraps. `close()`, and leaving a
+    `with`, hand it back rather than closing it, so the next `open()` on this
+    thread gets the same connection. Opened inside another open on the same
+    thread it IS the same connection, which is what a reader inside a block's
+    transaction wants to see.
+    """
+
+    __slots__ = ("db", "inode", "depth")
+
+    def __init__(self, db: Database, inode: int | None):
+        self.db = db
+        self.inode = inode
+        self.depth = 0
+
+    def __getattr__(self, name: str):
+        return getattr(self.db, name)
+
+    def close(self) -> None:
+        self.depth = max(0, self.depth - 1)
+
+    def __enter__(self) -> "_Kept":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
 
 
 class LedgerIndex:
@@ -128,21 +170,72 @@ class LedgerIndex:
     # --- storage --------------------------------------------------------------
 
     def open(self) -> Database:
-        """A fresh connection with the protocol tables installed.
+        """This thread's connection to the index, with the protocol tables
+        installed, to use in a `with`.
 
-        Per call, per thread: see the module docstring. The tables and their
-        one-off migrations are installed once per process for each file
-        (2026-10-05): `install_schema` re-filed every inscription's JSON on
-        every open, and a page that opens the index fifty times spent most of
-        its time doing it.
+        One per thread per file, kept between calls (D-193): see the module
+        docstring. It follows the FILE, not the path -- an index moved aside
+        and rebuilt (`_start_again`) is a new file, and the connection to the
+        old one is dropped the next time this thread asks. A transaction a
+        crashed caller left open is rolled back before the connection is
+        lent again, and a connection somebody closed outright is replaced.
+        The tables and their one-off migrations are installed once per
+        process for each file (2026-10-05): `install_schema` re-filed every
+        inscription's JSON on every open, and a page that opens the index
+        fifty times spent most of its time doing it.
         """
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        db = Database(self.path)
         key = str(self.path.resolve())
-        if key not in _SCHEMA_INSTALLED:
-            install_schema(db)
-            _SCHEMA_INSTALLED.add(key)
-        return db
+        kept: dict[str, _Kept] | None = getattr(_THREAD, "kept", None)
+        if kept is None:
+            kept = _THREAD.kept = {}
+        try:
+            inode: int | None = os.stat(key).st_ino
+        except OSError:
+            inode = None
+        lease = kept.get(key)
+        if lease is not None:
+            stale = lease.inode != inode
+            if not stale and lease.depth == 0:
+                try:
+                    if lease.db.conn.in_transaction:
+                        log.warning("ledger %s: a transaction was left open; rolled back",
+                                    self.params.name)
+                        lease.db.conn.execute("ROLLBACK")
+                except sqlite3.ProgrammingError:      # closed outright by somebody
+                    stale = True
+            if stale:
+                kept.pop(key, None)
+                try:
+                    lease.db.conn.close()
+                except Exception:                     # noqa: BLE001 -- it is gone either way
+                    pass
+                lease = None
+        if lease is None:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            db = Database(self.path)
+            try:
+                inode = os.stat(key).st_ino
+            except OSError:
+                inode = None
+            # Per FILE, not per path: an index moved aside and rebuilt is a
+            # new file at the same path, and remembering the path alone left
+            # the new file without its tables ("no such table: watched" after
+            # a floor move, found by test_scan_floor on 2026-10-11).
+            if (key, inode) not in _SCHEMA_INSTALLED:
+                install_schema(db)
+                _SCHEMA_INSTALLED.add((key, inode))
+            lease = _Kept(db, inode)
+            # The one asked for last is the one kept longest.
+            for old_key in [k for k, v in kept.items() if v.depth == 0][:max(0, len(kept) + 1 - KEPT_PER_THREAD)]:
+                try:
+                    kept.pop(old_key).db.conn.close()
+                except Exception:                     # noqa: BLE001
+                    pass
+        else:
+            kept.pop(key, None)
+        kept[key] = lease
+        lease.depth += 1
+        return lease                                  # type: ignore[return-value]
 
     @property
     def enabled(self) -> bool:
