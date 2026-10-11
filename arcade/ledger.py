@@ -594,15 +594,17 @@ class LedgerIndex:
 
         # Trades change only when a block is indexed, and this reads the whole
         # transaction table: kept per indexed tip (2026-10-05, the Exchange
-        # asked twice a load, a quarter of a second each).
+        # asked twice a load, a quarter of a second each). Kept at the
+        # largest limit and cut to size, because the Exchange asks for 500
+        # and the pair markets for 5000, and a memo keyed on the limit missed
+        # on every page (2026-10-11).
         with self.open() as db:
             tip = db.conn.execute("SELECT MAX(height) FROM block").fetchone()[0]
         memo = getattr(self, "_trades_memo", None)
-        if memo and memo[0] == (tip, limit, since_height):
-            return list(memo[1])
-        out = self._trades_uncached(limit, since_height)
-        self._trades_memo = ((tip, limit, since_height), list(out))
-        return out
+        if not (memo and memo[0] == (tip, since_height)):
+            memo = ((tip, since_height), self._trades_uncached(5000, since_height))
+            self._trades_memo = memo
+        return list(memo[1][:max(1, min(limit, 5000))])
 
     def _trades_uncached(self, limit: int, since_height: int) -> list[dict]:
         from . import inscriptions as I
@@ -1231,8 +1233,13 @@ class LedgerIndex:
             return [dict(row) for row in db.conn.execute(sql, args)]
 
     def book(self, property_id: int, limit: int = 50,
-             pool: bool = True) -> dict[str, list[dict]]:
+             pool: bool = True, pending: tuple[list[dict], set[str]] | None = None,
+             ) -> dict[str, list[dict]]:
         """One pair's book: asks cheapest first, bids dearest first.
+
+        `pending` is a pool read already made (`pending_orders()`), for a
+        caller drawing many books at once: the Exchange's table asked the
+        node for its mempool once per token, 120 times a page (2026-10-11).
 
         Price is worked out from two integers and kept as a Fraction until
         the last moment, because a book sorted on floats puts orders in an
@@ -1246,19 +1253,47 @@ class LedgerIndex:
         built from blocks, and the reserve an order holds moves only when its
         block lands.
         """
-        from fractions import Fraction
-
         with self.open() as db:
             rows = [dict(r) for r in db.conn.execute(
                 "SELECT * FROM book_order WHERE (sale_property = ? AND want_property = 0) "
                 "OR (want_property = ? AND sale_property = 0)",
                 (property_id, property_id))]
         if pool:
-            fresh, cancelled = self.pending_orders()
+            fresh, cancelled = pending if pending is not None else self.pending_orders()
             rows = [r for r in rows if r["txid"] not in cancelled]
             rows += [r for r in fresh
                      if property_id in (r["sale_property"], r["want_property"])
                      and 0 in (r["sale_property"], r["want_property"])]
+        return self._coin_book(rows, property_id, limit)
+
+    def coin_books(self, limit: int = 50, pool: bool = True,
+                   pending: tuple[list[dict], set[str]] | None = None,
+                   ) -> dict[int, dict[str, list[dict]]]:
+        """Every token's book against the coin at once, by property id: what
+        `book()` answers for one token, read in one query for the lot. For
+        the Exchange's table, which drew a book per token and opened the
+        index 120 times a page (2026-10-11). A token with no order has no
+        entry."""
+        with self.open() as db:
+            rows = [dict(r) for r in db.conn.execute(
+                "SELECT * FROM book_order WHERE sale_property = 0 OR want_property = 0")]
+        if pool:
+            fresh, cancelled = pending if pending is not None else self.pending_orders()
+            rows = [r for r in rows if r["txid"] not in cancelled]
+            rows += [r for r in fresh if 0 in (r["sale_property"], r["want_property"])]
+        by_token: dict[int, list[dict]] = {}
+        for row in rows:
+            pid = row["sale_property"] or row["want_property"]
+            if pid:
+                by_token.setdefault(pid, []).append(row)
+        return {pid: self._coin_book(mine, pid, limit) for pid, mine in by_token.items()}
+
+    @staticmethod
+    def _coin_book(rows: list[dict], property_id: int, limit: int) -> dict[str, list[dict]]:
+        """These coin-side orders of one token as its book: asks cheapest
+        first, bids dearest first, each with `tokens`, `coins` and `price`."""
+        from fractions import Fraction
+
         asks, bids = [], []
         for row in rows:
             selling_token = row["sale_property"] == property_id

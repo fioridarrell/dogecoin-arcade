@@ -201,6 +201,18 @@ def test_the_exchange_reads_the_chain_rather_than_a_list(client):
     assert "No offers yet." in offers, "said simply (2026-09-28)"
 
 
+def test_the_exchange_opens_on_tokens(client):
+    """2026-10-11: "when they open the exchange tab, it should open to
+    tokens instead of launchpads" (it opened on the mintpads from 2026-09-28).
+    A tab nobody has heard of lands there too."""
+    app, _ = client
+    for where in ("/exchange", "/exchange?tab=nonsense"):
+        body = app.get(where).text
+        assert 'href="/exchange?tab=tokens" aria-current="page"' in body, where
+        assert body.count('aria-current="page"') == 1, where
+        assert "No market has an order or a trade yet" in body, where
+
+
 # --- address book -------------------------------------------------------------
 # Local-only data, so these tests need no node and no identity -- which is also
 # the point: the address book must work before anything else is set up.

@@ -20618,10 +20618,18 @@ def create_app(state: AppState) -> FastAPI:
         """Tokens against the coin, most traded first."""
         wanted = {p["property_id"]: p for p in _token_props(index)}
         faces = _faces_for(index, wanted.values())
+        # The mempool once for the whole table, not once per token: each
+        # `book()` asked the node for it, and the Tokens tab took over a
+        # second to answer (2026-10-11).
+        try:
+            pending = index.pending_orders()
+        except Exception:
+            pending = ([], set())
+        books = index.coin_books(limit=1, pending=pending)
         out = []
         for pid, prop in wanted.items():
             points = chartlib.token_prices(trades, pid, prop["divisible"])
-            book = index.book(pid, limit=1)
+            book = books.get(pid) or {"asks": [], "bids": []}
             if not points and not (book["asks"] or book["bids"]):
                 continue
             stats = chartlib.day(points)
@@ -22592,16 +22600,17 @@ def create_app(state: AppState) -> FastAPI:
                       book_error=book_error)
 
     @app.get("/exchange", response_class=HTMLResponse)
-    def exchange(request: Request, tab: str = "mintpads", sort: str = "popular"):
+    def exchange(request: Request, tab: str = "tokens", sort: str = "popular"):
         """Everything for sale on this chain, and what has been offered to you.
 
         Four questions, four tabs: what somebody has offered for something of
         yours, which mintpads still have pieces, what tokens are being sold
         for, and which single NFTs are for sale.
         """
-        # Mintpads first (2026-09-28: Exchange "should open to the
-        # launchpads section"), and anything unknown lands there too.
-        tab = tab if tab in EXCHANGE_TABS else "mintpads"
+        # Tokens first (2026-10-11: "when they open the exchange tab,
+        # it should open to tokens instead of launchpads"; it opened on the
+        # mintpads from 2026-09-28), and anything unknown lands there too.
+        tab = tab if tab in EXCHANGE_TABS else "tokens"
         chain, index = _token_chain()
         data: dict[str, Any] = {"tab": tab, "chain": chain, "node": chain.status(),
                                 "other_chains": [c for c in state.token_chains

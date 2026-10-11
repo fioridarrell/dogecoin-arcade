@@ -56,6 +56,8 @@ def test_two_accounts_trade_one_token_for_another_through_the_book(node):
     assert page.status_code == 200 and "Recent trades" in page.text and "1.5" in page.text
     tab = buyer["client"].get("/exchange?tab=tokens")
     assert tab.status_code == 200 and f"/exchange/pairs/{min(A, B)}/{max(A, B)}" in tab.text
+    assert 'class="ex-spark"' not in tab.text, \
+        "no chart in the list (2026-10-11): the chart is on the market's own page"
 
 
 def test_a_pair_of_one_token_with_itself_is_no_pair(node):
