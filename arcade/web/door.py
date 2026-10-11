@@ -269,7 +269,7 @@ PUBLIC_POST = ("/auth/challenge", "/auth/login", "/auth/logout",
                # how the account's own mintpad page looks (presentation only)
                "/account/mintpad", "/account/mintpad/inscribe", "/account/tokenpad/inscribe", "/account/mintpad/announce", "/account/mintpad/announced",
                "/account/claim", "/account/send", "/account/inscribe", "/account/inscribe/abandon",
-               "/account/run/start", "/account/run", "/account/run/piece",
+               "/account/run/start", "/account/run/plan", "/account/run", "/account/run/piece",
                "/account/run/stop",
                # a folder bigger than one request, in batches; and an item of
                # more than one transaction, sent the one-big-file way, reported

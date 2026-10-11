@@ -147,7 +147,7 @@ def test_the_public_nfts_page_offers_the_account_s_inscribe(public):
     app.post("/account/address", json={"address": TEST}, headers=EDGE)
     body = app.get("/nfts", headers=EDGE).text
     assert 'id="inscribe-it"' in body and 'id="run-start"' in body
-    assert "/account/inscribe" in body and "/account/run/start" in body
+    assert "/account/inscribe" in body and "/account/run/plan" in body
     for refused in ('action="/inscriptions/create"',
                     'href="/inscriptions/collection"',
                     'href="/wallet/nfts"'):
@@ -212,7 +212,7 @@ def test_the_inscribe_panels_are_one_file(client):
         assert '{% include "_account_inscribe.html" %}' in page, name
         assert "/account/inscribe" not in page, \
             f"{name} has its own copy of the inscribe offer"
-    for route in ("/account/inscribe", "/account/run/start",
+    for route in ("/account/inscribe", "/account/run/plan",
                   "/account/run/piece", "/account/run/stop"):
         assert route in shared, route
 

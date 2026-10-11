@@ -9891,6 +9891,8 @@ def create_app(state: AppState) -> FastAPI:
                 raise ValueError("there is nothing to inscribe")
             kind = media.standard_type(str(said.get("content_type") or ""),
                                        str(said.get("name") or "")) or "application/octet-stream"
+            if str(said.get("run") or ""):
+                return _inscribe_run_piece(account, chain, address, said, content, kind)
             return _inscribe_start(account, chain, address, said, content, kind)
         except (fundinglib.FundingError, inscriptionlib.InscriptionError,
                 ValueError) as exc:
@@ -9973,9 +9975,80 @@ def create_app(state: AppState) -> FastAPI:
                 {"address": to, "value": sats, "permille": permille,
                  "minimum": fees.DUST_LIMIT, "at_minimum": share < fees.DUST_LIMIT})
 
+    def _inscribe_run_piece(account, chain, address: str, said: dict,
+                            content: bytes, kind: str):
+        """One piece of a collection run whose pictures live in the browser.
+
+        2026-10-11: a 6,480-picture folder (123 MB) never got past
+        the upload -- Cloudflare's 100 MB and 100-second limits sit in front
+        of this node -- and the node keeping everybody's pictures was never
+        the point. So the run is written down from the folder's names, sizes
+        and hashes (`/account/run/plan`), the pictures stay in the browser,
+        and each one comes here when its turn comes, exactly the way one file
+        does. What this adds to `_inscribe_start` is the run's bookkeeping:
+        the bytes must hash to what the run was written down with (a piece is
+        permanent, and the wrong file under the right name is the costly
+        kind of wrong), the inscription id is the one on the piece, so a
+        piece asked again lands the same piece and not a copy beside it, and
+        the broadcast marks the piece sent.
+
+        Charged once per piece, like `/account/run/piece`: a piece already
+        `sending` was charged when it was first asked for, and asking again
+        -- a reload, an expired offer -- is the same piece.
+        """
+        run = _runs.get(str(said.get("run") or ""))
+        if run is None:
+            raise ValueError("there is no run of that id")
+        if run["account"] != account.pubkey.lower():
+            raise ValueError("that run belongs to somebody else")
+        if run["network"] != chain.network:
+            raise ValueError(f"that run is on {run['network']}, not {chain.network}")
+        if run["folder"]:
+            raise ValueError("that run's pictures are on this node; ask for its pieces "
+                             "with /account/run/piece")
+        try:
+            edition = int(said.get("piece"))
+        except (TypeError, ValueError):
+            raise ValueError("which piece was not said") from None
+        piece = _runs.piece(run["id"], edition)
+        if piece is None:
+            raise ValueError("that run has no such piece")
+        if piece["status"] == "sent":
+            raise ValueError(f"{piece['name']} is already on the chain ({piece['txid']}). "
+                             "Nothing has been paid for twice.")
+        if piece["status"] == "failed":
+            raise ValueError(f"{piece['name']} was refused ({piece['error']}); retry the "
+                             "run's refused pieces first")
+        digest = hashlib.sha256(content).hexdigest()
+        if piece.get("sha256") and digest != piece["sha256"]:
+            raise ValueError(f"those are not the bytes of {piece['name']} this run was "
+                             f"written down with ({piece['image']}, {int(piece['size']):,} "
+                             "bytes). A piece is permanent and paid for, so the picture "
+                             "has to be the one the run was made from. Nothing has been "
+                             "paid for.")
+        if run["status"] == "stopped":
+            _runs.set_status(run["id"], "running")
+        answer = _inscribe_start(
+            account, chain, address,
+            {**said, "name": piece["name"], "json": piece["json"]}, content,
+            piece["content_type"] or kind,
+            tag=bytes.fromhex(piece["inscription_id"]),
+            on_sent=lambda txid, run_id=run["id"], n=edition: _runs.record_piece(run_id, n, txid),
+            charge=piece["status"] != "sending")
+        # After the offer and not before: a refusal (no coins, the hour used
+        # up) charged nothing, and the piece stays `pending` so the next ask
+        # is the first.
+        _runs.offer_piece(run["id"], edition)
+        return answer
+
     def _inscribe_start(account, chain, address: str, said: dict,
-                        content: bytes, kind: str):
+                        content: bytes, kind: str, tag: bytes | None = None,
+                        on_sent: Any = None, charge: bool = True):
         """The first transaction of an inscription: the piece, or the split.
+
+        `tag`, `on_sent` and `charge` are a collection run's (`_inscribe_run_piece`):
+        the inscription id the run wrote down for the piece, what to do with the
+        broadcast, and whether this ask is a new gesture or the same one again.
         """
         label = (str(said.get("name") or "").strip()[:60]
                  or kind.split(";")[0])
@@ -9984,7 +10057,7 @@ def create_app(state: AppState) -> FastAPI:
         if waiting is not None:
             return _inscribe_again(account, chain, address, waiting)
 
-        tag = secrets.token_bytes(8)
+        tag = tag or secrets.token_bytes(8)
         plan = inscribelib.plan(content, kind, str(said.get("json", "")),
                                 inscription_id=tag)
         fee_out, fee_said = _operator_fee(chain, address,
@@ -10004,9 +10077,9 @@ def create_app(state: AppState) -> FastAPI:
             again = any(o.digest == digest
                         for o in _offers.waiting(account.pubkey)
                         if o.network == chain.network)
-            _quota(account, "inscribe", len(content), count=not again)
+            _quota(account, "inscribe", len(content), count=charge and not again)
             offer = _offers.add(account.pubkey, chain.network, unsigned,
-                                unsigned.what, digest=digest)
+                                unsigned.what, digest=digest, done=on_sent)
             return JSONResponse({"offer": offer.id, "bytes": plan.content_len,
                                  "chunks": 1, "chain": chain.network,
                                  "operator_fee": fee_said, **unsigned.as_json()})
@@ -10018,7 +10091,7 @@ def create_app(state: AppState) -> FastAPI:
             [(piece, txbuild.p2pkh_script(address))] * plan.chunks + fee_out,
             f"split into {plan.chunks:,} outputs, to inscribe {label} "
             f"in {plan.chunks:,} transactions")
-        _quota(account, "inscribe", len(content))
+        _quota(account, "inscribe", len(content), count=charge)
         job = _parts.create(
             account=account.pubkey, address=address, network=chain.network,
             name=label, content_type=plan.content_type, json_text=plan.json,
@@ -10417,6 +10490,70 @@ def create_app(state: AppState) -> FastAPI:
             build = collectionlib.read_build(collectionlib.find_build(folder))
         except (collectionlib.CollectionError, ValueError, OSError) as exc:
             return JSONResponse({"detail": str(exc)}, status_code=400)
+        return _write_run(account, chain, address, build, str(build.folder),
+                          name=name, max_supply=max_supply, numbering=numbering,
+                          description=description, url=url, artist=artist, icon=icon)
+
+    @app.post("/account/run/plan")
+    def account_run_plan(request: Request, payload: Any = Body(None)):
+        """Write a collection down as this account's run from what the browser
+        read off the folder, and keep none of its pictures.
+
+        2026-10-11: the upload of a 6,480-picture folder never started
+        -- 123 MB through Cloudflare, whose request limit is 100 MB and whose
+        patience is 100 seconds -- and this node keeping a stranger's pictures
+        for ever was never wanted. So the browser sends the manifest: each
+        piece's JSON, its picture's name, size and SHA-256. That is a few
+        megabytes for the biggest set, and it is everything `read_build` would
+        have read off the disk except the bytes, which come one piece at a
+        time through `/account/inscribe` (`_inscribe_run_piece`), checked
+        against the hash written down here.
+
+        The same questions as `/account/run/start` and the same answers: one
+        run going at a time, what is on the chain already, the set's rules on
+        its #1. Only the folder is different, and it is blank.
+        """
+        account = _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        try:
+            chain = _chain_asked({"chain": said.get("run_chain") or said.get("chain")})
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        address = _account_address(account.pubkey, chain)
+        if not address:
+            return JSONResponse(
+                {"detail": f"this account has no {chain.label.lower()} "
+                           f"address yet"}, status_code=400)
+        ahead = _runs.due(account.pubkey, chain.network)
+        if ahead is not None:
+            return JSONResponse(
+                {"detail": f"{ahead['name']} is still going, at {ahead['sent']} "
+                           f"of {ahead['items']} pieces. Finish it or stop it "
+                           "before starting another. Nothing has been paid "
+                           "for."}, status_code=400)
+        try:
+            build = collectionlib.build_from_manifest(said.get("items"))
+        except collectionlib.CollectionError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        words = {key: str(said.get(key) or "") for key in
+                 ("name", "max_supply", "numbering", "description", "url", "artist", "icon")}
+        words["numbering"] = words["numbering"] or "continue"
+        return _write_run(account, chain, address, build, "", **words)
+
+    def _write_run(account, chain, address: str, build, folder: str, *, name: str = "",
+                   max_supply: str = "", numbering: str = "continue",
+                   description: str = "", url: str = "", artist: str = "",
+                   icon: str = ""):
+        """The run book's entry for a build, after the questions both routes ask.
+
+        `folder` is where the pictures are on this node, or blank when they
+        are in the browser; a piece's digest is then the one the manifest
+        said, and otherwise it is read off the file.
+        """
+        def digest_of(item) -> str:
+            if getattr(item, "sha256", ""):
+                return item.sha256
+            return hashlib.sha256((build.folder / item.image).read_bytes()).hexdigest()
         # The set's rules are #1's (2026-09-25): a NEW collection writes
         # its details and its maximum supply (0 = unlimited) onto #1; a batch
         # added to one already on the chain from this address inherits them,
@@ -10446,9 +10583,7 @@ def create_app(state: AppState) -> FastAPI:
                         break
             except Exception:
                 have = set()
-            fresh = [item for item in build.items
-                     if hashlib.sha256((build.folder / item.image).read_bytes()
-                                       ).hexdigest() not in have]
+            fresh = [item for item in build.items if digest_of(item) not in have]
             if not fresh:
                 return JSONResponse({"detail": (
                     f"{build.collection} is already on this chain from this "
@@ -10510,7 +10645,8 @@ def create_app(state: AppState) -> FastAPI:
             run_id = _runs.create(account.pubkey, address, build,
                                   chain.network,
                                   name=name.strip()[:60] or build.collection,
-                                  floor=chain.params.activation_height)
+                                  floor=chain.params.activation_height,
+                                  folder=folder)
         except (collectionlib.CollectionError, accountrunslib.TooBig,
                 ValueError, OSError) as exc:
             return JSONResponse({"detail": str(exc)}, status_code=400)
@@ -10746,6 +10882,20 @@ def create_app(state: AppState) -> FastAPI:
                                 status_code=403)
         chain = _chain_on(run["network"])
         piece = _runs.next_piece(run["id"])
+        if piece is not None and not run["folder"]:
+            # The pictures are in the browser (2026-10-11): nothing to build
+            # from here. The page is told which piece is next and what its
+            # bytes must hash to, and sends them to /account/inscribe with the
+            # run and piece named, which is where it is charged and marked.
+            if run["status"] == "stopped":
+                _runs.set_status(run["id"], "running")
+            return JSONResponse({"held": "browser", "run": run["id"], "piece": piece["edition"],
+                                 "items": run["items"], "sent": run["sent"],
+                                 "name": piece["name"], "image": piece["image"],
+                                 "bytes": int(piece["size"]), "chunks": int(piece["chunks"] or 1),
+                                 "sha256": piece.get("sha256") or "",
+                                 "content_type": piece["content_type"],
+                                 "json": piece["json"], "chain": chain.network})
         if piece is None:
             if run["failed_pieces"]:
                 # Not finished. It is the run that stopped, not the work, and
@@ -10891,7 +11041,10 @@ def create_app(state: AppState) -> FastAPI:
         except (TypeError, ValueError):
             return JSONResponse({"detail": "which item?"}, status_code=400)
         piece = _runs.piece(row["id"], edition)
-        if piece is None or int(piece.get("chunks") or 1) < 2:
+        # A run whose pictures are in the browser reports every piece this way
+        # (2026-10-11); one this node holds the pictures of records its
+        # one-transaction pieces itself, as the offer is broadcast.
+        if piece is None or (row["folder"] and int(piece.get("chunks") or 1) < 2):
             return JSONResponse({"detail": "that is not an item of more than one transaction"},
                                 status_code=400)
         if piece["status"] == "sent":
