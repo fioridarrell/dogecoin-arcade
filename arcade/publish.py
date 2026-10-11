@@ -347,7 +347,9 @@ class Publisher:
             raise PublishError("there is nothing to inscribe")
         digest = hashlib.sha256(content).hexdigest()
         journal = Journal(self.journal_home, digest)
-        kind = media.standard_type(content_type, name) or "application/octet-stream"
+        import mimetypes
+        kind = (media.standard_type(content_type, name) or media.standard_type(mimetypes.guess_type(name)[0] or "")
+                or "application/octet-stream")   # a .json name is a JSON file, not a blob (0.8.86's data modules)
         if not journal.data["tag"]:
             journal.data["tag"] = secrets.token_bytes(8).hex()
             journal.data["name"] = name
