@@ -640,15 +640,15 @@ def test_a_node_whose_ipv4_cannot_be_reached_announces_its_ipv6_to_be_met():
 
     async def go():
         svc = MeshService(NET, nacl.signing.SigningKey.generate(), listen_host="127.0.0.1", listen_port=0,
-                          observe=lambda: ["129.222.45.75:5000", "129.222.45.75:5001",
-                                           "[2605:59ca:13cf:2e10::c48e]:3001", "[2605:59ca:13cf:2e10::c48e]:3002"])
+                          observe=lambda: ["9.9.9.9:5000", "9.9.9.9:5001",
+                                           "[2a00:1450:4001:80b::200e]:3001", "[2a00:1450:4001:80b::200e]:3002"])
         await svc.node.start()
         try:
             found = await svc.where_am_i()
             assert svc.reachable is False, "nothing answers at the IPv4 address"
-            assert found == ("2605:59ca:13cf:2e10::c48e", svc.node.listen_port)
-            assert svc.meet == svc.node.meet_from == "2605:59ca:13cf:2e10::c48e"
-            assert svc.status()["meet"] == "2605:59ca:13cf:2e10::c48e"
+            assert found == ("2a00:1450:4001:80b::200e", svc.node.listen_port)
+            assert svc.meet == svc.node.meet_from == "2a00:1450:4001:80b::200e"
+            assert svc.status()["meet"] == "2a00:1450:4001:80b::200e"
         finally:
             await svc.node.stop()
     run(go())
