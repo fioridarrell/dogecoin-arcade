@@ -123,6 +123,18 @@ Keep `view` smaller than `cell` and a player is in at most four cells, whatever 
 size of the world. A player standing in two of your cells is one player to you:
 `join` once, `leave` when they are out of all of them.
 
+### Any node is the way in
+
+A room is the same room on every node, so a player can use whichever node answers
+them fastest. The viewer showing a game asks its own node for the other nodes it
+can reach over https (their tunnel addresses, and arcade domains on the chain),
+times a hello to each, and plays through the quickest one if it is clearly faster
+than its own; it checks again every ten minutes, and goes back to its own node if
+the chosen one stops answering. A player signed in on one node is still themselves
+on another: their wallet signs that node's one-day room certificate. A node's
+tunnel carries only its room routes (`/realtime/...`) -- never the wallet or the
+rest of the arcade. Nothing changes for a game: `arcade.realtime` works the same.
+
 ### A service for your game: a bank, a dealer, a referee
 
 Some games need something that is always in the room: a bank that pays out, a

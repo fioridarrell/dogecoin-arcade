@@ -220,7 +220,7 @@ def main(argv: list[str] | None = None) -> int:
                 tunnel=(shutil.which("cloudflared") or next((p for p in (os.path.expanduser("~/.local/bin/cloudflared"),)
                                                              if os.path.exists(p)), None))
                 if args.mesh_tunnel == "auto" and args.mesh_port else None,
-                core=args.mesh_core == "on",
+                core=args.mesh_core == "on", web_port=args.port,
             ).start()
             print(f"  mesh node {state.mesh.node_id[:16]}"
                   + (f" listening on {args.mesh_port}" if args.mesh_port else " (dial-out only)"))

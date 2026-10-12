@@ -27,7 +27,46 @@
     // address, proved once a day by a signature its key makes here; if the
     // wallet stays locked it plays as a guest rather than not at all.
     var rt = {};
-    function realtimeProof(hello){
+    // ANY NODE AS THE WAY IN (2026-10-12, the operator: "I want the client to be able to access any
+    // one of the connected nodes as their game server"). A room is the same room on every node,
+    // so this page may carry the player through whichever node answers fastest: it asks its own
+    // node for the ways in (/realtime/nodes, all https), times a hello to each and to itself, and
+    // keeps its own unless another is clearly quicker. The choice is kept ten minutes; a node
+    // that fails sends the player back to this one. Signed in here, the player is still
+    // themselves there: the wallet signs that node's certificate (hello.cert) instead.
+    var RT_PICK = 'arcade-rt-base';
+    function realtimeTime(base){
+      var t0 = performance.now();
+      return Promise.race([
+        fetch(base + '/realtime/hello', {cache: 'no-store', credentials: 'omit'}).then(function(r){ return r.json(); })
+          .then(function(h){ return h && h.online ? performance.now() - t0 : Infinity; }),
+        new Promise(function(res){ setTimeout(function(){ res(Infinity); }, 3000); })
+      ]).catch(function(){ return Infinity; });
+    }
+    function realtimeBase(){
+      try {
+        var kept = JSON.parse(sessionStorage.getItem(RT_PICK) || 'null');
+        if (kept && Date.now() - kept.at < 600000) return Promise.resolve(kept.base);
+      } catch (err) {}
+      return fetch('/realtime/nodes', {cache: 'no-store'}).then(function(r){ return r.json(); })
+        .then(function(j){
+          var bases = [''].concat(((j && j.nodes) || []).map(function(n){ return n.base; })
+            .filter(function(b){ return b && b !== location.origin; }).slice(0, 12));
+          // two tries each (the first pays for a fresh TLS connection); the better counts
+          return Promise.all(bases.map(function(b){
+            return realtimeTime(b).then(function(a){ return realtimeTime(b).then(function(c){ return Math.min(a, c); }); });
+          })).then(function(ms){
+            var best = 0;
+            for (var i = 1; i < bases.length; i++) if (ms[i] < ms[best]) best = i;
+            var pick = (best && ms[best] < ms[0] * 0.8) ? bases[best] : '';
+            try { sessionStorage.setItem(RT_PICK, JSON.stringify({base: pick, at: Date.now(), ms: ms})); } catch (err) {}
+            return pick;
+          });
+        }).catch(function(){ return ''; });
+    }
+    function realtimeForget(){ try { sessionStorage.removeItem(RT_PICK); } catch (err) {} }
+    function realtimeProof(hello, base){
+      if (base) return realtimeProofThere(hello);
       if (!hello.sign || !hello.who || hello.who.kind !== 'account') return Promise.resolve(null);
       var slot = 'arcade-rt-cert:' + hello.sign.message;
       try {
@@ -50,26 +89,53 @@
         });
       }).catch(function(){ return null; });        // locked or refused: a guest
     }
-    function realtimePost(path, body){
-      body.csrf_token = csrf;
-      return fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json'},
-                          body: JSON.stringify(body), keepalive: path === '/realtime/leave'})
+    // Another node: who the player is comes from THIS node's hello; the words to sign from that one's.
+    function realtimeProofThere(there){
+      if (!there.cert) return Promise.resolve(null);
+      return fetch('/realtime/hello', {cache: 'no-store'}).then(function(r){ return r.json(); }).then(function(own){
+        if (!own.sign || !own.who || own.who.kind !== 'account' || !own.who.address) return null;
+        var c = there.cert, words = 'arcade-realtime\n' + c.network + '\n' + c.node + '\n' + own.who.address + '\n' + c.expires;
+        return realtimeProof({sign: {message: words, expires: c.expires, magic: c.magic, chain: own.sign.chain},
+                              who: own.who}, '').then(function(p){ return p && {sig: p.sig, expires: p.expires, address: own.who.address}; });
+      }).catch(function(){ return null; });
+    }
+    function realtimePost(path, body, base){
+      base = base || '';
+      if (!base) body.csrf_token = csrf;          // this node's form token never goes to another node
+      return fetch(base + path, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                 credentials: base ? 'omit' : 'same-origin',
+                                 body: JSON.stringify(body), keepalive: path === '/realtime/leave'})
         .then(function(r){ return r.json(); });
     }
     // One way into a room, used for the first join and for every rejoin.
-    function realtimeConnect(name, game, guest){
-      return fetch('/realtime/hello', {cache: 'no-store'}).then(function(r){ return r.json(); })
+    function realtimeConnectAt(base, name, game, guest){
+      return fetch(base + '/realtime/hello', {cache: 'no-store', credentials: base ? 'omit' : 'same-origin'})
+        .then(function(r){ return r.json(); })
         .then(function(hello){
           if (!hello.online) return {ok: true, online: false, why: hello.why || 'this node is not on the mesh'};
-          return realtimeProof(hello).then(function(proof){
+          return realtimeProof(hello, base).then(function(proof){
             return realtimePost('/realtime/join', {game: game, room: name, guest: guest || '',
-                                sig: proof && proof.sig, expires: proof && proof.expires});
+                                sig: proof && proof.sig, expires: proof && proof.expires,
+                                address: proof && proof.address}, base);
           });
+        }).then(function(j){ if (j) j.base = base; return j; });
+    }
+    function realtimeConnect(name, game, guest){
+      return realtimeBase().then(function(base){
+        if (!base) return realtimeConnectAt('', name, game, guest);
+        return realtimeConnectAt(base, name, game, guest).then(function(j){
+          if (j && j.ok && j.token) return j;
+          throw new Error('that node said no');
+        }).catch(function(){                      // the chosen node failed: this one, and choose again later
+          realtimeForget();
+          return realtimeConnectAt('', name, game, guest);
         });
+      });
     }
     function realtimeOpen(name, frame, j, game){
-      var es = new EventSource('/realtime/stream?token=' + encodeURIComponent(j.token));
-      var h = rt[name] = {token: j.token, es: es, me: j.me, members: {}, game: game};
+      var base = j.base || '';
+      var es = new EventSource(base + '/realtime/stream?token=' + encodeURIComponent(j.token));
+      var h = rt[name] = {token: j.token, es: es, me: j.me, members: {}, game: game, base: base};
       (j.members || []).forEach(function(p){ h.members[p.id] = p; });
       es.onmessage = function(ev){
         if (rt[name] !== h) return;              // an old stream, replaced by a rejoin
@@ -109,7 +175,7 @@
         tries++;
         realtimeConnect(name, h.game, h.me && h.me.guest ? h.me.id : '').then(function(j){
           if (rt[name] !== h) {
-            if (j && j.token) realtimePost('/realtime/leave', {token: j.token}).catch(function(){});
+            if (j && j.token) realtimePost('/realtime/leave', {token: j.token}, j.base).catch(function(){});
             return;
           }
           if (!j || !j.ok || !j.online || !j.token) throw new Error('not yet');
@@ -152,7 +218,7 @@
       var held = rt[name];
       if (!held) { answer({ok: false, error: 'join the room first'}); return; }
       if (m.op === 'send') {
-        realtimePost('/realtime/send', {token: held.token, data: String(m.data || '')})
+        realtimePost('/realtime/send', {token: held.token, data: String(m.data || '')}, held.base)
           .then(function(j){
             if (!j.ok && /join again/.test(j.error || '')) realtimeRejoin(name, frame, held);
             answer(j.ok ? {ok: true} : {ok: false, error: j.error || 'refused'});
@@ -160,7 +226,7 @@
           .catch(function(){ answer({ok: false, error: 'the node did not answer'}); });
       } else if (m.op === 'leave') {
         held.es.close(); delete rt[name];
-        realtimePost('/realtime/leave', {token: held.token}).catch(function(){});
+        realtimePost('/realtime/leave', {token: held.token}, held.base).catch(function(){});
         answer({ok: true});
       } else {
         answer({ok: false, error: 'realtime ops are join, send and leave'});
@@ -207,7 +273,7 @@
       var h = rt[t.room];
       if (!h) return Promise.reject(new Error('you left the room this trade was in'));
       msg.id = t.id; msg.to = t.peer.id;
-      return realtimePost('/realtime/send', {token: h.token, data: TRADE + JSON.stringify(msg)})
+      return realtimePost('/realtime/send', {token: h.token, data: TRADE + JSON.stringify(msg)}, h.base)
         .then(function(j){ if (!j.ok) throw new Error(j.error || 'the room did not take it'); });
     }
     function tradeFail(t, err, quiet){
@@ -506,7 +572,7 @@
     window.addEventListener('pagehide', function(){
       for (var k in rt) {
         rt[k].es.close();
-        realtimePost('/realtime/leave', {token: rt[k].token}).catch(function(){});
+        realtimePost('/realtime/leave', {token: rt[k].token}, rt[k].base).catch(function(){});
       }
       rt = {};
     });

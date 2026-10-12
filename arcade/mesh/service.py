@@ -37,7 +37,8 @@ free, no account, pointing at the node's local WebSocket port (wsock.py) -- and
 announces the wss:// address it gets (`arcade-mesh-ws`). Every node can dial that,
 IPv4-only homes included. The tunnel carries ciphertext only: the mesh handshake and
 frames run inside it unchanged. A new address every time cloudflared restarts, so it is
-announced again then. No cloudflared on the machine, or `--mesh-tunnel off`: no tunnel,
+announced again then. It stays up even once an address is proved: it is also every
+browser's https way in to this node (realtime.py, "any node can be a player's way in"). No cloudflared on the machine, or `--mesh-tunnel off`: no tunnel,
 and nothing else changes. `status()["tunnel"]` names it.
 `--mesh-announce IP:PORT` still names an address by hand and skips all of this.
 
@@ -173,7 +174,8 @@ class MeshService:
                  peers_file: Path | None = None,
                  max_inbound: int | None = None,
                  tunnel: str | None = None,
-                 ws_port: int | None = None):
+                 ws_port: int | None = None,
+                 web_port: int | None = None):
         """`verify(address, signature, message)` asks a Core node; `announced()`
         lists the chain's mesh announcements; `announce(host, port)` publishes
         this node's; `announce_at` fixes the address by hand; `observe()` lists
@@ -206,6 +208,7 @@ class MeshService:
         self.node = MeshNode(key, network, listen_host=listen_host, listen_port=listen_port,
                              peers=peers or [], vouch=self._vouch,
                              ws_port=(ws_port if ws_port is not None else 0) if tunnel else None,
+                             web_port=web_port,
                              **({"max_inbound": max_inbound} if max_inbound else {}))
         self.node_id = self.node.node_id
         for host, port, node_id in self._load_peers():
@@ -403,9 +406,10 @@ class MeshService:
         home = tempfile.mkdtemp(prefix="arcade-tunnel-")  # no ~/.cloudflared/config.yml: a quick tunnel
         while True:
             try:
-                if self.reachable is True and not self.announce_at:
-                    await self._tunnel_stop()               # a proved address: no tunnel needed
-                elif self._tunnel_proc is None or self._tunnel_proc.returncode is not None:
+                # Kept up even when an address is proved (2026-10-12): the tunnel is also how a
+                # BROWSER reaches this node over https, to use it as its way in (realtime.py).
+                # Nodes dialling nodes still prefer a direct address (node.py _dialer).
+                if self._tunnel_proc is None or self._tunnel_proc.returncode is not None:
                     self.tunnel_url = None
                     self._tunnel_proc = await asyncio.create_subprocess_exec(
                         self.tunnel_cmd, "tunnel", "--no-autoupdate", "--url", f"http://127.0.0.1:{self.node.ws_port}",
@@ -596,7 +600,8 @@ def for_state(state, *, listen_host: str | None = None, listen_port: int | None 
               peers: list[tuple[str, int]] | None = None,
               announce_at: tuple[str, int] | None = None,
               public_port: int | None = None, max_inbound: int | None = None,
-              tunnel: str | None = None, core: bool = True) -> MeshService:
+              tunnel: str | None = None, core: bool = True,
+              web_port: int | None = None) -> MeshService:
     """A MeshService wired to an arcade node: its key in the arcade's home, its
     peers from the messaging chain's index, and players checked by the
     messaging chain's Core -- the chain the @tags live on, so a player's
@@ -637,7 +642,7 @@ def for_state(state, *, listen_host: str | None = None, listen_port: int | None 
         announce_at=announce_at, observe=observe, public_port=public_port,
         remember=Path(state.home) / "mesh-announced.json", own_v6=own_ipv6,
         peers_file=Path(state.home) / "mesh-peers.json", max_inbound=max_inbound,
-        tunnel=tunnel)
+        tunnel=tunnel, web_port=web_port)
     if core:
         # Core to Core through the mesh (corelink.py): each chain's own peer port, and its addnode.
         from .corelink import CoreBridge

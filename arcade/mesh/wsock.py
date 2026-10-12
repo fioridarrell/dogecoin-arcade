@@ -198,8 +198,39 @@ async def connect(url: str, timeout: float = 10.0) -> tuple[Reader, Writer]:
     return Reader(sock), Writer(sock, url)
 
 
-async def serve(handler, host: str, port: int) -> asyncio.base_events.Server:
-    """A WebSocket server on host:port: each upgrade at PATH gets handler(reader, writer)."""
+async def _proxy(head: bytes, reader, writer, http_port: int) -> None:
+    """One /realtime/ request through the tunnel to the node's own web app, answer streamed back
+    (the room stream is server-sent events and never ends by itself). Cloudflare's own headers
+    ride along, so the web app's door sees a request from outside and treats it as one."""
+    lines = head.decode("latin-1").split("\r\n")
+    kept = [l for l in lines[1:] if l and not l.lower().startswith(("connection:", "keep-alive:"))]
+    length = next((int(l.split(":", 1)[1]) for l in kept if l.lower().startswith("content-length:")), 0)
+    try:
+        body = await asyncio.wait_for(reader.readexactly(min(length, 64 * 1024)), 15) if length else b""
+        up_r, up_w = await asyncio.wait_for(asyncio.open_connection("127.0.0.1", http_port), 5)
+    except (asyncio.TimeoutError, asyncio.IncompleteReadError, OSError):
+        writer.write(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+        await writer.drain()
+        writer.close()
+        return
+    up_w.write(("\r\n".join([lines[0]] + kept + ["Connection: close", "", ""])).encode("latin-1") + body)
+    await up_w.drain()
+    try:
+        while data := await up_r.read(16384):
+            writer.write(data)
+            await writer.drain()
+    except (ConnectionError, OSError):
+        pass
+    finally:
+        up_w.close()
+        writer.close()
+
+
+async def serve(handler, host: str, port: int, http_port: int | None = None) -> asyncio.base_events.Server:
+    """A WebSocket server on host:port: each upgrade at PATH gets handler(reader, writer).
+    With `http_port`, a request for /realtime/... is passed to the node's web app there -- the
+    room routes only, so a player can use this node as their way in (realtime.py); anything
+    else is refused, so the tunnel never exposes the wallet or the rest of the arcade."""
     async def one(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
             head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 10)
@@ -209,6 +240,10 @@ async def serve(handler, host: str, port: int) -> asyncio.base_events.Server:
         lines = head.decode("latin-1").split("\r\n")
         got = {k.strip().lower(): v.strip() for k, _, v in (l.partition(":") for l in lines[1:] if ":" in l)}
         parts = lines[0].split(" ")
+        if http_port and len(parts) >= 2 and parts[1].startswith("/realtime/") and ".." not in parts[1] \
+                and parts[0] in ("GET", "POST", "OPTIONS", "HEAD"):
+            await _proxy(head, reader, writer, http_port)
+            return
         if len(parts) < 2 or parts[0] != "GET" or parts[1].split("?")[0] != PATH \
                 or got.get("upgrade", "").lower() != "websocket" or "sec-websocket-key" not in got:
             writer.write(b"HTTP/1.1 404 Not Found\r\nContent-Length: 12\r\nConnection: close\r\n\r\narcade mesh\n")

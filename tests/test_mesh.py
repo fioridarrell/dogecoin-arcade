@@ -805,3 +805,35 @@ def test_core_peers_through_the_mesh_both_ways_and_only_to_the_core_port():
             server_b.close(); await server_b.wait_closed()
             await asyncio.sleep(0.2)                  # let the closed sockets finish closing
     run(go())
+
+
+def test_the_tunnel_carries_room_routes_to_the_web_app_and_nothing_else():
+    from arcade.mesh import wsock
+
+    async def go():
+        got = []
+
+        async def web(reader, writer):                     # the node's web app, standing in
+            head = await reader.readuntil(b"\r\n\r\n")
+            got.append(head.split(b"\r\n")[0].decode())
+            body = b'{"ok":true}'
+            writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n" % len(body) + body)
+            await writer.drain(); writer.close()
+        web_srv = await asyncio.start_server(web, "127.0.0.1", 0)
+        async def mesh_handler(r, w): pass
+        ws_srv = await wsock.serve(mesh_handler, "127.0.0.1", 0, http_port=web_srv.sockets[0].getsockname()[1])
+        port = ws_srv.sockets[0].getsockname()[1]
+        try:
+            async def ask(line):
+                r, w = await asyncio.open_connection("127.0.0.1", port)
+                w.write(line.encode() + b"\r\nHost: x\r\nCF-Connecting-IP: 203.0.113.1\r\n\r\n"); await w.drain()
+                out = await asyncio.wait_for(r.read(), 5); w.close(); await w.wait_closed()
+                return out
+            assert b"200 OK" in await ask("GET /realtime/hello HTTP/1.1") and got == ["GET /realtime/hello HTTP/1.1"]
+            for line in ("GET /wallet HTTP/1.1", "GET / HTTP/1.1", "GET /realtime/../admin HTTP/1.1", "POST /send HTTP/1.1"):
+                assert b"404" in await ask(line), line
+            assert len(got) == 1, "nothing but /realtime/ reaches the web app"
+        finally:
+            ws_srv.close(); web_srv.close(); await ws_srv.wait_closed(); await web_srv.wait_closed()
+            await asyncio.sleep(0.1)
+    run(go())

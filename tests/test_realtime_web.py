@@ -397,9 +397,13 @@ def test_a_service_on_the_node_joins_with_its_key_and_the_internet_cannot(two_no
     assert ca.post("/realtime/send", json={"token": tok, "data": "hi"}, headers={HEADER: key}).json() == {"ok": True}
     assert ca.post("/realtime/join", json=body, headers={HEADER: "0" * 64}).status_code == 400, "a wrong key is no key"
     assert ca.post("/realtime/join", json=body).status_code == 400, "no key and no form token"
-    # Through the door (an edge header): the key counts for nothing.
-    r = ca.post("/realtime/join", json=body, headers={HEADER: key, "CF-Connecting-IP": "203.0.113.9"})
-    assert r.status_code == 400
+    # Through the door (an edge header): the key counts for nothing -- whoever it is joins as a
+    # stranger would (a guest; any node can be a player's way in now), never as the operator.
+    outside = {HEADER: key, "CF-Connecting-IP": "203.0.113.9"}
+    assert ca.get("/realtime/hello", headers=outside).json()["who"]["kind"] == "guest"
+    r = ca.post("/realtime/join", json=body, headers=outside)
+    assert r.status_code == 200 and r.json()["me"]["guest"], r.text
+    assert ca.get("/realtime/hello").json()["who"]["kind"] == "operator", "from the machine itself: the operator"
 
 
 def test_the_service_client_hears_a_player_and_answers(two_nodes):
@@ -475,7 +479,7 @@ def test_a_tunnel_address_is_announced_and_kept_beside_the_ip_one(tmp_path):
     assert hosts == ["203.0.113.9", "wss://b.trycloudflare.com/mesh"]
 
 
-def test_the_tunnel_keeper_opens_announces_and_closes_a_tunnel(tmp_path, monkeypatch):
+def test_the_tunnel_keeper_opens_and_announces_a_tunnel_and_keeps_it(tmp_path, monkeypatch):
     """A stand-in cloudflared that prints a quick-tunnel address the way the real one does."""
     from arcade.mesh import service as svclib
     monkeypatch.setattr(svclib, "TUNNEL_FIRST", 0.1)
@@ -493,10 +497,42 @@ def test_the_tunnel_keeper_opens_announces_and_closes_a_tunnel(tmp_path, monkeyp
             time.sleep(0.05)
         assert told == [("wss://quiet-river-test.trycloudflare.com/mesh", 443)]
         assert svc.status()["tunnel"] == "wss://quiet-river-test.trycloudflare.com/mesh"
-        svc.reachable = True                     # its address was proved after all: the tunnel goes
-        end = time.monotonic() + 5
-        while svc.status()["tunnel"] and time.monotonic() < end:
-            time.sleep(0.05)
-        assert svc.status()["tunnel"] is None and svc._tunnel_proc is None
+        svc.reachable = True                     # an address proved: the tunnel stays, it is browsers' way in
+        time.sleep(1.0)
+        assert svc.status()["tunnel"] == "wss://quiet-river-test.trycloudflare.com/mesh" and len(told) == 1
     finally:
         svc.stop()
+
+
+# ------------------------------------------------------------------ any node as a player's way in (2026-10-12)
+
+def test_a_player_signed_in_elsewhere_plays_as_themselves_through_another_node(two_nodes):
+    """Another node's viewer, cross-site, no cookie: hello gives the certificate words, the player's
+    wallet signs them, and join takes the address + signature. CORS says yes to the room routes."""
+    (ca, sa), (cb, sb) = two_nodes
+    outside = {"Origin": "https://app.example", "CF-Connecting-IP": "203.0.113.7"}
+    pre = cb.options("/realtime/join", headers={**outside, "Access-Control-Request-Method": "POST"})
+    assert pre.status_code == 204 and pre.headers["access-control-allow-origin"] == "*"
+    hello = cb.get("/realtime/hello", headers=outside).json()
+    assert hello["who"]["kind"] == "guest" and hello["cert"]["node"] == sb.mesh.node_id
+    assert cb.get("/realtime/hello", headers=outside).headers["access-control-allow-origin"] == "*"
+    address = "nPlayerAddressFromNodeA0000000000x"
+    c = hello["cert"]
+    words = cert_message(c["network"], c["node"], address, c["expires"])
+    r = cb.post("/realtime/join", headers=outside, json={"game": "g1", "room": "town", "address": address,
+                                                        "sig": "good:" + words, "expires": c["expires"]})
+    assert r.status_code == 200, r.text
+    assert r.json()["me"]["id"] == address and not r.json()["me"]["guest"]
+    bad = cb.post("/realtime/join", headers=outside, json={"game": "g1", "room": "town", "address": address,
+                                                          "sig": "good:someone else's words", "expires": c["expires"]})
+    assert bad.status_code == 400, "a signature over other words proves nothing"
+
+
+def test_the_nodes_list_offers_https_ways_in_only(two_nodes):
+    (ca, sa), _ = two_nodes
+    sa.mesh.node.add_address("wss://quick-fox.trycloudflare.com/mesh", 443, "cd" * 32)
+    sa.mesh.node.addrs[("wss://quick-fox.trycloudflare.com/mesh", 443)]["ok"] = time.time()
+    sa.mesh.node.add_address("203.0.113.5", 8421, "ef" * 32)
+    j = ca.get("/realtime/nodes").json()
+    assert j["ok"] and {"base": "https://quick-fox.trycloudflare.com", "node": "cd" * 32} in j["nodes"]
+    assert all(n["base"].startswith("https://") for n in j["nodes"]), "a page served over https cannot use http"

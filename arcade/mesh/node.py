@@ -218,6 +218,7 @@ class MeshNode:
                  outbound_target: int = OUTBOUND_TARGET,
                  max_inbound: int = MAX_INBOUND,
                  ws_port: int | None = None,
+                 web_port: int | None = None,
                  vouch: Callable[[str, str, dict | None], Awaitable[bool]] | None = None):
         self.key = signing_key
         self.node_id = bytes(signing_key.verify_key).hex()
@@ -227,6 +228,7 @@ class MeshNode:
         self.max_inbound = max(1, int(max_inbound))
         # A local WebSocket port for a tunnel to point at (wsock.py); None: no WebSocket side.
         self.ws_port = ws_port
+        self.web_port = web_port                  # the node's web app: the tunnel carries its /realtime/ routes
         self._ws_server = None
         self._accepting = 0                       # inbound handshakes in progress
         self.extensions: list = []                # e.g. corelink.CoreBridge: told of links, given its frames
@@ -274,7 +276,7 @@ class MeshNode:
             if self.listen_port == 0:   # tests ask for any free port
                 self.listen_port = self._server.sockets[0].getsockname()[1]
         if self.ws_port is not None:
-            self._ws_server = await wsock.serve(self._accept, "127.0.0.1", self.ws_port)
+            self._ws_server = await wsock.serve(self._accept, "127.0.0.1", self.ws_port, http_port=self.web_port)
             if self.ws_port == 0:
                 self.ws_port = self._ws_server.sockets[0].getsockname()[1]
         self._spawn(self._dialer())
@@ -344,6 +346,10 @@ class MeshNode:
                                and e["id"] not in self.links
                                and (not self._meets(a, e) or e.get("plain"))]
                     random.shuffle(choices)
+                    # Direct addresses first: a tunnel (wss://) is for when nothing else reaches a node.
+                    have = {e["id"] for a, e in self.addrs.items() if not is_ws(a[0]) and e["id"] and e["fail"] < 3}
+                    choices = [a for a in choices if not is_ws(a[0])] + \
+                              [a for a in choices if is_ws(a[0]) and self.addrs[a]["id"] not in have]
                     for addr in choices[: self.outbound_target + (1 if self._probing else 0) - self._outbound()]:
                         self._spawn(self._dial(addr))
             except Exception:                      # noqa: BLE001 -- the loop must not die
