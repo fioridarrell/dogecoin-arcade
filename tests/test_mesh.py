@@ -726,3 +726,35 @@ def test_a_room_message_in_binary_comes_back_exactly_and_is_much_smaller():
         as_json = len(json.dumps(h, separators=(",", ":"))) + 2 + 7
         # The header shrinks to well under half; a certificate riding along is most of what is left.
         assert len(packed) < as_json * (0.7 if "c" in h else 0.6), (len(packed), as_json)   # measured 52% and 64%
+
+
+# ------------------------------------------------------------------ links over WebSocket (2026-10-12)
+# A node nobody can dial opens a tunnel (a Cloudflare quick tunnel) to a local WebSocket port and
+# announces its wss:// address; other nodes dial that. Loopback stands in for the tunnel here.
+
+def test_two_nodes_link_over_websocket_and_a_room_works_across_it():
+    async def go():
+        far = MeshNode(nacl.signing.SigningKey.generate(), NET, listen_host="127.0.0.1", listen_port=None, ws_port=0)
+        near = mk(listen=False)
+        await started(far, near)
+        try:
+            near.add_address(f"ws://127.0.0.1:{far.ws_port}/mesh", 443, far.node_id)
+            await until(lambda: far.node_id in near.links and near.node_id in far.links, what="ws link")
+            qn = await near.join("g/r", "nina")
+            await far.join("g/r", "fred")
+            await drain(qn, "join")
+            await far.send("g/r", "fred", b"over the tunnel")
+            assert (await drain(qn, "message")).data == b"over the tunnel"
+            assert not any(h.startswith("ws") for h, _ in far.addrs), "nothing to learn about a tunnel peer's address"
+        finally:
+            await stop(near, far)
+    run(go())
+
+
+def test_websocket_addresses_are_checked():
+    from arcade.mesh import wsock
+    assert wsock.parse_url("wss://abc-def.trycloudflare.com") == ("abc-def.trycloudflare.com", 443, "/mesh", True)
+    assert wsock.parse_url("ws://127.0.0.1:9000/mesh") == ("127.0.0.1", 9000, "/mesh", False)
+    for bad in ("http://x.com", "wss://", "wss://a b", "wss://x.com/<script>", "javascript:alert(1)"):
+        with pytest.raises(ValueError):
+            wsock.parse_url(bad)

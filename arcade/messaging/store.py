@@ -658,14 +658,15 @@ class MessageStore:
                                  (network, piece)).fetchall()
 
     def mesh_peers(self, network: str, since: int = 0) -> list[sqlite3.Row]:
-        """The latest announcement per mesh key seen since `since` (unix time),
-        newest first."""
+        """The latest announcement per mesh key and kind (an IP address, or a wss://
+        tunnel address -- a node may have both) seen since `since` (unix time), newest first."""
         return self.conn.execute(
             "SELECT * FROM mesh_announcement a WHERE a.network = ? AND a.seen_at >= ?"
             " AND NOT EXISTS (SELECT 1 FROM mesh_announcement b"
             "   WHERE b.network = a.network AND b.mesh_key = a.mesh_key"
+            "     AND (b.host LIKE 'wss://%') = (a.host LIKE 'wss://%')"
             "     AND (b.seen_at, b.txid) > (a.seen_at, a.txid))"
-            " ORDER BY a.seen_at DESC LIMIT 200", (network, int(since))).fetchall()
+            " ORDER BY a.seen_at DESC LIMIT 2000", (network, int(since))).fetchall()   # hundreds of nodes, two kinds each
 
     def set_meta(self, key: str, value: str) -> None:
         self.conn.execute(

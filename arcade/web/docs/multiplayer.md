@@ -135,7 +135,11 @@ slowest for a faster peer when it finds one.
 A node behind a router that cannot forward a port (carrier NAT, Starlink) still
 dials out. If it has IPv6 it announces that address and meets other IPv6 nodes
 halfway: both dial each other on the same beat of the clock, so each router lets
-the other in. Anybody with a public address can run a node that everyone else
+the other in. And if `cloudflared` is installed, it also opens a free Cloudflare
+quick tunnel and announces that `wss://` address, so even IPv4-only players' nodes
+can reach it. The mesh's own encryption runs inside the tunnel, so Cloudflare
+carries only ciphertext; nodes still link directly wherever they can, and
+`--mesh-tunnel off` turns it off. Anybody with a public address can run a node that everyone else
 links to automatically -- it announces itself, and the others dial it within a
 minute. More such nodes, from more people, make the mesh harder to break.
 

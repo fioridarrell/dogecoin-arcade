@@ -454,3 +454,49 @@ def test_a_node_remembers_the_peers_it_reached_across_a_restart(tmp_path):
         assert a.node_id in c.node.links
     finally:
         c.stop(); a.stop()
+
+
+def test_a_tunnel_address_is_announced_and_kept_beside_the_ip_one(tmp_path):
+    """arcade-mesh-ws: a wss:// address, parsed by new nodes, skipped by old ones (different first
+    word), and the address book keeps the latest of EACH kind per node."""
+    from arcade.messaging.envelope import Header, TYPE_MESH
+    key = "ab" * 32
+    ws = meshannounce.build("wss://Sized-Agenda.trycloudflare.com/mesh", 443, key)
+    assert meshannounce.parse(ws) == {"host": "wss://Sized-Agenda.trycloudflare.com/mesh", "port": 443, "key": key}
+    for bad in ("ws://x.trycloudflare.com/mesh", "wss://x.trycloudflare.com/other", "wss://localhost/mesh"):
+        with pytest.raises(ValueError):
+            meshannounce.build(bad, 443, key)
+    assert b"arcade-mesh-ws " in ws
+    store = MessageStore(tmp_path / "m.sqlite")
+    store.add_mesh_announcement("t1", "test", "addr", "203.0.113.9", 8421, key, 10, 100)
+    store.add_mesh_announcement("t2", "test", "addr", "wss://a.trycloudflare.com/mesh", 443, key, 11, 101)
+    store.add_mesh_announcement("t3", "test", "addr", "wss://b.trycloudflare.com/mesh", 443, key, 12, 102)
+    hosts = sorted(r["host"] for r in store.mesh_peers("test"))
+    assert hosts == ["203.0.113.9", "wss://b.trycloudflare.com/mesh"]
+
+
+def test_the_tunnel_keeper_opens_announces_and_closes_a_tunnel(tmp_path, monkeypatch):
+    """A stand-in cloudflared that prints a quick-tunnel address the way the real one does."""
+    from arcade.mesh import service as svclib
+    monkeypatch.setattr(svclib, "TUNNEL_FIRST", 0.1)
+    monkeypatch.setattr(svclib, "TUNNEL_EVERY", 0.3)
+    fake = tmp_path / "cloudflared"
+    fake.write_text("#!/bin/sh\necho 'INF |  https://quiet-river-test.trycloudflare.com  |'\nexec sleep 60\n")
+    fake.chmod(0o755)
+    told = []
+    svc = MeshService("arcade-test", nacl.signing.SigningKey.generate(), listen_host="127.0.0.1",
+                      listen_port=0, tunnel=str(fake), announce=lambda h, p: told.append((h, p))).start()
+    try:
+        assert svc.node.ws_port, "a tunnel needs the local WebSocket port"
+        end = time.monotonic() + 10
+        while not told and time.monotonic() < end:
+            time.sleep(0.05)
+        assert told == [("wss://quiet-river-test.trycloudflare.com/mesh", 443)]
+        assert svc.status()["tunnel"] == "wss://quiet-river-test.trycloudflare.com/mesh"
+        svc.reachable = True                     # its address was proved after all: the tunnel goes
+        end = time.monotonic() + 5
+        while svc.status()["tunnel"] and time.monotonic() < end:
+            time.sleep(0.05)
+        assert svc.status()["tunnel"] is None and svc._tunnel_proc is None
+    finally:
+        svc.stop()

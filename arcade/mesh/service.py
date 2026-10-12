@@ -29,6 +29,16 @@ proof: no proof is possible from inside (dialling your own IPv6 address never
 leaves the machine), and none is needed, because IPv6 peers are not dialled,
 they are met (node.py): both sides knock from their mesh ports on the same beat
 of the clock and each router lets the other in. `status()["meet"]` names it.
+
+**And a tunnel, as the floor under all of that** (2026-10-12, the operator: "not reliant on
+Cloudflare, but we can use Cloudflare to strengthen the network"). A node whose IPv4
+cannot be proved also runs a Cloudflare quick tunnel -- `cloudflared tunnel --url`,
+free, no account, pointing at the node's local WebSocket port (wsock.py) -- and
+announces the wss:// address it gets (`arcade-mesh-ws`). Every node can dial that,
+IPv4-only homes included. The tunnel carries ciphertext only: the mesh handshake and
+frames run inside it unchanged. A new address every time cloudflared restarts, so it is
+announced again then. No cloudflared on the machine, or `--mesh-tunnel off`: no tunnel,
+and nothing else changes. `status()["tunnel"]` names it.
 `--mesh-announce IP:PORT` still names an address by hand and skips all of this.
 
 **Who a player is.** A player is their chain address, proved by a certificate
@@ -72,6 +82,7 @@ BOOTSTRAP_EVERY = 60.0
 ANNOUNCE_EVERY = 24 * 3600.0
 ANNOUNCED_WITHIN = 14 * 24 * 3600       # chain announcements older than this are skipped
 CHECK_EVERY = 600.0                     # how often a node looks at its own address
+TUNNEL_FIRST, TUNNEL_EVERY = 45.0, 60.0 # when the tunnel keeper first looks, and how often after
 KEEP_PEERS = 30 * 24 * 3600             # how long a peer this node once reached is remembered
 SAVE_PEERS_EVERY = 300.0
 MIN_VOTES = 2                           # peers that must agree on what they see
@@ -160,7 +171,9 @@ class MeshService:
                  remember: Path | None = None,
                  own_v6: Callable[[], str | None] | None = None,
                  peers_file: Path | None = None,
-                 max_inbound: int | None = None):
+                 max_inbound: int | None = None,
+                 tunnel: str | None = None,
+                 ws_port: int | None = None):
         """`verify(address, signature, message)` asks a Core node; `announced()`
         lists the chain's mesh announcements; `announce(host, port)` publishes
         this node's; `announce_at` fixes the address by hand; `observe()` lists
@@ -185,8 +198,13 @@ class MeshService:
         self.last_announced = self._recall()
         self.reachable: bool | None = None
         self.meet: str | None = None            # the IPv6 address peers meet this node at
+        # The cloudflared program to run a quick tunnel with, or None (wsock.py, notes above).
+        self.tunnel_cmd = tunnel
+        self.tunnel_url: str | None = None
+        self._tunnel_proc = None
         self.node = MeshNode(key, network, listen_host=listen_host, listen_port=listen_port,
                              peers=peers or [], vouch=self._vouch,
+                             ws_port=(ws_port if ws_port is not None else 0) if tunnel else None,
                              **({"max_inbound": max_inbound} if max_inbound else {}))
         self.node_id = self.node.node_id
         for host, port, node_id in self._load_peers():
@@ -231,6 +249,10 @@ class MeshService:
         except Exception:                              # noqa: BLE001 -- stopping matters more
             log.exception("mesh: saving peers")
         try:
+            self._call(self._tunnel_stop(), timeout=15)
+        except Exception:                              # noqa: BLE001
+            pass
+        try:
             self._call(self.node.stop(), timeout=10)
         finally:
             self.loop.call_soon_threadsafe(self.loop.stop)
@@ -244,6 +266,8 @@ class MeshService:
             self.node._spawn(self._peer_keeper())
         if self.announce is not None and (self.announce_at or self.observe):
             self.node._spawn(self._announcer())
+        if self.tunnel_cmd and self.node.ws_port:
+            self.node._spawn(self._tunneler())
 
     def _call(self, coro, timeout: float = 5.0):
         """Run a coroutine on the mesh's loop from any other thread, and wait."""
@@ -370,6 +394,57 @@ class MeshService:
         self._keep({"host": host, "port": port, "at": int(time.time())})
         return True
 
+    async def _tunneler(self) -> None:
+        """Keep a quick tunnel up while this node cannot be reached otherwise (see the notes)."""
+        import re
+        import tempfile
+        await asyncio.sleep(TUNNEL_FIRST)               # after the first look at its own address
+        home = tempfile.mkdtemp(prefix="arcade-tunnel-")  # no ~/.cloudflared/config.yml: a quick tunnel
+        while True:
+            try:
+                if self.reachable is True and not self.announce_at:
+                    await self._tunnel_stop()               # a proved address: no tunnel needed
+                elif self._tunnel_proc is None or self._tunnel_proc.returncode is not None:
+                    self.tunnel_url = None
+                    self._tunnel_proc = await asyncio.create_subprocess_exec(
+                        self.tunnel_cmd, "tunnel", "--no-autoupdate", "--url", f"http://127.0.0.1:{self.node.ws_port}",
+                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+                        env=dict(os.environ, HOME=home))
+                    end = time.monotonic() + 60
+                    while time.monotonic() < end and self.tunnel_url is None:
+                        line = await asyncio.wait_for(self._tunnel_proc.stdout.readline(), 60)
+                        if not line:
+                            break
+                        m = re.search(rb"https://[a-z0-9-]+\.trycloudflare\.com", line)
+                        if m:
+                            self.tunnel_url = "wss://" + m.group(0).decode()[8:] + "/mesh"
+                    if self.tunnel_url:
+                        self.node._spawn(self._drain_tunnel_output(self._tunnel_proc))
+                        log.info("mesh: reachable through a tunnel at %s", self.tunnel_url)
+                        if self.announce is not None:
+                            await asyncio.to_thread(self.announce, self.tunnel_url, 443)
+                    else:
+                        await self._tunnel_stop()
+            except Exception as exc:                   # noqa: BLE001 -- try again later
+                log.warning("mesh: tunnel: %s", exc)
+            await asyncio.sleep(TUNNEL_EVERY)
+
+    async def _drain_tunnel_output(self, proc) -> None:
+        try:
+            while await proc.stdout.readline():
+                pass                                        # cloudflared talks; nobody needs to listen
+        except Exception:                                   # noqa: BLE001
+            pass
+
+    async def _tunnel_stop(self) -> None:
+        proc, self._tunnel_proc, self.tunnel_url = self._tunnel_proc, None, None
+        if proc is not None and proc.returncode is None:
+            proc.terminate()
+            try:
+                await asyncio.wait_for(proc.wait(), 10)
+            except asyncio.TimeoutError:
+                proc.kill()
+
     async def _announcer(self) -> None:
         await asyncio.sleep(30)                         # let the node settle first
         while True:
@@ -419,6 +494,7 @@ class MeshService:
                 "peers": links, "known": len(self.node.addrs),
                 "rtt_ms": sorted(v for v in self.node.rtts().values() if v is not None),
                 "listening": self.node.listen_port, "reachable": self.reachable, "meet": self.meet,
+                "tunnel": self.tunnel_url,
                 "announced": {k: self.last_announced.get(k) for k in ("host", "port", "at")}
                 if self.last_announced else None}
 
@@ -517,7 +593,8 @@ class MeshService:
 def for_state(state, *, listen_host: str | None = None, listen_port: int | None = DEFAULT_PORT,
               peers: list[tuple[str, int]] | None = None,
               announce_at: tuple[str, int] | None = None,
-              public_port: int | None = None, max_inbound: int | None = None) -> MeshService:
+              public_port: int | None = None, max_inbound: int | None = None,
+              tunnel: str | None = None) -> MeshService:
     """A MeshService wired to an arcade node: its key in the arcade's home, its
     peers from the messaging chain's index, and players checked by the
     messaging chain's Core -- the chain the @tags live on, so a player's
@@ -557,5 +634,6 @@ def for_state(state, *, listen_host: str | None = None, listen_port: int | None 
         announce=lambda host, port: state.announce_mesh(host, port, bytes(key.verify_key).hex()),
         announce_at=announce_at, observe=observe, public_port=public_port,
         remember=Path(state.home) / "mesh-announced.json", own_v6=own_ipv6,
-        peers_file=Path(state.home) / "mesh-peers.json", max_inbound=max_inbound)
+        peers_file=Path(state.home) / "mesh-peers.json", max_inbound=max_inbound,
+        tunnel=tunnel)
     return service

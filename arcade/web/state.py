@@ -817,7 +817,7 @@ class AppState:
                 raise ValueError(f"the fee address {fee_address} has no coins to pay for this")
             prepared = sender.prepare(address, payload, change_address=address)
             txid = sender.broadcast(prepared)
-        return {"txid": txid, "host": meshannounce.clean_host(host),
+        return {"txid": txid, "host": meshannounce.clean_address(host),
                 "port": meshannounce.clean_port(port), "key": mesh_key}
 
     def announce_instance(self, domain: str) -> dict:

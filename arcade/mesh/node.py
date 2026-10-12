@@ -91,6 +91,7 @@ from typing import Any, Awaitable, Callable
 import nacl.exceptions
 import nacl.signing
 
+from . import wsock
 from .link import Link, LinkError, handshake
 
 log = logging.getLogger("arcade.mesh")
@@ -100,6 +101,10 @@ GUESTLIKE = lambda m: str(m).startswith("guest-")   # noqa: E731 -- a guest has 
 def room_id(room: str) -> str:
     """A room's fingerprint in a SUB: 8 bytes of BLAKE2b, as hex."""
     return hashlib.blake2b(room.encode("utf-8"), digest_size=8).hexdigest()
+
+
+def is_ws(host: str) -> bool:
+    return str(host).startswith(("wss://", "ws://"))
 
 
 def is_v6(host: str) -> bool:
@@ -212,6 +217,7 @@ class MeshNode:
                  peers: list[tuple[str, int]] | None = None,
                  outbound_target: int = OUTBOUND_TARGET,
                  max_inbound: int = MAX_INBOUND,
+                 ws_port: int | None = None,
                  vouch: Callable[[str, str, dict | None], Awaitable[bool]] | None = None):
         self.key = signing_key
         self.node_id = bytes(signing_key.verify_key).hex()
@@ -219,6 +225,9 @@ class MeshNode:
         self.listen_host, self.listen_port = listen_host, listen_port
         self.outbound_target = outbound_target
         self.max_inbound = max(1, int(max_inbound))
+        # A local WebSocket port for a tunnel to point at (wsock.py); None: no WebSocket side.
+        self.ws_port = ws_port
+        self._ws_server = None
         self._accepting = 0                       # inbound handshakes in progress
         # Asked before a remote member is shown or heard; None trusts every node.
         self.vouch = vouch
@@ -263,6 +272,10 @@ class MeshNode:
                                                       self.listen_port, reuse_port=True)
             if self.listen_port == 0:   # tests ask for any free port
                 self.listen_port = self._server.sockets[0].getsockname()[1]
+        if self.ws_port is not None:
+            self._ws_server = await wsock.serve(self._accept, "127.0.0.1", self.ws_port)
+            if self.ws_port == 0:
+                self.ws_port = self._ws_server.sockets[0].getsockname()[1]
         self._spawn(self._dialer())
         self._spawn(self._announcer())
         if self.listen_port is not None:
@@ -273,6 +286,8 @@ class MeshNode:
         self._stopping = True
         if self._server is not None:
             self._server.close()
+        if self._ws_server is not None:
+            self._ws_server.close()
         # Links first: since Python 3.12 the server's wait_closed() waits for every
         # connection it accepted, and those end only when their links do.
         for link in list(self.links.values()):
@@ -323,7 +338,10 @@ class MeshNode:
         entry["next"] = time.monotonic() + 30           # not again while this one runs
         writer = None
         try:
-            reader, writer = await asyncio.wait_for(asyncio.open_connection(*addr), 5.0)
+            if is_ws(addr[0]):                                 # a node behind a tunnel (wsock.py)
+                reader, writer = await asyncio.wait_for(wsock.connect(addr[0]), 12.0)
+            else:
+                reader, writer = await asyncio.wait_for(asyncio.open_connection(*addr), 5.0)
             link = await handshake(reader, writer, self.key, self.network, True, self.listen_port)
         except (LinkError, OSError, asyncio.TimeoutError) as exc:
             entry["fail"] += 1
@@ -426,9 +444,10 @@ class MeshNode:
             except (ConnectionError, OSError):
                 pass
             return
-        if link.peer_listen:
+        if link.peer_listen and link.host not in ("ws", "?"):
             # Where it says it can be reached. Kept as a lead, passed on to
             # others only once this node has reached it itself (_dial sets ok).
+            # (Not for a link through a tunnel: there is no address to learn there.)
             self.add_address(link.host, link.peer_listen, link.peer_id)
         self._accepting = max(0, self._accepting - 1)        # a link now: counted among the links
         try:
