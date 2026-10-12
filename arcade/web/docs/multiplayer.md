@@ -139,7 +139,14 @@ the other in. And if `cloudflared` is installed, it also opens a free Cloudflare
 quick tunnel and announces that `wss://` address, so even IPv4-only players' nodes
 can reach it. The mesh's own encryption runs inside the tunnel, so Cloudflare
 carries only ciphertext; nodes still link directly wherever they can, and
-`--mesh-tunnel off` turns it off. Anybody with a public address can run a node that everyone else
+`--mesh-tunnel off` turns it off.
+
+The node's Pepecoin Core nodes ride the mesh too: for up to four linked arcades per
+chain (the quickest links), the node gives its Core a local peer address that leads,
+through the mesh link, to that arcade's Core. Two nodes behind routers that Core
+alone could never connect still sync and relay to each other. Core traffic is capped
+at 256 KB/s per link and sent in small pieces, so games stay quick; `--mesh-core off`
+turns it off. Anybody with a public address can run a node that everyone else
 links to automatically -- it announces itself, and the others dial it within a
 minute. More such nodes, from more people, make the mesh harder to break.
 

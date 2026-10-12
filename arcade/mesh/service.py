@@ -200,6 +200,7 @@ class MeshService:
         self.meet: str | None = None            # the IPv6 address peers meet this node at
         # The cloudflared program to run a quick tunnel with, or None (wsock.py, notes above).
         self.tunnel_cmd = tunnel
+        self.core = None                        # corelink.CoreBridge, when Core rides the mesh
         self.tunnel_url: str | None = None
         self._tunnel_proc = None
         self.node = MeshNode(key, network, listen_host=listen_host, listen_port=listen_port,
@@ -495,6 +496,7 @@ class MeshService:
                 "rtt_ms": sorted(v for v in self.node.rtts().values() if v is not None),
                 "listening": self.node.listen_port, "reachable": self.reachable, "meet": self.meet,
                 "tunnel": self.tunnel_url,
+                "core": self.core.status() if self.core is not None else None,
                 "announced": {k: self.last_announced.get(k) for k in ("host", "port", "at")}
                 if self.last_announced else None}
 
@@ -594,7 +596,7 @@ def for_state(state, *, listen_host: str | None = None, listen_port: int | None 
               peers: list[tuple[str, int]] | None = None,
               announce_at: tuple[str, int] | None = None,
               public_port: int | None = None, max_inbound: int | None = None,
-              tunnel: str | None = None) -> MeshService:
+              tunnel: str | None = None, core: bool = True) -> MeshService:
     """A MeshService wired to an arcade node: its key in the arcade's home, its
     peers from the messaging chain's index, and players checked by the
     messaging chain's Core -- the chain the @tags live on, so a player's
@@ -636,4 +638,20 @@ def for_state(state, *, listen_host: str | None = None, listen_port: int | None 
         remember=Path(state.home) / "mesh-announced.json", own_v6=own_ipv6,
         peers_file=Path(state.home) / "mesh-peers.json", max_inbound=max_inbound,
         tunnel=tunnel)
+    if core:
+        # Core to Core through the mesh (corelink.py): each chain's own peer port, and its addnode.
+        from .corelink import CoreBridge
+        by_name = {"main": state.ledger, "test": state.messaging}
+        chains = {}
+        for name, chain in by_name.items():
+            try:
+                chains[name] = int(chain.params.p2p_port)
+            except Exception:                              # noqa: BLE001 -- a chain this node does not run
+                continue
+
+        def addnode(name: str, hostport: str, op: str):
+            with by_name[name].rpc() as rpc:
+                return rpc.call("addnode", hostport, op)
+        service.core = CoreBridge(chains, addnode)
+        service.node.add_extension(service.core)
     return service

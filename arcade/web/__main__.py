@@ -89,6 +89,11 @@ def main(argv: list[str] | None = None) -> int:
              "tunnel (cloudflared, if installed) and announce it, so every node can dial "
              "this one; 'off' never does (auto by default)")
     parser.add_argument(
+        "--mesh-core", choices=["on", "off"], default="on",
+        help="let this node's Pepecoin Core nodes peer with other arcades' Core nodes through "
+             "the mesh, so two nodes behind routers can still sync with each other "
+             "(at most 256 KB/s per link; on by default)")
+    parser.add_argument(
         "--mesh-public-port", type=int, default=None, metavar="PORT",
         help="the port the router forwards to --mesh-port, if it is a different number")
     parser.add_argument(
@@ -215,6 +220,7 @@ def main(argv: list[str] | None = None) -> int:
                 tunnel=(shutil.which("cloudflared") or next((p for p in (os.path.expanduser("~/.local/bin/cloudflared"),)
                                                              if os.path.exists(p)), None))
                 if args.mesh_tunnel == "auto" and args.mesh_port else None,
+                core=args.mesh_core == "on",
             ).start()
             print(f"  mesh node {state.mesh.node_id[:16]}"
                   + (f" listening on {args.mesh_port}" if args.mesh_port else " (dial-out only)"))

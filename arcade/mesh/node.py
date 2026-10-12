@@ -229,6 +229,7 @@ class MeshNode:
         self.ws_port = ws_port
         self._ws_server = None
         self._accepting = 0                       # inbound handshakes in progress
+        self.extensions: list = []                # e.g. corelink.CoreBridge: told of links, given its frames
         # Asked before a remote member is shown or heard; None trusts every node.
         self.vouch = vouch
         self._vetted: OrderedDict[tuple, tuple[bool, float]] = OrderedDict()
@@ -281,6 +282,7 @@ class MeshNode:
         if self.listen_port is not None:
             self._spawn(self._meeter())
         self._spawn(self._tuner())
+        self._spawn(self._rebalancer())
 
     async def stop(self) -> None:
         self._stopping = True
@@ -313,6 +315,21 @@ class MeshNode:
         entry = self.addrs.setdefault((host, port), {"id": None, "ok": 0.0, "fail": 0, "next": 0.0})
         if node_id and not entry["id"]:
             entry["id"] = node_id
+
+    def add_extension(self, ext) -> None:
+        """Something riding on the links (corelink.CoreBridge): link_up(link), link_down(peer_id),
+        on_frame(link, header, blob) for frames of its kind ("cs"), rebalance() every minute."""
+        ext.node = self
+        self.extensions.append(ext)
+
+    async def _rebalancer(self) -> None:
+        while not self._stopping:
+            await asyncio.sleep(60)
+            for ext in list(self.extensions):
+                try:
+                    await ext.rebalance()
+                except Exception:                  # noqa: BLE001
+                    log.exception("mesh extension")
 
     def _outbound(self) -> int:
         return sum(1 for link in self.links.values() if link.outbound)
@@ -466,6 +483,8 @@ class MeshNode:
             await self._send_addrs(link)
             await self._send_own_sub(only=link)
             await self._send_table(link)
+            for ext in list(self.extensions):
+                await ext.link_up(link)
             while True:
                 header, blob = await asyncio.wait_for(link.recv(), DEAD_AFTER)
                 await self._handle(link, header, blob)
@@ -482,6 +501,12 @@ class MeshNode:
                 del self.links[link.peer_id]
             await link.close()
             self._drop_routes_via(link.peer_id)
+            for ext in list(self.extensions):
+                try:
+                    await ext.link_down(link.peer_id)
+                    await ext.rebalance()
+                except Exception:                  # noqa: BLE001
+                    log.exception("mesh extension")
 
     async def _pinger(self, link: Link) -> None:
         link.rtt, link.pings = None, {}       # seconds, smoothed; ping number -> sent at
@@ -903,6 +928,11 @@ class MeshNode:
             return
         if kind == "pong":
             self._pong(link, str(header.get("n", "")))
+            return
+        if kind == "cs":
+            for ext in self.extensions:
+                if hasattr(ext, "on_frame"):
+                    await ext.on_frame(link, header, blob)
             return
         if kind == "addrs":
             for a in header.get("a", [])[:50] if isinstance(header.get("a"), list) else []:

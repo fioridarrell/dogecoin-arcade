@@ -758,3 +758,50 @@ def test_websocket_addresses_are_checked():
     for bad in ("http://x.com", "wss://", "wss://a b", "wss://x.com/<script>", "javascript:alert(1)"):
         with pytest.raises(ValueError):
             wsock.parse_url(bad)
+
+
+# ------------------------------------------------------------------ Core through the mesh (2026-10-12)
+
+def test_core_peers_through_the_mesh_both_ways_and_only_to_the_core_port():
+    """Two stand-in Core nodes: a's Core dials the port its arcade opened for b, and the bytes reach
+    b's Core peer port, and the answer comes back. addnode is asked to add, and to remove on unlink."""
+    from arcade.mesh.corelink import CoreBridge
+
+    async def go():
+        heard = []
+
+        async def core_b(reader, writer):          # b's Core: echoes what it hears, upper-cased
+            try:
+                while data := await reader.read(100):
+                    heard.append(data)
+                    writer.write(data.upper()); await writer.drain()
+            except (ConnectionError, OSError):
+                pass
+            finally:
+                writer.close()
+        server_b = await asyncio.start_server(core_b, "127.0.0.1", 0)
+        asked = []
+        a, b = mk(), mk()
+        ba = CoreBridge({"test": 1}, lambda c, hp, op: asked.append((c, hp, op)))
+        bb = CoreBridge({"test": server_b.sockets[0].getsockname()[1], "main": 2}, None)
+        a.add_extension(ba); b.add_extension(bb)
+        await started(a, b)
+        try:
+            a.add_address(*addr(b))
+            await until(lambda: ba.listeners, what="a's arcade opens a Core port for b")
+            (peer, chain), (_, port) = next(iter(ba.listeners.items()))
+            assert peer == b.node_id and chain == "test", "only a chain both offer"
+            assert asked == [("test", f"127.0.0.1:{port}", "add")]
+            r, w = await asyncio.open_connection("127.0.0.1", port)      # a's Core dials it
+            w.write(b"version"); await w.drain()
+            assert await asyncio.wait_for(r.read(100), 5) == b"VERSION"
+            assert heard == [b"version"]
+            w.close(); await w.wait_closed()
+            await b.stop()                                               # the link goes
+            await until(lambda: not ba.listeners, what="the port closes with the link")
+            assert asked[-1] == ("test", f"127.0.0.1:{port}", "remove")
+        finally:
+            await a.stop()
+            server_b.close(); await server_b.wait_closed()
+            await asyncio.sleep(0.2)                  # let the closed sockets finish closing
+    run(go())
