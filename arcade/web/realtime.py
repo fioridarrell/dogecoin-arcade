@@ -63,6 +63,18 @@ def register(app, state, *, account_view: Callable, signed_in: Callable,
              check_csrf: Callable) -> None:
 
     tag_cache: dict[str, tuple[str, float]] = {}
+    # A game's service on this machine (arcade/service.py): it shows the node's
+    # service key instead of a form token, and is the operator. Never through
+    # the door: a public request with the key is just a request without a token.
+    from ..service import HEADER as SERVICE_HEADER, service_key
+    import secrets as _secrets
+    svc_key = service_key(state.home)
+
+    def form_ok(request: Request, body: dict) -> None:
+        shown = request.headers.get(SERVICE_HEADER, "")
+        if shown and svc_key and not account_view(request) and _secrets.compare_digest(shown, svc_key):
+            return
+        check_csrf(str(body.get("csrf_token", "")))
 
     def tag_of(address: str | None) -> str:
         if not address:
@@ -123,7 +135,7 @@ def register(app, state, *, account_view: Callable, signed_in: Callable,
 
     @app.post("/realtime/join")
     def realtime_join(request: Request, body: dict):
-        check_csrf(str(body.get("csrf_token", "")))
+        form_ok(request, body)
         try:
             svc = mesh()
             room = room_key(body.get("game"), body.get("room"))
@@ -160,7 +172,7 @@ def register(app, state, *, account_view: Callable, signed_in: Callable,
 
     @app.post("/realtime/send")
     def realtime_send(request: Request, body: dict):
-        check_csrf(str(body.get("csrf_token", "")))
+        form_ok(request, body)
         try:
             if "b64" in body:
                 data = base64.b64decode(str(body["b64"]), validate=True)
@@ -175,7 +187,7 @@ def register(app, state, *, account_view: Callable, signed_in: Callable,
 
     @app.post("/realtime/leave")
     def realtime_leave(request: Request, body: dict):
-        check_csrf(str(body.get("csrf_token", "")))
+        form_ok(request, body)
         try:
             mesh().leave(str(body.get("token", "")))
         except MeshError:

@@ -376,3 +376,80 @@ def test_one_player_in_two_tabs_gets_two_sessions_that_both_hear_and_outlive_eac
         assert not svc.present("g1/town", "nTabPlayer")
     finally:
         s1.close(); s2.close(); other.close()
+
+
+# ------------------------------------------------------------------ a game's own service (2026-10-12)
+# "If anybody else wants to make a bank for their own game, they should be able to do it on
+# their own node": a program on the node's machine joins its game's rooms as the node's operator
+# with the node's service key (arcade/service.py), no browser and no form token.
+
+def test_a_service_on_the_node_joins_with_its_key_and_the_internet_cannot(two_nodes):
+    from arcade.service import HEADER, KEY_FILE, service_key
+    (ca, sa), _ = two_nodes
+    key = service_key(sa.home, make=False)
+    assert key and len(key) == 64, "the node made its service key when it started"
+    assert oct((sa.home / KEY_FILE).stat().st_mode & 0o777) == "0o600"
+    body = {"game": "mygame", "room": "bank"}
+    r = ca.post("/realtime/join", json=body, headers={HEADER: key})
+    assert r.status_code == 200 and r.json()["ok"], r.text
+    tok = r.json()["token"]
+    assert ca.post("/realtime/send", json={"token": tok, "data": "hi"}, headers={HEADER: key}).json() == {"ok": True}
+    assert ca.post("/realtime/join", json=body, headers={HEADER: "0" * 64}).status_code == 400, "a wrong key is no key"
+    assert ca.post("/realtime/join", json=body).status_code == 400, "no key and no form token"
+    # Through the door (an edge header): the key counts for nothing.
+    r = ca.post("/realtime/join", json=body, headers={HEADER: key, "CF-Connecting-IP": "203.0.113.9"})
+    assert r.status_code == 400
+
+
+def test_the_service_client_hears_a_player_and_answers(two_nodes):
+    import threading as th
+    from arcade.service import Room
+    (ca, sa), (cb, sb) = two_nodes
+    got = []
+    room = Room("mygame", "bank", node=str(ca.base_url), home=sa.home)
+    room.join()
+
+    def serve():
+        for ev in room.events(reconnect=False):
+            if ev["type"] == "message" and ev["member"]["id"] != room.me["id"]:
+                got.append(ev)
+                room.send({"t": "ack", "to": ev["member"]["id"]})
+                return
+    t = th.Thread(target=serve, daemon=True); t.start()
+    jb = join(cb, sb, room="bank", game="mygame")
+    player = Stream(cb, jb["token"])
+    try:
+        player.wait(lambda e: e["type"] == "join" and e["member"]["id"] == room.me["id"])
+        cb.post("/realtime/send", json={"csrf_token": sb.csrf_token, "token": jb["token"], "data": "deposit"})
+        ack = player.wait(lambda e: e["type"] == "message" and e["member"]["id"] == room.me["id"])
+        assert json.loads(ack["data"]) == {"t": "ack", "to": jb["me"]["id"]}
+        assert got and got[0]["data"] == "deposit"
+    finally:
+        player.close()
+        room.leave()
+
+
+def test_a_node_remembers_the_peers_it_reached_across_a_restart(tmp_path):
+    a = MeshService("arcade-test", nacl.signing.SigningKey.generate(), listen_host="127.0.0.1", listen_port=0).start()
+    keep = tmp_path / "mesh-peers.json"
+    b = MeshService("arcade-test", nacl.signing.SigningKey.generate(), listen_host="127.0.0.1", listen_port=0,
+                    peers=[("127.0.0.1", a.node.listen_port)], peers_file=keep).start()
+    try:
+        end = time.monotonic() + 5
+        while not b.node.links and time.monotonic() < end:
+            time.sleep(0.02)
+        assert b.node.links
+    finally:
+        b.stop()                                   # saves on the way out
+    rows = json.loads(keep.read_text())
+    assert [(r["h"], r["p"], r["id"]) for r in rows] == [("127.0.0.1", a.node.listen_port, a.node_id)]
+    # A fresh start with no --mesh-peer and no chain: it finds a from the file alone.
+    c = MeshService("arcade-test", nacl.signing.SigningKey.generate(), listen_host="127.0.0.1", listen_port=0,
+                    peers_file=keep).start()
+    try:
+        end = time.monotonic() + 5
+        while not c.node.links and time.monotonic() < end:
+            time.sleep(0.02)
+        assert a.node_id in c.node.links
+    finally:
+        c.stop(); a.stop()

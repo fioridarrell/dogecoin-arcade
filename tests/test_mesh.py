@@ -648,3 +648,44 @@ def test_a_node_whose_ipv4_cannot_be_reached_announces_its_ipv6_to_be_met():
         finally:
             await svc.node.stop()
     run(go())
+
+
+# ------------------------------------------------------------------ the fastest links win (2026-10-12)
+
+def test_a_link_knows_its_round_trip_time():
+    async def go():
+        a, b = await started(mk(), mk())
+        try:
+            a.add_address(*addr(b))
+            for _ in range(150):
+                if b.node_id in a.rtts() and a.rtts()[b.node_id] is not None:
+                    break
+                await asyncio.sleep(0.02)
+            assert a.rtts()[b.node_id] is not None and a.rtts()[b.node_id] < 500
+        finally:
+            await stop(a, b)
+    run(go())
+
+
+def test_a_faster_peer_replaces_the_slowest_link():
+    async def go():
+        a, b, c = await started(mk(target=1), mk(), mk())
+        try:
+            a.add_address(*addr(b))
+            for _ in range(100):
+                if b.node_id in a.links:
+                    break
+                await asyncio.sleep(0.02)
+            a.links[b.node_id].rtt = 0.5               # b is far away (half a second)
+            a.add_address(*addr(c))                    # c is a newcomer next door
+            dropped = await a.tune_once(settle=2.5)    # the trial links c and times it
+            assert dropped == b.node_id
+            assert c.node_id in a.links and b.node_id not in a.links
+            # And a trial that is no faster is let go, keeping what works.
+            a.links[c.node_id].rtt = 0.0001
+            a.addrs[addr(b)]["next"] = 0.0              # (a just dropped b: it would wait 30 s to dial it again)
+            dropped = await a.tune_once(settle=2.5)
+            assert dropped == b.node_id and c.node_id in a.links
+        finally:
+            await stop(a, b, c)
+    run(go())

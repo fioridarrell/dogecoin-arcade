@@ -28,6 +28,13 @@ message goes only towards nodes that want it, nodes in between forward without
 being in the room, and when a node goes quiet its SUBs stop and its routes and
 members expire on their own. Nothing has to be torn down by anyone.
 
+**The fastest links win.** Every ping carries a number and comes back as a pong, so
+each link knows its round-trip time. Every TUNE_EVERY seconds a node that already
+has its outbound links tries one more peer; once the trial has a time, the slowest
+outbound link is dropped if the newcomer beat it clearly. Rooms do not notice: their
+routes are found again over the links that remain (2026-10-12, the operator: "choose the
+one with the fastest ping time").
+
 **Nobody can speak for another node.** Every SUB and every room message is
 signed by the node it came from, over everything but the hop count. A node that
 forwards can drop or delay, never forge or alter; and the receiver checks the
@@ -94,6 +101,9 @@ DIAL_EVERY = 1.0            # how often a node tops up its outbound links
 MEET_EVERY = 15.0           # the wall-clock beat IPv6 peers meet on (seconds)
 MEET_WAIT = 9.0             # how long one meeting dial keeps knocking (SYN retries at 1, 3, 7 s)
 MEET_MAX = 32               # IPv6 peers met per beat
+TUNE_EVERY = 300.0          # how often a node tries one more peer to see if it is faster
+TUNE_SETTLE = 40.0          # how long the trial link gets to show its round-trip time
+TUNE_MARGIN = 0.8           # a newcomer must be this much faster than the slowest link to replace it
 MAX_INBOUND = 32
 PING_EVERY = 15.0
 DEAD_AFTER = 45.0
@@ -204,6 +214,7 @@ class MeshNode:
         self._server: asyncio.base_events.Server | None = None
         self._tasks: set[asyncio.Task] = set()
         self._stopping = False
+        self._probing = False                  # one outbound link over target while a trial runs
 
     # ---------------------------------------------------------------- lifecycle
 
@@ -217,6 +228,7 @@ class MeshNode:
         self._spawn(self._announcer())
         if self.listen_port is not None:
             self._spawn(self._meeter())
+        self._spawn(self._tuner())
 
     async def stop(self) -> None:
         self._stopping = True
@@ -254,14 +266,14 @@ class MeshNode:
     async def _dialer(self) -> None:
         while not self._stopping:
             try:
-                if self._outbound() < self.outbound_target:
+                if self._outbound() < self.outbound_target + (1 if self._probing else 0):
                     now = time.monotonic()
                     choices = [a for a, e in self.addrs.items()
                                if e["next"] <= now and e["id"] != self.node_id
                                and e["id"] not in self.links
                                and (not self._meets(a, e) or e.get("plain"))]
                     random.shuffle(choices)
-                    for addr in choices[: self.outbound_target - self._outbound()]:
+                    for addr in choices[: self.outbound_target + (1 if self._probing else 0) - self._outbound()]:
                         self._spawn(self._dial(addr))
             except Exception:                      # noqa: BLE001 -- the loop must not die
                 log.exception("mesh dialer")
@@ -400,12 +412,68 @@ class MeshNode:
             self._drop_routes_via(link.peer_id)
 
     async def _pinger(self, link: Link) -> None:
+        link.rtt, link.pings = None, {}       # seconds, smoothed; ping number -> sent at
+        first = True
         try:
             while True:
-                await asyncio.sleep(PING_EVERY)
-                await link.send({"t": "ping"})
+                await asyncio.sleep(1.0 if first else PING_EVERY)
+                first = False
+                n = secrets.token_hex(4)
+                link.pings[n] = time.monotonic()
+                if len(link.pings) > 8:
+                    link.pings.pop(next(iter(link.pings)))
+                await link.send({"t": "ping", "n": n})
         except (LinkError, ConnectionError, OSError):
             pass
+
+    def _pong(self, link: Link, n: str) -> None:
+        sent = getattr(link, "pings", {}).pop(n, None)
+        if sent is None:
+            return
+        rtt = time.monotonic() - sent
+        link.rtt = rtt if link.rtt is None else 0.7 * link.rtt + 0.3 * rtt
+
+    def rtts(self) -> dict[str, float | None]:
+        """Each linked node's round-trip time in milliseconds (None until measured)."""
+        return {pid: (round(l.rtt * 1000, 1) if getattr(l, "rtt", None) is not None else None)
+                for pid, l in self.links.items()}
+
+    async def _tuner(self) -> None:
+        while not self._stopping:
+            await asyncio.sleep(TUNE_EVERY)
+            try:
+                await self.tune_once()
+            except Exception:                      # noqa: BLE001 -- the loop must not die
+                log.exception("mesh tuner")
+
+    async def tune_once(self, settle: float | None = None) -> str | None:
+        """Try one more peer; drop the slowest outbound link if the trial beat it.
+        Returns the id of the link dropped, if any."""
+        if self._outbound() < self.outbound_target:
+            return None
+        spare = [a for a, e in self.addrs.items()
+                 if e["id"] != self.node_id and e["id"] not in self.links and e["next"] <= time.monotonic()]
+        if not spare:
+            return None
+        before = {pid for pid, l in self.links.items() if l.outbound}
+        self._probing = True
+        try:
+            await asyncio.sleep(TUNE_SETTLE if settle is None else settle)
+        finally:
+            self._probing = False
+        out = [l for l in self.links.values() if l.outbound]
+        if len(out) <= self.outbound_target or any(getattr(l, "rtt", None) is None for l in out):
+            return None
+        new = [l for l in out if l.peer_id not in before]
+        slowest = max(out, key=lambda l: l.rtt)
+        if not new or slowest in new or min(l.rtt for l in new) > slowest.rtt * TUNE_MARGIN:
+            # The trial was no better: let it go again instead.
+            drop = max(new, key=lambda l: l.rtt) if new else slowest
+        else:
+            drop = slowest
+        log.info("mesh: dropping the slower link to %s (%.0f ms)", drop.peer_id[:12], drop.rtt * 1000)
+        await drop.close()
+        return drop.peer_id
 
     async def _send_addrs(self, link: Link) -> None:
         good = [{"h": h, "p": p, "id": e["id"]} for (h, p), e in self.addrs.items()
@@ -660,6 +728,11 @@ class MeshNode:
     async def _handle(self, link: Link, header: dict, blob: bytes) -> None:
         kind = header.get("t")
         if kind == "ping":
+            if isinstance(header.get("n"), str):
+                await link.send({"t": "pong", "n": header["n"][:16]})
+            return
+        if kind == "pong":
+            self._pong(link, str(header.get("n", "")))
             return
         if kind == "addrs":
             for a in header.get("a", [])[:50] if isinstance(header.get("a"), list) else []:

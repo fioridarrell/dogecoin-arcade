@@ -72,6 +72,8 @@ BOOTSTRAP_EVERY = 60.0
 ANNOUNCE_EVERY = 24 * 3600.0
 ANNOUNCED_WITHIN = 14 * 24 * 3600       # chain announcements older than this are skipped
 CHECK_EVERY = 600.0                     # how often a node looks at its own address
+KEEP_PEERS = 30 * 24 * 3600             # how long a peer this node once reached is remembered
+SAVE_PEERS_EVERY = 300.0
 MIN_VOTES = 2                           # peers that must agree on what they see
 
 
@@ -156,7 +158,8 @@ class MeshService:
                  observe: Callable[[], list[str]] | None = None,
                  public_port: int | None = None,
                  remember: Path | None = None,
-                 own_v6: Callable[[], str | None] | None = None):
+                 own_v6: Callable[[], str | None] | None = None,
+                 peers_file: Path | None = None):
         """`verify(address, signature, message)` asks a Core node; `announced()`
         lists the chain's mesh announcements; `announce(host, port)` publishes
         this node's; `announce_at` fixes the address by hand; `observe()` lists
@@ -173,12 +176,19 @@ class MeshService:
         self.public_port = public_port or listen_port
         self.remember = remember
         self.own_v6 = own_v6                    # this machine's IPv6 address, when Core's peers name none
+        # Every peer this node has actually linked to, kept across restarts: a node
+        # that restarts finds the mesh again from these, even if no announcement on
+        # the chain is fresh and the node that announced last has gone (2026-10-12:
+        # "not dependent on any node").
+        self.peers_file = peers_file
         self.last_announced = self._recall()
         self.reachable: bool | None = None
         self.meet: str | None = None            # the IPv6 address peers meet this node at
         self.node = MeshNode(key, network, listen_host=listen_host, listen_port=listen_port,
                              peers=peers or [], vouch=self._vouch)
         self.node_id = self.node.node_id
+        for host, port, node_id in self._load_peers():
+            self.node.add_address(host, port, node_id)
         self.loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._sessions: dict[str, Session] = {}
@@ -215,6 +225,10 @@ class MeshService:
         if self.loop is None:
             return
         try:
+            self.save_peers()
+        except Exception:                              # noqa: BLE001 -- stopping matters more
+            log.exception("mesh: saving peers")
+        try:
             self._call(self.node.stop(), timeout=10)
         finally:
             self.loop.call_soon_threadsafe(self.loop.stop)
@@ -224,6 +238,8 @@ class MeshService:
 
     def _spawn_background(self) -> None:
         self.node._spawn(self._bootstrapper())
+        if self.peers_file is not None:
+            self.node._spawn(self._peer_keeper())
         if self.announce is not None and (self.announce_at or self.observe):
             self.node._spawn(self._announcer())
 
@@ -247,6 +263,54 @@ class MeshService:
                 except Exception:                      # noqa: BLE001 -- try again later
                     log.exception("mesh bootstrap")
             await asyncio.sleep(BOOTSTRAP_EVERY)
+
+    def _peer_rows(self) -> list[tuple[str, int, str, float]]:
+        if self.peers_file is None:
+            return []
+        try:
+            import json
+            rows = json.loads(self.peers_file.read_text())
+        except (OSError, ValueError):
+            return []
+        out = []
+        for r in rows if isinstance(rows, list) else []:
+            try:
+                out.append((str(r["h"]), int(r["p"]), str(r["id"]), float(r["ok"])))
+            except (KeyError, TypeError, ValueError):
+                continue
+        return out
+
+    def _load_peers(self) -> list[tuple[str, int, str]]:
+        now = time.time()
+        return [(h, p, i) for h, p, i, ok in self._peer_rows() if now - ok < KEEP_PEERS and i != self.node_id]
+
+    def save_peers(self) -> int:
+        """Write the peers this node has reached (and still remembers) to peers_file."""
+        if self.peers_file is None:
+            return 0
+        import json
+        now = time.time()
+        rows = {(h, p): {"h": h, "p": p, "id": i, "ok": ok}             # what is on file ...
+                for h, p, i, ok in self._peer_rows()}
+        for (h, p), e in list(self.node.addrs.items()):                   # ... and what this run reached
+            if e.get("ok") and e.get("id") and e["id"] != self.node_id:
+                rows[(h, p)] = {"h": h, "p": p, "id": e["id"], "ok": e["ok"]}
+        keep = sorted((r for r in rows.values() if now - r["ok"] < KEEP_PEERS), key=lambda r: -r["ok"])[:200]
+        tmp = self.peers_file.with_suffix(".tmp")
+        try:
+            tmp.write_text(json.dumps(keep))
+            tmp.replace(self.peers_file)
+        except OSError:
+            return 0
+        return len(keep)
+
+    async def _peer_keeper(self) -> None:
+        while True:
+            await asyncio.sleep(SAVE_PEERS_EVERY)
+            try:
+                await asyncio.to_thread(self.save_peers)
+            except Exception:                          # noqa: BLE001
+                log.exception("mesh: saving peers")
 
     def _recall(self) -> dict:
         try:
@@ -351,6 +415,7 @@ class MeshService:
         links = len(self.node.links)
         return {"linked": links > 0, "node": self.node_id, "network": self.network,
                 "peers": links, "known": len(self.node.addrs),
+                "rtt_ms": sorted(v for v in self.node.rtts().values() if v is not None),
                 "listening": self.node.listen_port, "reachable": self.reachable, "meet": self.meet,
                 "announced": {k: self.last_announced.get(k) for k in ("host", "port", "at")}
                 if self.last_announced else None}
@@ -489,5 +554,6 @@ def for_state(state, *, listen_host: str | None = None, listen_port: int | None 
         listen_port=listen_port, peers=peers, verify=verify, announced=announced,
         announce=lambda host, port: state.announce_mesh(host, port, bytes(key.verify_key).hex()),
         announce_at=announce_at, observe=observe, public_port=public_port,
-        remember=Path(state.home) / "mesh-announced.json", own_v6=own_ipv6)
+        remember=Path(state.home) / "mesh-announced.json", own_v6=own_ipv6,
+        peers_file=Path(state.home) / "mesh-peers.json")
     return service

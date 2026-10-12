@@ -99,6 +99,46 @@ Nothing is required. When the tab closes or navigates, the viewer leaves every
 room. Call `room.leave()` when a player moves to another part of your game,
 then `join()` the next room. Being in several rooms at once is fine.
 
+### A service for your game: a bank, a dealer, a referee
+
+Some games need something that is always in the room: a bank that pays out, a
+dealer, a referee. You can run one for your own game on your own node, with
+Python and no browser. It joins your game's rooms as your node's own account, so
+players see your @tag, and nobody can run one in your name: every node checks the
+certificate with its own Core.
+
+```python
+from arcade.service import Room
+
+with Room("mygame", "bank") as room:          # your game's name, the room's name
+    for event in room.events():               # join, leave, message -- comes back by itself after a restart
+        if event["type"] == "message":
+            room.send({"t": "ack", "to": event["member"]["id"]})
+```
+
+Run it on the node's machine, as the user the node runs as: it reads the node's
+service key (`~/.dogecoinarcade/realtime-service.key`, made when the node starts,
+readable only by that user). The key works only from the machine itself, never
+through the door. `python -m arcade.service mygame bank` prints a room's events,
+a starting point. A service has the same limits as a player (512 bytes, about
+five messages a second); anything that must last goes on the chain.
+
+### Many nodes, one mesh
+
+Every node carries its own players into the same rooms, so it does not matter
+which node a player uses. A node finds others from the chain's mesh
+announcements, from `--mesh-peer`, from what its peers pass on, and from the
+peers it reached before (`mesh-peers.json`, kept for 30 days), so a restart never
+depends on any one node still being there. It keeps four links and swaps its
+slowest for a faster peer when it finds one.
+
+A node behind a router that cannot forward a port (carrier NAT, Starlink) still
+dials out. If it has IPv6 it announces that address and meets other IPv6 nodes
+halfway: both dial each other on the same beat of the clock, so each router lets
+the other in. Anybody with a public address can run a node that everyone else
+links to automatically -- it announces itself, and the others dial it within a
+minute. More such nodes, from more people, make the mesh harder to break.
+
 ## Trades: `arcade.swap.trade`
 
 A trade window between two players in the same room. Load both scripts:
