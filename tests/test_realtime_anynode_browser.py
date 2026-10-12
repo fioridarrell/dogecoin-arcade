@@ -50,7 +50,7 @@ def _mesh(peers=None):
 def _pick(driver, base_a, base_b):
     """What the viewer's timing would have stored: node B is the way in, for the next ten minutes."""
     driver.get(f"{base_a}/")
-    driver.execute_script("sessionStorage.setItem('arcade-rt-base', arguments[0])",
+    driver.execute_script("sessionStorage.setItem('arcade-rt-base-2', arguments[0])",
                           json.dumps({"base": base_b, "at": int(time.time() * 1000)}))
 
 

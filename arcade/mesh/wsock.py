@@ -29,6 +29,7 @@ import ssl
 import struct
 
 _GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+_LIVE: set = set()                  # connection tasks still running (see serve())
 MAX_MESSAGE = 128 * 1024           # far above a mesh frame (64 KB); more is cut off
 PATH = "/mesh"
 URL = re.compile(r"^wss?://(?P<host>[A-Za-z0-9.-]{1,253})(?::(?P<port>\d{1,5}))?(?P<path>/[A-Za-z0-9/_.-]{0,64})?$")
@@ -232,6 +233,17 @@ async def serve(handler, host: str, port: int, http_port: int | None = None) -> 
     room routes only, so a player can use this node as their way in (realtime.py); anything
     else is refused, so the tunnel never exposes the wallet or the rest of the arcade."""
     async def one(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        # Held here until it ends: asyncio keeps only a weak hold on a connection's task, and a
+        # long room stream through the tunnel was being collected mid-game ("Task was destroyed
+        # but it is pending", live 2026-10-12) -- the player stopped hearing the room.
+        task = asyncio.current_task()
+        _LIVE.add(task)
+        try:
+            await _one(reader, writer)
+        finally:
+            _LIVE.discard(task)
+
+    async def _one(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
             head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 10)
         except (asyncio.TimeoutError, asyncio.IncompleteReadError, asyncio.LimitOverrunError, ConnectionError):

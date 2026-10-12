@@ -34,7 +34,7 @@
     // keeps its own unless another is clearly quicker. The choice is kept ten minutes; a node
     // that fails sends the player back to this one. Signed in here, the player is still
     // themselves there: the wallet signs that node's certificate (hello.cert) instead.
-    var RT_PICK = 'arcade-rt-base';
+    var RT_PICK = 'arcade-rt-base-2';   // -2: picks made before 2026-10-12 17:00 could be this node's own tunnel
     function realtimeTime(base){
       var t0 = performance.now();
       return Promise.race([
@@ -50,7 +50,10 @@
       } catch (err) {}
       return fetch('/realtime/nodes', {cache: 'no-store'}).then(function(r){ return r.json(); })
         .then(function(j){
-          var bases = [''].concat(((j && j.nodes) || []).map(function(n){ return n.base; })
+          // Never this node again by another road (its own tunnel): same rooms, one more hop (2026-10-12 live:
+          // players on .25 were carried through .25's own tunnel and lost their room streams there).
+          var bases = [''].concat(((j && j.nodes) || []).filter(function(n){ return n.node !== j.self; })
+            .map(function(n){ return n.base; })
             .filter(function(b){ return b && b !== location.origin; }).slice(0, 12));
           // two tries each (the first pays for a fresh TLS connection); the better counts
           return Promise.all(bases.map(function(b){
