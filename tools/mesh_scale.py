@@ -10,7 +10,10 @@ room sees every member of it (presence).
 Results 2026-10-12 (30 players/node, every node in ~30 rooms -- harsher than any real game):
     mesh v1 (flooded member lists):  10 nodes 82 KB/s, 20 nodes 206 KB/s, 40 nodes broke down
     mesh v2 (this branch):           20 nodes 27 KB/s, 40 nodes 15.7 KB/s, 0% duplicates, presence 1200/1200
-Gate for releases that touch the mesh: 40 30 80 must show presence N/N and under 30 KB/s per node.
+    + binary room messages:          40 nodes 9.1 KB/s; send -> heard median 1.0 ms, 95% 1.4 ms, worst 1.7 ms
+                                     (the mesh's own cost across several hops; real latency adds the network)
+Gate for releases that touch the mesh: 40 30 80 40 must show presence N/N, under 15 KB/s per node and a
+median latency under 5 ms.
 """
 import asyncio, random, sys, time, collections
 sys.path.insert(0, ".")
@@ -59,6 +62,28 @@ async def main():
     print(f"nodes {N}, players/node {PLAYERS}, rooms {ROOMS}, links/node {links:.1f}: sent per node {per/1024:.1f} KB/s; by kind (KB/s/node):",
           {k: round(v / N / SECS / 1024, 1) for k, v in kinds.most_common(5)}, flush=True)
     print(f"   arrivals: {dups['fresh']} new, {dups['dup']} duplicate ({100*dups['dup']/max(1,dups['fresh']+dups['dup']):.0f}% wasted)", flush=True)
+    # latency: a message from one player, timed to every other player in the room (under the same load)
+    lat, hopsn = [], []
+    rooms = sorted({r for n in nodes for r, _ in n.local})
+    for room in random.sample(rooms, min(40, len(rooms))):
+        holders = [(n, m) for n in nodes for (r, m) in n.local if r == room]
+        if len(holders) < 2: continue
+        sn, sm = holders[0]
+        listeners = [(n, n.local[(room, m)].queue) for n, m in holders[1:] if n is not sn]
+        for _, q in listeners:
+            while not q.empty(): q.get_nowait()
+        tag = ("t%f" % time.monotonic()).encode()
+        t0 = time.monotonic(); await sn.send(room, sm, tag)
+        async def arrive(q):
+            while True:
+                ev = await q.get()
+                if ev.type == "message" and ev.data == tag: return time.monotonic() - t0
+        got = await asyncio.gather(*[asyncio.wait_for(arrive(q), 5) for _, q in listeners], return_exceptions=True)
+        lat += [g for g in got if isinstance(g, float)]
+    if lat:
+        lat.sort()
+        print(f"   latency (send -> heard, {len(lat)} deliveries, all in one process): median {1000*lat[len(lat)//2]:.1f} ms, "
+              f"95% {1000*lat[int(len(lat)*0.95)]:.1f} ms, worst {1000*lat[-1]:.1f} ms", flush=True)
     # correctness: for every room, does every node with a player there see all its members?
     want = collections.defaultdict(set)
     for i, n in enumerate(nodes):
