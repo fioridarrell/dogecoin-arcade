@@ -536,3 +536,30 @@ def test_the_nodes_list_offers_https_ways_in_only(two_nodes):
     j = ca.get("/realtime/nodes").json()
     assert j["ok"] and {"base": "https://quick-fox.trycloudflare.com", "node": "cd" * 32} in j["nodes"]
     assert all(n["base"].startswith("https://") for n in j["nodes"]), "a page served over https cannot use http"
+
+
+def test_a_tunnel_announcement_that_fails_is_tried_again(tmp_path, monkeypatch):
+    """Live, 2026-10-12: the IPv6 and tunnel announcements went in the same second and the second
+    was refused (txn-mempool-conflict). Announcements now take turns, and a refused one is retried."""
+    from arcade.mesh import service as svclib
+    monkeypatch.setattr(svclib, "TUNNEL_FIRST", 0.1)
+    monkeypatch.setattr(svclib, "TUNNEL_EVERY", 0.2)
+    fake = tmp_path / "cloudflared"
+    fake.write_text("#!/bin/sh\necho 'INF |  https://second-try.trycloudflare.com  |'\nexec sleep 60\n")
+    fake.chmod(0o755)
+    calls = []
+
+    def announce(h, p):
+        calls.append(h)
+        if len(calls) == 1:
+            raise RuntimeError("sendrawtransaction: [-26] 258: txn-mempool-conflict")
+    svc = MeshService("arcade-test", nacl.signing.SigningKey.generate(), listen_host="127.0.0.1",
+                      listen_port=0, tunnel=str(fake), announce=announce).start()
+    try:
+        end = time.monotonic() + 10
+        while len(calls) < 2 and time.monotonic() < end:
+            time.sleep(0.05)
+        time.sleep(0.6)
+        assert calls == ["wss://second-try.trycloudflare.com/mesh"] * 2, "refused once, announced on the next round, then left alone"
+    finally:
+        svc.stop()

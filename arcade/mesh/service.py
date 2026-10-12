@@ -204,6 +204,8 @@ class MeshService:
         self.tunnel_cmd = tunnel
         self.core = None                        # corelink.CoreBridge, when Core rides the mesh
         self.tunnel_url: str | None = None
+        self._tunnel_said: str | None = None    # the tunnel address last announced successfully
+        self._announcing = threading.Lock()     # one announcement at a time: two at once spend the same coin
         self._tunnel_proc = None
         self.node = MeshNode(key, network, listen_host=listen_host, listen_port=listen_port,
                              peers=peers or [], vouch=self._vouch,
@@ -393,7 +395,7 @@ class MeshService:
         fresh = time.time() - float(last.get("at") or 0) < ANNOUNCE_EVERY
         if last.get("host") == host and last.get("port") == port and fresh:
             return False
-        await asyncio.to_thread(self.announce, host, port)
+        await asyncio.to_thread(self._announce_locked, host, port)
         log.info("mesh: announced this node at %s:%s", host, port)
         self._keep({"host": host, "port": port, "at": int(time.time())})
         return True
@@ -426,13 +428,21 @@ class MeshService:
                     if self.tunnel_url:
                         self.node._spawn(self._drain_tunnel_output(self._tunnel_proc))
                         log.info("mesh: reachable through a tunnel at %s", self.tunnel_url)
-                        if self.announce is not None:
-                            await asyncio.to_thread(self.announce, self.tunnel_url, 443)
                     else:
                         await self._tunnel_stop()
+                # Announced until it sticks: a failure (2026-10-12 live: txn-mempool-conflict, the IPv6
+                # announcement went in the same second) is tried again on the next round.
+                if self.tunnel_url and self.tunnel_url != self._tunnel_said and self.announce is not None:
+                    await asyncio.to_thread(self._announce_locked, self.tunnel_url, 443)
+                    self._tunnel_said = self.tunnel_url
+                    log.info("mesh: announced the tunnel %s", self.tunnel_url)
             except Exception as exc:                   # noqa: BLE001 -- try again later
                 log.warning("mesh: tunnel: %s", exc)
             await asyncio.sleep(TUNNEL_EVERY)
+
+    def _announce_locked(self, host: str, port: int):
+        with self._announcing:
+            return self.announce(host, port)
 
     async def _drain_tunnel_output(self, proc) -> None:
         try:
