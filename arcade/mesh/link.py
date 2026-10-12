@@ -121,6 +121,11 @@ class Link:
 
     @staticmethod
     def pack(header: dict, blob: bytes = b"") -> bytes:
+        if header.get("t") == "pub":
+            try:
+                return _pack_pub(header, blob)
+            except (KeyError, ValueError, TypeError, OverflowError, struct.error):
+                pass                                     # anything unusual goes as JSON, as before
         head = json.dumps(header, separators=(",", ":")).encode()
         return struct.pack(">H", len(head)) + head + blob
 
@@ -128,6 +133,8 @@ class Link:
     def unpack(plain: bytes) -> tuple[dict, bytes]:
         if len(plain) < 2:
             raise LinkError("empty frame")
+        if plain[:2] == _BIN:
+            return _unpack_pub(plain)
         (n,) = struct.unpack(">H", plain[:2])
         try:
             header = json.loads(plain[2:2 + n])
@@ -156,6 +163,56 @@ class Link:
             await self.writer.wait_closed()
         except (ConnectionError, OSError):
             pass
+
+
+# ---------------------------------------------------------------- room messages, in binary
+# (2026-10-12, "very low latency" for tens of thousands of players.) A room message ("pub") is
+# by far the commonest frame, and as JSON it spent ~300 bytes on its header: the sender's key
+# and signature as hex, field names, quotes. In binary the same header is ~120 bytes and costs
+# no JSON parse per hop. The dict that comes out is exactly the dict that went in, so the
+# signature (over canonical JSON of the signed fields, node.py) checks the same either way.
+#
+#   FF FF | 01 | origin 32 | sig 64 | q u64 | hops u8 | kind u8 | room u8+bytes | member u8+bytes
+#         | cred u16+canonical JSON (0 = none) | d u16 count + 4 bytes each | the payload
+_BIN = b"\xff\xff"          # a JSON header of 65535 bytes cannot fit a frame, so this never collides
+_KINDS = ("msg", "join", "leave", "here")
+
+
+def _pack_pub(h: dict, blob: bytes) -> bytes:
+    room, member = str(h["r"]).encode(), str(h["m"]).encode()
+    cred = json.dumps(h["c"], separators=(",", ":"), sort_keys=True).encode() if "c" in h else b""
+    d = h.get("d")
+    shorts = b"".join(bytes.fromhex(x) for x in d) if isinstance(d, list) else b""
+    if isinstance(d, list) and any(len(x) != 8 for x in d):
+        raise ValueError("short ids are 8 hex characters")
+    return (_BIN + b"\x01" + bytes.fromhex(h["o"]) + bytes.fromhex(h["sig"])
+            + struct.pack(">QBB", int(h["q"]), int(h["hops"]), _KINDS.index(h["k"]))
+            + struct.pack(">B", len(room)) + room + struct.pack(">B", len(member)) + member
+            + struct.pack(">H", len(cred)) + cred
+            + struct.pack(">H", len(d) if isinstance(d, list) else 0xFFFF) + shorts + blob)
+
+
+def _unpack_pub(b: bytes) -> tuple[dict, bytes]:
+    try:
+        if b[2] != 1 or len(b) < 3 + 32 + 64 + 10:
+            raise LinkError("unknown binary frame")
+        i = 3
+        origin, sig = b[i:i + 32].hex(), b[i + 32:i + 96].hex(); i += 96
+        q, hops, kind = struct.unpack(">QBB", b[i:i + 10]); i += 10
+        n = b[i]; room = b[i + 1:i + 1 + n].decode(); i += 1 + n
+        n = b[i]; member = b[i + 1:i + 1 + n].decode(); i += 1 + n
+        (n,) = struct.unpack(">H", b[i:i + 2]); cred = b[i + 2:i + 2 + n]; i += 2 + n
+        (n,) = struct.unpack(">H", b[i:i + 2]); i += 2
+        h = {"t": "pub", "r": room, "o": origin, "q": q, "m": member, "k": _KINDS[kind], "hops": hops, "sig": sig}
+        if cred:
+            h["c"] = json.loads(cred)
+        if n != 0xFFFF:
+            h["d"] = [b[i + 4 * k:i + 4 * k + 4].hex() for k in range(n)]; i += 4 * n
+        if i > len(b):
+            raise LinkError("a binary frame ended early")
+        return h, b[i:]
+    except (IndexError, ValueError, struct.error, UnicodeDecodeError) as exc:
+        raise LinkError(f"unreadable binary frame: {type(exc).__name__}") from None
 
 
 def _derive(shared: bytes, transcript: bytes, label: bytes) -> bytes:

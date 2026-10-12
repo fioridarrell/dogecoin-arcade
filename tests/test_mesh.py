@@ -7,6 +7,7 @@ are shrunk (SUB_EVERY, IDLE, DIAL_EVERY) so a test takes about a second.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 
 import nacl.signing
@@ -708,3 +709,20 @@ def test_a_node_takes_no_more_inbound_links_than_it_is_set_to():
         finally:
             await stop(*spokes, hub)
     run(go())
+
+
+def test_a_room_message_in_binary_comes_back_exactly_and_is_much_smaller():
+    """Binary pub frames (link.py): the dict out is the dict in, so the signature checks the same."""
+    from arcade.mesh.link import Link
+    key = nacl.signing.SigningKey.generate()
+    for extra in ({}, {"c": {"a": "nAbc", "x": 1791900000, "s": "H" + "y" * 87}}, {"d": ["0a1b2c3d", "ffee0011"]}):
+        h = {"t": "pub", "r": "ashvale/vale:19:3:4", "o": bytes(key.verify_key).hex(), "q": 1791812345678901,
+             "m": "nQ" + "x" * 32, "k": "msg", "hops": 3, **extra}
+        h["sig"] = key.sign(meshlib._canon(meshlib._signed_part(h)) + b"payload").signature.hex()
+        packed = Link.pack(h, b"payload")
+        back, blob = Link.unpack(packed)
+        assert back == h and blob == b"payload"
+        assert MeshNode._verify(back, blob)
+        as_json = len(json.dumps(h, separators=(",", ":"))) + 2 + 7
+        # The header shrinks to well under half; a certificate riding along is most of what is left.
+        assert len(packed) < as_json * (0.7 if "c" in h else 0.6), (len(packed), as_json)   # measured 52% and 64%
