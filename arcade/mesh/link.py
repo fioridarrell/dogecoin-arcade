@@ -33,7 +33,7 @@ import nacl.public
 import nacl.signing
 
 #: Bumped when the wire format changes; nodes on different versions do not link.
-VERSION = 1
+VERSION = 2   # 2026-10-12: mesh v2 -- rooms as fingerprints, members in the room (node.py)
 MAGIC = b"ARCM"
 MAX_FRAME = 64 * 1024
 HANDSHAKE_TIMEOUT = 10.0

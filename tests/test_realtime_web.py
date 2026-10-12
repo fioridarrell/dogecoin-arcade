@@ -34,6 +34,7 @@ def fake_verify(address, signature, message):
 @pytest.fixture(autouse=True)
 def fast(monkeypatch):
     monkeypatch.setattr(meshlib, "SUB_EVERY", 0.15)
+    monkeypatch.setattr(meshlib, "HERE_EVERY", 0.15)
     monkeypatch.setattr(meshlib, "DIAL_EVERY", 0.05)
 
 

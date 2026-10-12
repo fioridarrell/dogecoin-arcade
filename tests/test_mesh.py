@@ -22,6 +22,7 @@ NET = "test-net"
 @pytest.fixture(autouse=True)
 def fast(monkeypatch):
     monkeypatch.setattr(meshlib, "SUB_EVERY", 0.15)
+    monkeypatch.setattr(meshlib, "HERE_EVERY", 0.15)
     monkeypatch.setattr(meshlib, "IDLE", 1.0)
     monkeypatch.setattr(meshlib, "DIAL_EVERY", 0.05)
 
@@ -174,7 +175,7 @@ def test_a_message_crosses_a_node_that_is_not_in_the_room():
             # Each hears the other arrive, through b.
             assert (await drain(qa, "join")).member == "carol"
             assert (await drain(qc, "join")).member == "alice"
-            await until(lambda: "game1/town" in a.remote and "game1/town" in c.remote,
+            await until(lambda: meshlib.room_id("game1/town") in a.routes and meshlib.room_id("game1/town") in c.routes,
                         what="routes")
             await a.send("game1/town", "alice", b'{"x":1,"y":2}')
             got = await drain(qc, "message")
@@ -193,7 +194,8 @@ def test_payload_is_never_read_any_bytes_go():
         try:
             await a.join("g/r", "alice")
             qc = await c.join("g/r", "carol")
-            await until(lambda: "g/r" in a.remote, what="route")
+            await until(lambda: meshlib.room_id("g/r") in a.routes, what="route")
+            await drain(qc, "join")                   # carol hears that alice is there before she speaks
             blob = bytes(range(256)) * 2              # 512 bytes, not text, not JSON
             await a.send("g/r", "alice", blob)
             assert (await drain(qc, "message")).data == blob
@@ -230,7 +232,8 @@ def test_a_triangle_delivers_once():
                         what="triangle")
             await a.join("g/r", "alice")
             qc = await c.join("g/r", "carol")
-            await until(lambda: "g/r" in a.remote and "g/r" in c.remote, what="routes")
+            await until(lambda: meshlib.room_id("g/r") in a.routes and meshlib.room_id("g/r") in c.routes, what="routes")
+            await drain(qc, "join")
             for i in range(5):
                 await a.send("g/r", "alice", bytes([i]))
             got = []
@@ -330,7 +333,7 @@ def test_when_a_node_in_the_middle_goes_down_the_room_carries_on():
             qd = await d.join("g/r", "dave")
             keepers = [asyncio.get_running_loop().create_task(keep(a, "alice")),
                        asyncio.get_running_loop().create_task(keep(d, "dave"))]
-            await until(lambda: "g/r" in a.remote and "g/r" in d.remote, what="routes")
+            await until(lambda: meshlib.room_id("g/r") in a.routes and meshlib.room_id("g/r") in d.routes, what="routes")
             await b.stop()
             got = None
             end = time.monotonic() + 5
@@ -463,7 +466,7 @@ def test_only_members_the_vouch_accepts_are_seen_or_heard():
             await a.join("g/r", "guest", cred=None)
             qc = await c.join("g/r", "carol", cred={"proof": "ok:carol"})
             assert (await drain(qc, "join")).member == "alice"
-            await until(lambda: "g/r" in a.remote, what="route")
+            await until(lambda: meshlib.room_id("g/r") in a.routes, what="route")
             await a.send("g/r", "mallory", b"trust me")
             await a.send("g/r", "alice", b"hello")
             got = await drain(qc, "message")
