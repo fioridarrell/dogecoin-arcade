@@ -79,6 +79,10 @@ def main(argv: list[str] | None = None) -> int:
              "announces it (again when it changes, and daily); nothing is announced "
              "if no port is forwarded. Paid for by the fee address")
     parser.add_argument(
+        "--mesh-inbound", type=int, default=None, metavar="N",
+        help="how many other nodes may link to this one (32 by default; a server "
+             "that everyone can reach should take hundreds, e.g. 500)")
+    parser.add_argument(
         "--mesh-public-port", type=int, default=None, metavar="PORT",
         help="the port the router forwards to --mesh-port, if it is a different number")
     parser.add_argument(
@@ -201,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
                 state, listen_port=args.mesh_port or None,
                 peers=[host_port(p) for p in args.mesh_peer],
                 announce_at=host_port(args.mesh_announce) if args.mesh_announce else None,
-                public_port=args.mesh_public_port,
+                public_port=args.mesh_public_port, max_inbound=args.mesh_inbound,
             ).start()
             print(f"  mesh node {state.mesh.node_id[:16]}"
                   + (f" listening on {args.mesh_port}" if args.mesh_port else " (dial-out only)"))

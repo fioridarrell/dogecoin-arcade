@@ -159,7 +159,8 @@ class MeshService:
                  public_port: int | None = None,
                  remember: Path | None = None,
                  own_v6: Callable[[], str | None] | None = None,
-                 peers_file: Path | None = None):
+                 peers_file: Path | None = None,
+                 max_inbound: int | None = None):
         """`verify(address, signature, message)` asks a Core node; `announced()`
         lists the chain's mesh announcements; `announce(host, port)` publishes
         this node's; `announce_at` fixes the address by hand; `observe()` lists
@@ -185,7 +186,8 @@ class MeshService:
         self.reachable: bool | None = None
         self.meet: str | None = None            # the IPv6 address peers meet this node at
         self.node = MeshNode(key, network, listen_host=listen_host, listen_port=listen_port,
-                             peers=peers or [], vouch=self._vouch)
+                             peers=peers or [], vouch=self._vouch,
+                             **({"max_inbound": max_inbound} if max_inbound else {}))
         self.node_id = self.node.node_id
         for host, port, node_id in self._load_peers():
             self.node.add_address(host, port, node_id)
@@ -515,7 +517,7 @@ class MeshService:
 def for_state(state, *, listen_host: str | None = None, listen_port: int | None = DEFAULT_PORT,
               peers: list[tuple[str, int]] | None = None,
               announce_at: tuple[str, int] | None = None,
-              public_port: int | None = None) -> MeshService:
+              public_port: int | None = None, max_inbound: int | None = None) -> MeshService:
     """A MeshService wired to an arcade node: its key in the arcade's home, its
     peers from the messaging chain's index, and players checked by the
     messaging chain's Core -- the chain the @tags live on, so a player's
@@ -555,5 +557,5 @@ def for_state(state, *, listen_host: str | None = None, listen_port: int | None 
         announce=lambda host, port: state.announce_mesh(host, port, bytes(key.verify_key).hex()),
         announce_at=announce_at, observe=observe, public_port=public_port,
         remember=Path(state.home) / "mesh-announced.json", own_v6=own_ipv6,
-        peers_file=Path(state.home) / "mesh-peers.json")
+        peers_file=Path(state.home) / "mesh-peers.json", max_inbound=max_inbound)
     return service

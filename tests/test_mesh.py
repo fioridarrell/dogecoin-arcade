@@ -692,3 +692,19 @@ def test_a_faster_peer_replaces_the_slowest_link():
         finally:
             await stop(a, b, c)
     run(go())
+
+
+def test_a_node_takes_no_more_inbound_links_than_it_is_set_to():
+    async def go():
+        hub = MeshNode(nacl.signing.SigningKey.generate(), NET, listen_host="127.0.0.1", listen_port=0, max_inbound=2)
+        await hub.start()
+        spokes = [mk(listen=False, peers=[]) for _ in range(4)]
+        await started(*spokes)
+        try:
+            for s in spokes:
+                s.add_address("127.0.0.1", hub.listen_port, hub.node_id)
+            await asyncio.sleep(1.5)
+            assert sum(1 for l in hub.links.values() if not l.outbound) == 2
+        finally:
+            await stop(*spokes, hub)
+    run(go())

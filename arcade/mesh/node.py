@@ -124,7 +124,7 @@ MAX_HERE = 60 * 1024        # bytes of one HERE (MAX_MEMBERS_PER_ROOM certificat
 SHORT = 8                   # hex characters of a node id in a copy's "d" list
 SKEW = 60.0                 # seconds of clock difference tolerated on a message
 MAX_HOPS = 16
-OUTBOUND_TARGET = 4
+OUTBOUND_TARGET = 6          # 2026-10-12: 4 -> 6, more paths for hundreds of nodes
 DIAL_EVERY = 1.0            # how often a node tops up its outbound links
 MEET_EVERY = 15.0           # the wall-clock beat IPv6 peers meet on (seconds)
 MEET_WAIT = 9.0             # how long one meeting dial keeps knocking (SYN retries at 1, 3, 7 s)
@@ -132,7 +132,7 @@ MEET_MAX = 32               # IPv6 peers met per beat
 TUNE_EVERY = 300.0          # how often a node tries one more peer to see if it is faster
 TUNE_SETTLE = 40.0          # how long the trial link gets to show its round-trip time
 TUNE_MARGIN = 0.8           # a newcomer must be this much faster than the slowest link to replace it
-MAX_INBOUND = 32
+MAX_INBOUND = 32             # the default; a server takes more (MeshNode(max_inbound=...), --mesh-inbound)
 PING_EVERY = 15.0
 DEAD_AFTER = 45.0
 SEEN_MAX = 50_000
@@ -211,12 +211,15 @@ class MeshNode:
                  listen_host: str | None = None, listen_port: int | None = None,
                  peers: list[tuple[str, int]] | None = None,
                  outbound_target: int = OUTBOUND_TARGET,
+                 max_inbound: int = MAX_INBOUND,
                  vouch: Callable[[str, str, dict | None], Awaitable[bool]] | None = None):
         self.key = signing_key
         self.node_id = bytes(signing_key.verify_key).hex()
         self.network = network
         self.listen_host, self.listen_port = listen_host, listen_port
         self.outbound_target = outbound_target
+        self.max_inbound = max(1, int(max_inbound))
+        self._accepting = 0                       # inbound handshakes in progress
         # Asked before a remote member is shown or heard; None trusts every node.
         self.vouch = vouch
         self._vetted: OrderedDict[tuple, tuple[bool, float]] = OrderedDict()
@@ -392,11 +395,20 @@ class MeshNode:
         await self._run_link(link)
 
     async def _accept(self, reader, writer) -> None:
-        inbound = sum(1 for link in self.links.values() if not link.outbound)
-        if inbound >= MAX_INBOUND or self._stopping:
+        # Handshakes in progress count too: nodes connecting at once all passed a check
+        # that counted only finished links (a hub set to 2 took 4).
+        inbound = sum(1 for link in self.links.values() if not link.outbound) + self._accepting
+        if inbound >= self.max_inbound or self._stopping:
             writer.close()
             await writer.wait_closed()
             return
+        self._accepting += 1
+        try:
+            await self._accept_one(reader, writer)
+        finally:
+            self._accepting = max(0, self._accepting - 1)
+
+    async def _accept_one(self, reader, writer) -> None:
         initiator = None
         peer = writer.get_extra_info("peername") or ()
         if len(peer) >= 2:
@@ -418,7 +430,11 @@ class MeshNode:
             # Where it says it can be reached. Kept as a lead, passed on to
             # others only once this node has reached it itself (_dial sets ok).
             self.add_address(link.host, link.peer_listen, link.peer_id)
-        await self._run_link(link)
+        self._accepting = max(0, self._accepting - 1)        # a link now: counted among the links
+        try:
+            await self._run_link(link)
+        finally:
+            self._accepting += 1                                  # the caller takes it off again
 
     async def _run_link(self, link: Link) -> None:
         if link.peer_id in self.links or self._stopping:
