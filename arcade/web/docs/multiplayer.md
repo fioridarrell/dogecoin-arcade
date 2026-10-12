@@ -99,6 +99,30 @@ Nothing is required. When the tab closes or navigates, the viewer leaves every
 room. Call `room.leave()` when a player moves to another part of your game,
 then `join()` the next room. Being in several rooms at once is fine.
 
+### Busy places: cells and full rooms
+
+One room for a whole town means everybody hears everybody: a thousand players
+sending five messages a second is five thousand a second for each of them. Two
+helpers keep a crowd cheap:
+
+```js
+// A full room sends you on: town, town#2, town#3 ... (room.name says which).
+arcade.realtime.join('town', {cap: 50});
+
+// The world in square cells: you hear the cells within sight, and speak in your own.
+arcade.realtime.area('world', {cell: 64, view: 48, x: px, y: py}).then(function (a) {
+  a.on('message', function (data, p) { movePlayer(p, data); });
+  a.on('join', addPlayer); a.on('leave', removePlayer);
+  // as the player walks:
+  a.move(px, py);                // cells come and go by themselves
+  a.send({x: px, y: py});        // heard by everyone who can see your cell
+});
+```
+
+Keep `view` smaller than `cell` and a player is in at most four cells, whatever the
+size of the world. A player standing in two of your cells is one player to you:
+`join` once, `leave` when they are out of all of them.
+
 ### A service for your game: a bank, a dealer, a referee
 
 Some games need something that is always in the room: a bank that pays out, a
