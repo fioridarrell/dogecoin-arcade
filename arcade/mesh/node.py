@@ -7,6 +7,19 @@ outbound links up at all times and accepts inbound ones if it listens. A node
 behind a router never listens and still takes part fully -- it dials out, and
 everything it needs arrives over the links it made.
 
+**Meeting halfway, over IPv6.** Two nodes that are both behind routers cannot
+dial each other the ordinary way: each router drops the other's first packet.
+Over IPv6 there is no address translation, only the router's firewall, and a
+firewall lets in the answer to a connection its own side opened. So nodes meet:
+every MEET_EVERY seconds, on the same wall-clock beat everywhere, each node dials
+every IPv6 peer it is not linked to, from its own mesh port to theirs. Both
+routers see an outgoing connection, both let the other's packet in, and the two
+dials become one TCP connection (a simultaneous open), or one of them lands on
+the other's listener if that router lets it in anyway. Either way both sides
+take the handshake's dialer part by one rule -- the lower node id dials -- so
+nothing new crosses the wire and an IPv4 dial is untouched. No server, no
+relay, no router setting (2026-10-12, Starlink: the router cannot be changed).
+
 **Rooms without a server.** A node whose players are in a room says so to the
 whole mesh every few seconds: a signed SUB naming its rooms and who is in each.
 SUBs flood (each node passes on what it has not seen), and the path a node's
@@ -40,6 +53,7 @@ true later goes on the chain.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import logging
 import random
@@ -56,6 +70,13 @@ from .link import Link, LinkError, handshake
 
 log = logging.getLogger("arcade.mesh")
 
+
+def is_v6(host: str) -> bool:
+    try:
+        return ipaddress.ip_address(str(host).strip("[]")).version == 6
+    except ValueError:
+        return False
+
 MAX_PAYLOAD = 512           # bytes in one room message
 MAX_ROOM = 128              # characters in a room name
 MAX_MEMBER = 64             # characters in a member id
@@ -70,6 +91,9 @@ SKEW = 60.0                 # seconds of clock difference tolerated on a message
 MAX_HOPS = 16
 OUTBOUND_TARGET = 4
 DIAL_EVERY = 1.0            # how often a node tops up its outbound links
+MEET_EVERY = 15.0           # the wall-clock beat IPv6 peers meet on (seconds)
+MEET_WAIT = 9.0             # how long one meeting dial keeps knocking (SYN retries at 1, 3, 7 s)
+MEET_MAX = 32               # IPv6 peers met per beat
 MAX_INBOUND = 32
 PING_EVERY = 15.0
 DEAD_AFTER = 45.0
@@ -145,7 +169,7 @@ class MeshNode:
     """One node in the mesh. Runs on an asyncio loop: `await start()`, `await stop()`."""
 
     def __init__(self, signing_key: nacl.signing.SigningKey, network: str, *,
-                 listen_host: str = "0.0.0.0", listen_port: int | None = None,
+                 listen_host: str | None = None, listen_port: int | None = None,
                  peers: list[tuple[str, int]] | None = None,
                  outbound_target: int = OUTBOUND_TARGET,
                  vouch: Callable[[str, str, dict | None], Awaitable[bool]] | None = None):
@@ -174,6 +198,9 @@ class MeshNode:
         self._dialbacks: dict[str, asyncio.Future] = {}
         self._dialed_back: dict[str, float] = {}
         self._seq = 0
+        # This node's own IPv6 address, the one it announces: meeting dials leave
+        # from it, so the far router sees the address it was told about.
+        self.meet_from: str | None = None
         self._server: asyncio.base_events.Server | None = None
         self._tasks: set[asyncio.Task] = set()
         self._stopping = False
@@ -183,11 +210,13 @@ class MeshNode:
     async def start(self) -> None:
         if self.listen_port is not None:
             self._server = await asyncio.start_server(self._accept, self.listen_host,
-                                                      self.listen_port)
+                                                      self.listen_port, reuse_port=True)
             if self.listen_port == 0:   # tests ask for any free port
                 self.listen_port = self._server.sockets[0].getsockname()[1]
         self._spawn(self._dialer())
         self._spawn(self._announcer())
+        if self.listen_port is not None:
+            self._spawn(self._meeter())
 
     async def stop(self) -> None:
         self._stopping = True
@@ -229,7 +258,8 @@ class MeshNode:
                     now = time.monotonic()
                     choices = [a for a, e in self.addrs.items()
                                if e["next"] <= now and e["id"] != self.node_id
-                               and e["id"] not in self.links]
+                               and e["id"] not in self.links
+                               and (not self._meets(a, e) or e.get("plain"))]
                     random.shuffle(choices)
                     for addr in choices[: self.outbound_target - self._outbound()]:
                         self._spawn(self._dial(addr))
@@ -258,14 +288,76 @@ class MeshNode:
         entry.update(id=link.peer_id, ok=time.time(), fail=0, next=time.monotonic() + 30)
         await self._run_link(link)
 
+    def _meets(self, addr: tuple[str, int], entry: dict) -> bool:
+        """Is this a peer this node meets halfway rather than simply dials?"""
+        return self.listen_port is not None and is_v6(addr[0]) and not entry.get("plain")
+
+    async def _meeter(self) -> None:
+        """On every beat of the wall clock, dial each IPv6 peer not linked yet,
+        from this node's own mesh port (see the module notes)."""
+        while not self._stopping:
+            await asyncio.sleep(MEET_EVERY - time.time() % MEET_EVERY)
+            try:
+                due = [a for a, e in self.addrs.items()
+                       if e["id"] and e["id"] != self.node_id and e["id"] not in self.links
+                       and self._meets(a, e)]
+                random.shuffle(due)
+                for addr in due[:MEET_MAX]:
+                    self._spawn(self._meet(addr))
+            except Exception:                      # noqa: BLE001 -- the loop must not die
+                log.exception("mesh meeter")
+
+    async def _meet(self, addr: tuple[str, int]) -> None:
+        import socket
+        entry = self.addrs[addr]
+        loop = asyncio.get_running_loop()
+        sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+        writer = None
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+            sock.bind((self.meet_from or "::", self.listen_port))
+            sock.setblocking(False)
+            await asyncio.wait_for(loop.sock_connect(sock, (addr[0], addr[1], 0, 0)), MEET_WAIT)
+        except (OSError, asyncio.TimeoutError) as exc:
+            sock.close()
+            log.debug("mesh meet %s: no answer (%s)", addr, exc)
+            return
+        try:
+            reader, writer = await asyncio.open_connection(sock=sock)
+            link = await handshake(reader, writer, self.key, self.network, True, self.listen_port,
+                                   initiator=self.node_id < entry["id"])
+        except (LinkError, OSError) as exc:
+            # It answered and the handshake failed: most likely a node from before
+            # meetings, which always takes the listener's part. Dial it plainly from now on.
+            entry["met_bad"] = entry.get("met_bad", 0) + 1
+            if entry["met_bad"] >= 2:
+                entry["plain"] = True
+            if writer is not None:
+                writer.close()
+            else:
+                sock.close()
+            log.debug("mesh meet %s refused: %s", addr, exc)
+            return
+        entry.update(ok=time.time(), fail=0, met_bad=0)
+        log.info("mesh: met %s over IPv6", entry["id"][:12])
+        await self._run_link(link)
+
     async def _accept(self, reader, writer) -> None:
         inbound = sum(1 for link in self.links.values() if not link.outbound)
         if inbound >= MAX_INBOUND or self._stopping:
             writer.close()
             await writer.wait_closed()
             return
+        initiator = None
+        peer = writer.get_extra_info("peername") or ()
+        if len(peer) >= 2:
+            met = self.addrs.get((str(peer[0]), int(peer[1])))
+            if met and met.get("id") and self._meets((str(peer[0]), int(peer[1])), met):
+                initiator = self.node_id < met["id"]     # a meeting: the lower id dials
         try:
-            link = await handshake(reader, writer, self.key, self.network, False, self.listen_port)
+            link = await handshake(reader, writer, self.key, self.network, False, self.listen_port,
+                                   initiator=initiator)
         except LinkError as exc:
             log.debug("mesh inbound refused: %s", exc)
             writer.close()

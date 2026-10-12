@@ -538,3 +538,113 @@ def test_a_peer_dials_back_only_where_it_sees_the_asker():
         finally:
             await stop(c, b, a)
     run(go())
+
+
+# ------------------------------------------------------------------ meeting halfway over IPv6 (2026-10-12)
+# Two nodes behind routers that cannot be changed (Starlink): each knocks on the other's
+# IPv6 mesh port from its own, on the same beat, so each router sees an outgoing
+# connection and lets the other in. Loopback has no firewall, so these check the
+# parts that are ours: the shared dialer rule, both landing points, and old nodes.
+
+def mk6():
+    return MeshNode(nacl.signing.SigningKey.generate(), NET, listen_host="::1", listen_port=0)
+
+
+def test_a_connection_both_sides_dialled_agrees_on_roles_by_node_id():
+    """A simultaneous open: each side believes it dialled. The lower id takes the dialer's part."""
+    from arcade.mesh.link import handshake
+
+    async def go():
+        ka, kb = nacl.signing.SigningKey.generate(), nacl.signing.SigningKey.generate()
+        ida, idb = bytes(ka.verify_key).hex(), bytes(kb.verify_key).hex()
+        got = {}
+
+        async def far(reader, writer):
+            got["b"] = await handshake(reader, writer, kb, NET, True, None, initiator=idb < ida)
+
+        server = await asyncio.start_server(far, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        a = await handshake(reader, writer, ka, NET, True, None, initiator=ida < idb)
+        for _ in range(50):
+            if "b" in got:
+                break
+            await asyncio.sleep(0.02)
+        assert a.peer_id == idb and got["b"].peer_id == ida
+        await a.send({"t": "hello-from-a"})
+        header, _ = await got["b"].recv()
+        assert header["t"] == "hello-from-a"
+        await a.close(); await got["b"].close(); server.close(); await server.wait_closed()
+    run(go())
+
+
+def test_two_ipv6_nodes_meet_whichever_side_knocks_first():
+    """A meeting dial that lands on the far node's listener (its router let it in): the far
+    side sees it come from the near node's own mesh port and takes its part by the same rule."""
+    async def go():
+        for first in (0, 1):            # both id orders: the lower id dials, whoever knocked
+            a, b = await started(mk6(), mk6())
+            try:
+                a.add_address("::1", b.listen_port, b.node_id)
+                b.add_address("::1", a.listen_port, a.node_id)
+                near, far = (a, b) if first == 0 else (b, a)
+                near._spawn(near._meet(("::1", far.listen_port)))     # a met link runs until the node stops
+                for _ in range(100):
+                    if far.node_id in near.links and near.node_id in far.links:
+                        break
+                    await asyncio.sleep(0.02)
+                assert far.node_id in near.links and near.node_id in far.links
+            finally:
+                await stop(a, b)
+    run(go())
+
+
+def test_ipv6_peers_are_met_not_dialled_and_an_old_node_is_dialled_plainly():
+    """The ordinary dialer leaves IPv6 peers to the meeter. A node from before meetings always
+    takes the listener's part, so two failed meetings make it a plain dial, which links."""
+    async def go():
+        a, b = await started(mk6(), mk6())
+        try:
+            b._meets = lambda addr, entry: False          # b: an old node, never meets
+            a.add_address("::1", b.listen_port, b.node_id)
+            entry = a.addrs[("::1", b.listen_port)]
+            assert a._meets(("::1", b.listen_port), entry)
+            if a.node_id > b.node_id:                      # a takes the listener's part: both listen, it fails
+                entry["met_bad"] = 1                       # one failed meeting already (a second dial of the same
+                await a._meet(("::1", b.listen_port))      # port pair would wait out TCP's TIME_WAIT)
+                assert entry.get("plain") and b.node_id not in a.links
+            else:                                          # a dials by the rule: an old listener answers fine
+                a._spawn(a._meet(("::1", b.listen_port)))
+                for _ in range(100):
+                    if b.node_id in a.links:
+                        break
+                    await asyncio.sleep(0.02)
+                assert b.node_id in a.links and not entry.get("plain")
+                return
+            for _ in range(150):                           # the ordinary dialer now takes it
+                if b.node_id in a.links:
+                    break
+                await asyncio.sleep(0.02)
+            assert b.node_id in a.links
+        finally:
+            await stop(a, b)
+    run(go())
+
+
+def test_a_node_whose_ipv4_cannot_be_reached_announces_its_ipv6_to_be_met():
+    from arcade.mesh.service import MeshService
+
+    async def go():
+        svc = MeshService(NET, nacl.signing.SigningKey.generate(), listen_host="127.0.0.1", listen_port=0,
+                          observe=lambda: ["129.222.45.75:5000", "129.222.45.75:5001",
+                                           "[2605:59ca:13cf:2e10::c48e]:3001", "[2605:59ca:13cf:2e10::c48e]:3002"])
+        await svc.node.start()
+        try:
+            found = await svc.where_am_i()
+            assert svc.reachable is False, "nothing answers at the IPv4 address"
+            assert found == ("2605:59ca:13cf:2e10::c48e", svc.node.listen_port)
+            assert svc.meet == svc.node.meet_from == "2605:59ca:13cf:2e10::c48e"
+            assert svc.status()["meet"] == "2605:59ca:13cf:2e10::c48e"
+        finally:
+            await svc.node.stop()
+    run(go())

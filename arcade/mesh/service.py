@@ -20,7 +20,15 @@ its Core nodes is connected to say what address they see it at (getpeerinfo's
 that has been shown to lead back here: it dials itself there (which works when
 the router forwards the port and lets a machine reach its own address), or asks
 a mesh peer to dial it back. A node behind a router with no port forwarded
-therefore announces nothing, which is right: it can still play by dialling out.
+therefore announces nothing on IPv4, which is right: it can still play by
+dialling out.
+
+**Behind a router that cannot be changed (Starlink, carrier NAT).** When IPv4
+cannot be proved, a node with an IPv6 address announces that instead, without
+proof: no proof is possible from inside (dialling your own IPv6 address never
+leaves the machine), and none is needed, because IPv6 peers are not dialled,
+they are met (node.py): both sides knock from their mesh ports on the same beat
+of the clock and each router lets the other in. `status()["meet"]` names it.
 `--mesh-announce IP:PORT` still names an address by hand and skips all of this.
 
 **Who a player is.** A player is their chain address, proved by a certificate
@@ -67,10 +75,11 @@ CHECK_EVERY = 600.0                     # how often a node looks at its own addr
 MIN_VOTES = 2                           # peers that must agree on what they see
 
 
-def public_address(seen: list[str]) -> str | None:
+def public_address(seen: list[str], versions: tuple[int, ...] = (4, 6)) -> str | None:
     """The address most peers say they see this node at, if at least MIN_VOTES
     agree. IPv4 first: an IPv6 address on a home network is often a temporary
-    one that changes by itself, which would mean announcing again every day."""
+    one that changes by itself, which would mean announcing again every day.
+    `versions=(6,)` asks for the IPv6 one only."""
     import collections
     import ipaddress
     votes: dict[int, collections.Counter] = {4: collections.Counter(), 6: collections.Counter()}
@@ -86,12 +95,27 @@ def public_address(seen: list[str]) -> str | None:
             continue
         if ip.is_global:
             votes[ip.version][str(ip)] += 1
-    for version in (4, 6):
+    for version in versions:
         if votes[version]:
             host, n = votes[version].most_common(1)[0]
             if n >= MIN_VOTES:
                 return host
     return None
+
+
+def own_ipv6() -> str | None:
+    """The global IPv6 address this machine would send from, asked of the kernel
+    (a UDP socket 'connected' to a public address sends nothing). The fallback
+    when Core's peers report no IPv6 address for this node."""
+    import ipaddress
+    import socket
+    try:
+        with socket.socket(socket.AF_INET6, socket.SOCK_DGRAM) as s:
+            s.connect(("2001:4860:4860::8888", 9))
+            host = s.getsockname()[0]
+        return host if ipaddress.ip_address(host).is_global else None
+    except OSError:
+        return None
 
 
 def cert_message(network: str, node_id: str, address: str, expires: int) -> str:
@@ -123,7 +147,7 @@ class Session:
 
 class MeshService:
     def __init__(self, network: str, key: nacl.signing.SigningKey, *,
-                 listen_host: str = "0.0.0.0", listen_port: int | None = DEFAULT_PORT,
+                 listen_host: str | None = None, listen_port: int | None = DEFAULT_PORT,
                  peers: list[tuple[str, int]] | None = None,
                  verify: Callable[[str, str, str], bool] | None = None,
                  announced: Callable[[], list[dict]] | None = None,
@@ -131,7 +155,8 @@ class MeshService:
                  announce_at: tuple[str, int] | None = None,
                  observe: Callable[[], list[str]] | None = None,
                  public_port: int | None = None,
-                 remember: Path | None = None):
+                 remember: Path | None = None,
+                 own_v6: Callable[[], str | None] | None = None):
         """`verify(address, signature, message)` asks a Core node; `announced()`
         lists the chain's mesh announcements; `announce(host, port)` publishes
         this node's; `announce_at` fixes the address by hand; `observe()` lists
@@ -147,8 +172,10 @@ class MeshService:
         self.observe = observe
         self.public_port = public_port or listen_port
         self.remember = remember
+        self.own_v6 = own_v6                    # this machine's IPv6 address, when Core's peers name none
         self.last_announced = self._recall()
         self.reachable: bool | None = None
+        self.meet: str | None = None            # the IPv6 address peers meet this node at
         self.node = MeshNode(key, network, listen_host=listen_host, listen_port=listen_port,
                              peers=peers or [], vouch=self._vouch)
         self.node_id = self.node.node_id
@@ -247,15 +274,20 @@ class MeshService:
             seen = await asyncio.to_thread(self.observe)
         except Exception:                          # noqa: BLE001 -- ask again later
             seen = []
-        host = public_address(seen)
-        if host is None:
-            return None
         port = int(self.public_port or self.node.listen_port)
-        self.reachable = await self.node.reaches_itself(host, port)
-        if not self.reachable and self.node.links:
-            said = await self.node.ask_dial_back(port)
-            self.reachable = said["reached"]
-        return (host, port) if self.reachable else None
+        host = public_address(seen, (4,))
+        if host is not None:
+            self.reachable = await self.node.reaches_itself(host, port)
+            if not self.reachable and self.node.links:
+                said = await self.node.ask_dial_back(port)
+                self.reachable = said["reached"]
+            if self.reachable:
+                self.meet = None
+                return host, port
+        # IPv4 cannot be reached from outside: meet over IPv6 instead (see the notes above).
+        v6 = public_address(seen, (6,)) or (await asyncio.to_thread(self.own_v6) if self.own_v6 else None)
+        self.meet = self.node.meet_from = v6
+        return (v6, int(self.node.listen_port)) if v6 else None
 
     async def announce_if_due(self) -> bool:
         """Announce when the address is new, or once a day to stay fresh."""
@@ -319,7 +351,7 @@ class MeshService:
         links = len(self.node.links)
         return {"linked": links > 0, "node": self.node_id, "network": self.network,
                 "peers": links, "known": len(self.node.addrs),
-                "listening": self.node.listen_port, "reachable": self.reachable,
+                "listening": self.node.listen_port, "reachable": self.reachable, "meet": self.meet,
                 "announced": {k: self.last_announced.get(k) for k in ("host", "port", "at")}
                 if self.last_announced else None}
 
@@ -415,7 +447,7 @@ class MeshService:
         return await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(get(), self.loop))
 
 
-def for_state(state, *, listen_host: str = "0.0.0.0", listen_port: int | None = DEFAULT_PORT,
+def for_state(state, *, listen_host: str | None = None, listen_port: int | None = DEFAULT_PORT,
               peers: list[tuple[str, int]] | None = None,
               announce_at: tuple[str, int] | None = None,
               public_port: int | None = None) -> MeshService:
@@ -457,5 +489,5 @@ def for_state(state, *, listen_host: str = "0.0.0.0", listen_port: int | None = 
         listen_port=listen_port, peers=peers, verify=verify, announced=announced,
         announce=lambda host, port: state.announce_mesh(host, port, bytes(key.verify_key).hex()),
         announce_at=announce_at, observe=observe, public_port=public_port,
-        remember=Path(state.home) / "mesh-announced.json")
+        remember=Path(state.home) / "mesh-announced.json", own_v6=own_ipv6)
     return service

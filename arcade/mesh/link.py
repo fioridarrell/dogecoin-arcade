@@ -163,8 +163,14 @@ def _derive(shared: bytes, transcript: bytes, label: bytes) -> bytes:
 
 
 async def handshake(reader, writer, signing_key: nacl.signing.SigningKey, network: str,
-                    outbound: bool, listen_port: int | None) -> Link:
-    """Run the handshake on a fresh connection; return a Link or raise LinkError."""
+                    outbound: bool, listen_port: int | None, *, initiator: bool | None = None) -> Link:
+    """Run the handshake on a fresh connection; return a Link or raise LinkError.
+
+    `initiator` is who plays the dialer's part in the key schedule, when that is
+    not simply who connected: on a connection both nodes dialled at once (a
+    "meet", node.py) each side believes it dialled, so both pass the same rule
+    -- the lower node id is the dialer -- and agree without a word on the wire."""
+    dialer = outbound if initiator is None else initiator
     eph = nacl.public.PrivateKey.generate()
     mine = Hello(network=network, ephemeral=bytes(eph.public_key))
     try:
@@ -174,14 +180,14 @@ async def handshake(reader, writer, signing_key: nacl.signing.SigningKey, networ
         if theirs.network != network:
             raise LinkError(f"that node is on {theirs.network!r}, this one on {network!r}")
         shared = sodium.crypto_scalarmult(bytes(eph), theirs.ephemeral)
-        first, second = (mine, theirs) if outbound else (theirs, mine)
+        first, second = (mine, theirs) if dialer else (theirs, mine)
         transcript = hashlib.blake2b(first.encode() + second.encode(), digest_size=32).digest()
         k_out = _derive(shared, transcript, b"arcm-dialer")
         k_in = _derive(shared, transcript, b"arcm-listener")
-        send_key, recv_key = (k_out, k_in) if outbound else (k_in, k_out)
+        send_key, recv_key = (k_out, k_in) if dialer else (k_in, k_out)
 
         link = Link(reader, writer, b"", outbound, send_key, recv_key, None)
-        role = b"D" if outbound else b"L"
+        role = b"D" if dialer else b"L"
         proof = signing_key.sign(_AUTH_CONTEXT + role + transcript).signature
         await link.send({"t": "auth", "key": bytes(signing_key.verify_key).hex(),
                          "sig": proof.hex(), "listen": listen_port})
@@ -191,7 +197,7 @@ async def handshake(reader, writer, signing_key: nacl.signing.SigningKey, networ
         try:
             key = bytes.fromhex(str(header.get("key", "")))
             sig = bytes.fromhex(str(header.get("sig", "")))
-            their_role = b"L" if outbound else b"D"
+            their_role = b"L" if dialer else b"D"
             nacl.signing.VerifyKey(key).verify(_AUTH_CONTEXT + their_role + transcript, sig)
         except (ValueError, nacl.exceptions.BadSignatureError, nacl.exceptions.ValueError,
                 nacl.exceptions.TypeError):
