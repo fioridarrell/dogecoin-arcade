@@ -17,6 +17,8 @@
       <td>{{ run.name }}</td>
       <td>{{ run.chain }}</td>
       <td>{{ "{:,}".format(run.sent) }} of {{ "{:,}".format(run["items"]) }}
+        {% if run.skipped %}<span class="pill">{{ "{:,}".format(run.skipped) }}
+          already in the set</span>{% endif %}
         {% if run.refused %}<span class="pill bad">{{ "{:,}".format(run.refused) }}
           refused</span>{% endif %}</td>
       <td><span class="pill {{ 'ok' if run.status == 'done' else ('bad' if run.status == 'failed' else ('warn' if run.status == 'running' else '')) }}">{{ run.status }}</span></td>

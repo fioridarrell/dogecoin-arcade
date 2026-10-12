@@ -377,6 +377,15 @@ def build_from_manifest(entries: Any) -> Build:
     edition from the entry, else from the name, else the position; off-chain
     image pointers stripped. `folder` is blank, and that blank is what every
     route reads as "the pictures are in the browser".
+
+    The digest is optional since 2026-10-12, and that is what makes a big folder
+    cheap: reading six thousand pictures to hash them, before any of them is on
+    the chain, is the same "all at once" the run was built to avoid. A run
+    written down without digests gets each one from the bytes that arrive for
+    that piece (`app._inscribe_run_piece`), so from the second ask of a piece
+    onwards the check is exactly as strict; what is not checked is the first
+    bytes of a piece ever offered, because there is nothing here to compare them
+    with. A digest that IS said is still enforced.
     """
     import re as _re
     if not isinstance(entries, list) or not entries:
@@ -409,9 +418,15 @@ def build_from_manifest(entries: Any) -> Build:
             raise CollectionError(f"{image}: its size was not said") from None
         if size <= 0:
             raise CollectionError(f"{image} is empty")
+        # Said when this browser has already read the picture; blank when it has
+        # not, which is what lets a folder of six thousand be written down
+        # without the tab reading six thousand files first (2026-10-12:
+        # "instead of trying to process all of the files all at once ... keep
+        # track of the number inscribed and just continue on one at a time").
+        # The node fills it in from the bytes when that piece's turn comes.
         digest = str(said.get("sha256") or "").lower()
-        if not _re.fullmatch(r"[0-9a-f]{64}", digest):
-            raise CollectionError(f"{image}: its SHA-256 is missing or malformed")
+        if digest and not _re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise CollectionError(f"{image}: its SHA-256 is malformed")
         edition = entry.get("edition")
         if isinstance(edition, bool) or not isinstance(edition, int):
             member = I.collection_of(compact(entry))

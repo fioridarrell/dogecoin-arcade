@@ -46,9 +46,19 @@ that has no rule written for it is not a directory to remove here.
 
 Since 2026-10-11 the wallet page writes a run down WITHOUT uploading (the operator: the
 pictures stay in the browser, and go up one piece at a time through
-`/account/inscribe`, the way one file does). Such a run has `folder = ''` and
-each piece carries the picture's `sha256`, which is what the bytes are checked
-against when they arrive. Nothing of it is ever on this disk.
+`/account/inscribe`, the way one file does). Such a run has `folder = ''`. Nothing
+of it is ever on this disk.
+
+Since 2026-10-12 its `sha256` starts blank unless the browser happened to have one
+(the operator, on a 6,480-picture collection: "instead of trying to process all of the
+files all at once in a very large collection it should just keep track of the
+number inscribed and just continue on one at a time"). Reading every picture to
+hash it before the first piece goes out was the last "all at once" left in the
+flow, and it is the one a phone cannot do. So the digest arrives with the piece and
+`record_digest` writes it down; `piece_skipped` files the one case that check found
+- a picture that is in the set already, which is not owed and must not be paid for
+twice. A run written down WITH digests behaves exactly as it did: same table, same
+statuses, one value filled in later.
 """
 
 from __future__ import annotations
@@ -125,8 +135,13 @@ STATUSES = ("open", "running", "done", "failed", "stopped")
 
 #: What a piece is doing. `pending` has never been offered, `sending` has an
 #: offer out with no broadcast yet -- the difference is only so a page can say
-#: which one the account is being asked about.
-PIECE_STATUSES = ("pending", "sending", "sent", "failed")
+#: which one the account is being asked about. `skipped` is a piece whose
+#: picture turned out to be in the set already (a run written down from a folder
+#: whose pictures are up under other numbers): it is settled -- not owed, never
+#: offered again, nothing charged -- without being on the chain as ITSELF.
+#: `retry_failed` leaves it alone on purpose: putting it back in line is how a
+#: second copy of a picture gets paid for.
+PIECE_STATUSES = ("pending", "sending", "sent", "failed", "skipped")
 
 
 class TooBig(ValueError):
@@ -336,6 +351,33 @@ class Runs:
                          "WHERE run_id = ? AND edition = ?", (error, run_id, edition))
             self._moved(conn, run_id)
 
+    def piece_skipped(self, run_id: str, edition: int, error: str) -> None:
+        """This piece's picture is in the set already, so it is not going out.
+
+        The answer only exists for a run whose pictures are in a browser and were
+        never hashed here: the node cannot know a picture is up until the bytes
+        arrive for it. `skipped` rather than `sent` because the piece is not on
+        the chain as ITSELF -- the copy that IS up stands under another number --
+        and a run that claims a piece it never paid for is the exact lie this
+        book is built to make impossible. Nothing is charged for it, which is
+        the whole point of finding out.
+        """
+        with self._open() as conn:
+            conn.execute("UPDATE piece SET status = 'skipped', error = ? "
+                         "WHERE run_id = ? AND edition = ?", (error, run_id, edition))
+            self._moved(conn, run_id)
+
+    def record_digest(self, run_id: str, edition: int, digest: str) -> None:
+        """The digest of a piece whose bytes have just arrived, once it is known.
+
+        Written only while the row is still blank, so a piece that came with a
+        digest in the manifest keeps the one it was written down with: that one
+        is what the browser promised before anything was paid for.
+        """
+        with self._open() as conn:
+            conn.execute("UPDATE piece SET sha256 = ? WHERE run_id = ? "
+                         "AND edition = ? AND sha256 = ''", (digest, run_id, edition))
+
     def retry_failed(self, run_id: str) -> int:
         """Failed pieces back to pending for a resume. Their inscription id is
         already written down, so a retry inscribes the same piece, not a new
@@ -428,13 +470,16 @@ class Runs:
 
 
 def _progress(conn: sqlite3.Connection, run_id: str) -> dict:
-    counts = {"pending": 0, "sending": 0, "sent": 0, "failed": 0}
+    counts = {"pending": 0, "sending": 0, "sent": 0, "failed": 0, "skipped": 0}
     for row in conn.execute(
             "SELECT status, COUNT(*) AS n FROM piece WHERE run_id = ? "
             "GROUP BY status", (run_id,)):
         counts[row["status"]] = row["n"]
     return {"sent": counts["sent"], "pending": counts["pending"],
             "sending": counts["sending"], "failed_pieces": counts["failed"],
+            # Settled without being paid for: the picture was in the set already.
+            # Counted apart from `sent` because those transactions do not exist.
+            "skipped": counts["skipped"],
             # What the next one is called, for the sentence on the page.
             "next": _next_label(conn, run_id)}
 

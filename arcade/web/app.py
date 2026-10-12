@@ -8815,6 +8815,15 @@ def create_app(state: AppState) -> FastAPI:
     #: it finds with the node's own wallet as the signer, and an account's run
     #: must never be signed by this node at all.
     _runs = accountrunslib.Runs(state.home / "accountruns.sqlite")
+    #: The digests already in a run's collection, kept while that run is going,
+    #: so a piece written down without a digest can be checked for being up
+    #: already without reading the index again for every piece. Keyed by run,
+    #: which is what makes it a fact rather than a stale cache: §6 lets an
+    #: account only one run at a time, and a collection only grows from its own
+    #: address, so while a run goes nothing else is adding to the set it is
+    #: reading. What a piece lands with is added here too, by `_set_landed`.
+    _set_pics: dict[str, set[str]] = {}
+    _SET_PIC_ROOM = 4         # runs remembered at once; a few hundred KB each
     #: Inscriptions too big for one transaction, and which of their transactions
     #: are still owed. Its own book again, for the same reason as the runs: the
     #: node's Runner resumes what the node's own wallet should finish, and this
@@ -9975,6 +9984,49 @@ def create_app(state: AppState) -> FastAPI:
                 {"address": to, "value": sats, "permille": permille,
                  "minimum": fees.DUST_LIMIT, "at_minimum": share < fees.DUST_LIMIT})
 
+    def _set_pictures(run, chain, piece) -> set[str]:
+        """The digests this run's collection already holds, read once per run.
+
+        Only a run written down without digests asks (a piece that carries its
+        own is checked against that, which is stricter). The set is read the
+        first time such a piece's bytes arrive and kept under the run's id:
+        paging ten thousand index rows for every piece would cost more than the
+        inscription does, and a 6,480-piece run asks 6,480 times.
+
+        An index that will not answer gives an empty set and is NOT remembered,
+        so the next piece asks again. A run is never stopped by a question about
+        what is already up -- the worst a wrong "no" can do is offer a piece that
+        the account then pays for twice, which is what the offer's own review
+        says out loud before signing.
+        """
+        have = _set_pics.get(run["id"])
+        if have is not None:
+            return have
+        found: set[str] = set()
+        said = inscriptionlib.collection_of(piece["json"])
+        collection = (said[0] if said else "") or run["name"]
+        try:
+            index = state.token_index(chain)
+            for offset in range(0, 10000, 500):
+                page = index.collection_items(run["address"], collection,
+                                              limit=500, offset=offset)
+                found |= {row["sha256"] for row in page if row.get("sha256")}
+                if len(page) < 500:
+                    break
+        except Exception:                                 # noqa: BLE001 -- index away
+            return found
+        if len(_set_pics) >= _SET_PIC_ROOM:
+            _set_pics.pop(next(iter(_set_pics)))
+        _set_pics[run["id"]] = found
+        return found
+
+    def _set_landed(run_id: str, digest: str) -> None:
+        """A piece of a remembered run is going out: its picture is in the set
+        from now on, so a later piece with the same bytes is told so."""
+        have = _set_pics.get(run_id)
+        if have is not None:
+            have.add(digest)
+
     def _inscribe_run_piece(account, chain, address: str, said: dict,
                             content: bytes, kind: str):
         """One piece of a collection run whose pictures live in the browser.
@@ -9995,6 +10047,15 @@ def create_app(state: AppState) -> FastAPI:
         Charged once per piece, like `/account/run/piece`: a piece already
         `sending` was charged when it was first asked for, and asking again
         -- a reload, an expired offer -- is the same piece.
+
+        Since 2026-10-12 the run is usually written down WITHOUT the digests -- a
+        tab does not read six thousand pictures before its first piece goes out
+        (the operator: "keep track of the number inscribed and just continue on one at
+        a time"). So the digest is taken from the bytes that arrive and written
+        onto the piece, which makes every ask after the first exactly as strict
+        as the manifest used to be, and this is where the one thing the manifest
+        could see is now asked: whether this picture is in the collection
+        already. Piece by piece, from here -- see `_set_pictures`.
         """
         run = _runs.get(str(said.get("run") or ""))
         if run is None:
@@ -10019,13 +10080,44 @@ def create_app(state: AppState) -> FastAPI:
         if piece["status"] == "failed":
             raise ValueError(f"{piece['name']} was refused ({piece['error']}); retry the "
                              "run's refused pieces first")
+        if piece["status"] == "skipped":
+            raise ValueError(f"{piece['name']}: that picture is in the collection "
+                             "already, so this run does not pay for it. The pieces "
+                             "after it are still here to ask for.")
         digest = hashlib.sha256(content).hexdigest()
-        if piece.get("sha256") and digest != piece["sha256"]:
-            raise ValueError(f"those are not the bytes of {piece['name']} this run was "
-                             f"written down with ({piece['image']}, {int(piece['size']):,} "
-                             "bytes). A piece is permanent and paid for, so the picture "
-                             "has to be the one the run was made from. Nothing has been "
-                             "paid for.")
+        if piece.get("sha256"):
+            if digest != piece["sha256"]:
+                raise ValueError(f"those are not the bytes of {piece['name']} this run "
+                                 "was written down with ({piece['image']}, "
+                                 f"{int(piece['size']):,} bytes). A piece is permanent "
+                                 "and paid for, so the picture has to be the one the "
+                                 "run was made from. Nothing has been paid for.")
+        elif len(content) != int(piece["size"]):
+            # The only check left when the run was written down without hashing
+            # the folder -- and it catches the case that check was ever for: the
+            # folder chosen again being a different folder.
+            raise ValueError(f"{piece['name']} was written down at "
+                             f"{int(piece['size']):,} bytes and these are "
+                             f"{len(content):,}. The folder this run was made from "
+                             "is the one its pictures have to come out of. Nothing "
+                             "has been paid for.")
+        elif digest in _set_pictures(run, chain, piece):
+            # Not a refusal and not a piece: the picture is in the set already,
+            # under this number or another, and paying again joins nothing. This
+            # is where the 2026-09-25 rule ("a second copy joins nothing and
+            # costs again") lives now that the digests are not all known when the
+            # run is written down: asked piece by piece instead of all at once.
+            _runs.piece_skipped(run["id"], edition,
+                                "its picture is in the collection already")
+            run = _runs.get(run["id"])
+            return JSONResponse({"already": f"{piece['name']}: that picture is in "
+                                 f"{run['name']} already, so nothing is paid for it.",
+                                 "run": run["id"], "piece": edition,
+                                 "items": run["items"], "sent": run["sent"],
+                                 "skipped": run["skipped"], "chain": chain.network})
+        else:
+            # From the next ask of this piece, the check above is the strict one.
+            _runs.record_digest(run["id"], edition, digest)
         if run["status"] == "stopped":
             _runs.set_status(run["id"], "running")
         answer = _inscribe_start(
@@ -10033,7 +10125,8 @@ def create_app(state: AppState) -> FastAPI:
             {**said, "name": piece["name"], "json": piece["json"]}, content,
             piece["content_type"] or kind,
             tag=bytes.fromhex(piece["inscription_id"]),
-            on_sent=lambda txid, run_id=run["id"], n=edition: _runs.record_piece(run_id, n, txid),
+            on_sent=lambda txid, run_id=run["id"], n=edition, d=digest: (
+                _runs.record_piece(run_id, n, txid), _set_landed(run_id, d)),
             charge=piece["status"] != "sending")
         # After the offer and not before: a refusal (no coins, the hour used
         # up) charged nothing, and the piece stays `pending` so the next ask
@@ -10553,6 +10646,12 @@ def create_app(state: AppState) -> FastAPI:
         def digest_of(item) -> str:
             if getattr(item, "sha256", ""):
                 return item.sha256
+            if not folder:
+                # Written down from a folder this node never held, without its
+                # pictures being read (2026-10-12). There is nothing to read a
+                # digest off, and the answer to "is this one up already?" waits
+                # for the bytes -- `_inscribe_run_piece`.
+                return ""
             return hashlib.sha256((build.folder / item.image).read_bytes()).hexdigest()
         # The set's rules are #1's (2026-09-25): a NEW collection writes
         # its details and its maximum supply (0 = unlimited) onto #1; a batch
@@ -10583,7 +10682,15 @@ def create_app(state: AppState) -> FastAPI:
                         break
             except Exception:
                 have = set()
-            fresh = [item for item in build.items if digest_of(item) not in have]
+            # Three answers, not two: an item this node cannot digest (its
+            # pictures were never read here) is neither up nor new -- the
+            # question is asked when its bytes arrive, by
+            # `_inscribe_run_piece`, and a piece that turns out to be up is
+            # filed `skipped` and costs nothing.
+            known = [(item, digest_of(item)) for item in build.items]
+            fresh = [item for item, digest in known
+                     if not digest or digest not in have]
+            blind = sum(1 for _item, digest in known if not digest)
             if not fresh:
                 return JSONResponse({"detail": (
                     f"{build.collection} is already on this chain from this "
@@ -10598,6 +10705,15 @@ def create_app(state: AppState) -> FastAPI:
                     f"as the other {len(fresh):,}. A second copy joins nothing "
                     "and costs again.")
                 build = dataclasses.replace(build, items=fresh)
+            if blind:
+                # Said rather than left out: the page would otherwise promise a
+                # clean continuation, and the honest answer is that this node
+                # cannot see the pictures it is being asked to run.
+                repeat_note = (repeat_note + " " if repeat_note else "") + (
+                    f"{blind:,} of them cannot be compared with what is on the "
+                    "chain from here -- their pictures stay in your browser -- so "
+                    "each is checked when its turn comes, and one that is already "
+                    "in the collection is skipped and costs nothing.")
             cap = inscriptionlib.collection_details((cover or {}).get("json") or "").get("supply")
             if numbering != "keep":
                 build = collectionlib.renumbered(build, max(taken) + 1)
@@ -10684,6 +10800,7 @@ def create_app(state: AppState) -> FastAPI:
                                        "status": run["status"],
                                        "sending": run["sending"],
                                        "refused": run["failed_pieces"],
+                                       "skipped": run["skipped"],
                                        "note": run["note"],
                                        "next": run["next"],
                                        "chain": run["network"]}
@@ -10814,6 +10931,7 @@ def create_app(state: AppState) -> FastAPI:
                            "been paid for."}, status_code=400)
         folder = Path(run["folder"])
         _runs.delete(run["id"])
+        _set_pics.pop(run["id"], None)     # the run is gone; its remembered set goes with it
         uploads = _collection_upload_dir().resolve()
         if run["folder"] and folder.exists():
             try:
@@ -10891,6 +11009,7 @@ def create_app(state: AppState) -> FastAPI:
                 _runs.set_status(run["id"], "running")
             return JSONResponse({"held": "browser", "run": run["id"], "piece": piece["edition"],
                                  "items": run["items"], "sent": run["sent"],
+                                 "skipped": run["skipped"],
                                  "name": piece["name"], "image": piece["image"],
                                  "bytes": int(piece["size"]), "chunks": int(piece["chunks"] or 1),
                                  "sha256": piece.get("sha256") or "",
@@ -10910,6 +11029,7 @@ def create_app(state: AppState) -> FastAPI:
                                "and it will be written down as only what is "
                                "still missing."}, status_code=400)
             return JSONResponse({"run": run["id"], "sent": run["sent"],
+                                 "skipped": run["skipped"],
                                  "items": run["items"], "finished": True})
         if int(piece.get("chunks") or 1) > 1:
             # More than one transaction (2026-10-08: never shrink a collection's
@@ -10927,6 +11047,7 @@ def create_app(state: AppState) -> FastAPI:
             _runs.offer_piece(run["id"], piece["edition"])
             return JSONResponse({"big": True, "run": run["id"], "piece": piece["edition"],
                                  "items": run["items"], "sent": run["sent"],
+                                 "skipped": run["skipped"],
                                  "name": piece["name"], "bytes": int(piece["size"]),
                                  "chunks": int(piece["chunks"]),
                                  "content_type": piece["content_type"],
@@ -18132,6 +18253,7 @@ def create_app(state: AppState) -> FastAPI:
                              "items": run["items"], "sent": run["sent"],
                              "status": run["status"],
                              "refused": run["failed_pieces"],
+                             "skipped": run["skipped"],
                              "next": run["next"],
                              "chain": labels.get(run["network"], run["network"])}
                             for run in mine])

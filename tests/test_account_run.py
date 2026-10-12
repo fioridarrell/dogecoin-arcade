@@ -829,21 +829,33 @@ def test_asking_again_for_the_same_piece_is_not_charged_again(seated, tmp_path):
 
 # --- the pictures stay in the browser (2026-10-11) ---------------------------
 
-def _manifest(build):
+def _manifest(build, hashes=True):
     """What the page reads off a chosen folder: each piece's JSON and its picture's
-    name, size and SHA-256 -- never the picture."""
+    name and size, and -- with `hashes=False`, which is what the page sends since
+    2026-10-12 -- its SHA-256. Never the picture.
+
+    The hashes are optional because reading six thousand pictures in the tab before
+    its first piece goes on the chain is the same "all at once" the run was built to
+    avoid (the operator: "it should just keep track of the number inscribed and just
+    continue on one at a time"). Without them the node asks the same questions when
+    each piece's bytes arrive instead of when the run is written down, which is what
+    the two tests below are about.
+    """
     items = []
     for entry in json.loads((build / "json" / "_metadata.json").read_text()):
         pic = build / "images" / f"{entry['edition']}.png"
-        items.append({"json": entry, "image": pic.name, "size": pic.stat().st_size,
-                      "content_type": "image/png",
-                      "sha256": hashlib.sha256(pic.read_bytes()).hexdigest()})
+        item = {"json": entry, "image": pic.name, "size": pic.stat().st_size,
+                "content_type": "image/png"}
+        if hashes:
+            item["sha256"] = hashlib.sha256(pic.read_bytes()).hexdigest()
+        items.append(item)
     return items
 
 
-def _plan(app, build, **fields):
+def _plan(app, build, hashes=True, **fields):
     return app.post("/account/run/plan",
-                    json={"run_chain": "regtest", "items": _manifest(build), **fields})
+                    json={"run_chain": "regtest", "items": _manifest(build, hashes),
+                          **fields})
 
 
 def _piece_bytes(app, run_id, build, edition, content=None):
@@ -949,3 +961,167 @@ def test_a_manifest_is_checked_before_anything_is_written(seated, tmp_path):
     said = app.post("/account/run/plan", json={"run_chain": "regtest", "items": []})
     assert said.status_code == 400
     assert not [r for r in _book(state).list() if r["name"] == "Doge Punks Checked"]
+
+
+def test_a_folder_is_written_down_without_reading_a_single_picture(seated, tmp_path):
+    """2026-10-12: "Instead of trying to process all of the files all at once
+    in a very large collection it should just keep track of the number inscribed and
+    just continue on one at a time."
+
+    The tab used to open all 6,480 pictures and hash them before it could write the
+    run down — twenty minutes of "Reading your pictures…" before piece one, which is
+    the all-at-once the run exists to avoid, moved from the node to the browser. So
+    a manifest may carry names and sizes alone. Nothing is weaker for it: the first
+    picture that arrives has to be the size the run was written down at, its digest
+    is written onto its piece as it lands, and every later ask of that piece is the
+    strict hash check — the run is written down blind for one moment, not kept
+    blind.
+    """
+    app, state, rpc, pubkey, mine = seated
+    build = hashlips(tmp_path, count=2, prefix="Doge Punks Blind")
+    folders = _upload_folders(state)
+    said = _plan(app, build, hashes=False)
+    assert said.status_code == 200, said.text
+    run_id = said.json()["run"]
+    assert said.json()["items"] == 2 and said.json()["name"] == "Doge Punks Blind"
+    assert _upload_folders(state) == folders, "nothing was uploaded to write it down"
+    book = _book(state)
+    assert book.get(run_id)["folder"] == ""
+    assert book.piece(run_id, 1)["sha256"] == "", "nothing was hashed to write this down"
+    assert rpc.call("getrawmempool") == []
+
+    asked = app.post("/account/run/piece", json={"run": run_id}).json()
+    assert asked["held"] == "browser" and asked["sha256"] == "", "no hash to check here"
+
+    # A folder that wears the same file names but is not the folder is caught on
+    # its size — the one thing known about a picture without opening it.
+    near = (build / "images" / "1.png").read_bytes() + b"x"
+    wrong = _piece_bytes(app, run_id, build, 1, content=near)
+    assert wrong.status_code == 400, wrong.text
+    assert "written down at" in wrong.json()["detail"], wrong.text
+    assert book.piece(run_id, 1)["status"] == "pending", "a refusal leaves the piece"
+
+    offered = _piece_bytes(app, run_id, build, 1)
+    assert offered.status_code == 200, offered.text
+    digest = hashlib.sha256((build / "images" / "1.png").read_bytes()).hexdigest()
+    assert book.piece(run_id, 1)["sha256"] == digest, "the bytes wrote the piece's hash"
+    # From that moment the check is the strict one, on a piece still unsigned:
+    changed = _piece_bytes(app, run_id, build, 1, content=b"different bytes")
+    assert changed.status_code == 400, changed.text
+    assert "not the bytes of Doge Punks Blind #1" in changed.json()["detail"]
+
+    done = _sign_and_send(app, pubkey, offered.json())
+    assert done.status_code == 200, done.text
+    assert book.piece(run_id, 1)["status"] == "sent"
+    assert book.piece(run_id, 1)["txid"] == done.json()["txid"]
+    rpc.call("generate", 1)
+    _catch_up(state, rpc)
+    assert app.post("/account/run/piece",
+                    json={"run": run_id}).json()["piece"] == 2
+
+
+def test_a_second_copy_of_a_picture_is_skipped_and_costs_nothing(seated, tmp_path):
+    """The rule the up-front hashes enforced, asked piece by piece instead.
+
+    2026-09-25: "a second copy joins nothing and costs again" — a duplicate of a
+    picture already in this account's set must not be paid for. While every piece's
+    digest was known at write-down time the duplicates were dropped from the run
+    before it was priced. With the digests gone they cannot be seen at write-down at
+    all, so the run is written with all of them, says so plainly, and each one is
+    asked when its bytes arrive: a duplicate is filed `skipped`, which is neither
+    sent nor refused — it is settled, at no cost, and the run goes on to the next.
+    """
+    app, state, rpc, pubkey, mine = seated
+    build = hashlips(tmp_path, count=3, prefix="Doge Punks Twice Over")
+    first = _plan(app, build).json()["run"]
+    for edition in (1, 2):
+        asked = app.post("/account/run/piece", json={"run": first})
+        assert asked.status_code == 200, asked.text
+        done = _sign_and_send(app, pubkey,
+                              _piece_bytes(app, first, build, edition).json())
+        assert done.status_code == 200, done.text
+        rpc.call("generate", 1)
+        _catch_up(state, rpc)
+    assert app.post("/account/run/stop", json={"run": first}).json()["status"] == "stopped"
+
+    again = _plan(app, build, hashes=False, numbering="keep")
+    assert again.status_code == 200, again.text
+    run_id = again.json()["run"]
+    assert again.json()["items"] == 3, "this node cannot see which are up, so all three"
+    assert "cannot be compared" in again.json()["note"], again.json()["note"]
+
+    balance = app.get("/account").json()["balance"]
+
+    def used():
+        return next(a for a in app.get("/account").json()["quota"]["actions"]
+                    if a["kind"] == "inscribe")["used"]
+
+    charged = used()
+    book = _book(state)
+    for edition in (1, 2):
+        answer = _piece_bytes(app, run_id, build, edition)
+        assert answer.status_code == 200, answer.text
+        said = answer.json()
+        assert "already" in said and "offer" not in said, said
+        assert said["skipped"] == edition and said["sent"] == 0, said
+        assert book.piece(run_id, edition)["status"] == "skipped"
+        assert book.piece(run_id, edition)["txid"] == "", "it is not on the chain twice"
+    assert rpc.call("getrawmempool") == [] and \
+        app.get("/account").json()["balance"] == balance, "a skipped piece costs nothing"
+    assert used() == charged, "a skipped piece is not an inscription of this hour"
+
+    # The pieces after it are still there to ask for, which is the whole point of
+    # `skipped` not being `failed`: nothing is waiting to be retried.
+    row = app.post("/account/run").json()["runs"][0]
+    assert row["skipped"] == 2 and row["refused"] == 0 and row["next"] == "Doge Punks Twice Over #3", row
+
+    third = _piece_bytes(app, run_id, build, 3)
+    assert third.status_code == 200, third.text
+    assert "offer" in third.json(), "the one picture that is new is offered"
+    assert _sign_and_send(app, pubkey, third.json()).status_code == 200
+    rpc.call("generate", 1)
+    _catch_up(state, rpc)
+    over = app.post("/account/run/piece", json={"run": run_id})
+    assert over.status_code == 200, over.text
+    assert over.json()["finished"] and over.json()["sent"] == 1
+    assert over.json()["skipped"] == 2
+    page = app.get(f"/me/run/{run_id}")
+    assert "already in the set" in _flat(page.text), "the page says what was skipped"
+    index = state.token_index(state.chain_named("regtest"))
+    assert index.collection_editions(mine, "Doge Punks Twice Over") == {1, 2, 3}
+
+
+def test_a_run_whole_written_before_the_first_piece_arrives(seated, tmp_path):
+    """A 6,480-piece folder is written down in the time it takes to name its files,
+    and its first piece is the first thing read off the disk.
+
+    The number the panel shows is the number inscribed, and nothing before it
+    touches the pictures: no upload, no hashing pass, no estimate that has to walk
+    the folder. What the run costs is priced from the sizes in the manifest, which is
+    what makes the page's number the number the run charges even though this node
+    has never held a single one of them.
+    """
+    app, state, rpc, pubkey, mine = seated
+    build = hashlips(tmp_path, count=4, prefix="Doge Punks Counted")
+    said = _plan(app, build, hashes=False)
+    assert said.status_code == 200, said.text
+    run_id = said.json()["run"]
+    assert said.json()["items"] == 4
+    assert said.json()["fee"] > 0, "priced from the sizes, without reading them"
+    assert _book(state).get(run_id)["folder"] == ""
+
+    # Every piece of it is offered in order, one at a time, with nothing read
+    # before its turn: the run answers with which piece is next and its size.
+    for edition in (1, 2, 3, 4):
+        asked = app.post("/account/run/piece", json={"run": run_id})
+        assert asked.status_code == 200, asked.text
+        assert asked.json()["piece"] == edition, "the counter, not a walk of the folder"
+        assert asked.json()["held"] == "browser"
+        answer = _piece_bytes(app, run_id, build, edition)
+        assert answer.status_code == 200, answer.text
+        assert _sign_and_send(app, pubkey, answer.json()).status_code == 200
+        rpc.call("generate", 1)
+        _catch_up(state, rpc)
+    assert app.post("/account/run/piece", json={"run": run_id}).json()["finished"]
+    index = state.token_index(state.chain_named("regtest"))
+    assert index.collection_editions(mine, "Doge Punks Counted") == {1, 2, 3, 4}

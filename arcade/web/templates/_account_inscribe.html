@@ -593,6 +593,14 @@ async function inscribeBytes(bytes, name, type, jsonGiven = "",
       // the hash the run was written down with and lands it under the piece's
       // own inscription id.
       ...(run ? {run, piece} : {})});
+    // A run's piece whose picture is in the collection already: the node settled
+    // the piece as skipped and answered with no transaction in it at all
+    // (2026-10-12). Nothing is signed and nothing is paid here, and "already"
+    // tells the run to move on to the next piece rather than wait on this one.
+    if (start.already) {
+      if (!quiet) news(start.already);
+      return "already";
+    }
     // What this browser reads off the transaction's own bytes, not what this
     // node says it costs: a confirmation that repeats the node's number proves
     // nothing. For a file already half up, the split is not offered again, and
@@ -916,10 +924,15 @@ async function browserItem(run, offer, held) {
     + `(item ${commas(offer.piece)} of ${commas(offer.items)}, ${commas(offer.sent)} on the chain)\u2026`;
   const root = await inscribeBytes(bytes, offer.name, offer.content_type, offer.json,
                                    {quiet: true, held, run, piece: offer.piece});
+  if (root === "already") {                 // in the set; nothing was paid for it
+    await dropRunFile(run, offer.image);
+    return "already";
+  }
   if (!root) throw new Error(`${offer.name}: its first transaction is not known here, so the `
                              + "run is waiting on it. Press Resume to pick it up again.");
   await ask("/account/run/done", {run, piece: offer.piece, txid: root});
   await dropRunFile(run, offer.image);     // off this browser's disk as it lands
+  return "";
 }
 
 /** The folder chosen again for a run that lost its pictures: the files by name,
@@ -990,12 +1003,16 @@ async function autoRun(run) {
       }
       if (offer.finished) {
         autoSet(run, null);
-        news(`All ${commas(offer.items)} are on the chain. They show up as their blocks `
+        news(`${offer.skipped
+              ? `${commas(offer.sent)} of them are on the chain and ${commas(offer.skipped)} `
+                + "were in the set already, so nothing was paid for them"
+              : `All ${commas(offer.items)} are on the chain`}. They show up as their blocks `
              + "are mined.");
         break;
       }
       $("run-says").textContent = `${offer.name}: piece ${offer.piece} of `
-        + `${commas(offer.items)}\u2026 (${commas(offer.sent)} on the chain)`;
+        + `${commas(offer.items)}\u2026 (${commas(offer.sent)} on the chain`
+        + (offer.skipped ? `, ${commas(offer.skipped)} already in the set` : "") + ")";
       if (offer.big) { await bigItem(run, offer, held); continue; }
       await wallet.checked(offer, held);
       await wallet.confirm(held, offer);
@@ -1032,6 +1049,8 @@ function showed(row, finished = null) {
   $("run-says").textContent = `${row.name}: ${commas(row.sent)} of `
     + `${commas(row.items)} on the chain`
     + (row.next ? `, next is ${row.next}` : ".")
+    + (row.skipped ? ` ${commas(row.skipped)} were in the set already, so nothing `
+                   + "was paid for them." : "")
     + (row.refused ? ` ${commas(row.refused)} refused.` : "");
 }
 
@@ -1388,21 +1407,15 @@ $("run-start").onclick = async () => {
   const chosen = st.pictures.filter((p) => byPic.has(p.name));
   if (!chosen.length) { say("none of these pictures has JSON; the wizard can write it"); return; }
   $("run-start").disabled = true;
-  const items = [];
-  try {
-    for (let n = 0; n < chosen.length; n++) {
-      const p = chosen[n];
-      if (n % 20 === 0) runNote(`Reading your pictures\u2026 ${commas(n)} of ${commas(chosen.length)}. `
-        + "Nothing is uploaded: they stay in this browser and go up one at a time.", "info");
-      const bytes = new Uint8Array(await p.arrayBuffer());
-      items.push({json: byPic.get(p.name), image: p.name, size: p.size,
-                  content_type: p.type || "", sha256: await shaOf(bytes)});
-    }
-  } catch (e) {
-    runNote(`Reading the folder stopped: ${String(e.message || e)}`);
-    $("run-start").disabled = false;
-    return;
-  }
+  // Name, size and JSON only. Nothing is read off the disk here: hashing six
+  // thousand pictures before the first one goes on the chain is the same "all at
+  // once" the run was built to avoid, and it is what left a 6,480-piece run
+  // saying "Reading your pictures… 0 of 6,480" for twenty minutes while the
+  // browser swapped (2026-10-12). Each picture is read when its own turn
+  // comes, and the node still refuses bytes that do not match the size it was
+  // written down with, and pays for nothing whose picture is already in the set.
+  const items = chosen.map((p) => ({json: byPic.get(p.name), image: p.name,
+                                    size: p.size, content_type: p.type || ""}));
   const body = {run_chain: CHAIN.network, items,
                 numbering: $("set-renumber").checked ? "continue" : "keep"};
   if (!$("set-new").hidden) {
@@ -1415,8 +1428,15 @@ $("run-start").onclick = async () => {
     runFiles = new Map(chosen.map((p) => [p.name, p]));
     runFilesFor = start.run;
     needFolder = "";
-    runNote(`Keeping your ${commas(chosen.length)} pictures in this browser\u2026`, "info");
-    const keptAll = await keepRunFiles(start.run, chosen);
+    // Not waited for. Copying six thousand pictures into this browser's own
+    // storage is a minute of nothing happening before a run may start, and the
+    // copy exists only to survive a reload: this tab already holds every file in
+    // `runFiles`, and a piece whose turn comes before its copy lands is read from
+    // the folder it came from anyway.
+    keepRunFiles(start.run, chosen).then((all) => {
+      if (!all) runNote("This browser would not keep copies of the pictures, so a reload means "
+        + "choosing the folder again. The run is written down either way.", "info");
+    });
     const room = await allowance();
     const pace = room && room.limit > 0 && start.items > room.limit
       ? ` This node takes ${commas(room.limit)} inscriptions an hour per account, `
@@ -1425,12 +1445,11 @@ $("run-start").onclick = async () => {
     setCap = start.supply || 0;
     runNote((start.continues ? `Added to ${start.name}, after the ${commas(start.on_chain)} `
           + "already on the chain. " : "")
-      + `Written down: ${start.name}, ${commas(start.items)} items. Your pictures stay in this `
-      + "browser" + (keptAll ? " (kept here, so the run carries on after a reload)"
-                             : " for this tab; if it closes, choose the folder again to carry on")
-      + ". Nothing is on the chain yet: press Inscribe them all below to start." + pace
+      + `Written down: ${start.name}, ${commas(start.items)} items in a moment — nothing `
+      + "was uploaded and nothing was read off your disk to do it. Each picture is read once, "
+      + "when its own turn comes." + pace
       + (start.note ? " " + start.note : ""), "ok");
-    showed({run: start.run, name: start.name, items: start.items, sent: 0,
+    showed({run: start.run, name: start.name, items: start.items, sent: 0, skipped: 0,
             next: start.next});
   } catch (e) { runNote(String(e.message || e)); }
   finally { $("run-start").disabled = false; }
@@ -1455,13 +1474,24 @@ $("run-piece").onclick = async () => {
     const held = (await take()) || await arcadeKeys(CHAIN);
     const first = await ask("/account/run/piece", {run});
     if (first.finished) {
-      news(`That run is finished. All ${commas(first.items)} of them are on the chain.`);
+      news(`That run is finished. ${commas(first.sent)} of its ${commas(first.items)}`
+        + " are on the chain"
+        + (first.skipped ? ", and " + commas(first.skipped)
+                         + " were in the set already and cost nothing" : "") + ".");
       await runs();
       return;
     }
-    const left = Number(first.items) - Number(first.sent);
+    const left = Number(first.items) - Number(first.sent) - Number(first.skipped || 0);
     const room = await allowance();
-    const shown = first.big ? null : await wallet.checked(first, held);
+    // A run whose pictures live in the browser answers with WHICH piece is next,
+    // not with a transaction: its bytes come out of this tab when its turn comes
+    // (2026-10-11). Asking `wallet.checked` of that answer is "that offer has no
+    // transaction in it, so there is nothing to check against", which is how a
+    // 6,480-piece run died before its first piece (2026-10-12). It is the
+    // same shape of answer an item that needs several transactions gives, and is
+    // read the same way: nothing to review until the bytes are here.
+    const shown = (first.big || first.held === "browser") ? null
+                  : await wallet.checked(first, held);
     // The run's name, not the first piece's: "…of Skull Squad", not "…of Skull
     // Squad #1" (filming, 2026-09-25).
     const setName = (shownRun && shownRun.name) || first.name;
