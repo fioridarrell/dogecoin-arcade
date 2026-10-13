@@ -678,6 +678,61 @@ class Publisher:
         return out
 
 
+    def reserved(self) -> set[str]:
+        """Splits an unfinished inscription is still waiting to spend: never swept."""
+        held = set()
+        for path in self.journal_home.glob("*.json"):
+            try:
+                data = json.loads(path.read_text())
+            except (OSError, ValueError):
+                continue
+            if data.get("split") and not data.get("txids"):
+                held.add(data["split"])
+        return held
+
+    def consolidate(self, below: int, intent: str, max_inputs: int = 200, min_inputs: int = 20,
+                    dry: bool = False) -> dict | None:
+        """Sweep this address's small confirmed coins (each under `below`) into
+        one coin back to itself, so payouts are not funded from a handful of
+        crumbs. Coins worth less than they cost to spend are left alone, and so
+        is any coin of a split an unfinished inscription is waiting on. None when
+        there are fewer than `min_inputs` to sweep. Journaled by intent."""
+        key = intent_key(intent)
+        rec = self.transfers.get(key)
+        if rec:
+            return self._resume(rec)
+        self.coins.watch()
+        worth = funding.price(1, [], self.rate) - funding.price(0, [], self.rate)   # what one more input costs
+        skip = self.reserved()
+        small = sorted((c for c in self.coins.confirmed()
+                        if worth * 2 < c["value"] < below and c["txid"] not in skip),
+                       key=lambda c: c["value"])[:max_inputs]
+        if len(small) < min_inputs:
+            return None
+        total = sum(c["value"] for c in small)
+        script = p2pkh_script(self.address)
+        fee = funding.price(len(small), [(total, script)], self.rate)
+        if fee > MAX_TRANSFER_FEE * 10 or total - fee < fees.DUST_LIMIT:
+            raise PublishError(f"refusing to consolidate: {len(small)} coins would cost {fee / fees.COIN:.8f}")
+        outs = [(total - fee, script)]
+        raw_unsigned = build_raw_tx([(c["txid"], c["vout"]) for c in small], outs)
+        hashes = [funding.sighash(small, outs, n, script).hex() for n in range(len(small))]
+        unsigned = funding.Unsigned(raw=raw_unsigned, inputs=small, outputs=outs, sighashes=hashes,
+                                    fee=fee, change=0, what=f"consolidate {len(small)} small coins")
+        raw = funding.assemble(unsigned, [self.key.sign(bytes.fromhex(h)).hex() for h in hashes], self.key.pubkey)
+        decoded = self.rpc.call("decoderawtransaction", raw)
+        if len(decoded.get("vin", [])) != len(small) or len(decoded.get("vout", [])) != 1 \
+                or decoded["vout"][0]["scriptPubKey"]["hex"] != script.hex():
+            raise PublishError("refusing to send: the consolidation does not read back as one coin to this address")
+        txid = _txid_of(raw)
+        out = {"txid": txid, "fee": fee, "what": unsigned.what, "inputs": len(small), "value": total - fee,
+               "resumed": False}
+        if dry:
+            return {**out, "dry": True}
+        self._send_journaled(key, intent, unsigned, raw, txid, self.address, unsigned.what)
+        return out
+
+
 def _txid_of(raw: str) -> str:
     return hashlib.sha256(hashlib.sha256(bytes.fromhex(raw)).digest()).digest()[::-1].hex()
 

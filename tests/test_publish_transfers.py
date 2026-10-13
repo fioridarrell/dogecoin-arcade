@@ -160,3 +160,22 @@ def test_refusals_before_anything_is_built(bank):
     with pytest.raises(publish.PublishError, match="not an inscription id"):
         pub.transfer_nft("abc", bob, "job 42")
     assert not node.rpc.call("getrawmempool")
+
+
+def test_small_coins_are_swept_into_one_and_a_waiting_split_is_left_alone(bank):
+    node, params, index, pub, sync, gold, ore, bob = bank
+    crumbs = pub.split(25, 2 * fees.COIN // 100, "test crumbs")          # 25 coins of 0.02
+    waiting = pub.split(3, 2 * fees.COIN // 100, "an inscription's split")
+    (pub.journal_home / "abc.json").write_text(json.dumps({"split": waiting["txid"], "txids": []}))
+    node.generate(1)
+    assert pub.consolidate(5 * fees.COIN // 100, "sweep 1", min_inputs=30) is None, "fewer than asked: nothing"
+    out = pub.consolidate(5 * fees.COIN // 100, "sweep 1", min_inputs=20)
+    assert out["inputs"] == 25 and out["txid"] in node.rpc.call("getrawmempool")
+    assert out["value"] == 25 * 2 * fees.COIN // 100 - out["fee"]
+    assert pub.consolidate(5 * fees.COIN // 100, "sweep 1")["resumed"], "the same intent sweeps once"
+    node.generate(1)
+    left = {(c["txid"]) for c in pub.coins.confirmed() if c["value"] < 5 * fees.COIN // 100}
+    assert crumbs["txid"] not in left and waiting["txid"] in left, "the inscription's pieces are still there"
+    sent = pub.transfer_token(gold, 2, bob, "after the sweep")
+    sync()
+    assert index.balance(bob, gold) == 2 and sent["txid"]
