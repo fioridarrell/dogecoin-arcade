@@ -2826,5 +2826,12 @@ if ('serviceWorker' in navigator && window.isSecureContext) {
   }).catch(function () {});
 })();
 </script>
+<script type="module">
+// Trades run on every arcade page, background tabs too (2026-10-13): one tab at a
+// time runs them (wallet.js startTradeRunner). Nothing happens for a locked wallet.
+if (typeof ARCADE_SIGNED !== "undefined" && (ARCADE_SIGNED || ARCADE_ME)) {
+  import("/wallet.js").then((w) => w.startTradeRunner(ARCADE_CHAIN)).catch(() => {});
+}
+</script>
 </body>
 </html>

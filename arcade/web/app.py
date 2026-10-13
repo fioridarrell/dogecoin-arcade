@@ -89,6 +89,7 @@ from .. import utxos as utxoslib
 from .. import update as updatelib
 from ..messaging.keys import fingerprint_of
 from .. import trade as tradelib
+from .. import trade_orders
 from ..messaging.miner import Miner, MiningError
 from ..messaging.scanner import Scanner, find_own_announcements
 from ..messaging.sender import (
@@ -23285,7 +23286,7 @@ def create_app(state: AppState) -> FastAPI:
         """Orders inscribed by every arcade, shown while their node is online; and, for the
         operator, this node's own standing orders and trades."""
         out: dict[str, Any] = {"trade_orders": [], "my_trade_orders": [], "my_trades": [],
-                               "can_trade_orders": False, "can_list_orders": False}
+                               "can_trade_orders": False, "can_list_orders": False, "coin_pairs": []}
         try:
             mesh = getattr(state, "mesh", None)
             mine = mesh.node_id if mesh is not None else ""
@@ -23303,12 +23304,20 @@ def create_app(state: AppState) -> FastAPI:
             if not _account_view(request) and _node_trades():
                 trader = state.node_trader
                 out["can_trade_orders"] = True
-                out["my_trade_orders"] = trader.standing()
+                out["my_trade_orders"] = [{**o, "give_label": _side_label(o["give"]),
+                                           "get_label": _side_label(o["get"])}
+                                          for o in trader.standing()]
                 out["my_trades"] = [{"id": t.id, "role": t.role, "state": t.state, "note": t.note,
                                      "give": M_leg_text(t.give), "get": M_leg_text(t.get)}
                                     for t in trader.book.open_trades()]
             for o in out["trade_orders"]:
                 o["give_label"], o["get_label"] = _side_label(o["give"]), _side_label(o["get"])
+            # Coin pairs with a market of their own: mainnet Pepecoin against Dogecoin
+            # (2026-10-13: "Will a PEP/DOGE pair be available?"). Real coin for real
+            # coin only; test coins against DOGE would be a market nobody should use.
+            nets = [c.network for c in state.all_chains]
+            if "doge" in nets and "main" in nets:
+                out["coin_pairs"] = [{"base": "main", "quote": "doge", "name": "PEP/DOGE"}]
         except Exception:
             log.debug("trade orders unavailable", exc_info=True)
         return out
@@ -23365,10 +23374,39 @@ def create_app(state: AppState) -> FastAPI:
             raise ValueError("an amount is more than nothing")
         return {"network": network, "kind": "coin", "asset": "", "amount": int(sats)}
 
+    def _swap_back(back: str) -> str:
+        """Where a swap form returns to: a coin pair's page that sent it, else the card."""
+        if re.fullmatch(r"/exchange/coins/[a-z]+/[a-z]+", back or ""):
+            return back
+        return "/exchange?tab=tokens#trade-orders"
+
+    @app.get("/exchange/coins/{base}/{quote}", response_class=HTMLResponse)
+    def coin_pair(request: Request, base: str, quote: str):
+        """A coin pair's market -- PEP/DOGE first (2026-10-13: "Will a PEP/DOGE pair
+        be available?") -- out of the swaps every arcade lists, priced in `quote` per
+        `base`, every one settled through lock scripts on both chains (trade_orders.coin_book)."""
+        nets = {c.network: c for c in state.all_chains}
+        if base not in NETWORKS or quote not in NETWORKS or base == quote:
+            raise HTTPException(404)
+        ready = {c.network for c in state.token_chains}
+        view = _trade_order_view(request)
+        book = trade_orders.coin_book(view["trade_orders"], base, quote)
+        mine = [o for o in (view.get("my_trade_orders") or [])
+                if {o["give"]["network"], o["get"]["network"]} == {base, quote}
+                and o["give"]["kind"] == o["get"]["kind"] == "coin"]
+        return render(request, "coin_pair.html", base=base, quote=quote,
+                      base_coin=NETWORKS[base].coin, quote_coin=NETWORKS[quote].coin,
+                      base_label=getattr(nets.get(base), "title", "") or NETWORKS[base].coin,
+                      quote_label=getattr(nets.get(quote), "title", "") or NETWORKS[quote].coin,
+                      open_here=base in ready and quote in ready,
+                      viewer="account" if _account_view(request) else "wallet",
+                      asks=book["asks"], bids=book["bids"], spread=book["spread"],
+                      my_pair_orders=mine, **{k: view[k] for k in ("can_trade_orders", "can_list_orders")})
+
     @app.post("/exchange/trade-orders/stand")
     def trade_order_stand(give_network: str = Form(""), give_amount: str = Form(""),
                           get_network: str = Form(""), get_amount: str = Form(""),
-                          csrf_token: str = Form("")):
+                          csrf_token: str = Form(""), back: str = Form("")):
         """The operator's node offers a swap -- coins, or a token from its home address --
         settled through lock scripts, and inscribes it so every arcade shows it while this
         node is online."""
@@ -23390,10 +23428,10 @@ def create_app(state: AppState) -> FastAPI:
                 state.flash("Saved. It is inscribed for other arcades once this node is on the mesh.", "ok")
         except Exception as exc:
             state.flash(str(exc), "err")
-        return RedirectResponse("/exchange?tab=tokens#trade-orders", status_code=303)
+        return RedirectResponse(_swap_back(back), status_code=303)
 
     @app.post("/exchange/trade-orders/withdraw")
-    def trade_order_withdraw(order: str = Form(""), csrf_token: str = Form("")):
+    def trade_order_withdraw(order: str = Form(""), csrf_token: str = Form(""), back: str = Form("")):
         check_csrf(csrf_token)
         state.node_trader.withdraw(order)
         mesh = getattr(state, "mesh", None)
@@ -23402,10 +23440,11 @@ def create_app(state: AppState) -> FastAPI:
                 state.node_trader.post(mesh.node_id)
         except Exception as exc:
             state.flash(f"Withdrawn here; the cancel could not be inscribed yet: {exc}", "err")
-        return RedirectResponse("/exchange?tab=tokens#trade-orders", status_code=303)
+        return RedirectResponse(_swap_back(back), status_code=303)
 
     @app.post("/exchange/trade-orders/take")
-    def trade_order_take(order: str = Form(""), lister: str = Form(""), csrf_token: str = Form("")):
+    def trade_order_take(order: str = Form(""), lister: str = Form(""), csrf_token: str = Form(""),
+                         back: str = Form("")):
         """The operator's node takes another arcade's order: it proposes the terms over the
         Messenger, then both sides settle through lock scripts (arcade/trade.py)."""
         check_csrf(csrf_token)
@@ -23440,7 +23479,7 @@ def create_app(state: AppState) -> FastAPI:
             state.flash(f"Proposed ({trade.id}). It locks and settles by itself; follow it below.", "ok")
         except Exception as exc:
             state.flash(str(exc), "err")
-        return RedirectResponse("/exchange?tab=tokens#trade-orders", status_code=303)
+        return RedirectResponse(_swap_back(back), status_code=303)
 
     @app.get("/exchange", response_class=HTMLResponse)
     def exchange(request: Request, tab: str = "tokens", sort: str = "popular",

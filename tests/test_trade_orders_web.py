@@ -105,6 +105,8 @@ def test_the_operator_posts_a_token_from_its_home_address(client, monkeypatch):
     standing = state.node_trader.standing()
     assert standing and standing[0]["give"] == {"network": "regtest", "kind": "token", "asset": "150",
                                                 "amount": 40 * COIN}
+    monkeypatch.setattr(state, "mesh", _Mesh(set()), raising=False)
+    assert "40 Gold" in app.get("/exchange?tab=tokens").text, "this node's swap is named by its token"
     # More than the home address holds is refused.
     app.post("/exchange/trade-orders/stand", data={**said, "give_amount": "60"}, follow_redirects=False)
     assert len(state.node_trader.standing()) == 1

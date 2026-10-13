@@ -18,7 +18,7 @@ pytest.importorskip("playwright.sync_api", reason="needs playwright")
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from test_htlc import doge                                            # noqa: E402,F401
 from test_node_trader import _scan                                    # noqa: E402
-from test_trade_tab_browser import _mine, _scan_a, world              # noqa: E402,F401
+from test_trade_tab_browser import _mine, _run, _scan_a, world        # noqa: E402,F401
 
 from arcade import trade as T, trade_orders as O                      # noqa: E402
 
@@ -90,29 +90,11 @@ def test_a_tab_lists_a_swap_and_another_node_takes_it(world, monkeypatch):
                     found["trade_key"], b.key.pubkey.hex())
         trade = b.propose(bytes.fromhex(found["msg_key"]), found["id"], give, get).id
 
-        steps = []
-        for _ in range(45):
-            _mine(pep, dg)
-            _scan_a(a)
-            _scan(b)
-            for done in b.tick():
-                steps.append(("b",) + done[1:2])
-            _scan_a(a)
-            got = tab.evaluate("""async ([net, id]) => {
-                const wal = await w.opened(net);
-                await w.answerProposals(wal);
-                const t = w.myTrades(wal).find((t) => t.id === id);
-                if (!t) return ['none', '', ''];
-                const after = await w.tradeTick(wal, id);
-                return [after.state, after.step || '', after.note || '']; }""", [net, trade])
-            steps.append(("tab",) + tuple(got))
-            if got[0] == "done" and b.book.get(trade).state == "done":
-                break
+        seen = _run(tab, net, trade, a, b, pep, dg)
         browser.close()
-    tab_steps = [s[2] for s in steps if s[0] == "tab"]
-    assert b.book.get(trade).state == "done", steps[-8:]
-    assert steps[-1][1] == "done", steps[-8:]
-    assert "lock" in tab_steps and "claim" in tab_steps, tab_steps
+    assert b.book.get(trade).state == "done", seen[-6:]
+    assert seen[-1][0] == "done" and seen[-1][1] == "I claimed their lock", seen[-6:]
+    assert any(locked for _, _, locked in seen), "the tab locked its own coins"
 
 
 def test_a_tab_turns_down_terms_that_are_not_its_order(world, monkeypatch):
@@ -167,39 +149,7 @@ def _gold_everywhere(a, b, holder, units):
 
 
 def _settle(tab, a, b, pep, dg, trade, net):
-    steps = []
-    for _ in range(45):
-        _mine(pep, dg)
-        _scan_a(a)
-        _scan(b)
-        b.state.token_index(b.state.messaging).sync()
-        for done in b.tick():
-            steps.append(("b",) + done[1:2])
-        _scan_a(a)
-        # Started, then waited for while blocks come: a step whose message needs a coin split
-        # waits a block for it, as a real tab does.
-        tab.evaluate("""([net, id]) => { window.got = null; (async () => {
-            const wal = await w.opened(net);
-            await w.answerProposals(wal);
-            const t = w.myTrades(wal).find((t) => t.id === id);
-            if (!t) return ['none', '', ''];
-            const after = await w.tradeTick(wal, id);
-            return [after.state, after.step || '', after.note || '']; })()
-            .then((r) => { window.got = r; }, (e) => { window.got = ['error', '', e.message]; }); }""", [net, trade])
-        got = None
-        for _ in range(30):
-            got = tab.evaluate("() => window.got")
-            if got:
-                break
-            tab.wait_for_timeout(300)
-            _mine(pep, dg)
-            _scan_a(a)
-        assert got and got[0] != "error", got
-        steps.append(("tab",) + tuple(got))
-        if got[0] == "done" and b.book.get(trade) and b.book.get(trade).state == "done":
-            break
-    return steps
-
+    return _run(tab, net, trade, a, b, pep, dg, b_ledger=True)
 
 def test_a_tab_lists_a_token_and_another_node_takes_it(world, monkeypatch):
     """The tab's Gold goes into a lock built by /account/trade/lock (the coin that pays its
@@ -231,10 +181,10 @@ def test_a_tab_lists_a_token_and_another_node_takes_it(world, monkeypatch):
         give = b.leg("doge", 2 * COIN, bytes.fromhex(found["take_key"]))
         get = T.Leg("regtest", "token", "150", 40 * COIN, found["trade_key"], b.key.pubkey.hex())
         trade = b.propose(bytes.fromhex(found["msg_key"]), found["id"], give, get).id
-        steps = _settle(tab, a, b, pep, dg, trade, net)
+        seen = _settle(tab, a, b, pep, dg, trade, net)
         browser.close()
-    assert b.book.get(trade).state == "done", steps[-8:]
-    assert steps[-1][1] == "done", steps[-8:]
+    assert b.book.get(trade).state == "done", seen[-6:]
+    assert seen[-1][0] == "done", seen[-6:]
     index = b.state.token_index(b.state.messaging)
     index.sync()
     assert int(index.balance(b._address("regtest"), pid)) == 40 * COIN, "B holds the Gold"
@@ -286,10 +236,10 @@ def test_a_tab_takes_a_nodes_token_for_its_coins(world, monkeypatch):
         trade = took
         # Dogecoin is real money: locking it asks the person first (mainnetOk). Here, yes.
         tab.evaluate("() => { globalThis.arcadeMainnetReview = async () => true; }")
-        steps = _settle(tab, a, b, pep, dg, trade, net)
+        seen = _settle(tab, a, b, pep, dg, trade, net)
         browser.close()
-    assert b.book.get(trade).state == "done", steps[-8:]
-    assert steps[-1][1] == "done", steps[-8:]
+    assert b.book.get(trade).state == "done", seen[-6:]
+    assert seen[-1][0] == "done", seen[-6:]
     index = a.token_index(a.messaging)
     index.sync()
     assert int(index.balance(made["regtest"], pid)) == 40 * COIN, "the tab holds the Gold"

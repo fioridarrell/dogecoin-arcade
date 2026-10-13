@@ -2839,3 +2839,68 @@ export async function answerProposals(wallet) {
   if (Object.keys(again.orders).length && again.posted && Date.now() - again.posted > TAB_REPOST)
     await postMyOrders(wallet);
 }
+
+
+/* --- the trade runner: every arcade page, background tabs too ---------------------------
+ *
+ * 2026-10-13: "The trade loop should be ran on every arcade page ... and even if
+ * the tab is in the background, it should continue to run." base.html starts this on every
+ * page. One tab in the browser runs it at a time -- a Web Lock, held for as long as the tab
+ * lives, so when that tab closes the next arcade tab takes over -- and its beat comes from a
+ * worker's timer: a background page's own timers are slowed to once a minute (Chrome's
+ * intensive throttling), a dedicated worker's are not, and the worker's beat reaches the
+ * page as a message, not a timer. Each beat: answer proposals to this tab's listings,
+ * re-post them when due, and take the next safe step of every open trade.
+ * Pages that show trades listen for "arcade:trades" (this tab) and "storage" (another tab).
+ */
+
+export const TRADE_BEAT = 8000;
+const RUNNER_LOCK = "arcade-trade-runner";
+let runnerChain = null, runnerBusy = false, runnerStarted = false;
+const kicks = (() => { try { return new BroadcastChannel("arcade-trade-kick"); } catch (e) { return null; } })();
+
+async function tradePass() {
+  if (runnerBusy || !runnerChain) return;
+  runnerBusy = true;
+  try {
+    const w = await opened(runnerChain);
+    if (!w) return;                       // locked: nothing can be signed, nothing to do
+    if (myOrders(w).length) await answerProposals(w).catch(() => {});
+    for (const t of myTrades(w)) {
+      if (t.state === "done" || t.state === "aborted") continue;
+      try { await tradeTick(w, t.id); }
+      catch (e) {
+        const kept = tradesOf(w)[t.id];
+        if (kept) { kept.note = String(e.message || e); keepTrade(w, kept); }
+      }
+    }
+    try { globalThis.dispatchEvent(new CustomEvent("arcade:trades")); } catch (e) {}
+  } finally { runnerBusy = false; }
+}
+
+/** Start the runner in this tab (it waits its turn behind any other arcade tab running it). */
+export function startTradeRunner(chain, beat = TRADE_BEAT) {
+  if (runnerStarted) return;
+  runnerStarted = true;
+  runnerChain = chain;
+  const run = async () => {
+    let worker = null;
+    try {
+      const src = `setInterval(() => postMessage(0), ${Number(beat)});`;
+      worker = new Worker(URL.createObjectURL(new Blob([src], {type: "text/javascript"})));
+      worker.onmessage = () => { tradePass(); };
+    } catch (e) { setInterval(tradePass, beat); }
+    if (kicks) kicks.onmessage = () => { tradePass(); };
+    globalThis.__arcadeTradeRunner = true;
+    tradePass();
+    await new Promise(() => {});          // the lock is this tab's until it closes
+  };
+  if (globalThis.navigator && navigator.locks) navigator.locks.request(RUNNER_LOCK, run).catch(() => {});
+  else run();
+}
+
+/** Run a pass now: in this tab if it is the runner, else in whichever tab is. */
+export function kickTrades() {
+  if (globalThis.__arcadeTradeRunner) tradePass();
+  else if (kicks) kicks.postMessage("kick");
+}

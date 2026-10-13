@@ -204,3 +204,27 @@ def import_announced(book: OrderBook, index: Any, network: str, limit: int = 200
     if rows:
         book.set_cursor(network, last)
     return filed
+
+
+def coin_book(orders: list[dict], base: str, quote: str) -> dict:
+    """A coin pair's market out of the visible orders (2026-10-13: "Will a PEP/DOGE
+    pair be available?"): coin-for-coin orders between `base` and `quote`, both ways.
+
+    asks: they give the base coin for the quote coin, cheapest first;
+    bids: they give the quote coin for the base coin, dearest first.
+    `price` is quote per base -- DOGE per PEP on the PEP/DOGE market. Each order is taken
+    whole: a lock moves exactly its amount, so there are no partial fills."""
+    def coin(side: dict, network: str) -> bool:
+        return side["kind"] == "coin" and side["network"] == network
+    asks, bids = [], []
+    for o in orders:
+        if coin(o["give"], base) and coin(o["get"], quote):
+            asks.append({**o, "price": o["get"]["amount"] / o["give"]["amount"],
+                         "base_amount": o["give"]["amount"], "quote_amount": o["get"]["amount"]})
+        elif coin(o["give"], quote) and coin(o["get"], base):
+            bids.append({**o, "price": o["give"]["amount"] / o["get"]["amount"],
+                         "base_amount": o["get"]["amount"], "quote_amount": o["give"]["amount"]})
+    asks.sort(key=lambda o: o["price"])
+    bids.sort(key=lambda o: -o["price"])
+    return {"asks": asks, "bids": bids,
+            "spread": (asks[0]["price"] - bids[0]["price"]) if asks and bids else None}

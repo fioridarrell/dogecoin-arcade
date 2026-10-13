@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% import "_exui.html" as ex %}
+{% block title %}{{ base_coin }}/{{ quote_coin }} · Exchange · DogecoinArcade{% endblock %}
+{% block body %}
+{# A coin pair's market (2026-10-13, trustless-trading-plan.md phase 6; the operator: "Will a
+   PEP/DOGE pair be available?"): the swaps every arcade lists between two coins, priced in
+   the quote coin per base coin. Nobody holds anybody's coins: each swap is taken whole and
+   settled through lock scripts on both chains (arcade/trade.py). #}
+{{ ex.style() }}
+<style>
+.cp-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media (max-width:720px){.cp-grid{grid-template-columns:1fr}}
+.cp-form{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:10px}
+.cp-form input{width:110px;flex:0 0 auto}
+.cp-px{font-variant-numeric:tabular-nums;font-weight:700}
+.cp-ask{color:var(--bad)}.cp-bid{color:var(--ok)}
+</style>
+<a class="back-link" href="/exchange?tab=tokens#trade-orders">&#8592; All markets</a>
+
+<div class="ex-hero">
+  <span class="ex-tic" style="width:46px;height:46px">{{ base_coin[:1] }}</span>
+  <div style="min-width:0">
+    <h1>{{ base_coin }}<span class="muted" style="font-weight:600"> / {{ quote_coin }}</span></h1>
+    <div class="muted" style="font-size:.78rem">{{ net_badge(base) }} {{ base_label }} priced in {{ net_badge(quote) }} {{ quote_label }}</div>
+  </div>
+</div>
+<div class="ex-price">
+  {%- if asks %}<b>{{ ex.px(asks[0].price) }}</b><span class="unit">{{ quote_coin }} per {{ base_coin }}, lowest ask</span>
+  {%- elif bids %}<b>{{ ex.px(bids[0].price) }}</b><span class="unit">{{ quote_coin }} per {{ base_coin }}, highest bid</span>
+  {%- else %}<b>&mdash;</b><span class="unit">nobody is offering a swap yet</span>{% endif %}
+</div>
+<p class="ex-note" style="margin:0 0 12px"><span class="ex-pill done">Lock scripts</span>
+  Each swap settles on both chains at once: either both sides get paid, or both get their own coins back.
+  Nobody holds anybody's coins, and each one is taken whole.</p>
+
+{% if not open_here %}
+<div class="ex-card"><p class="msg err" style="margin:0">This node does not run both chains yet{% if quote == 'doge' or base == 'doge' %} -- Dogecoin is still catching up{% endif %}.
+  The market opens here when it has.</p></div>
+{% endif %}
+
+<div class="cp-grid" id="coin-pair">
+  {% for side, rows, word in (('ask', asks, 'Selling ' ~ base_coin), ('bid', bids, 'Buying ' ~ base_coin)) %}
+  <div class="ex-card">
+    <div class="ex-h" style="margin-top:0">{{ word }}</div>
+    {% if rows %}
+    <table class="ex-table">
+      {% for o in rows %}
+      <tr>
+        <td><span class="cp-px cp-{{ side }}">{{ ex.px(o.price) }}</span><br><small class="muted">{{ quote_coin }} each</small></td>
+        <td>{{ '%g' % (o.base_amount / 100000000) }} {{ base_coin }}<br><small class="muted">for {{ '%g' % (o.quote_amount / 100000000) }} {{ quote_coin }} &middot; {{ o.lister|who }}</small></td>
+        <td style="text-align:right">
+          {% if can_trade_orders %}
+          <form method="post" action="/exchange/trade-orders/take" style="margin:0">
+            <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="back" value="/exchange/coins/{{ base }}/{{ quote }}">
+            <input type="hidden" name="order" value="{{ o.id }}"><input type="hidden" name="lister" value="{{ o.lister }}">
+            <button type="submit" class="small">{{ 'Buy' if side == 'ask' else 'Sell' }}</button></form>
+          {% elif viewer == 'account' and open_here %}
+          <button type="button" class="small" data-take-order="{{ o|tojson|forceescape }}">{{ 'Buy' if side == 'ask' else 'Sell' }}</button>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p class="muted" style="margin:0">{{ 'Nobody is selling ' ~ base_coin ~ ' for ' ~ quote_coin if side == 'ask' else 'Nobody is buying ' ~ base_coin ~ ' with ' ~ quote_coin }} right now.</p>
+    {% endif %}
+
+    {% if open_here and viewer == 'account' and can_list_orders %}
+    <form class="cp-form" data-pair-side="{{ 'sell' if side == 'ask' else 'buy' }}" data-base="{{ base }}" data-quote="{{ quote }}">
+      <span class="muted" style="font-size:.84rem">{{ 'Sell' if side == 'ask' else 'Buy' }}</span>
+      <input name="amount" inputmode="decimal" placeholder="{{ base_coin }}" autocomplete="off">
+      <span class="muted" style="font-size:.84rem">at</span>
+      <input name="price" inputmode="decimal" placeholder="{{ quote_coin }} each" autocomplete="off">
+      <button type="submit" class="small">{{ 'List sale' if side == 'ask' else 'List bid' }}</button>
+    </form>
+    {% elif open_here and can_trade_orders %}
+    <form class="cp-form" method="post" action="/exchange/trade-orders/stand">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="back" value="/exchange/coins/{{ base }}/{{ quote }}">
+      {% if side == 'ask' %}
+      <input type="hidden" name="give_network" value="{{ base }}"><input type="hidden" name="get_network" value="{{ quote }}">
+      <span class="muted" style="font-size:.84rem">Sell</span>
+      <input name="give_amount" inputmode="decimal" placeholder="{{ base_coin }}" autocomplete="off">
+      <span class="muted" style="font-size:.84rem">for</span>
+      <input name="get_amount" inputmode="decimal" placeholder="{{ quote_coin }} in all" autocomplete="off">
+      {% else %}
+      <input type="hidden" name="give_network" value="{{ quote }}"><input type="hidden" name="get_network" value="{{ base }}">
+      <span class="muted" style="font-size:.84rem">Buy</span>
+      <input name="get_amount" inputmode="decimal" placeholder="{{ base_coin }}" autocomplete="off">
+      <span class="muted" style="font-size:.84rem">for</span>
+      <input name="give_amount" inputmode="decimal" placeholder="{{ quote_coin }} in all" autocomplete="off">
+      {% endif %}
+      <button type="submit" class="small">Post</button>
+    </form>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+{% if can_trade_orders and my_pair_orders %}
+<div class="ex-card">
+  <div class="ex-h" style="margin-top:0">This node's {{ base_coin }}/{{ quote_coin }} swaps</div>
+  {% for o in my_pair_orders %}
+  <div class="row" style="gap:8px;align-items:center;padding:4px 0">
+    <span style="flex:1">{{ '%g' % (o['give'].amount / 100000000) }} {{ coin_of(o['give'].network) }}
+      for {{ '%g' % (o['get'].amount / 100000000) }} {{ coin_of(o['get'].network) }}</span>
+    <form method="post" action="/exchange/trade-orders/withdraw" style="margin:0">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="order" value="{{ o.id }}">
+      <input type="hidden" name="back" value="/exchange/coins/{{ base }}/{{ quote }}">
+      <button type="submit" class="ghost small">Withdraw</button></form>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if viewer == 'account' %}
+<div class="ex-card">{% include "_tab_swaps.html" %}
+  <p class="muted" style="font-size:.8rem;margin:8px 0 0">Your swaps run in this tab: keep it open until they finish
+    (a few blocks on each chain). Close it and come back, and it carries on -- or refunds, if the other side never paid.</p>
+</div>
+{% endif %}
+{% endblock %}

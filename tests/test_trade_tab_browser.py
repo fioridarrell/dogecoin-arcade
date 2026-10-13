@@ -7,7 +7,7 @@ by "the Pepe coin test net node to node communication protocol".
 Node B is a facilitating node (NodeTrader) standing an order: 2 DOGE for 3 PEP. A person signs
 up on node A in a real Chromium tab, gets some PEP, and presses Take (wallet.takeOrder). From
 then on the test only mines blocks, runs each node's scanner and index as its watcher would,
-and lets each side take its own steps -- the tab with wallet.tradeTick, node B with tick().
+and lets each side take its own steps -- the tab with its trade runner, node B with tick().
 The tab ends with B's DOGE, B with the tab's PEP, and nobody held anybody's coins.
 """
 
@@ -105,6 +105,34 @@ def _scan_a(state):
     _catch_up(state)
 
 
+def _run(tab, net, trade, a, b, pep, dg, rounds=60, b_ledger=False):
+    """The tab's side done by its own trade runner (wallet.startTradeRunner), as on every
+    arcade page; this only mines, reads the chains as each node's watcher would, ticks node
+    B, and nudges the runner (kickTrades) rather than waiting out its beat. Returns the
+    tab's trade as it changed: [state, note, locked]."""
+    tab.evaluate("async (net) => { const w = await import('/wallet.js'); w.startTradeRunner(net, 400); }", net)
+    seen = []
+    for _ in range(rounds):
+        _mine(pep, dg)
+        _scan_a(a)
+        _scan(b)
+        if b_ledger:
+            b.state.token_index(b.state.messaging).sync()
+        b.tick()
+        _scan_a(a)
+        tab.evaluate("async () => (await import('/wallet.js')).kickTrades()")
+        tab.wait_for_timeout(600)
+        got = tab.evaluate("""async ([net, id]) => { const w = await import('/wallet.js');
+            const wal = await w.opened(net); const t = wal && w.myTrades(wal).find((t) => t.id === id);
+            return t ? [t.state, t.note || '', !!t.myLock] : null; }""", [net, trade])
+        if got and (not seen or seen[-1] != got):
+            seen.append(got)
+        mine = b.book.get(trade)
+        if got and got[0] == "done" and mine is not None and mine.state == "done":
+            break
+    return seen
+
+
 def test_a_tab_takes_a_swap_and_both_sides_settle(world):
     from playwright.sync_api import sync_playwright
     base, a, b, pep, dg = world
@@ -133,22 +161,45 @@ def test_a_tab_takes_a_swap_and_both_sides_settle(world):
             const net = {network: 'regtest', version: 111};
             const wal = await w.opened(net);
             const t = await w.takeOrder(wal, order); return t.id; }""", order)
-        steps = []
-        for _ in range(45):
-            _mine(pep, dg)
-            _scan_a(a)
-            _scan(b)
-            for done in b.tick():
-                steps.append(("b",) + done[1:2])
-            _scan_a(a)
-            got = tab.evaluate("""async (id) => {
-                const wal = await w.opened({network: 'regtest', version: 111});
-                const t = await w.tradeTick(wal, id); return [t.state, t.step || '', t.note || '']; }""", trade)
-            steps.append(("tab", got[1] or got[0], got[2]))
-            if got[0] == "done" and all(t.state == "done" for t in [b.book.get(trade)] if t):
-                break
+        seen = _run(tab, {'network': 'regtest', 'version': 111}, trade, a, b, pep, dg)
         browser.close()
-    assert ("tab", "done", "I claimed their lock") in steps or any(s[0] == "tab" and s[1] == "done" for s in steps), steps[-8:]
-    assert b.book.get(trade).state == "done", steps[-8:]
-    tab_steps = [s[1] for s in steps if s[0] == "tab"]
-    assert "lock" in tab_steps and "claim" in tab_steps, tab_steps
+    assert seen and seen[-1][0] == "done", seen[-6:]
+    assert seen[-1][1] == "I claimed their lock", seen[-6:]
+    assert any(locked for _, _, locked in seen), "the tab locked its own coins"
+    assert b.book.get(trade).state == "done", seen[-6:]
+
+
+def test_one_tab_runs_the_trades_and_another_takes_over_when_it_closes(world):
+    """2026-10-13: the trade loop runs "on every arcade page ... even if the tab is in
+    the background". Every page starts the runner; a Web Lock lets one tab run it, and when
+    that tab closes the next one does -- with no page reload."""
+    from playwright.sync_api import sync_playwright
+    base, a, b, pep, dg = world
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        context = browser.new_context()
+        pages = [context.new_page() for _ in range(3)]
+        for page in pages:
+            page.goto(f"{base}/join")
+            page.evaluate("async () => { const w = await import('/wallet.js'); w.startTradeRunner({network: 'regtest', version: 111}, 300); }")
+        pages[0].wait_for_timeout(800)
+        running = [page.evaluate("() => !!globalThis.__arcadeTradeRunner") for page in pages]
+        assert running.count(True) == 1, running
+        first = running.index(True)
+        pages[first].close()
+        rest = [page for n, page in enumerate(pages) if n != first]
+        for _ in range(20):
+            rest[0].wait_for_timeout(250)
+            now = [page.evaluate("() => !!globalThis.__arcadeTradeRunner") for page in rest]
+            if True in now:
+                break
+        assert now.count(True) == 1, now
+        browser.close()
+
+
+def test_every_signed_in_page_starts_the_runner():
+    import re
+    base = (pathlib.Path(__file__).resolve().parent.parent / "arcade/web/templates/base.html").read_text()
+    assert re.search(r"startTradeRunner\(ARCADE_CHAIN\)", base), "base.html starts it on every page"
+    swaps = (pathlib.Path(__file__).resolve().parent.parent / "arcade/web/templates/_tab_swaps.html").read_text()
+    assert "setInterval" not in swaps and "tradeTick" not in swaps, "the trade pages only show trades"
