@@ -150,6 +150,8 @@ class Room:
                     for line in r.iter_lines(decode_unicode=True):
                         if line and line.startswith("data: "):
                             yield json.loads(line[6:])
+                        elif line and line.startswith(": "):
+                            yield {"type": "heartbeat"}   # the node's "still here": a turn for whatever waits to be sent
             except (requests.RequestException, ServiceError, ValueError):
                 if not reconnect:
                     raise
@@ -170,6 +172,8 @@ def _main(argv: list[str] | None = None) -> int:
     with Room(a.game, a.room, node=a.node) as room:
         print(f"in {a.game}/{a.room} as {room.me}", flush=True)
         for ev in room.events():
+            if ev.get("type") == "heartbeat":
+                continue
             print(json.dumps(ev), flush=True)
             if a.echo and ev.get("type") == "message" and ev["member"]["id"] != room.me["id"]:
                 room.send({"t": "echo", "to": ev["member"]["id"], "data": ev.get("data")})
@@ -178,3 +182,134 @@ def _main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(_main())
+
+
+# ---------------------------------------------------------------------------- a room by certificate
+#
+# A program need not run on the node's machine, nor speak as the node's
+# operator. The room routes let anybody be a player: a request through a node's
+# public name with no cookie is a guest, and a guest that shows a CERTIFICATE --
+# `cert_message(network, node, address, expires)` signed with that address's own
+# key in the chain's signed-message format, checked by the node's own Core with
+# `verifymessage` -- joins under that address (arcade/web/realtime.py
+# realtime_join). So a bank can sit in its game's room as the address that pays,
+# with nothing but that address's key: no browser, no password, no sign-in.
+
+MESSAGE_MAGIC = "Pepecoin Signed Message:\n"
+
+_P = 2 ** 256 - 2 ** 32 - 977
+_N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+_G = (0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798,
+      0x483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8)
+
+
+def _add(a, b):
+    if a is None:
+        return b
+    if b is None:
+        return a
+    if a[0] == b[0] and (a[1] + b[1]) % _P == 0:
+        return None
+    if a == b:
+        lam = 3 * a[0] * a[0] * pow(2 * a[1], -1, _P)
+    else:
+        lam = (b[1] - a[1]) * pow(b[0] - a[0], -1, _P)
+    x = (lam * lam - a[0] - b[0]) % _P
+    return x, (lam * (a[0] - x) - a[1]) % _P
+
+
+def _mul(k: int, point):
+    out = None
+    while k:
+        if k & 1:
+            out = _add(out, point)
+        point, k = _add(point, point), k >> 1
+    return out
+
+
+def _compressed(point) -> bytes:
+    return bytes([2 + (point[1] & 1)]) + point[0].to_bytes(32, "big")
+
+
+def _varstr(b: bytes) -> bytes:
+    return (bytes([len(b)]) if len(b) < 0xFD else b"\xfd" + len(b).to_bytes(2, "little")) + b
+
+
+def message_hash(message: str, magic: str = MESSAGE_MAGIC) -> bytes:
+    import hashlib
+    body = _varstr(magic.encode()) + _varstr(message.encode())
+    return hashlib.sha256(hashlib.sha256(body).digest()).digest()
+
+
+def sign_message(secret: int, message: str, magic: str = MESSAGE_MAGIC) -> str:
+    """What `signmessage` returns for a compressed key: base64 of the 65-byte
+    compact signature, whose first byte says how to recover the key."""
+    import base64
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec, utils
+    digest = message_hash(message, magic)
+    der = ec.derive_private_key(secret, ec.SECP256K1()).sign(digest, ec.ECDSA(utils.Prehashed(hashes.SHA256())))
+    r, s = utils.decode_dss_signature(der)
+    if s > _N // 2:
+        s = _N - s
+    want = _compressed(_mul(secret, _G))
+    e = int.from_bytes(digest, "big")
+    for recid in range(4):
+        x = r + (recid // 2) * _N
+        if x >= _P:
+            continue
+        y = pow((x * x * x + 7) % _P, (_P + 1) // 4, _P)
+        if (y & 1) != (recid & 1):
+            y = _P - y
+        q = _mul(pow(r, -1, _N), _add(_mul(s, (x, y)), _mul((-e) % _N, _G)))
+        if q is not None and _compressed(q) == want:
+            return base64.b64encode(bytes([27 + 4 + recid]) + r.to_bytes(32, "big") + s.to_bytes(32, "big")).decode()
+    raise ServiceError("no recovery id reproduces the key")
+
+
+class CertRoom(Room):
+    """One room of one game, joined through a node's PUBLIC name as `address`,
+    proved by a certificate signed with `secret` (that address's key).
+
+    Everything else is `Room`: `events()` joins again by itself when the stream
+    drops, `send()` takes a dict, str or bytes. A certificate lasts about a day;
+    `events()` joins afresh well before it runs out."""
+
+    REJOIN_S = 6 * 3600
+
+    def __init__(self, secret: int, address: str, game: str, room: str, *, node: str, timeout: float = 15.0):
+        import requests
+        self.game, self.room, self.node = game, room, node.rstrip("/")
+        self._secret, self.address = secret, address
+        self.http = requests.Session()
+        self.timeout = timeout
+        self.token: str | None = None
+        self.me: dict | None = None
+        self.members: list[dict] = []
+        self.joined_at = 0.0
+
+    def _post(self, path: str, body: dict) -> dict:
+        self.http.cookies.clear()   # a cookie would make this an account's form, which wants a csrf token
+        return super()._post(path, body)
+
+    def join(self) -> dict:
+        hello = self.http.get(self.node + "/realtime/hello", timeout=self.timeout).json()
+        if not hello.get("online"):
+            raise ServiceError(f"the room is offline: {hello.get('why')}")
+        cert = hello["cert"]
+        expires = int(cert["expires"])
+        words = f"arcade-realtime\n{cert['network']}\n{cert['node']}\n{self.address}\n{expires}"
+        out = self._post("/realtime/join", {"game": self.game, "room": self.room, "address": self.address,
+                                            "expires": expires,
+                                            "sig": sign_message(self._secret, words, cert.get("magic") or MESSAGE_MAGIC)})
+        self.token, self.me, self.members = out["token"], out["me"], out.get("members", [])
+        self.joined_at = time.time()
+        if (self.me or {}).get("address") != self.address:
+            raise ServiceError(f"joined as {(self.me or {}).get('address')}, not {self.address}")
+        return out
+
+    def events(self, reconnect: bool = True) -> Iterator[dict]:
+        for event in super().events(reconnect):
+            yield event
+            if time.time() - self.joined_at > self.REJOIN_S:
+                self.leave()                   # the next turn of Room.events joins with a fresh certificate

@@ -1,6 +1,6 @@
 """Transfers straight through a node (D-195): a token send, a grant, an NFT.
 
-The @ashvale Bank pays players this way (bank_rpc_plan.md 3a): the key here,
+A game's bank pays players this way (examples/rpc_bank): the key here,
 the coins from the node, the bytes from the arcade's own builders, the
 broadcast through the node -- and the real ledger index reading the block to
 say who holds what afterwards. Then the two promises the Bank depends on: an
@@ -156,7 +156,7 @@ def test_refusals_before_anything_is_built(bank):
     with pytest.raises(publish.PublishError, match="own"):
         pub.transfer_token(gold, 1, pub.address, "job 40")
     with pytest.raises(publish.PublishError, match="not a regtest address"):
-        pub.transfer_token(gold, 1, "nmrRmZASYVZXA7hbzxXY4J3BYTPKgfea9c", "job 41")
+        pub.transfer_token(gold, 1, publish.Key(5).address(publish.TESTNET), "job 41")
     with pytest.raises(publish.PublishError, match="not an inscription id"):
         pub.transfer_nft("abc", bob, "job 42")
     assert not node.rpc.call("getrawmempool")

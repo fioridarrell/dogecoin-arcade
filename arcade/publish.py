@@ -39,7 +39,7 @@ its coins -- so this runs against a bare node. Or, with `--index`, from the
 arcade's own ledger index, read-only: the one thing the arcade is asked for
 (2026-10-11), with the signing and the broadcast still here.
 
-Transfers (D-195), for a program that pays people -- the @ashvale Bank: a
+Transfers (D-195), for a program that pays people -- a game's bank: a
 token send, a managed token's grant, an inscription handed on. The same bytes
 the interface's `/account/token/send`, `/account/token/manage` and
 `/account/nft/send` build, from the same builders, paid from confirmed coins
