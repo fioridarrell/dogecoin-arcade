@@ -68,7 +68,7 @@ def test_the_tip_picker_grays_dogecoin_until_it_syncs(client, monkeypatch):
     _with_doge(state, monkeypatch, ready=False)
     from arcade.web.app import TEMPLATES, create_app
     create_app(state)
-    html = TEMPLATES.env.from_string('{% import "_tip.html" as t %}{{ t.tip_pay() }}').render()
+    html = TEMPLATES.env.from_string('{% import "_tip.html" as t with context %}{{ t.tip_pay() }}').render()
     doge = re.search(r'<option value="doge"[^>]*>[^<]*</option>', html)
     assert doge and " disabled" in doge.group(0) and "D main &mdash; syncing 42.3%" in doge.group(0)
 

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% import "_tip.html" as tipui %}
+{% import "_tip.html" as tipui with context %}
 {% block title %}{{ wall_text('@' ~ whose.tag, 'A profile') if whose else 'Feed' }} · DogecoinArcade{% endblock %}
 
 {# One card, drawn for a post and for every reply under it, however deep: a

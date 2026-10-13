@@ -31,7 +31,7 @@ def test_the_tip_picker_offers_both_coins_and_both_kinds_of_token(client):
     # them to THIS state before rendering outside a request (parallel runs).
     from arcade.web.app import TEMPLATES, create_app
     create_app(state)
-    html = TEMPLATES.env.from_string('{% import "_tip.html" as t %}{{ t.tip_pay() }}').render()
+    html = TEMPLATES.env.from_string('{% import "_tip.html" as t with context %}{{ t.tip_pay() }}').render()
     nets = re.search(r'<select name="net"[^>]*>(.*?)</select>', html, re.S).group(1)
     whats = re.search(r'<select name="what"[^>]*>(.*?)</select>', html, re.S).group(1)
     assert re.findall(r'<option value="([^"]+)"', nets) == [state.messaging.network, state.ledger.network]
@@ -45,7 +45,7 @@ def test_feed_and_games_draw_the_same_picker(client):
     root = pathlib.Path(__file__).resolve().parent.parent / "arcade" / "web" / "templates"
     for page in ("feed.html", "games.html"):
         text = (root / page).read_text()
-        assert "tipui.tip_pay()" in text and "wallet.tip(held, form, txid, KINDS, arcadeAsk)" in text, page
+        assert "tipui.tip_pay()" in text and "_tip.html\" as tipui with context" in text and "wallet.tip(held, form, txid, KINDS, arcadeAsk)" in text, page
         assert "wallet.tipPicker()" in text, page
     shared = (root / "wallet_js.js").read_text()
     assert "export async function tip(" in shared and "tip_of: txid" in shared
