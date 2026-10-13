@@ -2660,10 +2660,16 @@ def create_app(state: AppState) -> FastAPI:
         """Believe a token tip only when the chain says so (2026-09-27:
         "Tip a post with a token you hold ... and see it counted on the post").
 
-        A TIP_TOKEN act names a transaction; it counts when the token index has
+        A TIP_TOKEN act names a transaction; it counts when a token index has
         that transaction as a valid Simple Send (type 0) from the act's author
         to the post's author. Totals are kept per token and said in its own
-        units. One query for every claim on the page."""
+        units. One query per chain for every claim on the page.
+
+        On every token chain (2026-10-13: tip in "testnet or mainnet
+        token"): the note is always on the messaging chain, the send is on
+        whichever chain the token is, and there both people are the addresses
+        they published for it (`_pays_at`). A mainnet token is named with
+        "(mainnet)" so it never adds up with a testnet one of the same name."""
         every, stack = [], list(posts)
         while stack:
             post = stack.pop()
@@ -2673,24 +2679,32 @@ def create_app(state: AppState) -> FastAPI:
                   if re.fullmatch(r"[0-9a-f]{64}", c[0] or "")}
         if not wanted:
             return
-        try:
-            chain, index = _token_chain()
-            marks = ",".join("?" * len(wanted))
-            with contextlib.closing(index.open()) as db:
-                rows = {r["txid"]: r for r in db.conn.execute(
-                    f"SELECT txid, sender, reference, payload_hex FROM arcade_tx "
-                    f"WHERE valid = 1 AND message_type = 0 AND txid IN ({marks})",
-                    tuple(wanted))}
-        except Exception:
+        found: dict = {}          # send txid -> (chain, index, row)
+        marks = ",".join("?" * len(wanted))
+        for chain in state.token_chains:
+            try:
+                index = state.token_index(chain)
+                with contextlib.closing(index.open()) as db:
+                    for r in db.conn.execute(
+                            f"SELECT txid, sender, reference, payload_hex FROM arcade_tx "
+                            f"WHERE valid = 1 AND message_type = 0 AND txid IN ({marks})",
+                            tuple(wanted)):
+                        found.setdefault(r["txid"], (chain, index, r))
+            except Exception:
+                continue
+        if not found:
             return
         props: dict = {}
         for post in every:
             totals: dict = {}
             seen = set()
             for send, tipper in getattr(post, "token_claims", []):
-                row = rows.get(send)
-                if (row is None or send in seen or row["sender"] != tipper
-                        or row["reference"] != post.author):
+                got = found.get(send)
+                if got is None or send in seen:
+                    continue
+                chain, index, row = got
+                if (row["sender"] != _pays_at(tipper, chain)
+                        or row["reference"] != _pays_at(post.author, chain)):
                     continue
                 seen.add(send)
                 try:
@@ -2700,18 +2714,49 @@ def create_app(state: AppState) -> FastAPI:
                 pid = getattr(msg, "property_id", None)
                 if pid is None:
                     continue
-                totals[pid] = totals.get(pid, 0) + int(getattr(msg, "amount", 0))
+                key = (chain.network, pid)
+                totals[key] = totals.get(key, 0) + int(getattr(msg, "amount", 0))
+                props.setdefault(key, (chain, index))
             if totals:
                 said = {}
-                for pid, units in totals.items():
-                    if pid not in props:
-                        props[pid] = index.property(pid)
-                    prop = props[pid]
+                for key, units in totals.items():
+                    chain, index = props[key]
+                    prop = index.property(key[1])
                     if prop is None:
                         continue
-                    said[prop["name"]] = format_amount(units, prop["divisible"])
+                    name = prop["name"] + (" (mainnet)" if chain.is_mainnet else "")
+                    said[name] = format_amount(units, prop["divisible"])
                 post.token_tipped = said
                 post.tips += len(seen)
+
+    def _pays_at(author: str, chain) -> str:
+        """Where somebody on the feed takes payment on `chain`, or "".
+
+        A post's author is an address on the messaging chain. On any other
+        chain it is the address they PUBLISHED with their key (D-032), and
+        never a guess: an address nobody published is an address nobody
+        asked to be paid at, and on mainnet a wrong one is coins gone.
+        """
+        if not author:
+            return ""
+        if chain.network == state.messaging.network:
+            return author
+        with state.store() as store:
+            said = store.key_for(author)
+        if said is None or "other_address" not in said.keys():
+            return ""
+        return str(said["other_address"] or "")
+
+    def _tip_chains() -> list[dict[str, Any]]:
+        """The chains a tip can be paid on, for the tip form: the tag chain
+        first (2026-10-13: "testnet PEP mainnet PEP and testnet or
+        mainnet token")."""
+        return [{"network": c.network, "mainnet": bool(c.is_mainnet),
+                 "coin": "PEP" if c.is_mainnet else "PEP TEST",
+                 "word": "mainnet" if c.is_mainnet else "testnet"}
+                for c in _account_chains()]
+
+    TEMPLATES.env.globals["tip_chains"] = _tip_chains
 
     def _frames_for(request: Request, drawable: dict[str, str]) -> dict[str, str]:
         """Where each HTML embed on a feed page loads from: the pages host, with
@@ -17927,7 +17972,19 @@ def create_app(state: AppState) -> FastAPI:
             prop = index.property(property_id)
             if prop is None:
                 raise tokenlib.TokenError(f"there is no token {property_id}.")
-            to, to_tag = _payee(said.get("to", ""), chain)
+            tip_of = str(said.get("tip_of", "") or "").strip().lower()
+            if tip_of:
+                # A token tip (2026-10-13: "testnet or mainnet token"):
+                # the post's author, at the address they published for this
+                # chain. Worked out here, so the page never has to know it.
+                if not re.fullmatch(r"[0-9a-f]{64}", tip_of):
+                    raise ValueError("that is not a transaction id")
+                to, to_tag = _pays_at(_feed_author_address(_account_chain(), tip_of), chain), ""
+                if not to:
+                    raise ValueError("there is nowhere to send it: whoever wrote that has "
+                                     f"not published a {chain.label.lower()} address")
+            else:
+                to, to_tag = _payee(said.get("to", ""), chain)
             complaint = _check_address(to, mainnet=chain.is_mainnet)
             if complaint:
                 raise ValueError(complaint)
@@ -18557,11 +18614,17 @@ def create_app(state: AppState) -> FastAPI:
         """
         account = _signed_in_account(request)
         said = payload if isinstance(payload, dict) else {}
-        chain = _account_chain()
+        # A tip may be paid on either chain (2026-10-13: "testnet PEP
+        # mainnet PEP"); every other reaction is a note on the tag chain.
+        try:
+            chain = (_chain_asked(said) if int(said.get("kind", 0) or 0) == feedlib.TIP
+                     else _account_chain())
+        except (TypeError, ValueError) as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
         address = _account_address(account.pubkey, chain)
         if not address:
-            return JSONResponse({"detail": "this account has no address yet"},
-                                status_code=400)
+            return JSONResponse({"detail": f"this account has no {chain.label.lower()} "
+                                           f"address yet"}, status_code=400)
         try:
             target = str(said.get("txid", "")).strip().lower()
             if len(target) != 64 or not all(c in "0123456789abcdef"
@@ -18576,7 +18639,7 @@ def create_app(state: AppState) -> FastAPI:
             note = feedlib.build(kind, target, text)
 
             outputs = _class_c_or_b(chain, address, note,
-                                    _coin_pubkey(account.pubkey))
+                                    _coin_pubkey(account.pubkey, chain))
             paid = 0
             if kind == feedlib.TIP:
                 # A tip pays the post's author in the same transaction that
@@ -18586,11 +18649,12 @@ def create_app(state: AppState) -> FastAPI:
                 if amount <= 0:
                     raise ValueError("a tip of nothing is not a tip")
                 _above_dust(amount, "tip")
-                where = _feed_author_address(chain, target)
+                # The post is on the tag chain whichever chain pays for it.
+                where = _pays_at(_feed_author_address(_account_chain(), target), chain)
                 if not where:
                     raise ValueError(
                         "there is nowhere to send it: whoever wrote that has "
-                        "not published an address")
+                        f"not published a {chain.label.lower()} address")
                 outputs.append((amount, txbuild.p2pkh_script(where)))
                 paid = amount
 
@@ -19524,6 +19588,7 @@ def create_app(state: AppState) -> FastAPI:
         games = _games_ranked(request, sort)
         mine = _tag_of_whoever_is_asking(request) or {}
         return render(request, "games.html", chain=chain, games=games, sort=sort,
+                      kinds=feedlib.BY_NAME,
                       viewer="account" if _account_view(request) else "wallet",
                       mine_tag=mine.get("tag") or "", when=_when)
 

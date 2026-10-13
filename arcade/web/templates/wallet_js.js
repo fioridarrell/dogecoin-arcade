@@ -1918,11 +1918,11 @@ export async function react(wallet, txid, kind, text) {
  * uses. It is deliberately not `signAndSend`: a page that spends coins on the
  * way to being able to say what they cost has already spent them.
  */
-export async function offerReact(txid, kind, amount) {
+export async function offerReact(txid, kind, amount, chain = "") {
   return working(async () => {
     const asked = await fetch("/account/react", {
       method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({txid, kind, amount: String(amount || "")}),
+      body: JSON.stringify({txid, kind, amount: String(amount || ""), chain: chain || ""}),
     });
     const offer = await asked.json();
     if (!asked.ok) throw new Error(offer.detail || "that cannot be done");
@@ -2245,4 +2245,87 @@ export async function opened(chain) {
  */
 export async function unlockHere(tag, password, chain) {
   return signIn(tag, password, chain);
+}
+
+/* --- tipping a post: coins or a token, on either chain ---------------------
+ *
+ * 2026-10-13: "When a user selects tip on the feed, it should give them
+ * the options of testnet PEP mainnet PEP and testnet or mainnet token", and the
+ * same on the Games tab. One flow for both pages, so the two cannot drift.
+ *
+ * The form carries `pay` ("coin:<network>" or "token:<network>", from
+ * templates/_tip.html), `token` and `amount`. A coin tip is one transaction on
+ * the chain picked: the coins and the note naming the post. A token tip is the
+ * token send on its own chain (to the address the author published there, which
+ * the node works out from `tip_of`), then a TIP_TOKEN note on the tag chain
+ * naming that send. A mainnet one still goes through the mainnet review in
+ * `confirm`: real coins are asked about twice, on purpose.
+ */
+let tipHeld = null;
+
+/** Fill a tip form's token list when "a ... token" is picked. Call once per page. */
+export function tipPicker(root = document) {
+  root.addEventListener("change", async (e) => {
+    const pay = e.target;
+    if (!pay.form || pay.name !== "pay" || !pay.hasAttribute("data-tip-pay")) return;
+    const [what, network] = pay.value.split(":");
+    const list = pay.form.elements.token;
+    list.hidden = what !== "token";
+    if (what !== "token") return;
+    list.textContent = "";
+    try {
+      if (!tipHeld) tipHeld = ((await (await fetch("/account/tokens")).json()).chains) || [];
+      const here = (tipHeld.find((c) => c.network === network) || {}).tokens || [];
+      for (const t of here.filter((t) => Number(t.balance) > 0)) {
+        const o = document.createElement("option");
+        o.value = t.property_id; o.dataset.name = t.name;
+        o.textContent = `${t.name} (${t.display})`;
+        list.appendChild(o);
+      }
+    } catch (err) { /* the send says why if it is tried */ }
+    if (!list.options.length) {
+      const o = document.createElement("option");
+      o.value = "";
+      o.textContent = `you hold no ${pay.selectedOptions[0].dataset.word || ""} tokens`;
+      list.appendChild(o);
+    }
+  });
+}
+
+/** Tip the post `txid` with what the form says. Null if the person said no. */
+export async function tip(held, form, txid, kinds, ask) {
+  const choice = (form.elements.pay || {}).selectedOptions?.[0];
+  const [what, network] = String(choice ? choice.value : "coin:").split(":");
+  const amount = ((form.elements.amount || {}).value || "").trim();
+  const who = form.dataset.authorName || "whoever made this";
+  if (what === "token") {
+    const pick = form.elements.token.selectedOptions[0];
+    if (!pick || !pick.value) throw new Error("pick a token you hold");
+    const offer = await working(async () => {
+      const asked = await fetch("/account/token/send", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({property_id: Number(pick.value), amount, tip_of: txid,
+                              chain: network})});
+      const said = await asked.json();
+      if (!asked.ok) throw new Error(said.detail || "that token cannot be sent");
+      return said;
+    });
+    const shown = await checked(offer, held);
+    const ok = await ask(`Tip ${amount} ${pick.dataset.name}?`,
+      `${amount} ${pick.dataset.name} (${choice.dataset.word || network}) go to ${who}, and then a small note `
+      + "on the post says it was a tip: two small transactions, network fee "
+      + `${shown.coinsOf(shown.fee)} for the send. It is a payment: it cannot be taken back.`,
+      "Send the tip");
+    if (!ok) return null;
+    const sent = await confirm(held, offer);
+    return await react(held, txid, kinds.tiptoken, sent.txid);
+  }
+  const offer = await offerReact(txid, kinds.tip, amount, network);
+  const shown = await checked(offer, held);
+  const coin = (choice && choice.dataset.coin) || "coins";
+  const ok = await ask("Send this tip?",
+    `Tip ${amount} ${coin} to ${who}. The network fee is `
+    + `${shown.coinsOf(shown.fee)}. It is a payment: it cannot be taken back.`, "Send the tip");
+  if (!ok) return null;
+  return await confirm(held, offer);
 }
