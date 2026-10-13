@@ -24017,7 +24017,9 @@ def _check_address(address: str, *, mainnet: bool) -> str | None:
     if network in ("test", "regtest"):
         wanted = (NETWORKS["test"], NETWORKS["regtest"])
     elif network:
-        wanted = (NETWORKS[network],)
+        # The chain's own params: in production NETWORKS[network], and on a test chain
+        # standing in for it, that chain's (2026-10-13).
+        wanted = (getattr(mainnet, "params", None) or NETWORKS[network],)
     else:
         wanted = (NETWORKS["main"],) if mainnet else (NETWORKS["test"], NETWORKS["regtest"])
     word = (getattr(mainnet, "label", "") or "").lower() or ("mainnet" if mainnet else "testnet")

@@ -116,9 +116,10 @@ def _order(said: dict) -> None:
 
 def _propose(said: dict) -> None:
     _order(said)
-    give, get = leg_from(said.get("give")), leg_from(said.get("get"))
-    if give.giver_key != get.taker_key or give.taker_key != get.giver_key:
-        raise TradeMessageError("the two legs are between the same two people, crossed")
+    leg_from(said.get("give")), leg_from(said.get("get"))
+    # No rule that each person uses ONE key on both legs: a browser wallet has a key per
+    # chain (coin type 1 on testnet, 3 on mainnet and Dogecoin). Each lock names its own
+    # two keys, and each is checked on its own chain against these terms.
     if not isinstance(said.get("secret_hash"), str) or not _HEX64.match(said["secret_hash"]):
         raise TradeMessageError("the secret's hash is 32 bytes, in hex")
     t1, t2 = said.get("t1"), said.get("t2")

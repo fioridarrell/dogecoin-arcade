@@ -59,18 +59,20 @@ def test_what_is_not_a_trade_step_is_refused(bad):
         M.parse(bad)
 
 
-def test_a_proposal_must_be_two_crossed_legs_with_sane_times():
+def test_a_proposal_must_have_real_legs_and_sane_times():
     give, get = _legs()
     _, h = H.make_secret()
     now = int(time.time())
     with pytest.raises(M.TradeMessageError):     # the responder's time after the initiator's
         M.build("propose", "trade-0001", order="order-0001", give=M.leg_json(give),
                 get=M.leg_json(get), secret_hash=h.hex(), t1=now + 3600, t2=now + 7200)
-    stranger = Key()
-    crossed = M.leg_json(get) | {"taker_key": stranger.pub.hex()}
-    with pytest.raises(M.TradeMessageError):     # not between the same two people
+    with pytest.raises(M.TradeMessageError):     # nothing for nothing
         M.build("propose", "trade-0001", order="order-0001", give=M.leg_json(give),
-                get=crossed, secret_hash=h.hex(), t1=now + 7200, t2=now + 3600)
+                get=M.leg_json(get) | {"amount": 0}, secret_hash=h.hex(), t1=now + 7200, t2=now + 3600)
+    other_key = Key()                            # a person may use another key on another chain
+    M.build("propose", "trade-0001", order="order-0001", give=M.leg_json(give),
+            get=M.leg_json(get) | {"taker_key": other_key.pub.hex()}, secret_hash=h.hex(),
+            t1=now + 7200, t2=now + 3600)
 
 
 def test_a_responder_agrees_only_to_exactly_its_own_terms():
