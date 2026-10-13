@@ -2501,3 +2501,151 @@ export async function secretFromScriptSig(scriptSig, redeem) {
   if (coinsHex(await coins.sha256Of(secret)) !== coinsHex(lock.secretHash)) return null;
   return secret;
 }
+
+/* --- the tab trader: one trade, run while this tab is open -----------------------
+ *
+ * Steps travel over the PEP testnet Messenger (2026-10-13: "Can't we use the Pepe
+ * coin test net node to node communication protocol?"): sealed HERE to the other trader's
+ * key (messaging.js sealForProgram), carried by this node as one testnet transaction
+ * (/account/talk), answers opened HERE (programAnswers). Every move is nextTradeStep on
+ * what the chains show. The trade -- the secret included -- is kept in this browser, so a
+ * tab closed mid-trade can still claim or refund when it is opened again.
+ */
+
+const TRADES = "arcade-trades";
+//: A lock's address on each chain: P2SH version bytes (arcade/config.py).
+const P2SH_VERSION = {main: 22, doge: 22, test: 196, regtest: 196};
+
+function tradesOf(wallet) {
+  try { return JSON.parse(localStorage.getItem(`${TRADES}:${wallet.pubkey}`) || "{}"); }
+  catch (e) { return {}; }
+}
+function keepTrade(wallet, trade) {
+  const all = tradesOf(wallet);
+  all[trade.id] = trade;
+  try { localStorage.setItem(`${TRADES}:${wallet.pubkey}`, JSON.stringify(all)); } catch (e) {}
+}
+export function myTrades(wallet) {
+  return Object.values(tradesOf(wallet));
+}
+
+/** One trade step, sealed in this tab to `toKey` (hex, a messaging key), carried by this node. */
+export async function tradeSay(wallet, toKey, body) {
+  const {mail, me} = await messenger(wallet);
+  const asked = await fetch("/account/talk", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({op: "ask", to: toKey}),
+  });
+  const said = await asked.json();
+  if (!asked.ok) throw new Error(said.detail || "the node could not address that");
+  const talked = await fetch("/account/talk", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({op: "send", to: said.seal_to,
+                          sealed: mail.sealForProgram(me, said.seal_to, said.stamp, body)}),
+  });
+  const carrier = await talked.json();
+  if (!talked.ok) throw new Error(carrier.detail || "the node could not carry it");
+  return signOffer(wallet, carrier);
+}
+
+/** Trade steps sealed to this tab since `after`: {answers: [{json, sender}], cursor}. */
+export async function tradeHeard(wallet, after) {
+  const {mail, me} = await messenger(wallet);
+  const got = await mail.programAnswers(me, after);
+  return {cursor: got.cursor,
+          answers: got.answers.filter((a) => a.json && a.json.t === "trade" && a.json.v === 1)};
+}
+
+const coinsText = (sats) => (Number(sats) / 1e8).toFixed(8).replace(/\.?0+$/, "");
+
+/** Take an order (trade_orders.py) as the initiator: secret made here, terms proposed. */
+export async function takeOrder(wallet, order) {
+  for (const side of [order.give, order.get])
+    if (side.kind !== "coin") throw new Error("this tab takes coin-for-coin orders for now");
+  const mineOn = (network) => coinsHex(keysOn(wallet, network).pubkey);
+  const give = {network: order.get.network, kind: "coin", asset: "", amount: order.get.amount,
+                giver_key: mineOn(order.get.network), taker_key: order.trade_key};
+  const get = {network: order.give.network, kind: "coin", asset: "", amount: order.give.amount,
+               giver_key: order.trade_key, taker_key: mineOn(order.give.network)};
+  const secret = crypto.getRandomValues(new Uint8Array(32));
+  const secretHash = await coins.sha256Of(secret);
+  const {t1, t2} = planLocktimes(give, get, Date.now() / 1000);
+  const id = "tr-" + coinsHex(crypto.getRandomValues(new Uint8Array(8)));
+  const trade = {id, role: "initiator", order: order.id, peer: order.msg_key, give, get,
+                 secret: coinsHex(secret), secretHash: coinsHex(secretHash), t1, t2,
+                 myLock: null, theirLock: null, agreed: false, cancelled: false,
+                 state: "proposed", note: "proposed; waiting for the other side to accept",
+                 cursor: 0, created: Date.now()};
+  keepTrade(wallet, trade);
+  await tradeSay(wallet, order.msg_key, {t: "trade", v: 1, id, step: "propose", order: order.id,
+                                         give, get, secret_hash: trade.secretHash, t1, t2});
+  return trade;
+}
+
+async function redeemsOf(trade) {
+  const h = unhex(trade.secretHash);
+  const myTime = trade.role === "initiator" ? trade.t1 : trade.t2;
+  const theirTime = trade.role === "initiator" ? trade.t2 : trade.t1;
+  return {
+    myRedeem: coins.htlcRedeem(h, unhex(trade.give.taker_key), unhex(trade.give.giver_key), myTime),
+    theirRedeem: coins.htlcRedeem(h, unhex(trade.get.taker_key), unhex(trade.get.giver_key), theirTime),
+  };
+}
+
+/** One pass of one trade: read answers, read the chains, take the one safe step. */
+export async function tradeTick(wallet, id) {
+  const trade = tradesOf(wallet)[id];
+  if (!trade || trade.state === "done" || trade.state === "aborted") return trade;
+  const heard = await tradeHeard(wallet, trade.cursor);
+  trade.cursor = heard.cursor;
+  for (const a of heard.answers) {
+    if (a.json.id !== trade.id || a.sender !== trade.peer) continue;
+    if (a.json.step === "accept") trade.agreed = true;
+    else if (a.json.step === "locked") trade.theirLock = {txid: a.json.txid, vout: a.json.vout};
+    else if (a.json.step === "cancel") trade.cancelled = true;
+  }
+  if (trade.cancelled && !trade.myLock) {
+    trade.state = "aborted"; trade.note = "the other side walked away; nothing was locked";
+    keepTrade(wallet, trade); return trade;
+  }
+  if (!trade.agreed) { keepTrade(wallet, trade); return trade; }
+  const {myRedeem, theirRedeem} = await redeemsOf(trade);
+  const facts = {
+    mine: trade.myLock ? await tradeFacts(trade.give.network, trade.myLock.txid, trade.myLock.vout) : null,
+    theirs: trade.theirLock ? await tradeFacts(trade.get.network, trade.theirLock.txid, trade.theirLock.vout) : null,
+  };
+  const now = Math.floor(Date.now() / 1000);
+  const view = {...trade, myRedeem, theirRedeem};
+  const [step, why] = await nextTradeStep(view, facts, now);
+  if (view.secret && !trade.secret) trade.secret = view.secret;
+  trade.note = why;
+  if (step === "lock") {
+    const address = await coins.htlcAddress(myRedeem, P2SH_VERSION[trade.give.network]);
+    const offer = await offerSend(address, coinsText(trade.give.amount), trade.give.network);
+    const sent = await confirm(wallet, offer);
+    const script = coinsHex(await coins.htlcScript(myRedeem));
+    let vout = -1;
+    for (let n = 0; n < 4 && vout < 0; n++) {
+      const seen = await tradeFacts(trade.give.network, sent.txid, n).catch(() => null);
+      if (seen && seen.script_hex === script) vout = n;
+    }
+    trade.myLock = {txid: sent.txid, vout: Math.max(0, vout)};
+    keepTrade(wallet, trade);
+    await tradeSay(wallet, trade.peer, {t: "trade", v: 1, id: trade.id, step: "locked",
+                                        network: trade.give.network, txid: sent.txid, vout: trade.myLock.vout});
+  } else if (step === "claim") {
+    const done = await tradeSpend(wallet, {chain: trade.get.network, redeem: coinsHex(theirRedeem),
+      txid: trade.theirLock.txid, vout: trade.theirLock.vout, kind: "claim", secret: trade.secret});
+    await tradeSay(wallet, trade.peer, {t: "trade", v: 1, id: trade.id, step: "claimed",
+                                        network: trade.get.network, txid: done.txid});
+  } else if (step === "refund") {
+    const done = await tradeSpend(wallet, {chain: trade.give.network, redeem: coinsHex(myRedeem),
+      txid: trade.myLock.txid, vout: trade.myLock.vout, kind: "refund"});
+    await tradeSay(wallet, trade.peer, {t: "trade", v: 1, id: trade.id, step: "refunded",
+                                        network: trade.give.network, txid: done.txid});
+  } else if (step === "done") trade.state = "done";
+  else if (step === "abort") trade.state = "aborted";
+  else trade.state = trade.myLock ? "locked" : "accepted";
+  keepTrade(wallet, trade);
+  return {...trade, step};
+}

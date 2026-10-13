@@ -669,12 +669,67 @@ document.addEventListener('click', function (ev) {
         <input type="hidden" name="csrf_token" value="{{ csrf }}">
         <input type="hidden" name="order" value="{{ o.id }}"><input type="hidden" name="lister" value="{{ o.lister }}">
         <button type="submit" class="small">Take</button></form>
-      {% else %}
-      <span class="muted" style="font-size:.78rem">taking from your tab comes next</span>
+      {% elif viewer == 'account' %}
+      <button type="button" class="small" data-take-order="{{ o|tojson|forceescape }}">Take</button>
       {% endif %}
     </div>
     {% endfor %}
     {% if not trade_orders %}<p class="muted" style="margin:0 0 8px">No arcade is offering a swap right now.</p>{% endif %}
+    {% if viewer == 'account' %}
+    {# A tab's own swaps (2026-10-13): run here while this tab is open, settled by the locks. #}
+    <div id="tab-trades" hidden style="margin-top:10px">
+      <div class="ex-h">Your swaps <span class="muted" style="font-weight:500">&middot; keep this tab open until they finish</span></div>
+      <div id="tab-trades-list"></div>
+    </div>
+    <script type="module">
+    import * as wallet from "/wallet.js";
+    const CHAIN = {network: "{{ state.messaging.network }}", version: {{ state.messaging.params.pubkeyhash_version }}};
+    const box = document.getElementById("tab-trades"), list = document.getElementById("tab-trades-list");
+    let held = null;
+    const keys = async () => held || (held = (await wallet.opened(CHAIN)) || await arcadeKeys(CHAIN));
+    function draw(w) {
+      const all = wallet.myTrades(w).sort((a, b) => b.created - a.created).slice(0, 10);
+      box.hidden = !all.length;
+      list.replaceChildren(...all.map((t) => {
+        const p = document.createElement("p");
+        p.className = "muted"; p.style.cssText = "font-size:.84rem;margin:3px 0";
+        const amt = (leg) => `${(leg.amount / 1e8).toString()} ${leg.network === "doge" ? "DOGE" : leg.network === "main" ? "PEP" : "PEP TEST"}`;
+        p.textContent = `${amt(t.give)} for ${amt(t.get)} \u00b7 ${t.state} \u00b7 ${t.note || ""}`;
+        return p;
+      }));
+    }
+    let running = false;
+    async function tick() {
+      if (running) return;
+      running = true;
+      try {
+        const w = await wallet.opened(CHAIN);
+        if (!w) return;
+        for (const t of wallet.myTrades(w))
+          if (t.state !== "done" && t.state !== "aborted") await wallet.tradeTick(w, t.id).catch((e) => { t.note = String(e.message || e); });
+        draw(w);
+      } finally { running = false; }
+    }
+    document.querySelectorAll("[data-take-order]").forEach((b) => b.addEventListener("click", async () => {
+      const order = JSON.parse(b.dataset.takeOrder);
+      const ok = await arcadeAsk("Take this swap?",
+        "It settles through lock scripts: your coins go into a lock only you can take back if the other side "
+        + "never pays, and theirs into one only you can claim. Keep this tab open until it finishes "
+        + "(it takes a few blocks); you can close it and come back to claim or refund.", "Take it");
+      if (!ok) return;
+      b.disabled = true;
+      try {
+        const w = await keys();
+        if (!w) throw new Error("Unlock your wallet to trade.");
+        await wallet.takeOrder(w, order);
+        draw(w);
+        tick();
+      } catch (e) { b.disabled = false; alert(String(e.message || e)); }
+    }));
+    wallet.opened(CHAIN).then((w) => { if (w) { draw(w); tick(); } });
+    setInterval(tick, 8000);
+    </script>
+    {% endif %}
     {% if can_trade_orders %}
     {% if my_trade_orders %}
     <div class="ex-h" style="margin-top:10px">This node's swaps</div>
