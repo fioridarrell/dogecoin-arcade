@@ -9649,6 +9649,7 @@ def create_app(state: AppState) -> FastAPI:
         about somebody else.
         """
         account = signed_in(request)
+        mesh = getattr(state, "mesh", None)
         chains = [{"network": one.network, "label": one.label, "title": one.title,
                    "version": one.params.pubkeyhash_version,
                    "mainnet": bool(one.is_mainnet),
@@ -9661,6 +9662,9 @@ def create_app(state: AppState) -> FastAPI:
             return JSONResponse({"pubkey": None, "chains": chains})
         chain = _account_chain()
         said: dict[str, Any] = {
+            # This node on the mesh: a swap a tab lists names it, and shows on other
+            # arcades while it is online (trade_orders.py, 2026-10-13).
+            "mesh_node": getattr(mesh, "node_id", "") if mesh is not None else "",
             "pubkey": account.pubkey, "network": chain.network,
             "version": chain.params.pubkeyhash_version,
             "address": "", "balance": 0, "watching": None, "tag": "",
@@ -23193,12 +23197,21 @@ def create_app(state: AppState) -> FastAPI:
         """Orders inscribed by every arcade, shown while their node is online; and, for the
         operator, this node's own standing orders and trades."""
         out: dict[str, Any] = {"trade_orders": [], "my_trade_orders": [], "my_trades": [],
-                               "can_trade_orders": False}
+                               "can_trade_orders": False, "can_list_orders": False}
         try:
             mesh = getattr(state, "mesh", None)
             mine = mesh.node_id if mesh is not None else ""
-            out["trade_orders"] = [o for o in state.trade_orders.visible(_online)
-                                   if o["node"] != mine]
+            account = signed_in(request) if _account_view(request) else None
+            if _account_view(request):
+                # A person here lists from their own tab (wallet.listOrder) and may take any
+                # order but their own -- other accounts' on this very arcade included.
+                out["can_list_orders"] = bool(mine)
+                own = {_account_address(account.pubkey, c) for c in _account_chains()} if account else set()
+                out["trade_orders"] = [o for o in state.trade_orders.visible(_online)
+                                       if o["lister"] not in own]
+            else:
+                out["trade_orders"] = [o for o in state.trade_orders.visible(_online)
+                                       if o["node"] != mine]
             if not _account_view(request) and _node_trades():
                 trader = state.node_trader
                 out["can_trade_orders"] = True
@@ -23279,7 +23292,8 @@ def create_app(state: AppState) -> FastAPI:
                 if side["network"] not in trader.chains:
                     raise ValueError(f"this node does not run {side['network']} yet")
             mine = trader.key.pubkey
-            give = trader.leg(found["get"]["network"], found["get"]["amount"], bytes.fromhex(found["trade_key"]))
+            give = trader.leg(found["get"]["network"], found["get"]["amount"],
+                              bytes.fromhex(found.get("take_key") or found["trade_key"]))
             get = tradelib.Leg(found["give"]["network"], "coin", "", found["give"]["amount"],
                                found["trade_key"], mine.hex())
             trade = trader.propose(bytes.fromhex(found["msg_key"]), found["id"], give, get)

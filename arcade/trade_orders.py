@@ -8,7 +8,7 @@ an inscription, batched like a seller's listings (listing_announce.py): content 
 
     {"arcade": "orders", "v": 1,
      "orders":  [{id, give: {network, kind, asset, amount}, get: {...},
-                  trade_key, msg_key, node, expires}],
+                  trade_key, take_key?, msg_key, node, expires}],
      "cancels": [order id, ...]}
 
 * `trade_key` is the lister's key in the locks (it gives `give` and takes `get`);
@@ -75,11 +75,17 @@ def check_order(said: Any, now: float | None = None) -> dict:
     for field, pattern in (("trade_key", _KEY33), ("msg_key", _HEX32), ("node", _HEX32)):
         if not isinstance(said.get(field), str) or not pattern.match(said[field]):
             raise OrderError(f"an order's {field} is hex of the right length")
+    # The key the lister TAKES with, on the `get` chain, when it is not trade_key: a browser
+    # wallet has a key per chain (coin type 1 on testnet, 3 on mainnet and Dogecoin).
+    take_key = said.get("take_key", said["trade_key"])
+    if not isinstance(take_key, str) or not _KEY33.match(take_key):
+        raise OrderError("an order's take_key is a compressed public key, in hex")
     expires = said.get("expires")
     now = now or time.time()
     if not isinstance(expires, int) or not now < expires <= now + MAX_EXPIRY:
         raise OrderError("an order expires in the future, within 30 days")
     return {"id": said["id"], "give": give, "get": get, "trade_key": said["trade_key"],
+            "take_key": take_key,
             "msg_key": said["msg_key"], "node": said["node"], "expires": expires}
 
 
@@ -169,7 +175,8 @@ class OrderBook:
     def cursor(self, network: str) -> int:
         with self._open() as conn:
             row = conn.execute("SELECT number FROM order_cursor WHERE network=?", (network,)).fetchone()
-        return int(row["number"]) if row else 0
+        # -1 before the first look: inscription numbers start at 0.
+        return int(row["number"]) if row else -1
 
     def set_cursor(self, network: str, number: int) -> None:
         with self._open() as conn:

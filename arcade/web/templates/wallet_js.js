@@ -2564,7 +2564,7 @@ export async function takeOrder(wallet, order) {
     if (side.kind !== "coin") throw new Error("this tab takes coin-for-coin orders for now");
   const mineOn = (network) => coinsHex(keysOn(wallet, network).pubkey);
   const give = {network: order.get.network, kind: "coin", asset: "", amount: order.get.amount,
-                giver_key: mineOn(order.get.network), taker_key: order.trade_key};
+                giver_key: mineOn(order.get.network), taker_key: order.take_key || order.trade_key};
   const get = {network: order.give.network, kind: "coin", asset: "", amount: order.give.amount,
                giver_key: order.trade_key, taker_key: mineOn(order.give.network)};
   const secret = crypto.getRandomValues(new Uint8Array(32));
@@ -2592,10 +2592,21 @@ async function redeemsOf(trade) {
   };
 }
 
+async function sayAccept(wallet, trade) {
+  await tradeSay(wallet, trade.peer, {t: "trade", v: 1, id: trade.id, step: "accept"});
+  const kept = tradesOf(wallet)[trade.id] || trade;
+  kept.acceptSent = true;
+  keepTrade(wallet, kept);
+}
+
 /** One pass of one trade: read answers, read the chains, take the one safe step. */
 export async function tradeTick(wallet, id) {
-  const trade = tradesOf(wallet)[id];
+  let trade = tradesOf(wallet)[id];
   if (!trade || trade.state === "done" || trade.state === "aborted") return trade;
+  if (trade.acceptSent === false && !trade.myLock) {
+    await sayAccept(wallet, trade);
+    trade = tradesOf(wallet)[id];
+  }
   const heard = await tradeHeard(wallet, trade.cursor);
   trade.cursor = heard.cursor;
   for (const a of heard.answers) {
@@ -2648,4 +2659,118 @@ export async function tradeTick(wallet, id) {
   else trade.state = trade.myLock ? "locked" : "accepted";
   keepTrade(wallet, trade);
   return {...trade, step};
+}
+
+
+/* --- a tab LISTING its own swaps --------------------------------------------------
+ *
+ * The order is inscribed from this account (an order batch, trade_orders.py) naming its
+ * keys -- one per chain, which is what `take_key` is for -- its messaging key, and this
+ * node, so other arcades show it while this node is online. A tab's order lives an hour
+ * and is posted again while the tab stays open: a closed tab's swaps leave by themselves.
+ * Proposals are answered HERE, and only exactly this order's terms are accepted.
+ */
+
+const MY_ORDERS = "arcade-my-orders";
+export const TAB_ORDER_LIFE = 3600;
+const TAB_REPOST = 45 * 60 * 1000;
+
+function myOrdersOf(wallet) {
+  try { return JSON.parse(localStorage.getItem(`${MY_ORDERS}:${wallet.pubkey}`) || "{\"orders\":{},\"cancels\":[],\"posted\":0,\"cursor\":0}"); }
+  catch (e) { return {orders: {}, cancels: [], posted: 0, cursor: 0}; }
+}
+function keepMyOrders(wallet, book) {
+  try { localStorage.setItem(`${MY_ORDERS}:${wallet.pubkey}`, JSON.stringify(book)); } catch (e) {}
+}
+export function myOrders(wallet) {
+  return Object.values(myOrdersOf(wallet).orders);
+}
+
+/** The order batch for this tab's listed swaps, inscribed from this account. */
+export async function postMyOrders(wallet) {
+  const book = myOrdersOf(wallet);
+  const {me} = await messenger(wallet);
+  const acct = await (await fetch("/account")).json();
+  if (!acct.mesh_node) throw new Error("this node is not on the mesh, so no other arcade would see the swap");
+  const tags = (acct.chains || []).find((c) => c.tags) || {};
+  const now = Math.floor(Date.now() / 1000);
+  const orders = Object.values(book.orders).map((o) => ({
+    id: o.id, give: o.give, get: o.get, trade_key: o.trade_key, take_key: o.take_key,
+    msg_key: coinsHex(me.publicKey || me.public || me.pub), node: acct.mesh_node,
+    expires: now + TAB_ORDER_LIFE}));
+  const body = new TextEncoder().encode(JSON.stringify({arcade: "orders", v: 1, orders, cancels: book.cancels}));
+  let b64 = "";
+  for (let i = 0; i < body.length; i += 0x8000) b64 += String.fromCharCode(...body.subarray(i, i + 0x8000));
+  const asked = await fetch("/account/inscribe", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({content: btoa(b64), content_type: "application/vnd.arcade.orders+json",
+                          json: "", chain: tags.network || ""}),
+  });
+  const offer = await asked.json();
+  if (!asked.ok) throw new Error(offer.detail || "the swap could not be posted");
+  if (offer.part) throw new Error("too many swaps for one inscription; withdraw some");
+  const sent = await confirm(wallet, offer);
+  book.posted = Date.now();
+  book.cancels = [];
+  keepMyOrders(wallet, book);
+  return sent;
+}
+
+/** List a coin-for-coin swap from this tab: give `give` {network, amount}, get `get`. */
+export async function listOrder(wallet, give, get) {
+  const book = myOrdersOf(wallet);
+  const id = "ord-" + coinsHex(crypto.getRandomValues(new Uint8Array(8)));
+  const side = (s) => ({network: s.network, kind: "coin", asset: "", amount: Math.round(Number(s.amount))});
+  book.orders[id] = {id, give: side(give), get: side(get),
+                     trade_key: coinsHex(keysOn(wallet, give.network).pubkey),
+                     take_key: coinsHex(keysOn(wallet, get.network).pubkey)};
+  keepMyOrders(wallet, book);
+  await postMyOrders(wallet);
+  return book.orders[id];
+}
+
+export async function withdrawOrder(wallet, id) {
+  const book = myOrdersOf(wallet);
+  delete book.orders[id];
+  book.cancels = [...new Set([...(book.cancels || []), id])];
+  keepMyOrders(wallet, book);
+  await postMyOrders(wallet);
+}
+
+/** Answer proposals against this tab's orders: exactly the order's terms are accepted (and
+ *  traded as the responder), anything else is cancelled. Re-posts the orders when due. */
+export async function answerProposals(wallet) {
+  const book = myOrdersOf(wallet);
+  const heard = await tradeHeard(wallet, book.cursor);
+  book.cursor = heard.cursor;
+  keepMyOrders(wallet, book);
+  const trades = tradesOf(wallet);
+  const now = Math.floor(Date.now() / 1000);
+  for (const a of heard.answers) {
+    const p = a.json;
+    if (p.step !== "propose" || trades[p.id]) continue;
+    const mine = book.orders[p.order];
+    const fits = mine && p.get && p.give
+      && p.get.network === mine.give.network && p.get.kind === "coin" && p.get.amount === mine.give.amount
+      && p.get.giver_key === mine.trade_key
+      && p.give.network === mine.get.network && p.give.kind === "coin" && p.give.amount >= mine.get.amount
+      && p.give.taker_key === mine.take_key
+      && Number.isInteger(p.t1) && Number.isInteger(p.t2) && p.t2 < p.t1
+      && p.t2 - TRADE.LOCK_MARGIN > now && /^[0-9a-f]{64}$/.test(p.secret_hash || "");
+    if (!fits) {
+      await tradeSay(wallet, a.sender, {t: "trade", v: 1, id: p.id, step: "cancel",
+                                        reason: mine ? "those are not this swap's terms" : "no such swap here"});
+      continue;
+    }
+    const trade = {id: p.id, role: "responder", order: p.order, peer: a.sender, give: p.get, get: p.give,
+                   secret: "", secretHash: p.secret_hash, t1: p.t1, t2: p.t2, myLock: null, theirLock: null,
+                   agreed: true, acceptSent: false, cancelled: false, state: "accepted",
+                   note: "accepted; waiting for their lock", cursor: book.cursor, created: Date.now()};
+    keepTrade(wallet, trade);
+    // Kept BEFORE it is said, and said again by tradeTick until it goes: an accept that
+    // failed to send must not leave the other side waiting for ever.
+    await sayAccept(wallet, trade).catch(() => {});
+  }
+  if (Object.keys(book.orders).length && Date.now() - (book.posted || 0) > TAB_REPOST)
+    await postMyOrders(wallet);
 }
