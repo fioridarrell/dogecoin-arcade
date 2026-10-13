@@ -69,11 +69,15 @@
       {% endif %}
       {% if viewer == 'account' %}
       {% if account_address %}
+      {# Only where this node may fill for an absent buyer (node-facilitated trades,
+         off by default, 2026-10-13). Off, a buy order is told when it can fill. #}
+      {% if node_trades() %}
       <label id="book-away-row" class="muted" style="display:flex;gap:8px;align-items:flex-start;font-size:.84rem;margin:10px 0 0">
         <input type="checkbox" id="book-away" checked style="width:auto;margin:3px 0 0">
         <span>Let this server fill it while I'm away. It holds a signature for each small lot,
           which can spend no more than that lot's price. Untick to fill it yourself: your phone
           is told when it can fill, and the app does it the next time you open it.</span></label>
+      {% endif %}
       <p class="msg err" id="book-trouble" hidden></p>
       <p class="msg ok" id="book-news" hidden></p>
       <p class="ex-note">Settles on {{ chain.label|lower }} in the block your order lands in: no deposit, nobody

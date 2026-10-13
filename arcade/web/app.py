@@ -9011,6 +9011,31 @@ def create_app(state: AppState) -> FastAPI:
             pass
         return frozenset(out)
 
+    # --- node-facilitated trades: OFF unless the operator turns them on --------------
+    #
+    # 2026-10-13: "I want an option in my operator node admin panel. That will
+    # ... enable node facilitated trades. ... trades are only available if they leave
+    # their tab open so that transaction building is complete on the client side
+    # solely. It needs to be 100% trustless ... But node facilitated trading should
+    # still be an option." So by default this node completes nobody's trade while
+    # they are away: it holds no pre-signed listing or bid for later, fills no
+    # standing order on a buyer's behalf, and takes custody of nothing (the
+    # cross-chain book). Trades that both people's tabs sign live -- and the chain's
+    # own order matching -- are untouched. `node_trades` in settings.json.
+
+    NODE_TRADES_OFF = ("This arcade trades only while both people are here, each "
+                       "signing in their own tab: it does not hold a signature to "
+                       "finish a trade for somebody who has gone. The operator can "
+                       "turn node-facilitated trades on in the admin panel.")
+
+    def _node_trades() -> bool:
+        return bool(state.setting("node_trades", False))
+
+    TEMPLATES.env.globals["node_trades"] = _node_trades
+
+    def _node_trades_refused():
+        return JSONResponse({"detail": NODE_TRADES_OFF, "node_trades": False}, status_code=403)
+
     def _account_chain():
         """The chain a tag lives on. Testnet, as tags always have been."""
         return state.messaging
@@ -11434,6 +11459,7 @@ def create_app(state: AppState) -> FastAPI:
         """
         account = _signed_in_account(request)
         said = payload if isinstance(payload, dict) else {}
+        presign = _node_trades()       # node-facilitated trades (2026-10-13)
         try:
             chain = _chain_asked(said)
         except ValueError as exc:
@@ -11492,11 +11518,17 @@ def create_app(state: AppState) -> FastAPI:
                 # is sent (/account/offer/bid-build): one coin is all an account
                 # needs to make an offer, and one coin is what stays reserved.
                 price_sats = int(take.amount) if take.kind == inscriptionlib.LEG_COINS else 0
-                swap_bytes = _ask_payload(row, take)
-                need = fundinglib.bid_need(swap_bytes, price_sats, row["owner"],
-                                           fees.MIN_FEE_PER_KB)
-                set_aside_at = len(outputs)
-                outputs = outputs + [(need, txbuild.p2pkh_script(address))]
+                # Only when this node may hold that half (node-facilitated trades,
+                # 2026-10-13). Off, the offer is the on-chain Offer alone and the
+                # trade is made live: the seller answers it while the buyer's tab
+                # finishes it.
+                need, set_aside_at = 0, None
+                if presign:
+                    swap_bytes = _ask_payload(row, take)
+                    need = fundinglib.bid_need(swap_bytes, price_sats, row["owner"],
+                                               fees.MIN_FEE_PER_KB)
+                    set_aside_at = len(outputs)
+                    outputs = outputs + [(need, txbuild.p2pkh_script(address))]
                 unsigned = fundinglib.build(
                     db, chain.params, address, outputs,
                     rate=fees.MIN_FEE_PER_KB, what=what,
@@ -11532,6 +11564,9 @@ def create_app(state: AppState) -> FastAPI:
         out = {"offer": offer.id, "what": what,
                "number": row["number"], "chain": chain.network,
                **unsigned.as_json()}
+        if not presign:
+            out["presigned"] = False
+            return JSONResponse(out)
         _bids.draft(draft=offer.id, network=chain.network, buyer=address,
                     account=account.pubkey, piece=row["txid"], seller=row["owner"],
                     take=terms, price_sats=price_sats,
@@ -11543,6 +11578,14 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.post("/account/offer/bid-build")
     def account_offer_bid_build(request: Request, payload: Any = Body(None)):
+        if not _node_trades():
+            # A pre-signed bid is the buyer's signature, held by this node until the
+            # seller says yes. Off by default (2026-10-13).
+            _signed_in_account(request)
+            return _node_trades_refused()
+        return _account_offer_bid_build(request, payload)
+
+    def _account_offer_bid_build(request: Request, payload: Any = Body(None)):
         """The buyer's half, on the coin the offer set aside, once the offer is
         sent and its txid known. Returned for the tab to check and sign."""
         account = _signed_in_account(request)
@@ -11570,6 +11613,14 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.post("/account/offer/bid")
     def account_offer_bid(request: Request, payload: Any = Body(None)):
+        if not _node_trades():
+            # A pre-signed bid is the buyer's signature, held by this node until the
+            # seller says yes. Off by default (2026-10-13).
+            _signed_in_account(request)
+            return _node_trades_refused()
+        return _account_offer_bid(request, payload)
+
+    def _account_offer_bid(request: Request, payload: Any = Body(None)):
         """The buyer's signatures over their half, kept beside the offer
         (arcade/bids.py), once the offer itself is broadcast. Checked by the
         only test that cannot be argued with at accept: the network."""
@@ -12129,6 +12180,10 @@ def create_app(state: AppState) -> FastAPI:
         done = 0
         for s in _standing.open_on(chain.network):
             try:
+                if s["away"] and not _node_trades():
+                    # Filling for an absent buyer is the node trading on their
+                    # behalf. With the switch off it only tells them (2026-10-13).
+                    continue
                 if s["away"]:
                     if _fill_away(chain, index, s, taking):
                         done += 1
@@ -12184,6 +12239,9 @@ def create_app(state: AppState) -> FastAPI:
             return JSONResponse({"detail": "this account has no address on that chain"},
                                 status_code=400)
         away = bool(said.get("away"))
+        if away and not _node_trades():
+            # "Fill while I'm away" is the node trading for an absent buyer (2026-10-13).
+            return _node_trades_refused()
         try:
             index = state.token_index(chain)
             prop = index.property(int(said.get("property_id") or 0))
@@ -13197,6 +13255,8 @@ def create_app(state: AppState) -> FastAPI:
         `/account/buy`, which asks the chain and says so in words.
         """
         _sweep_book(chain)
+        if not _node_trades():
+            return None
         for row in state.listings.open_listings(chain.network):
             if _sold_piece(row) != piece:
                 continue
@@ -13339,6 +13399,15 @@ def create_app(state: AppState) -> FastAPI:
         return f"gives {give} and takes {take}"
 
     @app.post("/account/list")
+    def account_list_gate(request: Request, payload: Any = Body(None)):
+        """Refused before anything is signed when this node holds no waiting
+        listings (node-facilitated trades off, the default, 2026-10-13)."""
+        # (Prize pools file their lots through /account/pools/legs, not here.)
+        if not _node_trades():
+            _signed_in_account(request)
+            return _node_trades_refused()
+        return account_list(request, payload)
+
     def account_list(request: Request, payload: Any = Body(None)):
         """Show an account the leg it is about to sign, and stop there.
 
@@ -15762,6 +15831,14 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.post("/account/list/sign")
     def account_list_sign(request: Request, payload: Any = Body(None)):
+        if not _node_trades():
+            # A listing waits for a buyer with the seller gone: the node would hold
+            # the seller's signature to finish it. Off by default (2026-10-13).
+            _signed_in_account(request)
+            return _node_trades_refused()
+        return _account_list_sign(request, payload)
+
+    def _account_list_sign(request: Request, payload: Any = Body(None)):
         """File the leg this browser signed, from its bytes and the chain alone.
 
         `Listings.register` is the whole of it: the piece's value comes from
@@ -16085,6 +16162,12 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.post("/account/buy")
     def account_buy(request: Request, payload: Any = Body(None)):
+        if not _node_trades():
+            _signed_in_account(request)
+            return _node_trades_refused()
+        return _account_buy(request, payload)
+
+    def _account_buy(request: Request, payload: Any = Body(None)):
         """Show an account the transaction that fills somebody else's listing.
 
         Nothing is spent here, exactly as `/account/list` spends nothing: the
@@ -17178,6 +17261,14 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.post("/account/accept/complete")
     def account_accept_complete(request: Request, payload: Any = Body(None)):
+        if not _node_trades():
+            # A pre-signed bid is the buyer's signature, held by this node until the
+            # seller says yes. Off by default (2026-10-13).
+            _signed_in_account(request)
+            return _node_trades_refused()
+        return _account_accept_complete(request, payload)
+
+    def _account_accept_complete(request: Request, payload: Any = Body(None)):
         """The seller's one signature on a pre-signed offer's trade, pasted beside
         the buyer's, and the trade broadcast."""
         account = _signed_in_account(request)
@@ -17275,7 +17366,7 @@ def create_app(state: AppState) -> FastAPI:
             row = index.inscription(contentlib._key(str(said.get("piece", ""))))
             # A pre-signed offer: the buyer's half is already here, so Accept is
             # the trade itself (2026-09-27).
-            bid = _bids.get(ask["txid"])
+            bid = _bids.get(ask["txid"]) if _node_trades() else None
             if bid and bid["status"] == bidslib.OPEN \
                     and str(said.get("decision") or "") != "refuse":
                 return _accept_presigned(account, chain, address, row, bid, said)
@@ -19102,6 +19193,8 @@ def create_app(state: AppState) -> FastAPI:
         index = state.token_index(chain)
         state.listings.expire_due(chain.network)
         out = []
+        if not _node_trades():
+            return out          # an account mintpad is waiting listings (2026-10-13)
         for row in state.listings.open_listings(chain.network, limit=1000):
             if row["owner"] != creator:
                 continue
@@ -20268,6 +20361,7 @@ def create_app(state: AppState) -> FastAPI:
             "selling": {"auto_update": bool(state.setting("auto_update", True)),
                         "auto_sell": bool(state.setting("auto_sell", True)),
                         "auto_fill": bool(state.setting("auto_fill", True)),
+                        "node_trades": _node_trades(),
                         "trade_cut": state.setting("trade_cut")},
             "node": {"version": state.running_version,
                      "public_hosts": list(state.public_hosts)},
@@ -20373,7 +20467,7 @@ def create_app(state: AppState) -> FastAPI:
                 text = str(said["faucet_daily"]).strip()
                 state.set_setting("faucet_daily",
                                   None if text in ("", "none") else walletlib.parse_amount(text))
-            for flag in ("auto_update", "auto_sell", "auto_fill"):
+            for flag in ("auto_update", "auto_sell", "auto_fill", "node_trades"):
                 if flag in said:
                     state.set_setting(flag, bool(said[flag]))
             if "xchain_enabled" in said:      # the mainnet PEPE swap (arcade/xchain.py)
@@ -21271,7 +21365,10 @@ def create_app(state: AppState) -> FastAPI:
         # finish without waiting for anybody.
         try:
             _sweep_book(chain)
-            for row in state.listings.open_listings(chain.network, limit=1000):
+            # Waiting listings are node-held signatures: not prices here unless the
+            # operator turned node-facilitated trades on (2026-10-13).
+            for row in (state.listings.open_listings(chain.network, limit=1000)
+                        if _node_trades() else []):
                 piece = _sold_piece(row)
                 if not piece or (out.get(piece) or {}).get("kind") == "listing":
                     continue
@@ -22058,7 +22155,9 @@ def create_app(state: AppState) -> FastAPI:
             return ""
 
     def _x_open() -> bool:
-        return bool(state.setting("xchain:enabled"))
+        # Custody of both sides' coins is the most node-facilitated trade there is:
+        # it needs the operator's node-trades switch as well as its own (2026-10-13).
+        return bool(state.setting("xchain:enabled")) and _node_trades()
 
     def _x_asset(kind: str, asset: str) -> dict:
         """What is being sold: its name, whether it divides, and how the page names it."""
@@ -22913,6 +23012,8 @@ def create_app(state: AppState) -> FastAPI:
         thing as "spent" to a node that actually looked (arcade/listings.py).
         """
         groups, book_error = [], ""
+        if not _node_trades():
+            return groups, book_error
         for chain in state.token_chains:
             try:
                 # Looking is what keeps the book's idea of time current, the way
@@ -23033,7 +23134,8 @@ def create_app(state: AppState) -> FastAPI:
         try:
             state.listings.expire_due(chain.network)
             pads: dict = {}
-            for row in state.listings.open_listings(chain.network, limit=1000):
+            for row in (state.listings.open_listings(chain.network, limit=1000)
+                        if _node_trades() else []):
                 piece = _sold_piece(row)
                 got = index.inscription(piece) if piece else None
                 if not got or not got.get("collection") or got["owner"] != row["owner"]:

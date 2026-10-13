@@ -77,6 +77,15 @@
   <label class="switch"><input type="checkbox" id="auto_update"> Install updates by itself</label>
   <label class="switch"><input type="checkbox" id="auto_sell"> Sell listed pieces automatically</label>
   <label class="switch"><input type="checkbox" id="auto_fill"> Fill exchange orders automatically</label>
+  {# Off by default (2026-10-13): trades only while both people's tabs are open,
+     signed in each browser; on, this node also finishes trades for people who left. #}
+  <label class="switch"><input type="checkbox" id="node_trades"> Node-facilitated trades</label>
+  <p class="muted" style="margin:-4px 0 10px 28px;font-size:.84rem">
+    <strong>Off (the default):</strong> every trade happens while both people have their tab
+    open, built and signed in their own browsers, so this node is trusted with nothing.
+    <strong>On:</strong> this node also holds pre-signed listings and bids to finish later,
+    fills &ldquo;while I'm away&rdquo; buy orders, and may run the custodial mainnet PEP swap
+    below &mdash; convenient, but people then trust this node to finish their trades.</p>
   <h3 style="margin-bottom:6px">Content screening</h3>
   <p class="muted" style="margin-top:0">A model (vLLM, or any OpenAI-compatible server that
     reads images) looks at pictures and posts before this arcade shows them.
@@ -310,7 +319,7 @@ section.panel h2{margin-top:0}
     $('faucetdaily').value = d.faucet.daily ? coins(d.faucet.daily) : '';
     $('faucet_topoff').checked = d.faucet.topoff !== false;
     $('faucet_mine').checked = d.faucet.mine !== false;
-    ['auto_update', 'auto_sell', 'auto_fill'].forEach(function (k) { $(k).checked = !!d.selling[k]; });
+    ['auto_update', 'auto_sell', 'auto_fill', 'node_trades'].forEach(function (k) { $(k).checked = !!d.selling[k]; });
     // the mainnet PEP swap: its switch and how it stands
     var x = d.xchain || {}, xs = $('xchainstate');
     $('xchain_enabled').checked = !!x.enabled;
@@ -371,7 +380,7 @@ section.panel h2{margin-top:0}
   };
   $('saveswitches').onclick = function () {
     call('/admin/api/settings', {auto_update: $('auto_update').checked, auto_sell: $('auto_sell').checked,
-      auto_fill: $('auto_fill').checked,
+      auto_fill: $('auto_fill').checked, node_trades: $('node_trades').checked,
       xchain_enabled: $('xchain_enabled').checked,
       moderation: {url: $('modurl').value.trim(), model: $('modmodel').value.trim(),
                    key: $('modkey').value.trim(), clear_key: $('modclear').checked}})

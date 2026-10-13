@@ -178,3 +178,30 @@ def threadwatch(request):
                 print(f"threadwatch {request.node.name} <- {other.name} from {born}",
                       file=log)
     _orIGIN[0] = request.node.name
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "node_trades_default: run with node-facilitated trades at the "
+        "shipped default (off) instead of on")
+
+
+@pytest.fixture(autouse=True)
+def node_trades_on_unless_asked(monkeypatch, request):
+    """Node-facilitated trades are OFF by default since 2026-10-13 (the operator: trades
+    only while both tabs are open, unless the operator turns them on). Most tests
+    here are ABOUT those trades -- listings, held bids, away fills, the cross-chain
+    book -- so they run with the switch on, as on a node whose operator chose it.
+    A test of the default marks itself `node_trades_default`; a value a test saves
+    itself always wins."""
+    if request.node.get_closest_marker("node_trades_default"):
+        return
+    from arcade.web import state as statemod
+    real = statemod.AppState.setting
+
+    def setting(self, name, default=None):
+        if name == "node_trades" and default is False:
+            return real(self, name, True)
+        return real(self, name, default)
+
+    monkeypatch.setattr(statemod.AppState, "setting", setting)
