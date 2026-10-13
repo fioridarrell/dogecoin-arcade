@@ -20843,6 +20843,74 @@ def create_app(state: AppState) -> FastAPI:
         rows.sort(key=_by_popularity)
         return rows
 
+    def _nets_shown(chain, show: str):
+        """(chain, its index, net word, switch) for every chain a chip shows;
+        `switch` as in `_pairs_by_net`."""
+        for c in state.token_chains:
+            net = "mainnet" if c.is_mainnet else "testnet"
+            if show in ("mix", net):
+                yield c, (state.token_index(chain) if c is chain else state.token_index(c)), \
+                    net, ("" if c is chain else c.network)
+
+    def _nfts_by_net(request: Request, chain, index, trades, show: str) -> tuple[list, list, dict]:
+        """The NFTs tab for one chip (2026-10-13: "NFT's should have the
+        same sort by network buttons as the tokens"): every chain's collections
+        and recent sales, each saying which chain it is, and the pieces sold on
+        the cross-chain book as `cross`. Cross chain only is those sales and the
+        collections a cross-chain market has a piece of."""
+        colls: list[dict] = []
+        sales: list[dict] = []
+        tags: dict[str, str] = {}
+        public = _account_view(request)
+        cross = show == "cross"
+        for c, idx, net, switch in _nets_shown(chain, "mix" if cross else show):
+            try:
+                tr = trades if c is chain else idx.trades()
+                got_colls = _market_collections(idx, c, tr, public=public)
+                got_sales = _recent_sales(idx, tr, limit=8, chain=c)
+            except Exception:
+                log.debug("the %s collections could not be read", net, exc_info=True)
+                continue
+            # Which collections a cross-chain market holds a piece of.
+            crossing: set = set()
+            if c.network == state.messaging.network:
+                try:
+                    for m in state.xchain.book.markets():
+                        if m["kind"] != "nft":
+                            continue
+                        row = idx.inscription(contentlib._key(str(m["asset"])))
+                        if row and row["collection"]:
+                            crossing.add((row["creator"], row["collection"]))
+                except Exception:
+                    crossing = set()
+            for x in got_colls:
+                x.update(net=net, mainnet=c.is_mainnet, switch=switch,
+                         cross=(x["creator"], x["name"]) in crossing)
+            for x in got_sales:
+                # `mainnet` on a sale is the coin it was paid in.
+                was_cross = bool(x.get("mainnet")) and not c.is_mainnet
+                x.update(net="cross" if was_cross else net, switch=switch,
+                         mainnet=bool(x.get("mainnet")) or c.is_mainnet)
+            if cross:
+                got_colls = [x for x in got_colls if x["cross"]]
+                got_sales = [x for x in got_sales if x["net"] == "cross"]
+            elif show != "mix":
+                got_sales = [x for x in got_sales if x["net"] == show]
+            colls += got_colls
+            sales += got_sales
+            try:
+                tags.update(_names_for(idx, [x["creator"] for x in got_colls]
+                                       + [x["seller"] for x in got_sales]
+                                       + [x["owner"] for x in got_sales]))
+            except Exception:
+                pass
+        colls.sort(key=lambda x: (-x["for_sale"], -x["offers"], -x["trades"], x["name"].lower()))
+        sales.sort(key=lambda x: -float(x.get("when") or 0))
+        return colls, sales[:8], tags
+
+    #: Launchpads have no cross-chain kind: each pad sells on its own chain.
+    PAD_SHOWS = ("mix", "testnet", "mainnet")
+
     def _xchain_markets(index, faces_for) -> list[dict[str, Any]]:
         """Every cross-chain market with an order standing or a trade done, as a
         row of the same table: the asset here, priced in mainnet PEPE."""
@@ -22847,11 +22915,23 @@ def create_app(state: AppState) -> FastAPI:
         data["sort"] = "new" if sort == "new" else "popular"
         data["pads"], data["pad_frames"] = [], {}
         if tab == "mintpads":
-            data["pads"] = _pads_ranked(request, index, chain, data["sort"],
-                                        shops=[s for s in data["shops"]
-                                               if s["txid"] not in {p["txid"] for p in data["pads"]}])
+            # Pads from every chain the chip shows (2026-10-13: "Launchpads
+            # also need the ability to choose between the networks"), ranked
+            # together; a card from the other chain switches before it mints.
+            from .. import launchlist
+            data["show"] = show if show in PAD_SHOWS else "mix"
+            pads: list = []
+            for c, idx, net, switch in _nets_shown(chain, data["show"]):
+                try:
+                    shops = data["shops"] if c is chain else _shop_listings(idx, c)
+                    for pad in _pads_ranked(request, idx, c, data["sort"], shops=shops):
+                        pad.update(net=net, mainnet=c.is_mainnet, switch=switch)
+                        pads.append(pad)
+                except Exception:
+                    log.debug("the %s pads could not be read", net, exc_info=True)
+            data["pads"] = launchlist.rank(pads, data["sort"], int(time.time()))
             data["pad_frames"] = _frames_for(
-                request, {p["txid"]: "text/html" for p in data["pads"]})
+                request, {p["txid"]: "text/html" for p in data["pads"] if not p["switch"]})
             data["tags"].update(_tags_for([p["creator"] for p in data["pads"]]))
             # A collection pad that is only listings (never inscribed) has no
             # page to draw; it stays below the list, as it was.
@@ -22909,8 +22989,9 @@ def create_app(state: AppState) -> FastAPI:
             # Its chart belongs to the collection's own page, where the
             # pieces it prices are (D-096).
             try:
-                data["collections"] = _market_collections(
-                    index, chain, trades, public=_account_view(request))
+                data["show"] = show if show in PAIR_SHOWS else "mix"
+                data["collections"], data["sales"], named = _nfts_by_net(
+                    request, chain, index, trades, data["show"])
                 # Popular means traded, and traded recently: what a market
                 # is for is not the biggest set, it is the busy one. Falls
                 # back on what is for sale where nothing has traded at all,
@@ -22924,11 +23005,7 @@ def create_app(state: AppState) -> FastAPI:
                 # (2026-09-28). No piece-by-piece list of what is for
                 # sale: a piece is bought on its collection's own page, which
                 # is where its price, its neighbours and its Buy button are.
-                data["sales"] = _recent_sales(index, trades, limit=8, chain=chain)
-                data["tags"].update(_names_for(
-                    index, [c["creator"] for c in data["collections"]]
-                    + [s["seller"] for s in data["sales"]]
-                    + [s["owner"] for s in data["sales"]]))
+                data["tags"].update(named)
             except Exception as exc:
                 data["node_error"] = data["node_error"] or \
                     f"the collections could not be read: {exc}"

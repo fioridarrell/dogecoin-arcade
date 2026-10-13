@@ -29,6 +29,7 @@ def _markets(client, monkeypatch):
     real_property = L.LedgerIndex.property
     monkeypatch.setattr(L.LedgerIndex, "property", lambda self, pid: props.get(pid) or real_property(self, pid))
     monkeypatch.setattr(type(state.xchain), "address", lambda self, which: f"n{which}Exchange")
+    state.set_setting("xchain:enabled", True) if hasattr(state, "set_setting") else None
     book = state.xchain.book
     o = book.place(owner="x", side="sell", kind="token", asset="59", amount=10 * COIN, pepe=5 * COIN,
                    pay_test="nT", pay_main="PM")
@@ -78,4 +79,50 @@ def test_a_row_on_the_other_chain_switches_before_it_opens(client, monkeypatch):
     assert theirs and ours
     assert all(f'data-switch="{other.network}"' in r and 'data-back="/exchange/pairs/7/8"' in r for r in theirs), theirs
     assert not any("data-switch" in r for r in ours), "a row on this page's chain opens as it is"
-    assert 'id="pairswitch"' in page and 'action="/tokens/chain"' in page
+    assert 'id="netswitch"' in page and 'action="/tokens/chain"' in page
+
+
+def _collections(client, monkeypatch):
+    """One collection on every indexed chain."""
+    app, state = client
+    import arcade.ledger as L
+    monkeypatch.setattr(L.LedgerIndex, "collections", lambda self, limit=0: [
+        {"creator": "nCreator", "collection": "Doge Punks", "count": 10,
+         "first_number": 1, "last_number": 10}], raising=False)
+    return app, state
+
+
+def test_the_nfts_tab_has_the_same_chips(client, monkeypatch):
+    """2026-10-13: "In the exchange, NFT's should have the same sort by
+    network buttons as the tokens"."""
+    app, state = _collections(client, monkeypatch)
+    page = app.get("/exchange?tab=market").text
+    for label in ("Mix", "Testnet only", "Mainnet only", "Cross chain only"):
+        assert f">{label}</a>" in page, label
+    nets = re.findall(r'class="ex-coll"[^>]*data-net="(\w+)"', page)
+    assert {"testnet", "mainnet"} <= set(nets), nets
+    for show in ("testnet", "mainnet"):
+        shown = app.get(f"/exchange?tab=market&show={show}").text
+        assert set(re.findall(r'class="ex-coll"[^>]*data-net="(\w+)"', shown)) == {show}, show
+        assert f'tab=market&amp;show={show}" aria-current="true"' in shown
+    cross = app.get("/exchange?tab=market&show=cross").text
+    assert not re.findall(r'class="ex-coll"', cross), "no collection has a piece on the cross-chain book"
+    here = state.token_chain
+    other = next(c for c in state.token_chains if c is not here)
+    theirs = [r for r in re.findall(r'<a class="ex-coll"[^>]*>', page)
+              if f'data-net="{"mainnet" if other.is_mainnet else "testnet"}"' in r]
+    assert theirs and all(f'data-switch="{other.network}"' in r for r in theirs), theirs
+
+
+def test_the_launchpad_tab_chooses_a_network_too(client):
+    """2026-10-13: "Launchpads also need the ability to choose between the
+    networks". No pad sells across chains, so there is no cross-chain chip."""
+    app, state = client
+    page = app.get("/exchange?tab=mintpads").text
+    for label in ("Mix", "Testnet only", "Mainnet only"):
+        assert f">{label}</a>" in page, label
+    assert ">Cross chain only</a>" not in page
+    latest = app.get("/exchange?tab=mintpads&sort=new&show=mainnet").text
+    assert 'tab=mintpads&amp;sort=new&amp;show=mainnet" aria-current="true"' in latest
+    assert 'href="/exchange?tab=mintpads&amp;sort=new&amp;show=mainnet" aria-current="true">Latest' in latest, \
+        "Popular/Latest keep the network chosen"
