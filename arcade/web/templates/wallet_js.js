@@ -2264,19 +2264,23 @@ export async function unlockHere(tag, password, chain) {
  */
 let tipHeld = null;
 
-/** Fill a tip form's token list when "a ... token" is picked. Call once per page. */
+/** Keep a tip form's three steps in step: the coin named for the network picked, and
+ *  the token list (this account's own holdings there) when "a token" is picked.
+ *  Call once per page. */
 export function tipPicker(root = document) {
   root.addEventListener("change", async (e) => {
-    const pay = e.target;
-    if (!pay.form || pay.name !== "pay" || !pay.hasAttribute("data-tip-pay")) return;
-    const [what, network] = pay.value.split(":");
-    const list = pay.form.elements.token;
-    list.hidden = what !== "token";
-    if (what !== "token") return;
+    const box = e.target;
+    if (!box.form || !(box.hasAttribute("data-tip-net") || box.hasAttribute("data-tip-what"))) return;
+    const form = box.form, net = form.elements.net, what = form.elements.what;
+    const list = form.elements.token, pick = net.selectedOptions[0];
+    // The coin is said as the network's own: PEP TEST, PEP or DOGE.
+    if (what.options[0]) what.options[0].textContent = (pick && pick.dataset.coin) || "coins";
+    list.hidden = what.value !== "token";
+    if (what.value !== "token") return;
     list.textContent = "";
     try {
       if (!tipHeld) tipHeld = ((await (await fetch("/account/tokens")).json()).chains) || [];
-      const here = (tipHeld.find((c) => c.network === network) || {}).tokens || [];
+      const here = (tipHeld.find((c) => c.network === net.value) || {}).tokens || [];
       for (const t of here.filter((t) => Number(t.balance) > 0)) {
         const o = document.createElement("option");
         o.value = t.property_id; o.dataset.name = t.name;
@@ -2287,7 +2291,7 @@ export function tipPicker(root = document) {
     if (!list.options.length) {
       const o = document.createElement("option");
       o.value = "";
-      o.textContent = `you hold no ${pay.selectedOptions[0].dataset.word || ""} tokens`;
+      o.textContent = `you hold no tokens on ${(pick && pick.dataset.label) || net.value}`;
       list.appendChild(o);
     }
   });
@@ -2295,8 +2299,9 @@ export function tipPicker(root = document) {
 
 /** Tip the post `txid` with what the form says. Null if the person said no. */
 export async function tip(held, form, txid, kinds, ask) {
-  const choice = (form.elements.pay || {}).selectedOptions?.[0];
-  const [what, network] = String(choice ? choice.value : "coin:").split(":");
+  const choice = (form.elements.net || {}).selectedOptions?.[0];
+  const network = choice ? choice.value : "";
+  const what = (form.elements.what || {}).value || "coin";
   const amount = ((form.elements.amount || {}).value || "").trim();
   const who = form.dataset.authorName || "whoever made this";
   if (what === "token") {
@@ -2313,7 +2318,7 @@ export async function tip(held, form, txid, kinds, ask) {
     });
     const shown = await checked(offer, held);
     const ok = await ask(`Tip ${amount} ${pick.dataset.name}?`,
-      `${amount} ${pick.dataset.name} (${choice.dataset.word || network}) go to ${who}, and then a small note `
+      `${amount} ${pick.dataset.name} (${(choice && choice.dataset.label) || network}) go to ${who}, and then a small note `
       + "on the post says it was a tip: two small transactions, network fee "
       + `${shown.coinsOf(shown.fee)} for the send. It is a payment: it cannot be taken back.`,
       "Send the tip");

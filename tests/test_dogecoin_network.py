@@ -66,14 +66,11 @@ def test_a_synced_dogecoin_opens(client, monkeypatch):
 def test_the_tip_picker_grays_dogecoin_until_it_syncs(client, monkeypatch):
     app, state = client
     _with_doge(state, monkeypatch, ready=False)
-    # The template helpers are bound per app on a module-level environment; bind
-    # them to THIS state before rendering outside a request (parallel runs).
     from arcade.web.app import TEMPLATES, create_app
     create_app(state)
     html = TEMPLATES.env.from_string('{% import "_tip.html" as t %}{{ t.tip_pay() }}').render()
-    doge = [o for o in re.findall(r"<option [^>]*>[^<]*</option>", html) if "coin:doge" in o or "token:doge" in o]
-    assert len(doge) == 2 and all(" disabled" in o for o in doge), doge
-    assert ">D main &mdash; syncing 42.3%" in html and "a D main token" in html
+    doge = re.search(r'<option value="doge"[^>]*>[^<]*</option>', html)
+    assert doge and " disabled" in doge.group(0) and "D main &mdash; syncing 42.3%" in doge.group(0)
 
 
 def test_the_operator_wallet_and_admin_show_the_sync(client, monkeypatch):

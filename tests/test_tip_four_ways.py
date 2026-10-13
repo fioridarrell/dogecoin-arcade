@@ -23,6 +23,8 @@ def _published(state, address, other, n):
 
 
 def test_the_tip_picker_offers_both_coins_and_both_kinds_of_token(client):
+    """2026-10-13: "The tip picker should start with a network picker and then have
+    a coin or token picker and then a token if token is selected"."""
     app, state = client
     _seat(app)
     # The template helpers are bound per app on a module-level environment; bind
@@ -30,11 +32,13 @@ def test_the_tip_picker_offers_both_coins_and_both_kinds_of_token(client):
     from arcade.web.app import TEMPLATES, create_app
     create_app(state)
     html = TEMPLATES.env.from_string('{% import "_tip.html" as t %}{{ t.tip_pay() }}').render()
-    values = re.findall(r'<option value="([^"]+)"', html)
-    labels = [" ".join(x.split()) for x in re.findall(r"<option [^>]*>([^<]+)</option>", html)]
-    test, main = state.messaging.network, state.ledger.network
-    assert values == [f"coin:{test}", f"coin:{main}", f"token:{test}", f"token:{main}"], values
-    assert labels == ["P test", "P main", "a P test token", "a P main token"], labels
+    nets = re.search(r'<select name="net"[^>]*>(.*?)</select>', html, re.S).group(1)
+    whats = re.search(r'<select name="what"[^>]*>(.*?)</select>', html, re.S).group(1)
+    assert re.findall(r'<option value="([^"]+)"', nets) == [state.messaging.network, state.ledger.network]
+    assert [" ".join(x.split()) for x in re.findall(r">([^<]+)</option>", nets)] == ["P test", "P main"]
+    assert re.findall(r'<option value="([^"]+)"', whats) == ["coin", "token"]
+    assert ">PEP TEST</option>" in whats and ">a token</option>" in whats
+    assert '<select name="token"' in html and "hidden" in html.split('<select name="token"')[1][:80]
 
 
 def test_feed_and_games_draw_the_same_picker(client):

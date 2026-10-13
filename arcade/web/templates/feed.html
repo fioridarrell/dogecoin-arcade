@@ -867,6 +867,7 @@ document.body.dataset.profileReady = "yes";
         if (!out) { if (button) button.disabled = false; return; }
         form.reset();
         form.elements.token.hidden = true;
+        form.elements.net.dispatchEvent(new Event("change", {bubbles: true}));   // the coin named for the network again
         form.hidden = true;
         const opener = document.querySelector(`[data-tip-for="${txid}"]`);
         if (opener) { opener.textContent = "Tipped \u2713 waiting for its block"; opener.disabled = true; }
