@@ -156,3 +156,193 @@ def test_a_tab_turns_down_terms_that_are_not_its_order(world, monkeypatch):
         browser.close()
     assert agreed == -1, "the tab said no"
     assert b.book.get(trade).state != "done"
+
+
+def _gold_everywhere(a, b, holder, units):
+    from test_account_tokens import _balance, _token
+    for st in (a, b.state):
+        _token(st, property_id=150, name="Gold")
+        _balance(st, holder, 150, units)
+    return 150
+
+
+def _settle(tab, a, b, pep, dg, trade, net):
+    steps = []
+    for _ in range(45):
+        _mine(pep, dg)
+        _scan_a(a)
+        _scan(b)
+        b.state.token_index(b.state.messaging).sync()
+        for done in b.tick():
+            steps.append(("b",) + done[1:2])
+        _scan_a(a)
+        # Started, then waited for while blocks come: a step whose message needs a coin split
+        # waits a block for it, as a real tab does.
+        tab.evaluate("""([net, id]) => { window.got = null; (async () => {
+            const wal = await w.opened(net);
+            await w.answerProposals(wal);
+            const t = w.myTrades(wal).find((t) => t.id === id);
+            if (!t) return ['none', '', ''];
+            const after = await w.tradeTick(wal, id);
+            return [after.state, after.step || '', after.note || '']; })()
+            .then((r) => { window.got = r; }, (e) => { window.got = ['error', '', e.message]; }); }""", [net, trade])
+        got = None
+        for _ in range(30):
+            got = tab.evaluate("() => window.got")
+            if got:
+                break
+            tab.wait_for_timeout(300)
+            _mine(pep, dg)
+            _scan_a(a)
+        assert got and got[0] != "error", got
+        steps.append(("tab",) + tuple(got))
+        if got[0] == "done" and b.book.get(trade) and b.book.get(trade).state == "done":
+            break
+    return steps
+
+
+def test_a_tab_lists_a_token_and_another_node_takes_it(world, monkeypatch):
+    """The tab's Gold goes into a lock built by /account/trade/lock (the coin that pays its
+    way out riding along); node B claims it with the secret, the tab claims B's DOGE."""
+    from playwright.sync_api import sync_playwright
+    base, a, b, pep, dg = world
+    monkeypatch.setattr(a, "mesh", _Mesh(), raising=False)
+    net = {"network": "regtest", "version": 111}
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        tab = browser.new_page()
+        tab.goto(f"{base}/join")
+        tab.evaluate("async () => { window.w = await import('/wallet.js'); }")
+        made = tab.evaluate("""async (net) => {
+            const r = await w.signUp('goldie' + Math.floor(Math.random() * 1e6), 'a long enough password', net);
+            return r.wallet.on.regtest.address; }""", net)
+        pep.call("sendtoaddress", made, 10)
+        _mine(pep)
+        _scan_a(a)
+        pid = _gold_everywhere(a, b, made, 100 * COIN)
+        mine = tab.evaluate("""async ([net, give, get]) => w.listOrder(await w.opened(net), give, get)""",
+                            [net, {"network": "regtest", "kind": "token", "asset": "150", "amount": 40 * COIN},
+                             {"network": "doge", "amount": 2 * COIN}])
+        _mine(pep)
+        _scan_a(a)
+        O.import_announced(a.trade_orders, a.token_index(a.messaging), "regtest")
+        found = next(o for o in a.trade_orders.visible(a.mesh.online) if o["id"] == mine["id"])
+        assert found["give"] == {"network": "regtest", "kind": "token", "asset": "150", "amount": 40 * COIN}
+        give = b.leg("doge", 2 * COIN, bytes.fromhex(found["take_key"]))
+        get = T.Leg("regtest", "token", "150", 40 * COIN, found["trade_key"], b.key.pubkey.hex())
+        trade = b.propose(bytes.fromhex(found["msg_key"]), found["id"], give, get).id
+        steps = _settle(tab, a, b, pep, dg, trade, net)
+        browser.close()
+    assert b.book.get(trade).state == "done", steps[-8:]
+    assert steps[-1][1] == "done", steps[-8:]
+    index = b.state.token_index(b.state.messaging)
+    index.sync()
+    assert int(index.balance(b._address("regtest"), pid)) == 40 * COIN, "B holds the Gold"
+    assert int(index.balance(made, pid)) == 60 * COIN
+
+
+def test_a_tab_takes_a_nodes_token_for_its_coins(world, monkeypatch):
+    """Node B stands 40 Gold for 3 PEP; the tab takes it, locks its PEP, and claims the Gold
+    out of B's lock -- an OP_RETURN, the lock's leftover and the tab last, checked in the tab."""
+    from playwright.sync_api import sync_playwright
+    base, a, b, pep, dg = world
+    home = pep.call("getnewaddress")
+    pep.call("sendtoaddress", home, 5)
+    monkeypatch.setattr(b.state, "home_address",
+                        lambda chain: home if chain.network == "regtest" else "", raising=False)
+    pid = _gold_everywhere(a, b, home, 100 * COIN)
+    b.stand("order-gold", {"network": "regtest", "kind": "token", "asset": "150", "amount": 40 * COIN},
+            {"network": "doge", "kind": "coin", "amount": 2 * COIN})
+    order = {"id": "order-gold",
+             "give": {"network": "regtest", "kind": "token", "asset": "150", "amount": 40 * COIN},
+             "get": {"network": "doge", "kind": "coin", "asset": "", "amount": 2 * COIN},
+             "trade_key": b.key.pubkey.hex(), "msg_key": b.state.identity.public_bytes.hex(),
+             "node": "ab" * 32, "expires": 0}
+    net = {"network": "regtest", "version": 111}
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        tab = browser.new_page()
+        tab.goto(f"{base}/join")
+        tab.evaluate("async () => { window.w = await import('/wallet.js'); }")
+        made = tab.evaluate("""async (net) => {
+            const r = await w.signUp('buyer' + Math.floor(Math.random() * 1e6), 'a long enough password', net);
+            return {regtest: r.wallet.on.regtest.address, doge: r.wallet.on.doge.address}; }""", net)
+        pep.call("sendtoaddress", made["regtest"], 10)
+        dg.call("sendtoaddress", made["doge"], 10)
+        _mine(pep, dg)
+        _scan_a(a)
+        # Started, not awaited: a proposal too big for one message transaction splits a coin
+        # first and waits a block for it, and only this test mines blocks.
+        tab.evaluate("""([net, order]) => { window.taking = w.opened(net).then((wal) => w.takeOrder(wal, order))
+            .then((t) => { window.took = t.id; }, (e) => { window.took = 'ERR ' + e.message; }); }""", [net, order])
+        for _ in range(20):
+            took = tab.evaluate("() => window.took || ''")
+            if took:
+                break
+            _mine(pep)
+            _scan_a(a)
+            tab.wait_for_timeout(500)
+        assert took and not took.startswith("ERR"), took
+        trade = took
+        # Dogecoin is real money: locking it asks the person first (mainnetOk). Here, yes.
+        tab.evaluate("() => { globalThis.arcadeMainnetReview = async () => true; }")
+        steps = _settle(tab, a, b, pep, dg, trade, net)
+        browser.close()
+    assert b.book.get(trade).state == "done", steps[-8:]
+    assert steps[-1][1] == "done", steps[-8:]
+    index = a.token_index(a.messaging)
+    index.sync()
+    assert int(index.balance(made["regtest"], pid)) == 40 * COIN, "the tab holds the Gold"
+
+
+def test_the_list_form_offers_a_token_the_account_holds(world, monkeypatch):
+    """On the Exchange, "List swap" offers this account's own tokens beside the coins, and
+    a token listed there shows under "Your listed swaps" by name."""
+    from playwright.sync_api import sync_playwright
+    base, a, b, pep, dg = world
+    monkeypatch.setattr(a, "mesh", _Mesh(), raising=False)
+    net = {"network": "regtest", "version": 111}
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        tab = browser.new_page()
+        tab.goto(f"{base}/join")
+        tab.evaluate("async () => { window.w = await import('/wallet.js'); }")
+        made = tab.evaluate("""async (net) => {
+            const r = await w.signUp('former' + Math.floor(Math.random() * 1e6), 'a long enough password', net);
+            return r.wallet.on.regtest.address; }""", net)
+        pep.call("sendtoaddress", made, 10)
+        _mine(pep)
+        _scan_a(a)
+        _gold_everywhere(a, b, made, 100 * COIN)
+        tab.goto(f"{base}/exchange?tab=tokens")
+        tab.wait_for_selector("#tab-list-form")
+        option = tab.locator('#tab-list-form select[name=give_network] option[value^="token:regtest:150:"]')
+        assert option.count() == 1 and "Gold" in option.inner_text()
+        tab.evaluate("() => { globalThis.arcadeAsk = async () => true; }")
+        tab.select_option("#tab-list-form select[name=give_network]", option.get_attribute("value"))
+        tab.fill("#tab-list-form input[name=give_amount]", "40")
+        tab.select_option("#tab-list-form select[name=get_network]", "doge")
+        tab.fill("#tab-list-form input[name=get_amount]", "2")
+        said = []
+        tab.on("dialog", lambda d: (said.append(d.message), d.dismiss()))
+        tab.evaluate("() => document.getElementById('tab-list-form').requestSubmit()")
+        for _ in range(40):
+            if said or "Gold" in tab.inner_text("#tab-orders-list"):
+                break
+            tab.wait_for_timeout(500)
+        assert not said, said
+        assert "40 Gold (#150) for 2 DOGE" in tab.inner_text("#tab-orders-list")
+        if os.environ.get("ARCADE_SHOT"):
+            pathlib.Path(os.environ["ARCADE_SHOT"]).write_text(tab.evaluate("""() => {
+                let css = "";
+                for (const sheet of document.styleSheets) { try { for (const r of sheet.cssRules) css += r.cssText + "\\n"; } catch (e) {} }
+                return `<!doctype html><html><head><meta charset="utf-8"><style>${css}</style></head>`
+                     + `<body style="padding:16px;max-width:900px">${document.getElementById("trade-orders").outerHTML}</body></html>`; }"""))
+        browser.close()
+        mine = [o for o in a.trade_orders.visible(lambda n: True)] or []
+    _mine(pep)
+    _scan_a(a)
+    O.import_announced(a.trade_orders, a.token_index(a.messaging), "regtest")
+    listed = [o for o in a.trade_orders.visible(a.mesh.online) if o["lister"] == made]
+    assert listed and listed[0]["give"] == {"network": "regtest", "kind": "token", "asset": "150",
+                                            "amount": 40 * COIN}

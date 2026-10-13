@@ -73,3 +73,38 @@ def test_with_the_switch_off_the_node_neither_posts_nor_takes(client, monkeypatc
         "give_network": "regtest", "give_amount": "3", "get_network": "main", "get_amount": "2",
         "csrf_token": state.csrf_token}, follow_redirects=False)
     assert state.node_trader.standing() == []
+
+
+def test_a_token_swap_is_named_by_its_token(client, monkeypatch):
+    from test_account_tokens import _token
+    app, state = client
+    _token(state, property_id=150, name="Gold")
+    order = {"id": "order-gold1", "give": {"network": "regtest", "kind": "token", "asset": "150",
+                                           "amount": 40 * COIN},
+             "get": {"network": "regtest", "kind": "coin", "asset": "", "amount": 3 * COIN},
+             "trade_key": "02" + secrets.token_hex(32), "msg_key": secrets.token_hex(32),
+             "node": NODE, "expires": int(time.time()) + 3600}
+    state.trade_orders.file_batch("nListerAddressXXXXXXXXXXXXXXXXXXXXX", "regtest", "aa" * 32,
+                                  O.batch_json([order]))
+    monkeypatch.setattr(state, "mesh", _Mesh({NODE}), raising=False)
+    page = app.get("/exchange?tab=tokens").text
+    assert "<strong>40 Gold</strong>" in page, "a token side reads as its amount and name"
+
+
+def test_the_operator_posts_a_token_from_its_home_address(client, monkeypatch):
+    from test_account_tokens import _balance, _token
+    app, state = client
+    monkeypatch.setattr(state, "mesh", None, raising=False)
+    home = "nHomeAddressXXXXXXXXXXXXXXXXXXXXXXX"
+    monkeypatch.setattr(state, "home_address", lambda chain: home, raising=False)
+    _token(state, property_id=150, name="Gold")
+    _balance(state, home, 150, 50 * COIN)
+    said = dict(give_network="token:regtest:150:1", give_amount="40", get_network="main", get_amount="2",
+                csrf_token=state.csrf_token)
+    assert app.post("/exchange/trade-orders/stand", data=said, follow_redirects=False).status_code == 303
+    standing = state.node_trader.standing()
+    assert standing and standing[0]["give"] == {"network": "regtest", "kind": "token", "asset": "150",
+                                                "amount": 40 * COIN}
+    # More than the home address holds is refused.
+    app.post("/exchange/trade-orders/stand", data={**said, "give_amount": "60"}, follow_redirects=False)
+    assert len(state.node_trader.standing()) == 1

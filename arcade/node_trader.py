@@ -96,6 +96,24 @@ def observe(rpc: Any, lock: dict | None, my_addresses: set[str],
     return seen
 
 
+def asset_seen(seen: T.LockSeen | None, leg: T.Leg, lock_address: str, index: Any,
+               rpc: Any) -> T.LockSeen | None:
+    """`seen` with the ledger's word on a token or NFT leg: asset_ok, or -- while the
+    ledger has not read the lock's block -- confirmations 0, so a lagging ledger makes a
+    lock look not-yet-there and never wrong (trade.asset_at)."""
+    if seen is None or leg.kind == "coin" or seen.spent_by_script_sig:
+        return seen
+    height = None
+    if seen.confirmations > 0:
+        height = int(rpc.call("getblockcount")) - seen.confirmations + 1
+    said = T.asset_at(index, leg, lock_address, height)
+    if said is None:
+        seen.confirmations = 0
+    else:
+        seen.asset_ok = said
+    return seen
+
+
 def _spends(tx: dict, lock: dict) -> bool:
     return any(v.get("txid") == lock["txid"] and v.get("vout") == int(lock["vout"]) for v in tx["vin"])
 
@@ -191,9 +209,11 @@ class NodeTrader:
             secret_hash=h.hex(), t1=t1, t2=t2))
         return trade
 
-    def leg(self, network: str, amount: int, taker_key: bytes) -> T.Leg:
-        """A coin leg this node gives: its trade key as giver."""
-        return T.Leg(network, "coin", "", int(amount), self.key.pubkey.hex(), taker_key.hex())
+    def leg(self, network: str, amount: int, taker_key: bytes, kind: str = "coin",
+            asset: str = "") -> T.Leg:
+        """A leg this node gives: its trade key as giver. A token or NFT goes from its home
+        address (state.home_address), where the node's own tokens are kept."""
+        return T.Leg(network, kind, str(asset), int(amount), self.key.pubkey.hex(), taker_key.hex())
 
     # --- telling the other nodes ----------------------------------------------------------
 
@@ -328,6 +348,37 @@ class NodeTrader:
                 self._addresses[network] = rpc.call("getnewaddress")
         return self._addresses[network]
 
+    # --- tokens and NFTs in a lock -------------------------------------------------------
+
+    def _asset(self, seen: T.LockSeen | None, leg: T.Leg, redeem: bytes, chain: Any,
+               rpc: Any) -> T.LockSeen | None:
+        """For a token or NFT leg, what the ledger says is at the lock. While the ledger
+        has not read the lock's block yet the lock counts as unconfirmed (trade.asset_at)."""
+        return asset_seen(seen, leg, H.address_of(redeem, chain.params),
+                          self.state.token_index(chain), rpc)
+
+    def _lock_asset(self, leg: T.Leg, lock_address: str, chain: Any, rpc: Any) -> str:
+        """The token or NFT into the lock, from this node's home address, with the reserve
+        that pays its way out as the lock output (the reference: last, so the lock is the
+        recipient)."""
+        from . import inscriptions as I, payload as P, tokens as tokenlib
+        if leg.kind == "token":
+            payload = tokenlib.send_payload(int(leg.asset), leg.amount)
+        else:
+            payload = P.AnyData(data=I.Transfer(txid=bytes.fromhex(leg.asset)).encode()).encode()
+        sender = tokenlib.TokenSender(rpc, chain.params)
+        prepared = sender.prepare(self.state.home_address(chain), payload, lock_address,
+                                  reference_value=T.LOCK_RESERVE)
+        return sender.broadcast(prepared)
+
+    def _way_out(self, coin: dict, leg: T.Leg, redeem: bytes, chain: Any):
+        """The claim or refund's inputs and outputs, to this node: the coin itself, or the
+        token/NFT moved out by the lock's own reserve."""
+        to = self._address(leg.network)
+        if leg.kind == "coin":
+            return H.pay_out(coin, to)
+        return H.move_out(coin, H.address_of(redeem, chain.params), T.move_data(leg), to)
+
     def _advance(self, trade: T.Trade, now: int) -> tuple[str, str]:
         with self._db() as conn:
             link = conn.execute("SELECT * FROM link WHERE id=?", (trade.id,)).fetchone()
@@ -344,13 +395,18 @@ class NodeTrader:
         give_chain, get_chain = self.chains[trade.give.network], self.chains[trade.get.network]
         with give_chain.rpc() as grpc, get_chain.rpc() as trpc:
             facts = T.Facts(
-                mine=observe(grpc, mine, {self._address(trade.give.network)}, self._scanned),
-                theirs=observe(trpc, theirs, {self._address(trade.get.network)}, self._scanned))
+                mine=self._asset(observe(grpc, mine, {self._address(trade.give.network)}, self._scanned),
+                                 trade.give, trade.my_redeem(), give_chain, grpc),
+                theirs=self._asset(observe(trpc, theirs, {self._address(trade.get.network)}, self._scanned),
+                                   trade.get, trade.their_redeem(), get_chain, trpc))
             step, why = T.next_step(trade, facts, now)
             peer = bytes.fromhex(link["peer"])
             if step == T.LOCK:
                 lock_address = H.address_of(trade.my_redeem(), give_chain.params)
-                txid = grpc.call("sendtoaddress", lock_address, trade.give.amount / COIN)
+                if trade.give.kind == "coin":
+                    txid = grpc.call("sendtoaddress", lock_address, trade.give.amount / COIN)
+                else:
+                    txid = self._lock_asset(trade.give, lock_address, give_chain, grpc)
                 tx = grpc.call("getrawtransaction", txid, 1)
                 vout = next(o["n"] for o in tx["vout"]
                             if lock_address in o["scriptPubKey"].get("addresses", []))
@@ -360,14 +416,14 @@ class NodeTrader:
                     "locked", trade.id, network=trade.give.network, txid=txid, vout=vout))
             elif step == T.CLAIM:
                 coin = {**theirs, "value": facts.theirs.value}
-                inputs, outputs = H.pay_out(coin, self._address(trade.get.network))
+                inputs, outputs = self._way_out(coin, trade.get, trade.their_redeem(), get_chain)
                 txid = trpc.call("sendrawtransaction", H.claimed(
                     inputs, outputs, trade.their_redeem(), bytes.fromhex(trade.secret), self.key.sign))
                 courier.send(self.state, self.messaging, peer, M.build(
                     "claimed", trade.id, network=trade.get.network, txid=txid))
             elif step == T.REFUND:
                 coin = {**mine, "value": facts.mine.value}
-                inputs, outputs = H.pay_out(coin, self._address(trade.give.network))
+                inputs, outputs = self._way_out(coin, trade.give, trade.my_redeem(), give_chain)
                 txid = grpc.call("sendrawtransaction", H.refunded(
                     inputs, outputs, trade.my_redeem(), self.key.sign))
                 courier.send(self.state, self.messaging, peer, M.build(

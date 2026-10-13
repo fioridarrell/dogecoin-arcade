@@ -114,7 +114,29 @@ def _scenarios():
                           T.Facts(mine=seen(False), theirs=seen(True, spent="00", by_me=True)),
                           T.Facts(mine=seen(False, spent="00", by_me=True))):
                 out.append((tr, facts))
+    # A token leg each way: the reserve, and the ledger's word on the asset.
+    for role in (T.INITIATOR, T.RESPONDER):
+        a, b = Key(), Key()
+        secret, h = H.make_secret()
+        give = T.Leg("regtest", "token", "150", 40, a.pub.hex(), b.pub.hex())
+        get = T.Leg("regtest", "nft", "c3" * 32, 1, b.pub.hex(), a.pub.hex())
+        tr = T.Trade("t", role, give, get, h.hex(), secret.hex() if role == T.INITIATOR else "",
+                     now + 6 * 3600, now + 3 * 3600)
+        def seen(theirs, value=T.LOCK_RESERVE, asset_ok=True, tr=tr):
+            redeem = tr.their_redeem() if theirs else tr.my_redeem()
+            return T.LockSeen("ab" * 32, 0, value, H.p2sh_script(redeem).hex(), 5, asset_ok)
+        for facts in (T.Facts(theirs=seen(True)), T.Facts(theirs=seen(True, asset_ok=False)),
+                      T.Facts(theirs=seen(True, value=T.LOCK_RESERVE - 1)),
+                      T.Facts(mine=seen(False), theirs=seen(True)),
+                      T.Facts(mine=seen(False), theirs=seen(True, asset_ok=False))):
+            out.append((tr, facts))
     return out
+
+
+def test_the_browser_keeps_the_same_reserve():
+    import re
+    js = (pathlib.Path(__file__).resolve().parent.parent / "arcade/web/templates/wallet_js.js").read_text()
+    assert int(re.search(r"LOCK_RESERVE: ([0-9_]+)", js).group(1).replace("_", "")) == T.LOCK_RESERVE
 
 
 def test_the_browser_decides_every_step_as_the_python_does(tmp_path):

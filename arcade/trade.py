@@ -95,6 +95,46 @@ class Trade:
                                bytes.fromhex(self.get.giver_key), self.their_locktime)
 
 
+#: A token or NFT lock carries this much coin in its lock output besides the asset: it
+#: pays for the one transaction that moves the asset out again, claim or refund
+#: (htlc.move_out), so neither side has to bring coin of its own to finish.
+LOCK_RESERVE = H.SPEND_FEE + H.DUST
+
+
+def lock_value(leg: Leg) -> int:
+    """The coin a lock output for `leg` must hold: the amount for coin, the reserve else."""
+    return leg.amount if leg.kind == "coin" else LOCK_RESERVE
+
+
+def move_data(leg: Leg) -> bytes:
+    """The OP_RETURN data that moves a token or NFT leg out of its lock (claim or refund)."""
+    from . import escrow as E
+    if leg.kind == "token":
+        return E.token_payload(int(leg.asset), leg.amount)
+    if leg.kind == "nft":
+        return E.nft_payload(leg.asset)
+    raise ValueError("a coin leg moves no asset")
+
+
+def asset_at(index: Any, leg: Leg, address: str, lock_height: int | None) -> bool | None:
+    """Does the ledger show `leg`'s token or NFT at the lock `address`? None when the
+    ledger has not yet read the lock's block (`lock_height`, None while unconfirmed):
+    a lagging index must make a lock look not-yet-there, never wrong -- a wrong lock is
+    walked away from (next_step ABORT)."""
+    if leg.kind == "coin":
+        return True
+    if lock_height is None:
+        return None
+    with index.open() as db:
+        tip = db.tip()
+    if tip is None or int(tip["height"]) < int(lock_height):
+        return None
+    if leg.kind == "token":
+        return int(index.balance(address, int(leg.asset))) >= leg.amount
+    row = index.inscription(leg.asset)
+    return bool(row) and row["owner"] == address
+
+
 @dataclasses.dataclass
 class LockSeen:
     """A lock as a chain shows it: where, how much, how deep, and whether it was spent."""
@@ -130,10 +170,11 @@ def check_lock(trade: Trade, seen: LockSeen, theirs: bool) -> str:
     redeem = trade.their_redeem() if theirs else trade.my_redeem()
     if seen.script_hex != H.p2sh_script(redeem).hex():
         return "that lock's script is not the one agreed (hash, keys or lock time differ)"
-    if leg.kind == "coin":
-        if seen.value < leg.amount:
+    if seen.value < lock_value(leg):
+        if leg.kind == "coin":
             return f"that lock holds {seen.value}, less than the {leg.amount} agreed"
-    elif not seen.asset_ok:
+        return "that lock holds too little coin to move its token or NFT out again"
+    if leg.kind != "coin" and not seen.asset_ok:
         return "the ledger does not show the agreed token or NFT at that lock"
     return ""
 

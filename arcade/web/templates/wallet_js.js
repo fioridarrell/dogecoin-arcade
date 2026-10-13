@@ -2348,11 +2348,12 @@ export async function tip(held, form, txid, kinds, ask) {
  */
 
 /** Claim (`kind` "claim", with `secret` hex) or refund one lock coin to this account. */
-export async function tradeSpend(wallet, {chain, redeem, txid, vout, kind, secret}) {
+export async function tradeSpend(wallet, {chain, redeem, txid, vout, kind, secret, leg}) {
   return working(async () => {
+    const what = legWhat(leg);
     const asked = await fetch("/account/trade/spend", {
       method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({chain, redeem, txid, vout, kind}),
+      body: JSON.stringify({chain, redeem, txid, vout, kind, leg: what}),
     });
     const said = await asked.json();
     if (!asked.ok) throw new Error(said.detail || "that lock cannot be spent now");
@@ -2371,7 +2372,14 @@ export async function tradeSpend(wallet, {chain, redeem, txid, vout, kind, secre
       throw new Error("the node asked to spend a different coin. Nothing was signed.");
     const mine = coins.p2pkh(await coins.hash160(keys.pubkey));
     const same = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
-    if (!tx.outputs.length || !tx.outputs.every((o) => same(o.script, mine)))
+    // A coin comes out to this account alone. A token or NFT comes out by one OP_RETURN,
+    // what is left of the lock's coin back into the lock, and this account LAST -- the
+    // ledger's recipient (escrow.move_out).
+    const lockScript = await coins.htlcScript(unhex(redeem));
+    const fine = (o) => same(o.script, mine)
+      || (what.kind !== "coin" && (o.script[0] === 0x6a || same(o.script, lockScript)));
+    if (!tx.outputs.length || !tx.outputs.every(fine) || !same(tx.outputs[tx.outputs.length - 1].script, mine)
+        || (what.kind !== "coin" && tx.outputs.filter((o) => o.script[0] === 0x6a).length !== 1))
       throw new Error("that spend pays somebody else. Nothing was signed.");
     if (kind === "refund" && tx.locktime !== lock.locktime)
       throw new Error("a refund must carry the lock's own time. Nothing was signed.");
@@ -2391,15 +2399,20 @@ export async function tradeSpend(wallet, {chain, redeem, txid, vout, kind, secre
 }
 
 /** A lock as its chain shows it (null if not there yet). */
-export async function tradeFacts(chain, txid, vout) {
+export async function tradeFacts(chain, txid, vout, leg = null, redeem = null) {
   if (!txid) return null;
   const asked = await fetch("/account/trade/facts", {
     method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({chain, txid, vout}),
+    body: JSON.stringify({chain, txid, vout, leg: legWhat(leg), redeem: redeem ? coinsHex(redeem) : ""}),
   });
   const said = await asked.json();
   if (!asked.ok) throw new Error(said.detail || "the node could not read that lock");
   return said.seen;
+}
+
+/** What moves in a leg, as the node's trade routes take it: {kind, asset, amount}. */
+function legWhat(leg) {
+  return leg ? {kind: leg.kind || "coin", asset: leg.asset || "", amount: leg.amount} : {kind: "coin", asset: "", amount: 0};
 }
 
 /* The trade state machine: arcade/trade.py's next_step, rule for rule (tests compare
@@ -2408,6 +2421,7 @@ export const TRADE = {
   LOCK_SECONDS: {mainnet: 48 * 3600, testnet: 6 * 3600},
   CONFIRMATIONS: {mainnet: 3, testnet: 1},
   CLAIM_MARGIN: 3600, LOCK_MARGIN: 2 * 3600,
+  LOCK_RESERVE: 2_000_000,          // htlc.SPEND_FEE + htlc.DUST (trade.LOCK_RESERVE)
 };
 const tierOf = (leg) => (leg.network === "main" || leg.network === "doge") ? "mainnet" : "testnet";
 
@@ -2424,10 +2438,18 @@ export async function checkLock(trade, seen, theirs) {
   const redeem = theirs ? trade.theirRedeem : trade.myRedeem;
   const script = coinsHex(await coins.htlcScript(redeem));
   if (seen.script_hex !== script) return "that lock's script is not the one agreed (hash, keys or lock time differ)";
-  if (leg.kind === "coin") {
-    if (seen.value < leg.amount) return `that lock holds ${seen.value}, less than the ${leg.amount} agreed`;
-  } else if (!seen.asset_ok) return "the ledger does not show the agreed token or NFT at that lock";
+  if (seen.value < lockValue(leg)) {
+    if (leg.kind === "coin") return `that lock holds ${seen.value}, less than the ${leg.amount} agreed`;
+    return "that lock holds too little coin to move its token or NFT out again";
+  }
+  if (leg.kind !== "coin" && !seen.asset_ok) return "the ledger does not show the agreed token or NFT at that lock";
   return "";
+}
+
+/** The coin a lock output for `leg` must hold (trade.lock_value): the amount for coin,
+ *  else the reserve that pays for moving the token or NFT out again. */
+export function lockValue(leg) {
+  return leg.kind === "coin" ? leg.amount : TRADE.LOCK_RESERVE;
 }
 
 /** [step, why]: "lock" | "wait" | "claim" | "refund" | "done" | "abort" (trade.next_step).
@@ -2513,8 +2535,19 @@ export async function secretFromScriptSig(scriptSig, redeem) {
  */
 
 const TRADES = "arcade-trades";
-//: A lock's address on each chain: P2SH version bytes (arcade/config.py).
+//: A lock's address on each chain: P2SH version bytes (arcade/config.py). The node's own
+//: word (/account chains[].p2sh) wins: a chain standing in for another has its own.
 const P2SH_VERSION = {main: 22, doge: 22, test: 196, regtest: 196};
+let p2shKnown = null;
+async function p2shOf(network) {
+  if (!p2shKnown) {
+    try {
+      const said = await (await fetch("/account")).json();
+      p2shKnown = Object.fromEntries((said.chains || []).filter((c) => c.p2sh != null).map((c) => [c.network, c.p2sh]));
+    } catch (e) { p2shKnown = {}; }
+  }
+  return p2shKnown[network] ?? P2SH_VERSION[network];
+}
 
 function tradesOf(wallet) {
   try { return JSON.parse(localStorage.getItem(`${TRADES}:${wallet.pubkey}`) || "{}"); }
@@ -2560,12 +2593,12 @@ const coinsText = (sats) => (Number(sats) / 1e8).toFixed(8).replace(/\.?0+$/, ""
 
 /** Take an order (trade_orders.py) as the initiator: secret made here, terms proposed. */
 export async function takeOrder(wallet, order) {
-  for (const side of [order.give, order.get])
-    if (side.kind !== "coin") throw new Error("this tab takes coin-for-coin orders for now");
   const mineOn = (network) => coinsHex(keysOn(wallet, network).pubkey);
-  const give = {network: order.get.network, kind: "coin", asset: "", amount: order.get.amount,
+  const give = {network: order.get.network, kind: order.get.kind, asset: order.get.asset || "",
+                amount: order.get.amount,
                 giver_key: mineOn(order.get.network), taker_key: order.take_key || order.trade_key};
-  const get = {network: order.give.network, kind: "coin", asset: "", amount: order.give.amount,
+  const get = {network: order.give.network, kind: order.give.kind, asset: order.give.asset || "",
+               amount: order.give.amount,
                giver_key: order.trade_key, taker_key: mineOn(order.give.network)};
   const secret = crypto.getRandomValues(new Uint8Array(32));
   const secretHash = await coins.sha256Of(secret);
@@ -2622,8 +2655,10 @@ export async function tradeTick(wallet, id) {
   if (!trade.agreed) { keepTrade(wallet, trade); return trade; }
   const {myRedeem, theirRedeem} = await redeemsOf(trade);
   const facts = {
-    mine: trade.myLock ? await tradeFacts(trade.give.network, trade.myLock.txid, trade.myLock.vout) : null,
-    theirs: trade.theirLock ? await tradeFacts(trade.get.network, trade.theirLock.txid, trade.theirLock.vout) : null,
+    mine: trade.myLock ? await tradeFacts(trade.give.network, trade.myLock.txid, trade.myLock.vout,
+                                          trade.give, myRedeem) : null,
+    theirs: trade.theirLock ? await tradeFacts(trade.get.network, trade.theirLock.txid, trade.theirLock.vout,
+                                               trade.get, theirRedeem) : null,
   };
   const now = Math.floor(Date.now() / 1000);
   const view = {...trade, myRedeem, theirRedeem};
@@ -2631,13 +2666,26 @@ export async function tradeTick(wallet, id) {
   if (view.secret && !trade.secret) trade.secret = view.secret;
   trade.note = why;
   if (step === "lock") {
-    const address = await coins.htlcAddress(myRedeem, P2SH_VERSION[trade.give.network]);
-    const offer = await offerSend(address, coinsText(trade.give.amount), trade.give.network);
+    const address = await coins.htlcAddress(myRedeem, await p2shOf(trade.give.network));
+    let offer;
+    if (trade.give.kind === "coin") offer = await offerSend(address, coinsText(trade.give.amount), trade.give.network);
+    else {
+      // A token or NFT: the node builds it (payload, then the lock with the coin that pays
+      // its way out, last); this tab checks and signs it like any other offer.
+      const asked = await fetch("/account/trade/lock", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({chain: trade.give.network, redeem: coinsHex(myRedeem), leg: legWhat(trade.give)}),
+      });
+      offer = await asked.json();
+      if (!asked.ok) throw new Error(offer.detail || "the node could not build that lock");
+      if (offer.lock !== address) throw new Error("the node built a different lock. Nothing was signed.");
+    }
     const sent = await confirm(wallet, offer);
     const script = coinsHex(await coins.htlcScript(myRedeem));
     let vout = -1;
     for (let n = 0; n < 4 && vout < 0; n++) {
       const seen = await tradeFacts(trade.give.network, sent.txid, n).catch(() => null);
+      if (seen && seen.script_hex === script && seen.value < lockValue(trade.give)) continue;
       if (seen && seen.script_hex === script) vout = n;
     }
     trade.myLock = {txid: sent.txid, vout: Math.max(0, vout)};
@@ -2646,12 +2694,12 @@ export async function tradeTick(wallet, id) {
                                         network: trade.give.network, txid: sent.txid, vout: trade.myLock.vout});
   } else if (step === "claim") {
     const done = await tradeSpend(wallet, {chain: trade.get.network, redeem: coinsHex(theirRedeem),
-      txid: trade.theirLock.txid, vout: trade.theirLock.vout, kind: "claim", secret: trade.secret});
+      txid: trade.theirLock.txid, vout: trade.theirLock.vout, kind: "claim", secret: trade.secret, leg: trade.get});
     await tradeSay(wallet, trade.peer, {t: "trade", v: 1, id: trade.id, step: "claimed",
                                         network: trade.get.network, txid: done.txid});
   } else if (step === "refund") {
     const done = await tradeSpend(wallet, {chain: trade.give.network, redeem: coinsHex(myRedeem),
-      txid: trade.myLock.txid, vout: trade.myLock.vout, kind: "refund"});
+      txid: trade.myLock.txid, vout: trade.myLock.vout, kind: "refund", leg: trade.give});
     await tradeSay(wallet, trade.peer, {t: "trade", v: 1, id: trade.id, step: "refunded",
                                         network: trade.give.network, txid: done.txid});
   } else if (step === "done") trade.state = "done";
@@ -2686,8 +2734,18 @@ export function myOrders(wallet) {
   return Object.values(myOrdersOf(wallet).orders);
 }
 
+//: One post at a time from this tab: the page's tick re-posting while a List or Withdraw
+//: is posting would spend the same coins twice (txn-mempool-conflict).
+let posting = Promise.resolve();
+
 /** The order batch for this tab's listed swaps, inscribed from this account. */
-export async function postMyOrders(wallet) {
+export function postMyOrders(wallet) {
+  const run = posting.then(() => postNow(wallet));
+  posting = run.catch(() => {});
+  return run;
+}
+
+async function postNow(wallet) {
   const book = myOrdersOf(wallet);
   const {me} = await messenger(wallet);
   const acct = await (await fetch("/account")).json();
@@ -2698,7 +2756,7 @@ export async function postMyOrders(wallet) {
     id: o.id, give: o.give, get: o.get, trade_key: o.trade_key, take_key: o.take_key,
     msg_key: coinsHex(me.publicKey || me.public || me.pub), node: acct.mesh_node,
     expires: now + TAB_ORDER_LIFE}));
-  const body = new TextEncoder().encode(JSON.stringify({arcade: "orders", v: 1, orders, cancels: book.cancels}));
+  const body = new TextEncoder().encode(JSON.stringify({arcade: "orders", v: 1, orders, cancels: book.cancels || []}));
   let b64 = "";
   for (let i = 0; i < body.length; i += 0x8000) b64 += String.fromCharCode(...body.subarray(i, i + 0x8000));
   const asked = await fetch("/account/inscribe", {
@@ -2710,18 +2768,21 @@ export async function postMyOrders(wallet) {
   if (!asked.ok) throw new Error(offer.detail || "the swap could not be posted");
   if (offer.part) throw new Error("too many swaps for one inscription; withdraw some");
   const sent = await confirm(wallet, offer);
-  book.posted = Date.now();
-  book.cancels = [];
-  keepMyOrders(wallet, book);
+  // Read again: the cursor, or another listing, may have moved while this was posting.
+  const now2 = myOrdersOf(wallet);
+  now2.posted = Date.now();
+  now2.cancels = (now2.cancels || []).filter((c) => !(book.cancels || []).includes(c));
+  keepMyOrders(wallet, now2);
   return sent;
 }
 
-/** List a coin-for-coin swap from this tab: give `give` {network, amount}, get `get`. */
+/** List a swap from this tab: give `give` {network, kind?, asset?, amount}, get `get` (coin, token or NFT). */
 export async function listOrder(wallet, give, get) {
   const book = myOrdersOf(wallet);
   const id = "ord-" + coinsHex(crypto.getRandomValues(new Uint8Array(8)));
-  const side = (s) => ({network: s.network, kind: "coin", asset: "", amount: Math.round(Number(s.amount))});
-  book.orders[id] = {id, give: side(give), get: side(get),
+  const side = (s) => ({network: s.network, kind: s.kind || "coin", asset: String(s.asset || ""),
+                        amount: s.kind === "nft" ? 1 : Math.round(Number(s.amount))});
+  book.orders[id] = {id, give: side(give), get: side(get), labels: [give.label || "", get.label || ""],
                      trade_key: coinsHex(keysOn(wallet, give.network).pubkey),
                      take_key: coinsHex(keysOn(wallet, get.network).pubkey)};
   keepMyOrders(wallet, book);
@@ -2751,9 +2812,11 @@ export async function answerProposals(wallet) {
     if (p.step !== "propose" || trades[p.id]) continue;
     const mine = book.orders[p.order];
     const fits = mine && p.get && p.give
-      && p.get.network === mine.give.network && p.get.kind === "coin" && p.get.amount === mine.give.amount
+      && p.get.network === mine.give.network && p.get.kind === mine.give.kind
+      && (p.get.asset || "") === mine.give.asset && p.get.amount === mine.give.amount
       && p.get.giver_key === mine.trade_key
-      && p.give.network === mine.get.network && p.give.kind === "coin" && p.give.amount >= mine.get.amount
+      && p.give.network === mine.get.network && p.give.kind === mine.get.kind
+      && (p.give.asset || "") === mine.get.asset && p.give.amount >= mine.get.amount
       && p.give.taker_key === mine.take_key
       && Number.isInteger(p.t1) && Number.isInteger(p.t2) && p.t2 < p.t1
       && p.t2 - TRADE.LOCK_MARGIN > now && /^[0-9a-f]{64}$/.test(p.secret_hash || "");
@@ -2771,6 +2834,8 @@ export async function answerProposals(wallet) {
     // failed to send must not leave the other side waiting for ever.
     await sayAccept(wallet, trade).catch(() => {});
   }
-  if (Object.keys(book.orders).length && Date.now() - (book.posted || 0) > TAB_REPOST)
+  // Again only what has gone out before: a new listing posts itself (listOrder).
+  const again = myOrdersOf(wallet);
+  if (Object.keys(again.orders).length && again.posted && Date.now() - again.posted > TAB_REPOST)
     await postMyOrders(wallet);
 }

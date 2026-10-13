@@ -221,6 +221,7 @@ LINKED_FROM_PUBLIC = ("/content/", "/collections", "/feed", "/u/", "/docs",
 PUBLIC_POST = ("/auth/challenge", "/auth/login", "/auth/logout",
                # a tab's own lock-script trades (2026-10-13)
                "/account/trade/spend", "/account/trade/spend/sign", "/account/trade/facts",
+               "/account/trade/lock",
                # game rooms over the mesh (realtime.py): each acts only on the
                # caller's own token, and an account joins only as the address
                # its own browser signed for

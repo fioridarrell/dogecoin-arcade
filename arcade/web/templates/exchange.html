@@ -661,8 +661,8 @@ document.addEventListener('click', function (ev) {
       either both sides get paid or both get their own coins back. Nobody holds anybody's coins.</p>
     {% for o in trade_orders %}
     <div class="row" style="gap:8px;align-items:center;padding:6px 0;border-top:1px solid var(--line)">
-      <span style="flex:1">{{ net_badge(o['give'].network) }} <strong>{{ '%g' % (o['give'].amount / 100000000) }} {{ coin_of(o['give'].network) }}</strong>
-        for {{ net_badge(o['get'].network) }} <strong>{{ '%g' % (o['get'].amount / 100000000) }} {{ coin_of(o['get'].network) }}</strong>
+      <span style="flex:1">{{ net_badge(o['give'].network) }} <strong>{{ o.give_label }}</strong>
+        for {{ net_badge(o['get'].network) }} <strong>{{ o.get_label }}</strong>
         <small class="muted">&middot; by {{ o.lister|who }}</small></span>
       {% if can_trade_orders %}
       <form method="post" action="/exchange/trade-orders/take" style="margin:0">
@@ -691,7 +691,8 @@ document.addEventListener('click', function (ev) {
     <form id="tab-list-form" class="row" style="gap:6px;flex-wrap:wrap;align-items:center;margin-top:10px">
       <span class="muted" style="font-size:.84rem">Offer</span>
       <input name="give_amount" inputmode="decimal" placeholder="amount" style="width:90px;flex:0 0 auto" autocomplete="off">
-      <select name="give_network" style="flex:0 0 auto;width:auto">{% for m in chain_menu() if m.ready %}<option value="{{ m.network }}">{{ m.coin }}</option>{% endfor %}</select>
+      <select name="give_network" style="flex:0 0 auto;width:auto">{% for m in chain_menu() if m.ready %}<option value="{{ m.network }}">{{ m.coin }}</option>{% endfor %}
+        {% for t in held_tokens or [] %}<option value="token:{{ held_net }}:{{ t.property_id }}:{{ 1 if t.divisible else 0 }}">{{ wall_text(t.name, 'token') }} (#{{ t.property_id }})</option>{% endfor %}</select>
       <span class="muted" style="font-size:.84rem">for</span>
       <input name="get_amount" inputmode="decimal" placeholder="amount" style="width:90px;flex:0 0 auto" autocomplete="off">
       <select name="get_network" style="flex:0 0 auto;width:auto">{% for m in chain_menu() if m.ready %}<option value="{{ m.network }}"{% if loop.index == 2 %} selected{% endif %}>{{ m.coin }}</option>{% endfor %}</select>
@@ -705,7 +706,8 @@ document.addEventListener('click', function (ev) {
     let held = null;
     const keys = async () => held || (held = (await wallet.opened(CHAIN)) || await arcadeKeys(CHAIN));
     const coinName = (n) => n === "doge" ? "DOGE" : n === "main" ? "PEP" : "PEP TEST";
-    const amt = (leg) => `${(leg.amount / 1e8).toString()} ${coinName(leg.network)}`;
+    const amt = (leg) => leg.label || (leg.kind === "token" ? `${leg.amount} of token #${leg.asset}`
+      : leg.kind === "nft" ? `NFT ${String(leg.asset).slice(0, 10)}\u2026` : `${(leg.amount / 1e8).toString()} ${coinName(leg.network)}`);
     const obox = document.getElementById("tab-orders"), olist = document.getElementById("tab-orders-list");
     function drawOrders(w) {
       const all = wallet.myOrders(w);
@@ -714,7 +716,7 @@ document.addEventListener('click', function (ev) {
         const row = document.createElement("div");
         row.className = "row"; row.style.cssText = "gap:8px;align-items:center;padding:4px 0";
         const what = document.createElement("span");
-        what.style.flex = "1"; what.textContent = `${amt(o.give)} for ${amt(o.get)}`;
+        what.style.flex = "1"; what.textContent = `${(o.labels && o.labels[0]) || amt(o.give)} for ${(o.labels && o.labels[1]) || amt(o.get)}`;
         const out = document.createElement("button");
         out.type = "button"; out.className = "ghost small"; out.textContent = "Withdraw";
         out.addEventListener("click", async () => {
@@ -730,10 +732,16 @@ document.addEventListener('click', function (ev) {
       ev.preventDefault();
       const f = ev.target, button = f.querySelector("button");
       const sats = (v) => Math.round(Number(String(v).trim()) * 1e8);
-      const give = {network: f.give_network.value, amount: sats(f.give_amount.value)};
+      // "regtest" is a coin; "token:<network>:<id>:<divisible>" a token this account holds.
+      const pick = f.give_network.value.split(":");
+      const give = pick[0] === "token"
+        ? {network: pick[1], kind: "token", asset: pick[2],
+           amount: pick[3] === "1" ? sats(f.give_amount.value) : Math.round(Number(f.give_amount.value)),
+           label: `${String(f.give_amount.value).trim()} ${f.give_network.selectedOptions[0].textContent.trim()}`}
+        : {network: pick[0], amount: sats(f.give_amount.value)};
       const get = {network: f.get_network.value, amount: sats(f.get_amount.value)};
       if (!(give.amount > 0 && get.amount > 0)) return alert("Both amounts, please.");
-      if (give.network === get.network) return alert("A swap is one coin for another.");
+      if (!give.kind && give.network === get.network) return alert("A swap is one coin for another.");
       const ok = await arcadeAsk("List this swap?",
         `${amt(give)} for ${amt(get)}. It is written on the chain (a small fee) and other arcades see it `
         + "while this tab is open. Somebody who takes it locks their coins first; yours go into a lock only "
@@ -815,7 +823,8 @@ document.addEventListener('click', function (ev) {
       <input type="hidden" name="csrf_token" value="{{ csrf }}">
       <span class="muted" style="font-size:.84rem">Offer</span>
       <input name="give_amount" inputmode="decimal" placeholder="amount" style="width:90px;flex:0 0 auto" autocomplete="off">
-      <select name="give_network" style="flex:0 0 auto;width:auto">{% for m in chain_menu() if m.ready %}<option value="{{ m.network }}">{{ m.coin }}</option>{% endfor %}</select>
+      <select name="give_network" style="flex:0 0 auto;width:auto">{% for m in chain_menu() if m.ready %}<option value="{{ m.network }}">{{ m.coin }}</option>{% endfor %}
+        {% for t in held_tokens or [] %}<option value="token:{{ held_net }}:{{ t.property_id }}:{{ 1 if t.divisible else 0 }}">{{ wall_text(t.name, 'token') }} (#{{ t.property_id }})</option>{% endfor %}</select>
       <span class="muted" style="font-size:.84rem">for</span>
       <input name="get_amount" inputmode="decimal" placeholder="amount" style="width:90px;flex:0 0 auto" autocomplete="off">
       <select name="get_network" style="flex:0 0 auto;width:auto">{% for m in chain_menu() if m.ready %}<option value="{{ m.network }}"{% if loop.index == 2 %} selected{% endif %}>{{ m.coin }}</option>{% endfor %}</select>

@@ -131,3 +131,98 @@ def test_the_switch_off_means_the_node_does_nothing(market):
     a, b, pep, dg = market
     b.enabled = lambda: False
     assert b.tick() == [], "node-facilitated trades off: the node trader is idle"
+
+
+def _gold(trader, holder, units):
+    """A token both nodes' ledgers know, with `units` of it at `holder` (as test_escrow)."""
+    from test_account_tokens import _balance, _token
+    for st in {id(t.state): t.state for t in trader}.values():
+        _token(st, property_id=150, name="Gold")
+        _balance(st, holder, 150, units)
+    return 150
+
+
+def _ledgers(*traders):
+    for t in traders:
+        t.state.token_index(t.state.messaging).sync()
+
+
+def test_two_nodes_trade_a_token_for_doge(market, monkeypatch):
+    """B gives 40 Gold on PEP regtest for A's 2 DOGE: the token goes into a lock with the
+    coin that pays its way out, and the ledger -- not a message -- says it is there."""
+    a, b, pep, dg = market
+    home = pep.call("getnewaddress")
+    pep.call("sendtoaddress", home, 5)
+    monkeypatch.setattr(b.state, "home_address",
+                        lambda chain: home if chain.network == "regtest" else "", raising=False)
+    pid = _gold((a, b), home, 100 * COIN)
+    _mine(pep)
+    _ledgers(a, b)
+    b.stand("order-gold", {"network": "regtest", "kind": "token", "asset": str(pid), "amount": 40 * COIN},
+            {"network": "doge", "kind": "coin", "amount": 2 * COIN})
+    give = a.leg("doge", 2 * COIN, b.key.pubkey)
+    get = T.Leg("regtest", "token", str(pid), 40 * COIN, b.key.pubkey.hex(), a.key.pubkey.hex())
+    trade = a.propose(b.state.identity.public_bytes, "order-gold", give, get)
+    log = []
+    for _ in range(40):
+        for t in (a, b):
+            _scan(t)
+            _ledgers(t)
+            log.extend((("a" if t is a else "b"),) + r for r in t.tick())
+        _mine(pep, dg)
+        if a.book.get(trade.id).state == "done" and (b.book.get(trade.id) or trade).state == "done":
+            break
+    assert a.book.get(trade.id).state == "done", log[-6:]
+    assert b.book.get(trade.id).state == "done", log[-6:]
+    _ledgers(a, b)
+    index = a.state.token_index(a.state.messaging)
+    claimed_to = a._address("regtest")
+    assert int(index.balance(claimed_to, pid)) == 40 * COIN, "A holds the Gold"
+    assert int(index.balance(home, pid)) == 60 * COIN, "B's home kept the rest"
+
+
+def test_a_token_lock_the_ledger_has_not_read_yet_is_waited_for_not_walked_from(market):
+    """A lagging index must not make a good token lock look wrong (asset_at -> None)."""
+    from arcade import htlc as H
+    a, b, pep, dg = market
+    _, h = H.make_secret()
+    leg = T.Leg("regtest", "token", "150", 40, Key().pub.hex(), Key().pub.hex())
+    index = a.state.token_index(a.state.messaging)
+    _ledgers(a)
+    with index.open() as db:
+        tip = int(db.tip()["height"])
+    assert T.asset_at(index, leg, "nAddressXXXXXXXXXXXXXXXXXXXXXXXXXXX", tip + 5) is None
+    assert T.asset_at(index, leg, "nAddressXXXXXXXXXXXXXXXXXXXXXXXXXXX", None) is None
+    assert T.asset_at(index, leg, "nAddressXXXXXXXXXXXXXXXXXXXXXXXXXXX", tip) is False
+
+
+def test_two_nodes_trade_an_nft_for_doge(market, monkeypatch):
+    from test_escrow import _piece
+    a, b, pep, dg = market
+    home = pep.call("getnewaddress")
+    pep.call("sendtoaddress", home, 5)
+    monkeypatch.setattr(b.state, "home_address",
+                        lambda chain: home if chain.network == "regtest" else "", raising=False)
+    sword = "b1" * 32
+    _mine(pep)
+    _ledgers(a, b)
+    for t in (a, b):
+        _piece(t.state, sword, home)
+    give = a.leg("doge", 2 * COIN, b.key.pubkey)
+    get = T.Leg("regtest", "nft", sword, 1, b.key.pubkey.hex(), a.key.pubkey.hex())
+    b.stand("order-sword", {"network": "regtest", "kind": "nft", "asset": sword, "amount": 1},
+            {"network": "doge", "kind": "coin", "amount": 2 * COIN})
+    trade = a.propose(b.state.identity.public_bytes, "order-sword", give, get)
+    log = []
+    for _ in range(40):
+        for t in (a, b):
+            _scan(t)
+            _ledgers(t)
+            log.extend((("a" if t is a else "b"),) + r for r in t.tick())
+        _mine(pep, dg)
+        if a.book.get(trade.id).state == "done" and (b.book.get(trade.id) or trade).state == "done":
+            break
+    assert a.book.get(trade.id).state == "done", log[-6:]
+    assert b.book.get(trade.id).state == "done", log[-6:]
+    _ledgers(a)
+    assert a.state.token_index(a.state.messaging).inscription(sword)["owner"] == a._address("regtest")
