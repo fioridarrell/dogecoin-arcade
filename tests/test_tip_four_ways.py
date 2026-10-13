@@ -25,7 +25,10 @@ def _published(state, address, other, n):
 def test_the_tip_picker_offers_both_coins_and_both_kinds_of_token(client):
     app, state = client
     _seat(app)
-    from arcade.web.app import TEMPLATES
+    # The template helpers are bound per app on a module-level environment; bind
+    # them to THIS state before rendering outside a request (parallel runs).
+    from arcade.web.app import TEMPLATES, create_app
+    create_app(state)
     html = TEMPLATES.env.from_string('{% import "_tip.html" as t %}{{ t.tip_pay() }}').render()
     values = re.findall(r'<option value="([^"]+)"', html)
     labels = [" ".join(x.split()) for x in re.findall(r"<option [^>]*>([^<]+)</option>", html)]
