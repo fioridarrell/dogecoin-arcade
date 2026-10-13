@@ -88,6 +88,7 @@ from .. import listings as listingslib
 from .. import utxos as utxoslib
 from .. import update as updatelib
 from ..messaging.keys import fingerprint_of
+from .. import trade as tradelib
 from ..messaging.miner import Miner, MiningError
 from ..messaging.scanner import Scanner, find_own_announcements
 from ..messaging.sender import (
@@ -23073,6 +23074,111 @@ def create_app(state: AppState) -> FastAPI:
         return render(request, "listings.html", groups=groups,
                       book_error=book_error)
 
+    # --- lock-script trades between arcades (trustless-trading-plan.md, phases 4-5) -------
+
+    def _online(node_id: str) -> bool:
+        mesh = getattr(state, "mesh", None)
+        return bool(mesh is not None and mesh.online(node_id))
+
+    def _trade_order_view(request: Request) -> dict:
+        """Orders inscribed by every arcade, shown while their node is online; and, for the
+        operator, this node's own standing orders and trades."""
+        out: dict[str, Any] = {"trade_orders": [], "my_trade_orders": [], "my_trades": [],
+                               "can_trade_orders": False}
+        try:
+            mesh = getattr(state, "mesh", None)
+            mine = mesh.node_id if mesh is not None else ""
+            out["trade_orders"] = [o for o in state.trade_orders.visible(_online)
+                                   if o["node"] != mine]
+            if not _account_view(request) and _node_trades():
+                trader = state.node_trader
+                out["can_trade_orders"] = True
+                out["my_trade_orders"] = trader.standing()
+                out["my_trades"] = [{"id": t.id, "role": t.role, "state": t.state, "note": t.note,
+                                     "give": M_leg_text(t.give), "get": M_leg_text(t.get)}
+                                    for t in trader.book.open_trades()]
+        except Exception:
+            log.debug("trade orders unavailable", exc_info=True)
+        return out
+
+    def M_leg_text(leg) -> str:
+        return f"{leg.amount / COIN:g} {NETWORKS[leg.network].coin}" if leg.kind == "coin" \
+            else f"{leg.amount} of {leg.kind} {leg.asset[:12]}"
+
+    def _coin_side(network: str, amount: str) -> dict:
+        if network not in {c.network for c in state.token_chains}:
+            raise ValueError("that network is not open on this node")
+        sats = parse_amount(amount, True)
+        if sats <= 0:
+            raise ValueError("an amount is more than nothing")
+        return {"network": network, "kind": "coin", "asset": "", "amount": int(sats)}
+
+    @app.post("/exchange/trade-orders/stand")
+    def trade_order_stand(give_network: str = Form(""), give_amount: str = Form(""),
+                          get_network: str = Form(""), get_amount: str = Form(""),
+                          csrf_token: str = Form("")):
+        """The operator's node offers a coin-for-coin swap, settled through lock scripts,
+        and inscribes it so every arcade shows it while this node is online."""
+        check_csrf(csrf_token)
+        try:
+            if not _node_trades():
+                raise ValueError(NODE_TRADES_OFF)
+            give, get = _coin_side(give_network, give_amount), _coin_side(get_network, get_amount)
+            if give["network"] == get["network"]:
+                raise ValueError("a swap is between two different coins")
+            order_id = f"ord-{secrets.token_hex(8)}"
+            trader = state.node_trader
+            trader.stand(order_id, give, get)
+            mesh = getattr(state, "mesh", None)
+            if mesh is not None:
+                trader.post(mesh.node_id)
+                state.flash("Posted: every arcade shows it while this node is online.", "ok")
+            else:
+                state.flash("Saved. It is inscribed for other arcades once this node is on the mesh.", "ok")
+        except Exception as exc:
+            state.flash(str(exc), "err")
+        return RedirectResponse("/exchange?tab=tokens#trade-orders", status_code=303)
+
+    @app.post("/exchange/trade-orders/withdraw")
+    def trade_order_withdraw(order: str = Form(""), csrf_token: str = Form("")):
+        check_csrf(csrf_token)
+        state.node_trader.withdraw(order)
+        mesh = getattr(state, "mesh", None)
+        try:
+            if mesh is not None:
+                state.node_trader.post(mesh.node_id)
+        except Exception as exc:
+            state.flash(f"Withdrawn here; the cancel could not be inscribed yet: {exc}", "err")
+        return RedirectResponse("/exchange?tab=tokens#trade-orders", status_code=303)
+
+    @app.post("/exchange/trade-orders/take")
+    def trade_order_take(order: str = Form(""), lister: str = Form(""), csrf_token: str = Form("")):
+        """The operator's node takes another arcade's order: it proposes the terms over the
+        Messenger, then both sides settle through lock scripts (arcade/trade.py)."""
+        check_csrf(csrf_token)
+        try:
+            if not _node_trades():
+                raise ValueError(NODE_TRADES_OFF)
+            found = next((o for o in state.trade_orders.visible(_online)
+                          if o["id"] == order and o["lister"] == lister), None)
+            if found is None:
+                raise ValueError("that order is gone, or its arcade is offline right now")
+            if found["give"]["kind"] != "coin" or found["get"]["kind"] != "coin":
+                raise ValueError("this node takes coin-for-coin orders for now")
+            trader = state.node_trader
+            for side in (found["give"], found["get"]):
+                if side["network"] not in trader.chains:
+                    raise ValueError(f"this node does not run {side['network']} yet")
+            mine = trader.key.pubkey
+            give = trader.leg(found["get"]["network"], found["get"]["amount"], bytes.fromhex(found["trade_key"]))
+            get = tradelib.Leg(found["give"]["network"], "coin", "", found["give"]["amount"],
+                               found["trade_key"], mine.hex())
+            trade = trader.propose(bytes.fromhex(found["msg_key"]), found["id"], give, get)
+            state.flash(f"Proposed ({trade.id}). It locks and settles by itself; follow it below.", "ok")
+        except Exception as exc:
+            state.flash(str(exc), "err")
+        return RedirectResponse("/exchange?tab=tokens#trade-orders", status_code=303)
+
     @app.get("/exchange", response_class=HTMLResponse)
     def exchange(request: Request, tab: str = "tokens", sort: str = "popular",
                  show: str = "mix", count: int = 0):
@@ -23199,6 +23305,7 @@ def create_app(state: AppState) -> FastAPI:
         except Exception:
             trades = []
         if tab == "tokens":
+            data.update(_trade_order_view(request))
             # Every token paired against the coin: the ones with a book and
             # the ones that have traded, last price and the day's move
             # (D-048). Clicking one opens its own page.

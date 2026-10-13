@@ -195,6 +195,62 @@ class NodeTrader:
         """A coin leg this node gives: its trade key as giver."""
         return T.Leg(network, "coin", "", int(amount), self.key.pubkey.hex(), taker_key.hex())
 
+    # --- telling the other nodes ----------------------------------------------------------
+
+    #: How long a posted order stands before this node posts it again (it is shown only
+    #: while this node is online in any case; the expiry bounds a node that vanished).
+    POST_EVERY = 12 * 3600
+    ORDER_LIFE = 24 * 3600
+
+    def standing(self) -> list[dict]:
+        import json
+        with self._db() as conn:
+            rows = conn.execute("SELECT * FROM standing_order ORDER BY id").fetchall()
+        return [{"id": r["id"], "give": json.loads(r["give"]), "get": json.loads(r["get"])} for r in rows]
+
+    def withdraw(self, order_id: str) -> None:
+        with self._db() as conn:
+            conn.execute("DELETE FROM standing_order WHERE id=?", (order_id,))
+            conn.execute("INSERT OR REPLACE INTO meta(k, v) VALUES('posted', '0')")
+            row = conn.execute("SELECT v FROM meta WHERE k='cancels'").fetchone()
+            cancels = (row["v"].split(",") if row and row["v"] else []) + [order_id]
+            conn.execute("INSERT OR REPLACE INTO meta(k, v) VALUES('cancels', ?)", (",".join(cancels),))
+
+    def batch(self, node_id: str, now: int | None = None) -> bytes:
+        """This node's standing orders as an order inscription (trade_orders.py)."""
+        from . import trade_orders as O
+        now = int(now or time.time())
+        with self._db() as conn:
+            row = conn.execute("SELECT v FROM meta WHERE k='cancels'").fetchone()
+        cancels = [c for c in (row["v"].split(",") if row and row["v"] else []) if c]
+        orders = [{"id": o["id"], "give": {**o["give"]}, "get": {**o["get"]},
+                   "trade_key": self.key.pubkey.hex(),
+                   "msg_key": self.state.ensure_identity().public_bytes.hex(),
+                   "node": node_id, "expires": now + self.ORDER_LIFE} for o in self.standing()]
+        return O.batch_json(orders, cancels=cancels)
+
+    def post_due(self, now: int | None = None) -> bool:
+        with self._db() as conn:
+            row = conn.execute("SELECT v FROM meta WHERE k='posted'").fetchone()
+        return bool(self.standing()) and int(now or time.time()) - int(row["v"] if row else 0) >= self.POST_EVERY
+
+    def post(self, node_id: str) -> str:
+        """Inscribe this node's orders on the messaging chain, where every node reads them.
+        Returns the inscription id."""
+        from . import inscribe as inscribelib, trade_orders as O
+        from .messaging.sender import MessageSender, funded_address
+        body = self.batch(node_id)
+        plan = inscribelib.plan(body, O.CONTENT_TYPE, "")
+        with self.messaging.rpc() as rpc:
+            sender = MessageSender(rpc, self.messaging.params, public_only=True)
+            address = funded_address(rpc, prefer=self.state.derived_address)
+            inscribelib.prepare_wallet(sender, address, plan)
+            txids = sender.send_all(address, plan.payloads)
+        with self._db() as conn:
+            conn.execute("INSERT OR REPLACE INTO meta(k, v) VALUES('posted', ?)", (str(int(time.time())),))
+            conn.execute("INSERT OR REPLACE INTO meta(k, v) VALUES('cancels', '')")
+        return txids[0]
+
     # --- one pass --------------------------------------------------------------------------
 
     def tick(self, now: int | None = None) -> list[tuple[str, str, str]]:

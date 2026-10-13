@@ -1266,6 +1266,26 @@ class AppState:
         return self._pagestore
 
     @property
+    def trade_orders(self):
+        """Orders inscribed on the chains this node reads (arcade/trade_orders.py)."""
+        if getattr(self, "_trade_orders", None) is None:
+            from ..trade_orders import OrderBook
+            self._trade_orders = OrderBook(self.home / "trade-orders.sqlite")
+        return self._trade_orders
+
+    @property
+    def node_trader(self):
+        """This node's own lock-script trader (arcade/node_trader.py): idle unless the
+        operator turned node-facilitated trades on. Its chains are the ones ready now."""
+        if getattr(self, "_node_trader", None) is None:
+            from ..node_trader import NodeTrader
+            self._node_trader = NodeTrader(
+                self, {}, self.messaging,
+                enabled=lambda: bool(self.setting("node_trades", False)))
+        self._node_trader.chains = {c.network: c for c in self.token_chains}
+        return self._node_trader
+
+    @property
     def talk(self):
         """What each inscribed page has said to other nodes (arcade/nodetalk.py)."""
         if self._talk is None:
