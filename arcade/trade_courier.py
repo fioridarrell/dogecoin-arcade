@@ -34,11 +34,24 @@ def send(state: Any, chain: Any, to_pub: bytes, body: bytes) -> str:
         try:
             prepared = sender.prepare(address, payload)
         except SendError:
-            other = funded_address(rpc)
-            if other == address:
+            # A message is funded from ordinary pay-to-pubkey-hash coins only (a reader
+            # works the sender out of them); fall back to the address holding the most of
+            # THOSE -- not the most coins, which on a node that mines is mined coins.
+            other = _message_address(rpc)
+            if not other or other == address:
                 raise
             prepared = sender.prepare(other, payload)
         return sender.broadcast(prepared)
+
+
+def _message_address(rpc: Any) -> str:
+    """The wallet address holding the most coins a message can be paid from."""
+    totals: dict[str, float] = {}
+    for coin in rpc.call("listunspent", 1, 9_999_999) or []:
+        script = str(coin.get("scriptPubKey", ""))
+        if coin.get("address") and script.startswith("76a914") and script.endswith("88ac"):
+            totals[coin["address"]] = totals.get(coin["address"], 0.0) + float(coin["amount"])
+    return max(totals, key=totals.get) if totals else ""
 
 
 def inbox(state: Any, chain: Any, after_id: int = 0, limit: int = 200) -> list[dict]:
