@@ -67,7 +67,8 @@ def regtest():
     """One regtest node shared across the session -- starting it is slow."""
     node = RegtestNode()
     try:
-        node.start()
+        # A busy machine (a mainnet node syncing beside it) can take longer than a minute.
+        node.start(timeout=float(os.environ.get("ARCADE_REGTEST_TIMEOUT", "60")))
     except RuntimeError as exc:
         pytest.skip(f"regtest node unavailable: {exc}")
     yield node
