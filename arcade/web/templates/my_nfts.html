@@ -564,7 +564,11 @@ async function draw() {
     const head = document.createElement("div");
     head.className = "chain-head";
     const title = document.createElement("h2");
-    title.textContent = chain.label;
+    // Which coin as well as which net (2026-10-13): the letter in its network color.
+    const netl = document.createElement("b");
+    netl.className = "netl " + (chain.network === "doge" ? "dogecoin" : chain.mainnet ? "mainnet" : "testnet");
+    netl.textContent = chain.network === "doge" ? "D" : "P";
+    title.replaceChildren(netl, " " + (chain.network === "doge" ? "DOGE Mainnet" : chain.label));
     const where = document.createElement("span");
     where.className = "muted mono";
     where.style.fontSize = ".78rem";

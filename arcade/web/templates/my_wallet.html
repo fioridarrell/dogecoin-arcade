@@ -266,6 +266,16 @@ import * as wallet from "/wallet.js";
 import * as mail from "/messaging.js";
 
 const $ = (id) => document.getElementById(id);
+/* A network's button, said the way every page says it (2026-10-13: "Should say
+ * 'P test' 'P main' 'D main' like in the other pages"): the coin's letter in its color. */
+const netButton = (one, cls) => {
+  const doge = one.network === "doge" || one.doge;
+  const b = el("button", cls);
+  const letter = el("b", "netl " + (doge ? "dogecoin" : one.mainnet ? "mainnet" : "testnet"), doge ? "D" : "P");
+  b.append(letter, " " + (one.mainnet || doge ? "main" : "test"));
+  b.title = one.title || one.label || "";
+  return b;
+};
 const el = (tag, cls, text) => {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
@@ -325,7 +335,7 @@ function drawHead() {
   nets.replaceChildren();
   if (chains().length > 1) {
     for (const one of chains()) {
-      const b = el("button", "", one.title || one.label);
+      const b = netButton(one, "");
       b.type = "button";
       b.setAttribute("aria-pressed", String(one.network === (c && c.network)));
       b.onclick = () => { net = one.network; asset = null; keep(NET, net); drawAll(); };
@@ -333,7 +343,7 @@ function drawHead() {
     }
   }
   for (const one of WAITING) {
-    const b = el("button", "chain-off", one.label);
+    const b = netButton(one, "chain-off");
     b.type = "button"; b.disabled = true;
     b.title = `${one.label} opens when this node has synced it (${one.progress}% so far)`;
     nets.append(b);
