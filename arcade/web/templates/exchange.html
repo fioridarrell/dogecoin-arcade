@@ -14,7 +14,7 @@
   <a class="{{ 'on' if current == 'tokens' }}" href="/exchange?tab=tokens"{% if current == 'tokens' %} aria-current="page"{% endif %}>Tokens</a>
   <a class="{{ 'on' if current == 'market' }}" href="/exchange?tab=market"{% if current == 'market' %} aria-current="page"{% endif %}>NFTs</a>
   <a class="{{ 'on' if current == 'mintpads' }}" href="/exchange?tab=mintpads"{% if current == 'mintpads' %} aria-current="page"{% endif %}>Launchpad</a>
-  <a class="{{ 'on' if current == 'offers' }}" href="/exchange?tab=offers"{% if current == 'offers' %} aria-current="page"{% endif %}>Offers
+  <a id="ex-offers-tab" class="{{ 'on' if current == 'offers' }}" href="/exchange?tab=offers"{% if current == 'offers' %} aria-current="page"{% endif %}>Offers
     {%- if waiting_offers %}<span class="nav-count" aria-label="{{ waiting_offers }} waiting">{{ waiting_offers if waiting_offers < 100 else '99+' }}</span>{% endif %}</a>
 </nav>
 <script>
@@ -62,6 +62,25 @@ document.querySelectorAll('.ex-seg a').forEach(function (a) {
 {{ ex.style() }}
 <h1>Exchange {{ tk.chain_switch(chain, other_chains, csrf, "/exchange", public) }}</h1>
 {{ tabs(tab) }}
+{% if tab != 'offers' %}
+<script>
+// The Offers count, fetched after this tab has shown (2026-10-13: each tab loads only
+// what it draws; the offers are read on the Offers tab itself).
+(function () {
+  fetch('/exchange?tab=offers&count=1', {credentials: 'same-origin'})
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (said) {
+      var n = said && said.waiting, tab = document.getElementById('ex-offers-tab');
+      if (!n || !tab || tab.querySelector('.nav-count')) return;
+      var c = document.createElement('span');
+      c.className = 'nav-count';
+      c.setAttribute('aria-label', n + ' waiting');
+      c.textContent = n < 100 ? String(n) : '99+';
+      tab.appendChild(c);
+    }).catch(function () {});
+})();
+</script>
+{% endif %}
 
 {% if node_error %}<div class="msg err">{{ node_error }}</div>{% endif %}
 

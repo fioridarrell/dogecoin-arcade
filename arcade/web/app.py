@@ -23075,7 +23075,7 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.get("/exchange", response_class=HTMLResponse)
     def exchange(request: Request, tab: str = "tokens", sort: str = "popular",
-                 show: str = "mix"):
+                 show: str = "mix", count: int = 0):
         """Everything for sale on this chain, and what has been offered to you.
 
         Four questions, four tabs: what somebody has offered for something of
@@ -23087,14 +23087,19 @@ def create_app(state: AppState) -> FastAPI:
         # mintpads from 2026-09-28), and anything unknown lands there too.
         tab = tab if tab in EXCHANGE_TABS else "tokens"
         chain, index = _token_chain()
-        data: dict[str, Any] = {"tab": tab, "chain": chain, "node": chain.status(),
+        # Each tab reads only what it draws (2026-10-13: "Make sure each tab only
+        # loads what it needs to load and does lazy loading"). The node's status was read
+        # on every tab and drawn on none; the shops and pads only feed Launchpad; offers
+        # only the Offers tab, whose count the other tabs fetch after they show.
+        offers_tab, pads_tab = tab == "offers", tab == "mintpads"
+        data: dict[str, Any] = {"tab": tab, "chain": chain, "node": {},
                                 "other_chains": [c for c in state.token_chains
                                                  if c is not chain],
                                 "shops": [], "node_error": None, "owned": set(),
                                 "offers_in": [], "offers_out": [], "tags": {},
                                 "offer_history": [], "token_bids": []}
         try:
-            data["shops"] = _shop_listings(index, chain)
+            data["shops"] = _shop_listings(index, chain) if pads_tab else []
         except Exception as exc:
             data["node_error"] = f"the index could not be read: {exc}"
         # Whose pieces this page is about, which is the one question a
@@ -23109,7 +23114,7 @@ def create_app(state: AppState) -> FastAPI:
             looking = signed_in(request)
             here = _account_address(looking.pubkey, chain) if looking else ""
             data["owned"] = {here} if here else set()
-        else:
+        elif offers_tab or pads_tab:
             try:
                 with chain.rpc() as rpc:
                     data["owned"] = set(_ledger_addresses(rpc))
@@ -23132,6 +23137,8 @@ def create_app(state: AppState) -> FastAPI:
         # collection (2026-09-26).
         data["account_pads"] = []
         try:
+            if not pads_tab:
+                raise LookupError("not this tab")
             state.listings.expire_due(chain.network)
             pads: dict = {}
             for row in (state.listings.open_listings(chain.network, limit=1000)
@@ -23150,7 +23157,7 @@ def create_app(state: AppState) -> FastAPI:
         except Exception:
             data["account_pads"] = []
         # And accounts' TOKEN mintpads, found by their inscriptions (a tester).
-        data["token_pads"] = _token_pads(index, limit=24)
+        data["token_pads"] = []          # never drawn on this page
         data["sort"] = "new" if sort == "new" else "popular"
         data["pads"], data["pad_frames"] = [], {}
         if tab == "mintpads":
@@ -23188,7 +23195,7 @@ def create_app(state: AppState) -> FastAPI:
         # What has actually traded, and what it went for. Read from the swaps
         # the chain holds, not from a book -- there is no book (D-039).
         try:
-            trades = index.trades()
+            trades = index.trades() if tab in ("tokens", "market") else []
         except Exception:
             trades = []
         if tab == "tokens":
@@ -23249,160 +23256,166 @@ def create_app(state: AppState) -> FastAPI:
             except Exception as exc:
                 data["node_error"] = data["node_error"] or \
                     f"the collections could not be read: {exc}"
-        try:
-            # The mempool first, then the blocks, so an offer made a minute
-            # ago is here rather than in ten minutes' time. A transaction is
-            # in exactly one of the two, so there is nothing to dedupe -- but
-            # a block landing between the two reads could show one twice, and
-            # the txid settles it (D-058).
-            pending = index.pending_offers()
-            own = set(data["owned"])
-            data["offers_in"] = _merge_offers(
-                [o for o in pending if o["owner"] in own],
-                index.offers_on(sorted(data["owned"])))
-            data["offers_out"] = _merge_offers(
-                [o for o in pending if o["buyer"] in own],
-                index.offers_by(sorted(data["owned"])))
-            # Pre-signed offers that are done, withdrawn or spent are not offers.
-            marks = _bids.statuses([o["txid"] for o in data["offers_in"] + data["offers_out"]])
-            # Ended offers leave both lists at once, on both sides (the operator,
-            # 2026-09-28: "declined offers should be removed from both sides
-            # instantly"; "accepted offers should go directly into the history").
-            ended = _bids.ended([o["txid"] for o in data["offers_in"] + data["offers_out"]])
-            data["offers_in"] = [o for o in data["offers_in"] if o["txid"] not in ended]
-            data["offers_out"] = [o for o in data["offers_out"] if o["txid"] not in ended]
-            data["offer_history"] = []
-            # Offers in mainnet PEP on the cross-chain book (2026-10-09: "fix that
-            # offers bug" -- they showed on the piece page and nowhere here): bids
-            # on the pieces this wallet holds, and this wallet's own bids.
-            data["x_in"], data["x_out"] = [], []
-            if tab == "offers" and _x_open() and not chain.is_mainnet:
-                xbook = state.xchain.book
-                for m in xbook.markets():
-                    if m["kind"] != "nft" or not m["orders"]:
-                        continue
-                    piece = index.inscription(m["asset"]) or {}
-                    if piece.get("owner") not in data["owned"]:
-                        continue
-                    for b in xbook.book("nft", m["asset"])["buys"]:
-                        data["x_in"].append({"inscription": m["asset"], "number": piece.get("number"),
-                                             "collection": piece.get("collection"),
-                                             "edition": piece.get("edition"), "name": _piece_name(piece),
-                                             "content_type": piece.get("content_type") or "",
-                                             "pep": f"{b['left_pepe'] / COIN:.8f}".rstrip("0").rstrip(".")})
-                x_owner = ("node" if data["viewer"] == "wallet" else
-                           signed_in(request).pubkey.lower() if data["viewer"] == "account" else "")
-                for o in (xbook.orders_of(x_owner) if x_owner else []):
-                    if o["kind"] != "nft" or o["side"] != "buy" or o["status"] not in ("open", "awaiting"):
-                        continue
-                    piece = index.inscription(o["asset"]) or {}
-                    data["x_out"].append({"inscription": o["asset"], "number": piece.get("number"),
-                                          "collection": piece.get("collection"),
-                                          "edition": piece.get("edition"), "status": o["status"],
-                                          "name": _piece_name(piece),
-                                          "content_type": piece.get("content_type") or "",
-                                          "pep": f"{o['pepe'] / COIN:.8f}".rstrip("0").rstrip(".")})
-            # Buy orders on the tokens this account made (2026-09-28:
-            # "where does the creator of a token see if someone puts in an order
-            # to buy? ... on exchange>offers"): the chain's bids and the ones this
-            # node holds, best price first.
-            looker = signed_in(request) if data["viewer"] == "account" else None
-            declined_bids = set(state.setting(f"declined_bids:{looker.pubkey}", []) or []) \
-                if looker is not None else set()
-            if tab == "offers" and data["owned"]:
-                from fractions import Fraction
-                for prop in _token_props(index):
-                    if prop.get("issuer") not in data["owned"]:
-                        continue
-                    pid, whole = prop["property_id"], prop["divisible"]
-                    wants = [(Fraction(b["coins"], b["tokens"]), b["tokens"], b["address"], "",
-                              b["txid"])
-                             for b in index.book(pid)["bids"] if b.get("tokens")]
-                    wants += [(Fraction(s["coins"], s["units"]), s["left_units"], s["buyer"],
-                               "away" if s["away"] else "back", f"standing-{s['id']}")
-                              for s in _standing.open_on(chain.network, pid)]
-                    for price, units, buyer, mode, key in sorted(wants, key=lambda w: -w[0]):
-                        if buyer in data["owned"] or key in declined_bids:
-                            continue
-                        each = f"{_coins_each(price, whole):.8f}".rstrip("0").rstrip(".")
-                        data["token_bids"].append({
-                            "key": key,
-                            "property_id": pid, "name": prop["name"], "price": each,
-                            "amount": format_amount(units, whole), "buyer": buyer, "mode": mode})
-                data["tags"].update(_tags_for([b["buyer"] for b in data["token_bids"]]))
-            looking = signed_in(request) if data["viewer"] == "account" else None
-            if looking is not None:
-                for b in _bids.history(looking.pubkey, sorted(data["owned"]), chain.network):
-                    piece = index.inscription(b["piece"]) or {}
-                    mine = b["account"] == looking.pubkey
-                    try:
-                        price = swaplib.describe_leg(b["take"])
-                    except Exception:
-                        price = f"{b['price_sats'] / 100000000:g} coins"
-                    data["offer_history"].append({
-                        "txid": b["id"], "inscription": b["piece"], "mine": mine,
-                        "number": piece.get("number"), "collection": piece.get("collection"),
-                        "edition": piece.get("edition"), "price": price,
-                        "other": b["seller"] if mine else b["buyer"],
-                        "status": {"filled": "bought" if mine else "sold",
-                                   "declined": "declined", "withdrawn": "cancelled",
-                                   "stale": "expired"}.get(b["status"], b["status"]),
-                        "at": b["ended_at"]})
-                data["tags"].update(_tags_for([h["other"] for h in data["offer_history"]]))
+        if offers_tab:
             try:
-                swapping = index.pending_swaps()
-            except Exception:
-                swapping = {}
-            for entry in data["offers_in"] + data["offers_out"]:
-                entry["presigned"] = marks.get(entry["txid"]) == bidslib.OPEN
-                entry["busy"] = entry["inscription"] in swapping
-                entry["price"] = swaplib.describe_leg(_take_json(entry, index))
-                # The other half of the sentence an answer is confirmed with: not
-                # only what the offer pays, but what answering hands over.
-                entry["give"] = swaplib.describe_leg(swaplib.leg_json(
-                    swaplib.leg_of({"inscription": entry["inscription"]}, index),
-                    index))
-            # An offer already accepted is waiting for the buyer's wallet to
-            # sign, not waiting for a second Accept. Drawing the button again
-            # was how somebody pressed it twice and got told their own offer
-            # belonged to somebody else (D-049).
-            if data["viewer"] == "account":
-                # Not from `open_offers`, whatever the viewer: every row of that
-                # book is a signature THIS node made, and on a public copy this
-                # node has made nothing of the looking account's. What an account
-                # answered stands in the bid book instead, as a note with the
-                # direction its own offers never take -- a receipt of who was
-                # answered, which is also all the exclusivity behind an answer
-                # made of signatures rather than of coins this node can lock
-                # (D-182). It says nothing about whether the buyer ever signed,
-                # which is why the row waits out the note rather than reading
-                # "sold": the piece moving is the only news here, and the next
-                # page read is where that shows.
-                for entry in data["offers_in"]:
-                    note = _answer_standing(chain, entry["inscription"]) or {}
-                    same = note.get("buyer") == entry["buyer"]
-                    entry["accepted"] = bool(note and same)
-                    entry["held_for"] = "" if same else str(note.get("buyer") or "")
-                    entry["until"] = (_local_time(float(note["created"]), "day")
-                                      if note else "")
-            else:
-                standing = {}
-                for offer in state.offers.open_offers(chain.network):
-                    if offer["give"].get("kind") == "inscription":
-                        standing[offer["give"]["txid"]] = offer
-                for offer in state.offers.sold_offers(chain.network):
-                    if offer["give"].get("kind") == "inscription":
-                        standing.setdefault(offer["give"]["txid"], offer)
-                for entry in data["offers_in"]:
-                    held = standing.get(entry["inscription"])
-                    entry["accepted"] = bool(held and held["buyer"] == entry["buyer"])
-                    entry["held_for"] = held["buyer"] if held else ""
-                    entry["until"] = (_local_time(held["expires"], "time")
-                                      if held else "")
-                    entry["settled"] = bool(held and held.get("status") == "sent")
-                    entry["swap_txid"] = (held or {}).get("txid", "")
-        except Exception as exc:
-            data["node_error"] = data["node_error"] or str(exc)
+                # The mempool first, then the blocks, so an offer made a minute
+                # ago is here rather than in ten minutes' time. A transaction is
+                # in exactly one of the two, so there is nothing to dedupe -- but
+                # a block landing between the two reads could show one twice, and
+                # the txid settles it (D-058).
+                pending = index.pending_offers()
+                own = set(data["owned"])
+                data["offers_in"] = _merge_offers(
+                    [o for o in pending if o["owner"] in own],
+                    index.offers_on(sorted(data["owned"])))
+                data["offers_out"] = _merge_offers(
+                    [o for o in pending if o["buyer"] in own],
+                    index.offers_by(sorted(data["owned"])))
+                # Pre-signed offers that are done, withdrawn or spent are not offers.
+                marks = _bids.statuses([o["txid"] for o in data["offers_in"] + data["offers_out"]])
+                # Ended offers leave both lists at once, on both sides (the operator,
+                # 2026-09-28: "declined offers should be removed from both sides
+                # instantly"; "accepted offers should go directly into the history").
+                ended = _bids.ended([o["txid"] for o in data["offers_in"] + data["offers_out"]])
+                data["offers_in"] = [o for o in data["offers_in"] if o["txid"] not in ended]
+                data["offers_out"] = [o for o in data["offers_out"] if o["txid"] not in ended]
+                data["offer_history"] = []
+                # Offers in mainnet PEP on the cross-chain book (2026-10-09: "fix that
+                # offers bug" -- they showed on the piece page and nowhere here): bids
+                # on the pieces this wallet holds, and this wallet's own bids.
+                data["x_in"], data["x_out"] = [], []
+                if tab == "offers" and _x_open() and not chain.is_mainnet:
+                    xbook = state.xchain.book
+                    for m in xbook.markets():
+                        if m["kind"] != "nft" or not m["orders"]:
+                            continue
+                        piece = index.inscription(m["asset"]) or {}
+                        if piece.get("owner") not in data["owned"]:
+                            continue
+                        for b in xbook.book("nft", m["asset"])["buys"]:
+                            data["x_in"].append({"inscription": m["asset"], "number": piece.get("number"),
+                                                 "collection": piece.get("collection"),
+                                                 "edition": piece.get("edition"), "name": _piece_name(piece),
+                                                 "content_type": piece.get("content_type") or "",
+                                                 "pep": f"{b['left_pepe'] / COIN:.8f}".rstrip("0").rstrip(".")})
+                    x_owner = ("node" if data["viewer"] == "wallet" else
+                               signed_in(request).pubkey.lower() if data["viewer"] == "account" else "")
+                    for o in (xbook.orders_of(x_owner) if x_owner else []):
+                        if o["kind"] != "nft" or o["side"] != "buy" or o["status"] not in ("open", "awaiting"):
+                            continue
+                        piece = index.inscription(o["asset"]) or {}
+                        data["x_out"].append({"inscription": o["asset"], "number": piece.get("number"),
+                                              "collection": piece.get("collection"),
+                                              "edition": piece.get("edition"), "status": o["status"],
+                                              "name": _piece_name(piece),
+                                              "content_type": piece.get("content_type") or "",
+                                              "pep": f"{o['pepe'] / COIN:.8f}".rstrip("0").rstrip(".")})
+                # Buy orders on the tokens this account made (2026-09-28:
+                # "where does the creator of a token see if someone puts in an order
+                # to buy? ... on exchange>offers"): the chain's bids and the ones this
+                # node holds, best price first.
+                looker = signed_in(request) if data["viewer"] == "account" else None
+                declined_bids = set(state.setting(f"declined_bids:{looker.pubkey}", []) or []) \
+                    if looker is not None else set()
+                if tab == "offers" and data["owned"]:
+                    from fractions import Fraction
+                    for prop in _token_props(index):
+                        if prop.get("issuer") not in data["owned"]:
+                            continue
+                        pid, whole = prop["property_id"], prop["divisible"]
+                        wants = [(Fraction(b["coins"], b["tokens"]), b["tokens"], b["address"], "",
+                                  b["txid"])
+                                 for b in index.book(pid)["bids"] if b.get("tokens")]
+                        wants += [(Fraction(s["coins"], s["units"]), s["left_units"], s["buyer"],
+                                   "away" if s["away"] else "back", f"standing-{s['id']}")
+                                  for s in _standing.open_on(chain.network, pid)]
+                        for price, units, buyer, mode, key in sorted(wants, key=lambda w: -w[0]):
+                            if buyer in data["owned"] or key in declined_bids:
+                                continue
+                            each = f"{_coins_each(price, whole):.8f}".rstrip("0").rstrip(".")
+                            data["token_bids"].append({
+                                "key": key,
+                                "property_id": pid, "name": prop["name"], "price": each,
+                                "amount": format_amount(units, whole), "buyer": buyer, "mode": mode})
+                    data["tags"].update(_tags_for([b["buyer"] for b in data["token_bids"]]))
+                looking = signed_in(request) if data["viewer"] == "account" else None
+                if looking is not None:
+                    for b in _bids.history(looking.pubkey, sorted(data["owned"]), chain.network):
+                        piece = index.inscription(b["piece"]) or {}
+                        mine = b["account"] == looking.pubkey
+                        try:
+                            price = swaplib.describe_leg(b["take"])
+                        except Exception:
+                            price = f"{b['price_sats'] / 100000000:g} coins"
+                        data["offer_history"].append({
+                            "txid": b["id"], "inscription": b["piece"], "mine": mine,
+                            "number": piece.get("number"), "collection": piece.get("collection"),
+                            "edition": piece.get("edition"), "price": price,
+                            "other": b["seller"] if mine else b["buyer"],
+                            "status": {"filled": "bought" if mine else "sold",
+                                       "declined": "declined", "withdrawn": "cancelled",
+                                       "stale": "expired"}.get(b["status"], b["status"]),
+                            "at": b["ended_at"]})
+                    data["tags"].update(_tags_for([h["other"] for h in data["offer_history"]]))
+                try:
+                    swapping = index.pending_swaps()
+                except Exception:
+                    swapping = {}
+                for entry in data["offers_in"] + data["offers_out"]:
+                    entry["presigned"] = marks.get(entry["txid"]) == bidslib.OPEN
+                    entry["busy"] = entry["inscription"] in swapping
+                    entry["price"] = swaplib.describe_leg(_take_json(entry, index))
+                    # The other half of the sentence an answer is confirmed with: not
+                    # only what the offer pays, but what answering hands over.
+                    entry["give"] = swaplib.describe_leg(swaplib.leg_json(
+                        swaplib.leg_of({"inscription": entry["inscription"]}, index),
+                        index))
+                # An offer already accepted is waiting for the buyer's wallet to
+                # sign, not waiting for a second Accept. Drawing the button again
+                # was how somebody pressed it twice and got told their own offer
+                # belonged to somebody else (D-049).
+                if data["viewer"] == "account":
+                    # Not from `open_offers`, whatever the viewer: every row of that
+                    # book is a signature THIS node made, and on a public copy this
+                    # node has made nothing of the looking account's. What an account
+                    # answered stands in the bid book instead, as a note with the
+                    # direction its own offers never take -- a receipt of who was
+                    # answered, which is also all the exclusivity behind an answer
+                    # made of signatures rather than of coins this node can lock
+                    # (D-182). It says nothing about whether the buyer ever signed,
+                    # which is why the row waits out the note rather than reading
+                    # "sold": the piece moving is the only news here, and the next
+                    # page read is where that shows.
+                    for entry in data["offers_in"]:
+                        note = _answer_standing(chain, entry["inscription"]) or {}
+                        same = note.get("buyer") == entry["buyer"]
+                        entry["accepted"] = bool(note and same)
+                        entry["held_for"] = "" if same else str(note.get("buyer") or "")
+                        entry["until"] = (_local_time(float(note["created"]), "day")
+                                          if note else "")
+                else:
+                    standing = {}
+                    for offer in state.offers.open_offers(chain.network):
+                        if offer["give"].get("kind") == "inscription":
+                            standing[offer["give"]["txid"]] = offer
+                    for offer in state.offers.sold_offers(chain.network):
+                        if offer["give"].get("kind") == "inscription":
+                            standing.setdefault(offer["give"]["txid"], offer)
+                    for entry in data["offers_in"]:
+                        held = standing.get(entry["inscription"])
+                        entry["accepted"] = bool(held and held["buyer"] == entry["buyer"])
+                        entry["held_for"] = held["buyer"] if held else ""
+                        entry["until"] = (_local_time(held["expires"], "time")
+                                          if held else "")
+                        entry["settled"] = bool(held and held.get("status") == "sent")
+                        entry["swap_txid"] = (held or {}).get("txid", "")
+            except Exception as exc:
+                data["node_error"] = data["node_error"] or str(exc)
+        if count:
+            # The Offers tab's count, fetched by the other tabs after they show.
+            waiting = (len([o for o in data["offers_in"] if not o.get("settled")])
+                       + len(data.get("x_in") or []))
+            return JSONResponse({"waiting": waiting}, headers={"Cache-Control": "no-store"})
         return render(request, "exchange.html", when=_when,
                       mine_tag=(_tag_of_whoever_is_asking(request) or {}).get("tag") or "",
                       **data)

@@ -205,3 +205,13 @@ def node_trades_on_unless_asked(monkeypatch, request):
         return real(self, name, default)
 
     monkeypatch.setattr(statemod.AppState, "setting", setting)
+
+
+@pytest.fixture(autouse=True)
+def status_cache_starts_empty():
+    """ChainContext.status keeps an answer for 10 s (2026-10-13). A test that changes a
+    node and reads its status again must not see the answer an earlier test kept."""
+    from arcade.web import state as statemod
+    statemod._STATUS_KEPT.clear()
+    yield
+    statemod._STATUS_KEPT.clear()

@@ -199,8 +199,22 @@ class ChainContext:
         verify_connected_chain(client, self.params)
         return client
 
+    #: How long one node's status is kept (2026-10-13: pages felt slow tab to tab; the
+    #: status is three RPC calls, one of them a wallet read off the disk, and a page
+    #: that shows it needs it to the block, not to the millisecond).
+    STATUS_SECONDS = 10.0
+
     def status(self) -> dict[str, Any]:
-        """Node health, or a plain explanation of why we cannot say."""
+        """Node health, or a plain explanation of why we cannot say (kept 10 s)."""
+        key = (self.network, str(self.conf or ""), str(self.datadir or ""))
+        kept = _STATUS_KEPT.get(key)
+        if kept and kept[0] > time.monotonic():
+            return dict(kept[1])
+        said = self._status()
+        _STATUS_KEPT[key] = (time.monotonic() + self.STATUS_SECONDS, dict(said))
+        return said
+
+    def _status(self) -> dict[str, Any]:
         try:
             with self.rpc() as rpc:
                 info = rpc.get_blockchain_info()
@@ -225,6 +239,10 @@ class ChainContext:
                 return result
         except Exception as exc:
             return {"online": False, "error": str(exc)}
+
+
+#: ChainContext.status answers, by node, until they go stale.
+_STATUS_KEPT: dict = {}
 
 
 @dataclass
