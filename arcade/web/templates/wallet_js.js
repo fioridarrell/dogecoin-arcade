@@ -2335,3 +2335,169 @@ export async function tip(held, form, txid, kinds, ask) {
   if (!ok) return null;
   return await confirm(held, offer);
 }
+
+/* --- a tab's own lock-script trades (trustless-trading-plan.md, phase 2) -------------
+ *
+ * 2026-10-13: trades "only available if they leave their tab open so that
+ * transaction building is complete on the client side solely ... 100% trustless with
+ * lock scripts". The lock is built in this tab (coins.htlcRedeem) and funded with an
+ * ordinary send to its address; spending it -- a claim with the secret, a refund after
+ * the time -- is asked of the node unsigned (/account/trade/spend), read here, signed
+ * here over a digest worked out here from the lock's own script, and only then handed
+ * back to be put in place and broadcast (/account/trade/spend/sign).
+ */
+
+/** Claim (`kind` "claim", with `secret` hex) or refund one lock coin to this account. */
+export async function tradeSpend(wallet, {chain, redeem, txid, vout, kind, secret}) {
+  return working(async () => {
+    const asked = await fetch("/account/trade/spend", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({chain, redeem, txid, vout, kind}),
+    });
+    const said = await asked.json();
+    if (!asked.ok) throw new Error(said.detail || "that lock cannot be spent now");
+    const keys = keysOn(wallet, said.chain || chain);
+    const lock = coins.htlcParse(unhex(redeem));
+    if (!lock) throw new Error("that is not a lock script. Nothing was signed.");
+    const me = coinsHex(keys.pubkey);
+    if (kind === "claim" && coinsHex(lock.claimer) !== me) throw new Error("that lock pays somebody else. Nothing was signed.");
+    if (kind === "refund" && coinsHex(lock.refunder) !== me) throw new Error("that lock refunds somebody else. Nothing was signed.");
+    if (kind === "claim") {
+      const hashed = coinsHex(await coins.sha256Of(unhex(secret)));
+      if (hashed !== coinsHex(lock.secretHash)) throw new Error("that secret does not open this lock. Nothing was signed.");
+    }
+    const tx = coins.parseTx(said.raw);
+    if (tx.inputs.length !== 1 || tx.inputs[0].txid !== txid || tx.inputs[0].vout !== Number(vout))
+      throw new Error("the node asked to spend a different coin. Nothing was signed.");
+    const mine = coins.p2pkh(await coins.hash160(keys.pubkey));
+    const same = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+    if (!tx.outputs.length || !tx.outputs.every((o) => same(o.script, mine)))
+      throw new Error("that spend pays somebody else. Nothing was signed.");
+    if (kind === "refund" && tx.locktime !== lock.locktime)
+      throw new Error("a refund must carry the lock's own time. Nothing was signed.");
+    const digest = coinsHex(await coins.sighashAll(tx, 0, unhex(redeem)));
+    if (digest !== String(said.sighash).toLowerCase())
+      throw new Error("the node asked for a signature over different bytes. Nothing was signed.");
+    const signature = coinsHex(await coins.signInput(keys.key, unhex(digest)));
+    const back = await fetch("/account/trade/spend/sign", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({chain: said.chain, redeem, raw: said.raw, signature, kind,
+                            secret: kind === "claim" ? secret : ""}),
+    });
+    const done = await back.json();
+    if (!back.ok) throw new Error(done.detail || "the node would not send it");
+    return done;                                  // {ok, txid}
+  });
+}
+
+/** A lock as its chain shows it (null if not there yet). */
+export async function tradeFacts(chain, txid, vout) {
+  if (!txid) return null;
+  const asked = await fetch("/account/trade/facts", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({chain, txid, vout}),
+  });
+  const said = await asked.json();
+  if (!asked.ok) throw new Error(said.detail || "the node could not read that lock");
+  return said.seen;
+}
+
+/* The trade state machine: arcade/trade.py's next_step, rule for rule (tests compare
+ * them). Pure: what the chains show in, the one thing to do next out. */
+export const TRADE = {
+  LOCK_SECONDS: {mainnet: 48 * 3600, testnet: 6 * 3600},
+  CONFIRMATIONS: {mainnet: 3, testnet: 1},
+  CLAIM_MARGIN: 3600, LOCK_MARGIN: 2 * 3600,
+};
+const tierOf = (leg) => (leg.network === "main" || leg.network === "doge") ? "mainnet" : "testnet";
+
+/** {initiatorLocktime, responderLocktime} for a trade starting now (trade.plan_locktimes). */
+export function planLocktimes(give, get, now) {
+  const tier = (tierOf(give) === "mainnet" || tierOf(get) === "mainnet") ? "mainnet" : "testnet";
+  return {t1: Math.floor(now) + TRADE.LOCK_SECONDS[tier],
+          t2: Math.floor(now) + Math.floor(TRADE.LOCK_SECONDS[tier] / 2)};
+}
+
+/** Is `seen` exactly the lock the terms say? "" if so, else why not (trade.check_lock). */
+export async function checkLock(trade, seen, theirs) {
+  const leg = theirs ? trade.get : trade.give;
+  const redeem = theirs ? trade.theirRedeem : trade.myRedeem;
+  const script = coinsHex(await coins.htlcScript(redeem));
+  if (seen.script_hex !== script) return "that lock's script is not the one agreed (hash, keys or lock time differ)";
+  if (leg.kind === "coin") {
+    if (seen.value < leg.amount) return `that lock holds ${seen.value}, less than the ${leg.amount} agreed`;
+  } else if (!seen.asset_ok) return "the ledger does not show the agreed token or NFT at that lock";
+  return "";
+}
+
+/** [step, why]: "lock" | "wait" | "claim" | "refund" | "done" | "abort" (trade.next_step).
+ *  `trade` = {role, give, get, secret?, secretHash, t1, t2, myRedeem, theirRedeem}. */
+export async function nextTradeStep(trade, facts, now) {
+  const need = Math.max(TRADE.CONFIRMATIONS[tierOf(trade.give)], TRADE.CONFIRMATIONS[tierOf(trade.get)]);
+  const mine = facts.mine, theirs = facts.theirs;
+  const myTime = trade.role === "initiator" ? trade.t1 : trade.t2;
+  const theirTime = trade.role === "initiator" ? trade.t2 : trade.t1;
+  if (theirs && theirs.spent_by_me) return ["done", "I claimed their lock"];
+  if (mine && mine.spent_by_me) return ["done", "my lock came back to me (refunded)"];
+  if (theirs && !theirs.spent_by_script_sig) {
+    const bad = await checkLock(trade, theirs, true);
+    if (bad) {
+      if (mine && !mine.spent_by_script_sig)
+        return now >= myTime ? ["refund", bad] : ["wait", bad + "; waiting to refund mine"];
+      return ["abort", bad];
+    }
+  }
+  if (trade.role === "initiator") {
+    if (!mine) return ["lock", "I lock first"];
+    if (!theirs || theirs.confirmations < need) {
+      if (now >= myTime) return ["refund", "the other side never locked; my lock time has passed"];
+      return ["wait", "waiting for the other lock to confirm"];
+    }
+    if (theirs.spent_by_script_sig) return [now < myTime ? "wait" : "refund", "their lock went back to them"];
+    if (now < theirTime - TRADE.CLAIM_MARGIN) return ["claim", "their lock is confirmed and agreed: claim it (this reveals the secret)"];
+    if (now >= myTime) return ["refund", "too late to claim safely; my lock time has passed"];
+    return ["wait", "too close to their lock time to claim safely; waiting to refund"];
+  }
+  if (!theirs || theirs.confirmations < need) {
+    if (mine && now >= myTime) return ["refund", "my lock time has passed"];
+    return ["wait", "waiting for the initiator's lock to confirm"];
+  }
+  if (!mine) {
+    if (now >= theirTime - TRADE.LOCK_MARGIN || now >= trade.t2 - TRADE.LOCK_MARGIN)
+      return ["abort", "too little time left to lock safely"];
+    return ["lock", "their lock is confirmed and agreed: lock mine"];
+  }
+  if (mine.spent_by_script_sig && !mine.spent_by_me) {
+    const secret = await secretFromScriptSig(unhex(mine.spent_by_script_sig), trade.myRedeem);
+    if (!secret) return ["wait", "my lock was spent without the secret?"];
+    trade.secret = coinsHex(secret);
+    if (now < theirTime) return ["claim", "the secret is on the chain: claim their lock"];
+    return ["abort", "the secret came too late to claim their lock"];
+  }
+  if (now >= myTime) return ["refund", "the initiator never claimed; my lock time has passed"];
+  return ["wait", "waiting for the initiator to claim (that reveals the secret)"];
+}
+
+/** The secret a claim revealed (htlc.secret_from_script_sig): sig, secret, OP_1, script. */
+export async function secretFromScriptSig(scriptSig, redeem) {
+  const pushes = [];
+  let at = 0;
+  while (at < scriptSig.length) {
+    const op = scriptSig[at++];
+    if (op === 0x00 || op === 0x51) { pushes.push(new Uint8Array([op])); continue; }
+    let n;
+    if (op >= 1 && op <= 75) n = op;
+    else if (op === 0x4c) n = scriptSig[at++];
+    else if (op === 0x4d) { n = scriptSig[at] | (scriptSig[at + 1] << 8); at += 2; }
+    else return null;
+    pushes.push(scriptSig.slice(at, at + n));
+    at += n;
+  }
+  if (pushes.length !== 4 || pushes[2].length !== 1 || pushes[2][0] !== 0x51) return null;
+  if (coinsHex(pushes[3]) !== coinsHex(redeem)) return null;
+  const lock = coins.htlcParse(redeem);
+  const secret = pushes[1];
+  if (!lock || secret.length !== 32) return null;
+  if (coinsHex(await coins.sha256Of(secret)) !== coinsHex(lock.secretHash)) return null;
+  return secret;
+}

@@ -14681,6 +14681,115 @@ def create_app(state: AppState) -> FastAPI:
                 RpcError) as exc:
             return contentlib._json({"ok": False, "error": str(exc)}, status=400)
 
+    # --- a tab's own lock-script trades (trustless-trading-plan.md, phase 2) --------------
+    #
+    # 2026-10-13: trades "only available if they leave their tab open so that
+    # transaction building is complete on the client side solely ... 100% trustless with
+    # lock scripts". The tab builds and reads the lock itself (coins.js htlcRedeem) and
+    # locks with an ordinary send to its address; these routes only hand it the unsigned
+    # spend of a lock -- a claim with the secret, or a refund after the time -- paying
+    # this account's own address, then put its signature in place and broadcast. The
+    # digest the tab signs is worked out in the tab from the lock's own script.
+
+    def _lock_for(account, said: dict):
+        from .. import htlc as htlclib
+        chain = _chain_asked(said)
+        owner = _account_address(account.pubkey, chain)
+        if not owner:
+            raise ValueError(f"this account has no {chain.label.lower()} address yet")
+        redeem = bytes.fromhex(str(said.get("redeem") or ""))
+        lock = htlclib.parse(redeem)
+        if lock is None:
+            raise ValueError("that is not a lock script")
+        return htlclib, chain, owner, redeem, lock
+
+    @app.post("/account/trade/spend")
+    def account_trade_spend(request: Request, payload: Any = Body(None)):
+        """The unsigned claim (`kind` claim) or refund (`kind` refund) of one lock coin,
+        paying this account's own address, with the digest to sign."""
+        account = _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        try:
+            htlclib, chain, owner, redeem, lock = _lock_for(account, said)
+            kind = str(said.get("kind") or "")
+            mine = _coin_pubkey(account.pubkey, chain)
+            if kind == "claim" and lock["claimer"] != mine:
+                raise ValueError("this account is not the one that lock pays")
+            if kind == "refund" and lock["refunder"] != mine:
+                raise ValueError("that lock refunds somebody else")
+            if kind not in ("claim", "refund"):
+                raise ValueError("a lock is claimed or refunded")
+            txid, vout = str(said.get("txid") or "").lower(), int(said.get("vout") or 0)
+            with chain.rpc() as rpc:
+                out = rpc.call("gettxout", txid, vout, True)
+            if out is None:
+                raise ValueError("that lock coin is spent, or not there")
+            if out["scriptPubKey"]["hex"] != htlclib.p2sh_script(redeem).hex():
+                raise ValueError("that coin is not under this lock")
+            coin = {"txid": txid, "vout": vout, "value": int(round(float(out["value"]) * COIN))}
+            inputs, outputs = htlclib.pay_out(coin, owner)
+            if kind == "refund":
+                inputs = [{**c, "sequence": htlclib.NOT_FINAL} for c in inputs]
+                locktime = lock["locktime"]
+            else:
+                locktime = 0
+            raw = escrowlib.serialize(inputs, outputs, locktime).hex()
+            digest = escrowlib.sighash(inputs, outputs, 0, redeem, locktime).hex()
+        except (ValueError, RpcError) as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        return JSONResponse({"chain": chain.network, "kind": kind, "raw": raw, "sighash": digest,
+                             "value": coin["value"], "to": owner, "locktime": locktime})
+
+    @app.post("/account/trade/spend/sign")
+    def account_trade_spend_sign(request: Request, payload: Any = Body(None)):
+        """The tab's signature (and, for a claim, the secret) put into the one input, the
+        spend checked to pay only this account, and broadcast."""
+        account = _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        try:
+            htlclib, chain, owner, redeem, lock = _lock_for(account, said)
+            raw = bytes.fromhex(str(said.get("raw") or ""))
+            sig = bytes.fromhex(str(said.get("signature") or ""))
+            with chain.rpc() as rpc:
+                decoded = rpc.call("decoderawtransaction", raw.hex())
+                if len(decoded["vin"]) != 1:
+                    raise ValueError("a lock spend spends one coin")
+                if any(a != owner for o in decoded["vout"]
+                       for a in o["scriptPubKey"].get("addresses", [])):
+                    raise ValueError("that spend pays somebody besides this account")
+                if said.get("kind") == "refund":
+                    script_sig = htlclib.refund_script_sig(sig, redeem)
+                else:
+                    secret = bytes.fromhex(str(said.get("secret") or ""))
+                    if htlclib.hash_of(secret) != lock["secret_hash"]:
+                        raise ValueError("that secret does not open this lock")
+                    script_sig = htlclib.claim_script_sig(sig, secret, redeem)
+                at = 4 + 1 + 36
+                signed_raw = raw[:at] + txbuild.varint(len(script_sig)) + script_sig + raw[at + 1:]
+                txid = rpc.call("sendrawtransaction", signed_raw.hex())
+        except (ValueError, RpcError) as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        state.bump_generation()
+        return JSONResponse({"ok": True, "txid": txid})
+
+    @app.post("/account/trade/facts")
+    def account_trade_facts(request: Request, payload: Any = Body(None)):
+        """A lock as its chain shows it, for the tab's own state machine: depth, value,
+        script, and the spender's input script if it was spent (a claim's reveals the
+        secret). Read from this node's chain, like every balance the tab is shown."""
+        from ..node_trader import observe
+        account = _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        try:
+            chain = _chain_asked(said)
+            owner = _account_address(account.pubkey, chain)
+            lock = {"txid": str(said.get("txid") or "").lower(), "vout": int(said.get("vout") or 0)}
+            with chain.rpc() as rpc:
+                seen = observe(rpc, lock, {owner})
+        except (ValueError, RpcError) as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        return JSONResponse({"seen": dataclasses.asdict(seen) if seen else None})
+
     @app.post("/account/escrow/reclaim")
     def account_escrow_reclaim(request: Request, payload: Any = Body(None)):
         """After the unlock time: every move that takes this account's escrow back,

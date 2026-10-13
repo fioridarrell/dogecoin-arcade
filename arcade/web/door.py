@@ -219,6 +219,8 @@ LINKED_FROM_PUBLIC = ("/content/", "/collections", "/feed", "/u/", "/docs",
 #: equally correct; it is named so that nobody reads that 405 as the door having
 #: opened something. (the door census, 2026-09-27)
 PUBLIC_POST = ("/auth/challenge", "/auth/login", "/auth/logout",
+               # a tab's own lock-script trades (2026-10-13)
+               "/account/trade/spend", "/account/trade/spend/sign", "/account/trade/facts",
                # game rooms over the mesh (realtime.py): each acts only on the
                # caller's own token, and an account joins only as the address
                # its own browser signed for
