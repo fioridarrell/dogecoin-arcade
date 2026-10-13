@@ -151,9 +151,9 @@ button.danger{background:var(--bad);border-color:var(--bad);color:#fff}
 .pill.bad{color:var(--bad);border-color:var(--bad)}
 .tag{font-size:.58rem;text-transform:uppercase;letter-spacing:.06em;padding:1px 5px;
   border-radius:4px;margin-left:6px;vertical-align:1px;font-weight:600}
-/* One color per network, everywhere (2026-10-13: "use blue for pep testnet
-   indicators green for main pep and ... yellow for doge main"). */
-:root{--net-test:#3b82f6;--net-main:#22a35a;--net-doge:#d4a106}
+/* One color per coin, everywhere (2026-10-13: "Change the P test color to green"
+   -- PEP green on both its networks, DOGE yellow; "test"/"main" tells PEP's two apart). */
+:root{--net-test:#22a35a;--net-main:#22a35a;--net-doge:#d4a106}
 .tag.testnet{background:color-mix(in srgb,var(--net-test) 20%,transparent);color:var(--net-test)}
 .tag.mainnet{background:color-mix(in srgb,var(--net-main) 22%,transparent);color:var(--net-main)}
 .tag.dogecoin{background:color-mix(in srgb,var(--net-doge) 24%,transparent);color:var(--net-doge)}

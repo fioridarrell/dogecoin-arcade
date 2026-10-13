@@ -59,7 +59,7 @@
 </div>
 
 {% macro panel(which, ctx, status, tag) %}
-<h2><b class="netl {{ ctx.net }}">{{ ctx.family }}</b> {{ 'Mainnet' if ctx.is_mainnet else 'Testnet' }} <span class="tag {{ 'dogecoin' if which == 'doge' else tag }}">{{ 'test' if tag == 'testnet' else 'main' }}</span></h2>
+<h2><b class="netl {{ ctx.net }}">{{ ctx.letter }}</b> {{ ctx.word }} <span class="tag {{ 'dogecoin' if which == 'doge' else tag }}">{{ 'test' if tag == 'testnet' else 'main' }}</span></h2>
 <div class="panel">
   {% if not status.online %}
     <p class="muted">{{ status.error }}</p>
@@ -171,9 +171,9 @@
 {% if doge_sync.ready %}
 {{ panel('doge', state.doge, doge, 'mainnet') }}
 {% else %}
-<h2 class="chain-off"><b class="netl dogecoin">DOGE</b> Mainnet <span class="tag dogecoin">main</span></h2>
+<h2 class="chain-off"><b class="netl dogecoin">D</b> main <span class="tag dogecoin">main</span></h2>
 <div class="panel chain-off" aria-disabled="true">
-  <p style="margin:0">DOGE Mainnet opens here when its node has finished syncing:
+  <p style="margin:0">D main opens here when its node has finished syncing:
     <strong>{{ '%.1f' % (100 * (doge_sync.progress or 0)) }}%</strong> so far
     ({{ "{:,}".format(doge_sync.blocks or 0) }} of {{ "{:,}".format(doge_sync.headers or 0) }} blocks).
     Until then nothing can be sent, held or shown on it.</p>

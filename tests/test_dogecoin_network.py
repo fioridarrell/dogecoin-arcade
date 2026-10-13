@@ -47,7 +47,7 @@ def test_a_syncing_dogecoin_is_shown_and_never_used(client, monkeypatch):
         "shown on the pages, kept out of everything that does work"
     assert doge.is_mainnet and doge.net == "dogecoin"
     page = app.get("/exchange?tab=tokens").text
-    chip = re.search(r'<span class="ex-chip chain-off"[^>]*><b class="netl dogecoin">D</b> Mainnet only</span>', page)
+    chip = re.search(r'<span class="ex-chip chain-off"[^>]*><b class="netl dogecoin">D</b> main</span>', page)
     assert chip and "42.3% so far" in chip.group(0), "grayed out, with how far it has got"
     assert "show=dogecoin" not in page
     for tab in ("market", "mintpads"):
@@ -60,7 +60,7 @@ def test_a_synced_dogecoin_opens(client, monkeypatch):
     doge = _with_doge(state, monkeypatch, ready=True)
     assert doge in state.token_chains
     page = app.get("/exchange?tab=tokens").text
-    assert 'href="/exchange?tab=tokens&show=dogecoin"' in page and "<b class=\"netl dogecoin\">D</b> Mainnet only</a>" in page
+    assert 'href="/exchange?tab=tokens&show=dogecoin"' in page and "<b class=\"netl dogecoin\">D</b> main</a>" in page
 
 
 def test_the_tip_picker_grays_dogecoin_until_it_syncs(client, monkeypatch):
@@ -73,14 +73,14 @@ def test_the_tip_picker_grays_dogecoin_until_it_syncs(client, monkeypatch):
     html = TEMPLATES.env.from_string('{% import "_tip.html" as t %}{{ t.tip_pay() }}').render()
     doge = [o for o in re.findall(r"<option [^>]*>[^<]*</option>", html) if "coin:doge" in o or "token:doge" in o]
     assert len(doge) == 2 and all(" disabled" in o for o in doge), doge
-    assert "DOGE (mainnet)" in html and "a DOGE Mainnet token" in html and "syncing 42.3%" in html
+    assert ">D main &mdash; syncing 42.3%" in html and "a D main token" in html
 
 
 def test_the_operator_wallet_and_admin_show_the_sync(client, monkeypatch):
     app, state = client
     _with_doge(state, monkeypatch, ready=False)
     page = app.get("/wallet").text
-    assert "DOGE Mainnet opens here when its node has finished syncing" in page and "42.3%" in page
+    assert "D main opens here when its node has finished syncing" in page and "42.3%" in page
     from test_admin import LOCAL
     wallets = app.get("/admin/api/state", headers=LOCAL).json()["wallets"]
     doge = [w for w in wallets if w["which"] == "doge"]
@@ -103,7 +103,8 @@ def test_a_dogecoin_send_takes_a_dogecoin_address_and_nothing_else(client, monke
 def test_the_network_colors(client):
     app, _ = client
     css = app.get("/exchange?tab=tokens").text
-    assert "--net-test:#3b82f6" in css and "--net-main:#22a35a" in css and "--net-doge:#d4a106" in css
+    assert "--net-test:#22a35a" in css and "--net-main:#22a35a" in css and "--net-doge:#d4a106" in css, \
+        "PEP green on both its networks, DOGE yellow (2026-10-13)"
     assert ".netbadge.test{background:color-mix(in srgb,var(--net-test)" in css
     assert ".tag.dogecoin" in css
 
@@ -116,13 +117,13 @@ def test_every_network_word_says_which_coin(client, monkeypatch):
     _with_doge(state, monkeypatch, ready=True)
     from arcade.web.app import TEMPLATES
     badge = TEMPLATES.env.globals["net_badge"]
-    assert '<b class="netl">P</b> TESTNET' in badge(False)
-    assert '<b class="netl">P</b> MAINNET' in badge(True)
-    assert 'netbadge doge' in badge("doge") and '<b class="netl">D</b> MAINNET' in badge(state.doge)
+    assert '<b class="netl">P</b> TEST<' in badge(False)
+    assert '<b class="netl">P</b> MAIN<' in badge(True)
+    assert 'netbadge doge' in badge("doge") and '<b class="netl">D</b> MAIN<' in badge(state.doge)
     page = app.get("/exchange?tab=tokens").text
     assert '.tag.testnet::before,.tag.mainnet::before{content:"P"' in page
     assert '.tag.dogecoin::before{content:"D"' in page
-    assert '<b class="netl testnet">P</b> Testnet only' in page and '<b class="netl mainnet">P</b> Mainnet only' in page
+    assert '<b class="netl testnet">P</b> test</a>' in page and '<b class="netl mainnet">P</b> main</a>' in page
 
 
 def test_one_naming_convention(client, monkeypatch):
@@ -130,7 +131,8 @@ def test_one_naming_convention(client, monkeypatch):
     mainnet": PEP Testnet, PEP Mainnet, DOGE Mainnet."""
     app, state = client
     doge = _with_doge(state, monkeypatch, ready=False)
-    assert (state.messaging.title, state.ledger.title, doge.title) == ("PEP Testnet", "PEP Mainnet", "DOGE Mainnet")
+    assert (state.messaging.title, state.ledger.title, doge.title) == ("P test", "P main", "D main"), \
+        'the operator: "make it say only P test or P main or D main in all of the labels"'
     page = app.get("/wallet").text
-    for coin, net in (("PEP", "Testnet"), ("PEP", "Mainnet"), ("DOGE", "Mainnet")):
-        assert f">{coin}</b> {net}" in page, (coin, net)
+    for letter, word in (("P", "test"), ("P", "main"), ("D", "main")):
+        assert f">{letter}</b> {word}" in page, (letter, word)

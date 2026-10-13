@@ -92,12 +92,12 @@ document.querySelectorAll('.ex-seg a').forEach(function (a) {
 {%- set doge = (chain_menu()|selectattr('doge')|list or [none])[0] %}
 <span class="ex-modes" style="margin:0" id="netshow">
   {%- for key in keys %}
-  <a class="ex-chip{{ ' on' if show == key }}" href="/exchange?tab={{ tab_name }}{{ extra }}{{ '' if key == 'mix' else '&show=' ~ key }}"{% if show == key %} aria-current="true"{% endif %}>{% if key in ('testnet', 'mainnet') %}<b class="netl {{ key }}">P</b> {% endif %}{{ {'mix': 'Mix', 'testnet': 'Testnet only', 'mainnet': 'Mainnet only', 'cross': 'Cross chain only'}[key] }}</a>
+  <a class="ex-chip{{ ' on' if show == key }}" href="/exchange?tab={{ tab_name }}{{ extra }}{{ '' if key == 'mix' else '&show=' ~ key }}"{% if show == key %} aria-current="true"{% endif %}>{% if key in ('testnet', 'mainnet') %}<b class="netl {{ key }}">P</b> {% endif %}{{ {'mix': 'Mix', 'testnet': 'test', 'mainnet': 'main', 'cross': 'Cross chain only'}[key] }}</a>
   {%- if key == 'mainnet' and doge %}
   {%- if doge.ready %}
-  <a class="ex-chip{{ ' on' if show == 'dogecoin' }}" href="/exchange?tab={{ tab_name }}{{ extra }}&show=dogecoin"{% if show == 'dogecoin' %} aria-current="true"{% endif %}><b class="netl dogecoin">D</b> Mainnet only</a>
+  <a class="ex-chip{{ ' on' if show == 'dogecoin' }}" href="/exchange?tab={{ tab_name }}{{ extra }}&show=dogecoin"{% if show == 'dogecoin' %} aria-current="true"{% endif %}><b class="netl dogecoin">D</b> main</a>
   {%- else %}
-  <span class="ex-chip chain-off" aria-disabled="true" title="DOGE Mainnet opens when its node has synced ({{ doge.progress }}% so far)"><b class="netl dogecoin">D</b> Mainnet only</span>
+  <span class="ex-chip chain-off" aria-disabled="true" title="D main opens when its node has synced ({{ doge.progress }}% so far)"><b class="netl dogecoin">D</b> main</span>
   {%- endif %}
   {%- endif %}
   {%- endfor %}</span>

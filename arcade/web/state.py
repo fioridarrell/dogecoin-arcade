@@ -162,11 +162,19 @@ class ChainContext:
         return "DOGE" if self.is_doge else "PEP"
 
     @property
+    def letter(self) -> str:
+        return "D" if self.is_doge else "P"
+
+    @property
+    def word(self) -> str:
+        return "main" if self.is_mainnet else "test"
+
+    @property
     def title(self) -> str:
-        """One naming convention for every chain (2026-10-13: "Pep and doge
-        should have the same naming conventions for mainnet"): PEP Testnet, PEP
-        Mainnet, DOGE Mainnet."""
-        return f"{self.family} {'Mainnet' if self.is_mainnet else 'Testnet'}"
+        """One short name for every chain, said the same everywhere (2026-10-13:
+        "make it say only P test or P main or D main in all of the labels across the
+        site"): P test, P main, D main."""
+        return f"{self.letter} {self.word}"
 
     @property
     def net(self) -> str:

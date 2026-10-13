@@ -23,7 +23,7 @@ def test_the_market_page_says_it_is_not_trustless_and_starts_closed(client, monk
                                                                       "divisible": True, "managed": 0})
     page = app.get("/exchange/x/token/59").text
     assert "Not trustless" in page and "trust the operator" in page
-    assert "not open on this node" in page and "MAINNET" in page and "TESTNET" in page
+    assert "not open on this node" in page and "MAIN</span>" in page and "TEST</span>" in page
     assert app.get("/exchange/pairs?base=59&quote=main", follow_redirects=False).headers["location"] \
         .startswith("/exchange?tab=tokens"), "the mainnet choice waits for the book to open"
 
@@ -53,7 +53,7 @@ def test_the_operator_opens_the_book_and_its_markets_join_the_list(client, monke
     listing = app.get("/exchange?tab=tokens").text
     assert "/exchange/x/token/59" in listing, "an open market is a row of the one table"
     row = listing[listing.index("/exchange/x/token/59"):][:2500]
-    assert "MAINNET" in row and "PEP" in row
+    assert "MAIN</span>" in row and "PEP" in row
     market = app.get("/exchange/x/token/59").text
     assert "0.5" in market and "Not trustless" in market
 
@@ -86,5 +86,5 @@ def test_a_piece_sold_for_mainnet_pep_is_a_sale_not_a_pair(client, monkeypatch):
     market = app.get("/exchange?tab=market").text
     assert "Recently sold" in market, "the sale is on the Market tab"
     sold = market[market.index("Recently sold"):][:4000]
-    assert "Doge Punk #7" in sold and "100 PEP" in sold and "MAINNET" in sold, sold
+    assert "Doge Punk #7" in sold and "100 PEP" in sold and "MAIN</span>" in sold, sold
     assert "PSellerMain" in sold, "the seller is the order's mainnet address"

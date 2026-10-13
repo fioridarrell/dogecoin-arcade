@@ -19,7 +19,7 @@
   {# Dogecoin while its node syncs (2026-10-13): shown, grayed out, not a link. #}
   <span class="chain-off" aria-disabled="true" title="{{ m.label }} opens when its node has synced">
   {% endif %}
-    <span class="tag {{ m.net }}">{{ 'mainnet' if m.doge else m.net }}</span>
+    <span class="tag {{ m.net }}">{{ 'main' if m.mainnet else 'test' }}</span>
     <strong>{{ m.label }}: {{ 'real ' ~ m.coin if m.mainnet else m.coin }}</strong>
     <span class="muted">{% if not m.ready %}Opens when this node has synced {{ m.label }}: {{ m.progress }}% so far.
       {%- elif m.mainnet %}Permanent and worth money. Every transaction shows its full cost, the operator’s 0.5% fee included, before you say yes.

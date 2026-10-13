@@ -568,7 +568,7 @@ async function draw() {
     const netl = document.createElement("b");
     netl.className = "netl " + (chain.network === "doge" ? "dogecoin" : chain.mainnet ? "mainnet" : "testnet");
     netl.textContent = chain.network === "doge" ? "D" : "P";
-    title.replaceChildren(netl, " " + (chain.network === "doge" ? "DOGE Mainnet" : chain.label));
+    title.replaceChildren(netl, " " + (chain.mainnet || chain.network === "doge" ? "main" : "test"));
     const where = document.createElement("span");
     where.className = "muted mono";
     where.style.fontSize = ".78rem";

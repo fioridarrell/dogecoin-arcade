@@ -5432,7 +5432,7 @@ def create_app(state: AppState) -> FastAPI:
         # Dogecoin, by its chain or its network name (2026-10-13), in yellow.
         if getattr(where, "is_doge", False) or where in ("doge", "dogecoin"):
             return Markup('<span class="netbadge doge" title="Dogecoin mainnet: real DOGE">'
-                          '<b class="netl">D</b> MAINNET</span>')
+                          '<b class="netl">D</b> MAIN</span>')
         if isinstance(where, bool):
             main = where
         elif isinstance(where, str):
@@ -5441,12 +5441,12 @@ def create_app(state: AppState) -> FastAPI:
             main = bool(getattr(where, "is_mainnet", False))
         if main:
             return Markup('<span class="netbadge main" title="Pepecoin mainnet: real PEP">'
-                          '<b class="netl">P</b> MAINNET</span>')
+                          '<b class="netl">P</b> MAIN</span>')
         # Which coin as well as which net (2026-10-13: "Wherever it says
         # testnet or mainnet it should also indicate pep or doge ... an uppercase
         # P or D in the correct color"): P blue, P green, D yellow.
         return Markup('<span class="netbadge test" title="Pepecoin testnet: test assets, no '
-                      'guaranteed value; the chain can be reset"><b class="netl">P</b> TESTNET</span>')
+                      'guaranteed value; the chain can be reset"><b class="netl">P</b> TEST</span>')
 
     def _supply_badge(prop: Any) -> Markup:
         """Fixed supply, or managed (the issuer can mint more whenever it likes)."""

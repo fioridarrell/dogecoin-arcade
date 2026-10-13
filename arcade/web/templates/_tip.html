@@ -6,7 +6,7 @@
 {%- set chains = tip_chains() %}
 <select name="pay" data-tip-pay aria-label="Tip in" style="flex:0 0 auto;width:auto">
   {%- for c in chains %}
-  <option value="coin:{{ c.network }}" data-coin="{{ c.coin }}"{% if not c.ready %} disabled{% endif %}>{{ c.coin }} ({{ c.word }}){% if not c.ready %} &mdash; syncing {{ c.progress }}%{% endif %}</option>
+  <option value="coin:{{ c.network }}" data-coin="{{ c.coin }}"{% if not c.ready %} disabled{% endif %}>{{ c.label }}{% if not c.ready %} &mdash; syncing {{ c.progress }}%{% endif %}</option>
   {%- endfor %}
   {%- for c in chains %}
   <option value="token:{{ c.network }}" data-word="{{ c.label }}"{% if not c.ready %} disabled{% endif %}>a {{ c.label }} token{% if not c.ready %} &mdash; syncing{% endif %}</option>
