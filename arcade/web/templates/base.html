@@ -151,20 +151,50 @@ button.danger{background:var(--bad);border-color:var(--bad);color:#fff}
 .pill.bad{color:var(--bad);border-color:var(--bad)}
 .tag{font-size:.58rem;text-transform:uppercase;letter-spacing:.06em;padding:1px 5px;
   border-radius:4px;margin-left:6px;vertical-align:1px;font-weight:600}
-.tag.testnet{background:color-mix(in srgb,var(--ok) 22%,transparent);color:var(--ok)}
-.tag.mainnet{background:color-mix(in srgb,var(--bad) 20%,transparent);color:var(--bad)}
+/* One color per network, everywhere (2026-10-13: "use blue for pep testnet
+   indicators green for main pep and ... yellow for doge main"). */
+:root{--net-test:#3b82f6;--net-main:#22a35a;--net-doge:#d4a106}
+.tag.testnet{background:color-mix(in srgb,var(--net-test) 20%,transparent);color:var(--net-test)}
+.tag.mainnet{background:color-mix(in srgb,var(--net-main) 22%,transparent);color:var(--net-main)}
+.tag.dogecoin{background:color-mix(in srgb,var(--net-doge) 24%,transparent);color:var(--net-doge)}
+/* Which coin, beside every testnet/mainnet word (2026-10-13): an uppercase P
+   or D in the network's own color -- blue P testnet, green P mainnet, yellow D. */
+.netl{font-weight:800;font-style:normal;letter-spacing:0;margin-right:1px}
+.netl.testnet{color:var(--net-test)}.netl.mainnet{color:var(--net-main)}.netl.dogecoin{color:var(--net-doge)}
+.tag.testnet::before,.tag.mainnet::before{content:"P";font-weight:800;margin-right:3px;letter-spacing:0}
+.tag.dogecoin::before{content:"D";font-weight:800;margin-right:3px;letter-spacing:0}
+/* A chain whose node is still syncing: shown, and grayed out (2026-10-13). */
+.chain-off{opacity:.45;filter:grayscale(1);cursor:not-allowed}
+a.chain-off,button.chain-off,span.chain-off.ex-chip{pointer-events:none}
 /* what an asset is, at a glance (2026-10-06): its chain, with an icon, and its supply */
 .netbadge,.supplybadge{display:inline-flex;align-items:center;gap:3px;font-size:.6rem;font-weight:700;
   letter-spacing:.05em;padding:1px 6px;border-radius:999px;vertical-align:2px;white-space:nowrap;
   line-height:1.6;margin-left:4px}
-.netbadge.test{background:color-mix(in srgb,#e8a33d 20%,transparent);color:#e8a33d}
-.netbadge.main{background:color-mix(in srgb,#3dbb6c 22%,transparent);color:#3dbb6c}
+.netbadge.test{background:color-mix(in srgb,var(--net-test) 20%,transparent);color:var(--net-test)}
+.netbadge.main{background:color-mix(in srgb,var(--net-main) 22%,transparent);color:var(--net-main)}
+.netbadge.doge{background:color-mix(in srgb,var(--net-doge) 24%,transparent);color:var(--net-doge)}
 .supplybadge{font-weight:600;letter-spacing:.02em;text-transform:none}
 .supplybadge.fixed{border:1px solid color-mix(in srgb,var(--muted) 45%,transparent);color:var(--muted)}
 .supplybadge.managed{border:1px solid color-mix(in srgb,var(--warn) 60%,transparent);color:var(--warn)}
 button.tag.switch{border:0;cursor:pointer;font-family:inherit;line-height:1.5;
   outline-offset:2px}
 button.tag.switch:hover{filter:brightness(.85)}
+/* The chain switch (2026-10-13). The operator: "the one that is selected should be higher
+   than the other two and have a border" -- the chain being shown is the tall one with a
+   border; the other two are smaller, level with each other, centred on it. */
+.chainswitch{display:inline-flex;gap:5px;align-items:center;vertical-align:middle;margin-left:8px}
+.chainswitch form{display:inline-flex;margin:0;align-items:center}
+.chainswitch .tag,.chainswitch button.tag.switch{display:inline-flex;align-items:center;margin:0;
+  font-size:.58rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;line-height:1.5;
+  padding:1px 6px;border-radius:5px;border:1px solid transparent;min-height:0;height:auto;
+  vertical-align:middle;box-shadow:none}
+.chainswitch .tag.on{font-size:.7rem;padding:5px 10px;border:1.5px solid currentColor;border-radius:7px}
+.chainswitch .tag:not(.on),.chainswitch button.tag.switch{height:1.3rem;box-sizing:border-box;font-family:inherit}
+/* the form carries style="display:inline", so only !important reaches it */
+.chainswitch form{display:inline-flex!important;align-items:center;height:1.3rem;line-height:1}
+.chainswitch button.tag.switch{opacity:.75;cursor:pointer}
+.chainswitch button.tag.switch:hover{opacity:1}
+.chainswitch button.tag.switch:hover{opacity:1}
 .chainbar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:22px}
 .chaincard{flex:1;min-width:240px;background:var(--panel);border:1px solid var(--line);
   border-radius:10px;padding:14px 16px}
@@ -1826,14 +1856,17 @@ function arcadeAsk(title, detail, yes = "Yes"){
 // read off the transaction's own bytes; a collection run calls it once with the
 // whole run's estimate (`costs.count`, `costs.estimate`). One button.
 function arcadeMainnetReview(costs){
+  // DOGE on Dogecoin, PEP on Pepecoin mainnet (2026-10-13): `costs.chain` says which.
+  var doge = costs.chain === 'doge', coin = doge ? ' DOGE' : ' PEP';
   var pep = function(sats){ return (Number(sats || 0) / 1e8).toLocaleString(undefined,
-    {minimumFractionDigits: 2, maximumFractionDigits: 8}) + ' PEP'; };
+    {minimumFractionDigits: 2, maximumFractionDigits: 8}) + coin; };
   return new Promise(function(answer){
     var back = document.createElement('div'); back.className = 'askcard-back';
     var card = document.createElement('div'); card.className = 'panel askcard mainnet-review';
     card.setAttribute('role', 'dialog'); card.setAttribute('aria-modal', 'true');
     var h = document.createElement('h3');
-    h.innerHTML = '<span class="tag mainnet">mainnet</span> Real PEP';
+    h.innerHTML = doge ? '<span class="tag dogecoin">dogecoin</span> Real DOGE'
+                       : '<span class="tag mainnet">mainnet</span> Real PEP';
     var what = document.createElement('p'); what.className = 'muted';
     what.textContent = costs.label ? costs.label : costs.count
       ? 'Inscribe ' + costs.count.toLocaleString() + ' pieces' + (costs.what ? ' of ' + costs.what : '')

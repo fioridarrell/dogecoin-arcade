@@ -12,6 +12,7 @@ from __future__ import annotations
 import time
 
 import os
+import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -176,6 +177,13 @@ class Params:
     names_from: int | None = None
 
     marker_address: str | None = None
+    #: What its coin is called on a page, and what the chain is called
+    #: (2026-10-13, Dogecoin as the third network): "PEP TEST" / "PEP" / "DOGE".
+    coin: str = "PEP"
+    label: str = "Pepecoin"
+    #: Block 0's hash, where it tells this chain from another that answers to
+    #: the same "main" in getblockchaininfo (Dogecoin and Pepecoin both do).
+    genesis: str = ""
 
     @property
     def index_start(self) -> int | None:
@@ -306,6 +314,8 @@ TESTNET = Params(
     token_pairs_from=1_529_092,
     datadir_subdir="testnet3",
     pubkeyhash_version=113,
+    coin="PEP TEST",
+    label="Pepecoin testnet",
     scripthash_version=196,
     other_pubkeyhash_version=56,    # Pepecoin mainnet
 )
@@ -327,6 +337,8 @@ REGTEST = Params(
     datadir_subdir="regtest",
     pubkeyhash_version=111,
     scripthash_version=196,
+    coin="PEP TEST",
+    label="Pepecoin regtest",
 )
 
 # --- Pepecoin only ------------------------------------------------------------
@@ -349,7 +361,40 @@ REGTEST = Params(
 # to: the chain is recorded beside an address, and an address that is merely
 # VALID SOMEWHERE ELSE has to be refused rather than accepted as close enough.
 
-NETWORKS = {p.name: p for p in (MAINNET, TESTNET, REGTEST)}
+# --- Dogecoin, the third network (2026-10-13) ----------------------------
+#
+# Back, now with a node behind it: "we will be adding it as a third network ...
+# Anything they can do on pep. It will be just another option alongside testnet
+# pep and mainnet pep." So it is Pepecoin MAINNET's Params with Dogecoin's own
+# ports, address bytes and floor, nothing else: the protocol constants are the
+# same in both trees (the comparison table in docs/DECISIONS.md). Mainnet only;
+# there is no Dogecoin testnet in the arcade (the operator: "We don't want Dogecoin
+# test net").
+#
+# The floor is the network tip of 2026-10-13 17:10 UTC (6,413,728, from a public
+# explorer, the node itself still syncing) rounded up to 6,415,000, about a day
+# ahead, so nothing that existed before the arcade read Dogecoin can be read as
+# an arcade transaction -- the margin D-004 asked for on Pepecoin mainnet. Every
+# feature height stays as it is on Pepecoin mainnet: one floor (D-106).
+DOGECOIN = dataclasses.replace(
+    MAINNET,
+    name="doge",
+    rpc_port=22555,
+    p2p_port=22556,
+    activation_height=6_415_000,
+    # Its public board (tips, D-014) is read from the same floor, never from block
+    # 0: Pepecoin mainnet reads from 0, which on Dogecoin is six million blocks.
+    messaging_start_height=6_415_000,
+    pubkeyhash_version=30,      # addresses start with "D"
+    scripthash_version=22,
+    other_pubkeyhash_version=113,
+    marker_address=None,
+    coin="DOGE",
+    label="Dogecoin",
+    genesis="1a91e3dace36e2be3bf030a65679fe821aa1d6ef92e7c9902eb318182c355691",
+)
+
+NETWORKS = {p.name: p for p in (MAINNET, TESTNET, REGTEST, DOGECOIN)}
 
 #: Networks on which the Messenger may operate. Testnet only, permanently
 #: (docs/DECISIONS.md D-010). Enforced in code, not configuration.
@@ -481,6 +526,8 @@ def load_rpc_credentials(
 #: reason this arcade names its chain rather than trusting what it connects to.
 CHAIN_NAMES = {
     "main": "main", "test": "test", "regtest": "regtest",
+    # A Dogecoin node calls its mainnet "main" too; `genesis` tells them apart.
+    "doge": "main",
 }
 
 
@@ -517,6 +564,13 @@ def verify_connected_chain(rpc, params: "Params") -> None:
             f"(expected chain {expected!r}). Refusing to continue -- check --datadir "
             f"and --conf."
         )
+    if params.genesis:
+        # Dogecoin and Pepecoin both answer "main": block 0 says which it is.
+        found = rpc.call("getblockhash", 0)
+        if found != params.genesis:
+            raise WrongChain(
+                f"connected to a node whose block 0 is {found}, not {params.label}'s "
+                f"{params.genesis}. Refusing to continue -- check --datadir and --conf.")
     if creds is not None:
         _CHAIN_SEEN[key] = time.time() + 300
 

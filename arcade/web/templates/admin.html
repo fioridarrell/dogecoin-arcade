@@ -220,7 +220,8 @@ section.panel h2{margin-top:0}
       c.appendChild(text('div', l, 'l')); cards.appendChild(c); }
     card(d.seats.free + ' / ' + d.seats.total, 'seats open');
     d.wallets.forEach(function (w) {
-      card(w.error ? 'offline' : Number(w.spendable).toLocaleString(), w.label + ' balance');
+      card(w.syncing ? 'syncing ' + w.progress + '%' : w.error ? 'offline'
+           : Number(w.spendable).toLocaleString(), w.label + (w.syncing ? ' node' : ' balance'));
     });
     card(d.push.available ? String(d.push.devices) : 'off', 'accounts with notifications');
 
@@ -276,8 +277,17 @@ section.panel h2{margin-top:0}
     var ws = $('wallets'); ws.textContent = ''; var sel = $('sendwhich'); sel.textContent = '';
     d.wallets.forEach(function (w) {
       var row = text('div', '', 'wallet');
+      if (w.syncing) {
+        // Dogecoin while its node syncs (2026-10-13): grayed out, nothing to press.
+        row.className = 'wallet chain-off';
+        row.appendChild(text('div', w.label + ': syncing ' + w.progress + '% (' +
+          Number(w.blocks || 0).toLocaleString() + ' of ' + Number(w.headers || 0).toLocaleString() +
+          ' blocks). Opens by itself when it has caught up.', 'muted'));
+        ws.appendChild(row);
+        return;
+      }
       var left = document.createElement('div');
-      left.appendChild(text('div', w.label, 'muted'));
+      left.appendChild(text('div', w.label + (w.coin ? ' · ' + w.coin : ''), 'muted'));
       left.appendChild(text('div', w.error ? 'node unreachable' :
         Number(w.spendable).toLocaleString() + (w.unconfirmed && Number(w.unconfirmed) ?
           '  (+' + Number(w.unconfirmed).toLocaleString() + ' on its way)' : ''), 'bal'));

@@ -48,6 +48,11 @@ def main(argv: list[str] | None = None) -> int:
                         help="chain for tokens, NFTs and PEP")
     parser.add_argument("--ledger-datadir", help="mainnet datadir, to read its .cookie")
     parser.add_argument("--ledger-conf", help="mainnet config with rpcuser/rpcpassword")
+    # Dogecoin mainnet, the third network (2026-10-13). Found by itself at
+    # ~/.dogecoin/dogecoin.conf, which the installer writes; this names another.
+    parser.add_argument("--doge-conf", help="Dogecoin config with rpcuser/rpcpassword")
+    parser.add_argument("--doge-datadir", help="Dogecoin datadir, to read its .cookie")
+    parser.add_argument("--no-doge", action="store_true", help="run without Dogecoin")
     parser.add_argument("--port", type=int, default=8420)
     parser.add_argument(
         "--public", action="store_true",
@@ -147,6 +152,7 @@ def main(argv: list[str] | None = None) -> int:
             # rather than assumed here.
             can_spend=True,
         ),
+        doge=_doge_context(args),
     )
 
     # Bots authenticate to /rpc/main and /rpc/test with this file's contents.
@@ -158,6 +164,9 @@ def main(argv: list[str] | None = None) -> int:
     # Report what was found, so a silent misconfiguration is visible at startup
     # rather than as an empty panel later.
     from ..discovery import best
+    if state.doge is not None:
+        print(f"  {state.doge.label:8s} {state.doge.network:10s} "
+              f"{state.doge.conf or state.doge.datadir}  (shown grayed out until it has synced)")
     for context in (state.messaging, state.ledger):
         if context.datadir or context.conf:
             where = context.datadir or context.conf
@@ -246,6 +255,27 @@ def main(argv: list[str] | None = None) -> int:
                 timeout_graceful_shutdown=GRACEFUL_STOP)
     return 0
 
+
+
+def _doge_context(args) -> "ChainContext | None":
+    """The Dogecoin chain, when this machine runs a Dogecoin node: named on the
+    command line, or the installer's ~/.dogecoin/dogecoin.conf (or a datadir
+    with a readable .cookie). None when there is none -- the arcade then simply
+    has its two Pepecoin chains, as before."""
+    if args.no_doge:
+        return None
+    conf = Path(args.doge_conf).expanduser() if args.doge_conf else None
+    datadir = Path(args.doge_datadir).expanduser() if args.doge_datadir else None
+    if conf is None and datadir is None:
+        found = Path.home() / ".dogecoin" / "dogecoin.conf"
+        if found.exists():
+            conf = found
+        elif (Path.home() / ".dogecoin" / ".cookie").exists():
+            datadir = Path.home() / ".dogecoin"
+        else:
+            return None
+    return ChainContext(network="doge", role="ledger", label="Dogecoin",
+                        datadir=datadir, conf=conf, can_spend=True)
 
 if __name__ == "__main__":
     raise SystemExit(main())

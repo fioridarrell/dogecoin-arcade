@@ -549,7 +549,8 @@ export function mainnetCosts(offer, shown) {
   }
   const network = Number(shown.fee || 0);
   return {network, data, others, operator, total: network + data + others + operator,
-          fee: offer.operator_fee || null, what: shown.what || offer.what || ""};
+          fee: offer.operator_fee || null, what: shown.what || offer.what || "",
+          chain: offer.chain || ""};
 }
 async function mainnetOk(offer, shown, network, options) {
   if (!(await isMainnet(network))) return;

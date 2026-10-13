@@ -4,14 +4,21 @@
    machine the chain is the operator's switch, which this does not touch. #}
 {% macro line(chain, back) -%}
 {% set others = state.token_chains|reject("sameas", chain)|list %}
-<div class="chainline {{ 'is-main' if chain.is_mainnet }}">
-  <span class="tag {{ 'mainnet' if chain.is_mainnet else 'testnet' }}">{{ 'mainnet' if chain.is_mainnet else 'testnet' }}</span>
-  <span>{% if chain.is_mainnet %}Real PEP. Every transaction here shows its full cost, the operator's fee included, and waits for your yes.{% else %}PEP TEST: test coins, free to try and worth nothing.{% endif %}</span>
-  {% if public and others %}<a href="/create/chain?to={{ others[0].network }}&amp;back={{ back|urlencode }}">Switch to {{ 'testnet' if chain.is_mainnet else 'mainnet' }}</a>{% endif %}
+<div class="chainline {{ 'is-main' if chain.is_mainnet }} net-{{ chain.net }}">
+  <span class="tag {{ chain.net }}">{{ 'mainnet' if chain.is_doge else chain.net }}</span>
+  <span>{% if chain.is_mainnet %}Real {{ chain.params.coin }}. Every transaction here shows its full cost, the operator's fee included, and waits for your yes.{% else %}PEP TEST: test coins, free to try and worth nothing.{% endif %}</span>
+  {% if public %}
+  {% for m in chain_menu() if m.network != chain.network %}
+  {% if m.ready %}<a href="/create/chain?to={{ m.network }}&amp;back={{ back|urlencode }}">Switch to <b class="netl {{ m.net }}">{{ m.family }}</b> {{ m.word|capitalize }}</a>
+  {% else %}<span class="chain-off" aria-disabled="true" title="{{ m.label }} opens when its node has synced ({{ m.progress }}% so far)">{{ m.label }}: syncing</span>{% endif %}
+  {% endfor %}
+  {% endif %}
 </div>
 <style>
 .chainline{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;padding:9px 12px;margin:0 0 14px;border-radius:12px;border:1px solid var(--line);font-size:.88rem}
-.chainline.is-main{border-color:var(--bad);background:color-mix(in srgb,var(--bad) 6%,transparent)}
-.chainline a{margin-left:auto;font-weight:700}
+.chainline.is-main{border-color:var(--net-main);background:color-mix(in srgb,var(--net-main) 6%,transparent)}
+.chainline.net-dogecoin{border-color:var(--net-doge);background:color-mix(in srgb,var(--net-doge) 7%,transparent)}
+.chainline a:first-of-type{margin-left:auto}
+.chainline a{font-weight:700}
 </style>
 {%- endmacro %}

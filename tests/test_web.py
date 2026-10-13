@@ -294,12 +294,16 @@ def test_an_address_from_a_chain_this_arcade_does_not_run_is_refused(client):
     assert doge_main.startswith("D")
 
     _save(app, state, name="Off this chain", mainnet_address=doge_main)
-    assert "chain this node does not run" in (state.notice or "")
+    # Refused either way; since Dogecoin became a chain of its own (2026-10-13) the
+    # refusal names it rather than calling it a chain this node does not run.
+    said = state.notice or ""
+    assert "chain this node does not run" in said or "a Dogecoin address, not a mainnet one" in said, said
     with state.store() as store:
         assert store.contacts() == []
 
     _save(app, state, name="Off this chain", testnet_address=doge_main)
-    assert "chain this node does not run" in (state.notice or "")
+    said = state.notice or ""
+    assert "chain this node does not run" in said or "a Dogecoin address, not a testnet one" in said, said
 
 
 def test_a_mistyped_address_is_refused(client):
@@ -2275,15 +2279,17 @@ def test_the_chain_tag_switches_tokens_between_mainnet_and_testnet(client, tmp_p
     app, state = client
     page = app.get("/tokens").text
     assert 'name="chain" value="main"' in page, "the tag offers the other chain"
-    assert '<button type="submit" class="tag testnet switch"' in page
+    # Every chain in one switch, the one shown marked (2026-10-13).
+    assert '<span class="tag testnet on" aria-current="true"' in page
+    assert '<button type="submit" class="tag mainnet switch" name="chain" value="main"' in page
     assert "Every fungible token on testnet" in page
 
     response = app.post("/tokens/chain", data={"chain": "main", "csrf_token": state.csrf_token},
                         follow_redirects=False)
     assert response.status_code == 303 and response.headers["location"] == "/tokens"
     page = app.get("/tokens").text
-    assert '<button type="submit" class="tag mainnet switch"' in page
-    assert 'name="chain" value="regtest"' in page
+    assert '<span class="tag mainnet on" aria-current="true"' in page
+    assert '<button type="submit" class="tag testnet switch" name="chain" value="regtest"' in page
     assert "Every fungible token on mainnet" in page
     assert (state.home / "tokens-chain").read_text().strip() == "main"
 

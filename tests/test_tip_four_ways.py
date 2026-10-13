@@ -31,7 +31,7 @@ def test_the_tip_picker_offers_both_coins_and_both_kinds_of_token(client):
     labels = [" ".join(x.split()) for x in re.findall(r"<option [^>]*>([^<]+)</option>", html)]
     test, main = state.messaging.network, state.ledger.network
     assert values == [f"coin:{test}", f"coin:{main}", f"token:{test}", f"token:{main}"], values
-    assert labels == ["PEP TEST (testnet)", "PEP (mainnet)", "a testnet token", "a mainnet token"], labels
+    assert labels == ["PEP TEST (testnet)", "PEP (mainnet)", "a PEP Testnet token", "a PEP Mainnet token"], labels
 
 
 def test_feed_and_games_draw_the_same_picker(client):

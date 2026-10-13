@@ -114,6 +114,11 @@ class BlockWatcher:
                       # The public board's mainnet half needs its own scan, and
                       # a public-only scanner decrypts nothing (D-014).
                       lambda: self._check(self.state.ledger, public_only=True),
+                      # Dogecoin too, once its node has synced (2026-10-13): a tip
+                      # paid in DOGE is a note on the Dogecoin chain.
+                      lambda: (self._check(self.state.doge, public_only=True)
+                               if self.state.doge is not None
+                               and self.state.chain_ready(self.state.doge) else None),
                       self._sync_ledgers,
                       self._check_pending_offers,
                       self._check_pending_feed,

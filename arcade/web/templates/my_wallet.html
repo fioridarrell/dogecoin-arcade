@@ -300,7 +300,10 @@ let said = {chains: []}, net = null, keys = null, tab = "activity";
  * send receive and balance at the top of your wallet should be in that token").
  * Send and Receive follow it; the network fee is still paid in PEP. */
 let asset = null;
-const COIN = () => (chainNow() || {}).mainnet ? "PEP" : "PEP TEST";
+const coinOf = (c) => !c ? "PEP TEST" : c.network === "doge" ? "DOGE" : c.mainnet ? "PEP" : "PEP TEST";
+const COIN = () => coinOf(chainNow());
+// Chains this node has that are not open yet: Dogecoin while it syncs (2026-10-13).
+const WAITING = {{ chain_menu(account_side=True)|rejectattr("ready")|list|tojson }};
 /** A token amount in its own units: divisible ones have 8 places, the rest are whole. */
 const tokenAmt = (raw, t) => t && t.divisible ? coinsOf(raw) : Number(raw || 0).toLocaleString();
 /** Raw units from what was typed, by the digits: 8 places for a divisible token, whole otherwise. */
@@ -322,12 +325,18 @@ function drawHead() {
   nets.replaceChildren();
   if (chains().length > 1) {
     for (const one of chains()) {
-      const b = el("button", "", one.label);
+      const b = el("button", "", one.title || one.label);
       b.type = "button";
       b.setAttribute("aria-pressed", String(one.network === (c && c.network)));
       b.onclick = () => { net = one.network; asset = null; keep(NET, net); drawAll(); };
       nets.append(b);
     }
+  }
+  for (const one of WAITING) {
+    const b = el("button", "chain-off", one.label);
+    b.type = "button"; b.disabled = true;
+    b.title = `${one.label} opens when this node has synced it (${one.progress}% so far)`;
+    nets.append(b);
   }
   if (!c) {
     $("bal").textContent = "—";
@@ -335,7 +344,7 @@ function drawHead() {
     return;
   }
   if (asset && asset.network !== c.network) asset = null;
-  UNIT = asset ? asset.name : (c.mainnet ? "PEP" : "PEP TEST");
+  UNIT = asset ? asset.name : coinOf(c);
   $("bal").textContent = asset ? tokenAmt(asset.balance, asset) : coinsOf(c.spendable ?? c.balance);
   $("unit").textContent = UNIT;
   const chip = $("netchip");

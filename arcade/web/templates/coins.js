@@ -172,7 +172,7 @@ export async function address(pubkey, version) {
 
 //: SLIP-44 registers 3 for Dogecoin and 1 for every test chain. Pepecoin
 //: has no registration of its own, so it follows the family it forked.
-export const COIN_TYPE = {main: 3, test: 1, regtest: 1};
+export const COIN_TYPE = {main: 3, test: 1, regtest: 1, doge: 3};
 
 export function coinPath(network, index = 0) {
   const coin = COIN_TYPE[network] ?? 1;

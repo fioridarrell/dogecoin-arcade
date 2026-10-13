@@ -10,13 +10,21 @@
    the create tab"). The choice is this browser's own; the pages it opens carry it. #}
 {% if public %}
 <div class="chainpick" role="group" aria-label="Which chain to create on">
-  {% for c in state.token_chains|sort(attribute="is_mainnet") %}
-  <a href="/create/chain?to={{ c.network }}&amp;back=/create" class="{{ 'on' if c is sameas chain }}"
-     aria-pressed="{{ 'true' if c is sameas chain else 'false' }}">
-    <span class="tag {{ 'mainnet' if c.is_mainnet else 'testnet' }}">{{ 'mainnet' if c.is_mainnet else 'testnet' }}</span>
-    <strong>{{ 'Mainnet: real PEP' if c.is_mainnet else 'Testnet: PEP TEST' }}</strong>
-    <span class="muted">{{ 'Permanent and worth money. Every transaction shows its full cost, the operator’s 0.5% fee included, before you say yes.' if c.is_mainnet else 'Free test coins to try things with. Nothing here is worth anything.' }}</span>
-  </a>
+  {% for m in chain_menu()|sort(attribute="mainnet") %}
+  {% set on = m.network == chain.network %}
+  {% if m.ready %}
+  <a href="/create/chain?to={{ m.network }}&amp;back=/create" class="{{ 'on' if on }}"
+     aria-pressed="{{ 'true' if on else 'false' }}">
+  {% else %}
+  {# Dogecoin while its node syncs (2026-10-13): shown, grayed out, not a link. #}
+  <span class="chain-off" aria-disabled="true" title="{{ m.label }} opens when its node has synced">
+  {% endif %}
+    <span class="tag {{ m.net }}">{{ 'mainnet' if m.doge else m.net }}</span>
+    <strong>{{ m.label }}: {{ 'real ' ~ m.coin if m.mainnet else m.coin }}</strong>
+    <span class="muted">{% if not m.ready %}Opens when this node has synced {{ m.label }}: {{ m.progress }}% so far.
+      {%- elif m.mainnet %}Permanent and worth money. Every transaction shows its full cost, the operator’s 0.5% fee included, before you say yes.
+      {%- else %}Free test coins to try things with. Nothing here is worth anything.{% endif %}</span>
+  {% if m.ready %}</a>{% else %}</span>{% endif %}
   {% endfor %}
 </div>
 {% else %}

@@ -12,7 +12,7 @@
   .statbar .stat{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:10px 12px}
   @media (max-width:560px){.statbar{grid-template-columns:repeat(2,minmax(0,1fr))}}
 </style>
-{% set coin_name = 'PEP' if chain.is_mainnet else 'PEP TEST' %}
+{% set coin_name = chain.params.coin %}
 <a class="back-link" href="/exchange?tab=market">&#8592; All collections</a>
 
 {% macro coins(sats) %}{{ "%.4f"|format(sats / 100000000) }}{% endmacro %}

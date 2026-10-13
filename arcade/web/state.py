@@ -147,7 +147,31 @@ class ChainContext:
 
     @property
     def is_mainnet(self) -> bool:
-        return self.network == "main"
+        """Real coins: Pepecoin mainnet AND Dogecoin (2026-10-13). Everything a
+        mainnet page does for safety -- the second confirmation, no faucet, the
+        words backed up -- Dogecoin needs as much."""
+        return self.network in ("main", "doge")
+
+    @property
+    def is_doge(self) -> bool:
+        return self.network == "doge"
+
+    @property
+    def family(self) -> str:
+        """Which coin: "PEP" or "DOGE"."""
+        return "DOGE" if self.is_doge else "PEP"
+
+    @property
+    def title(self) -> str:
+        """One naming convention for every chain (2026-10-13: "Pep and doge
+        should have the same naming conventions for mainnet"): PEP Testnet, PEP
+        Mainnet, DOGE Mainnet."""
+        return f"{self.family} {'Mainnet' if self.is_mainnet else 'Testnet'}"
+
+    @property
+    def net(self) -> str:
+        """The word a page files this chain under: testnet, mainnet or dogecoin."""
+        return "dogecoin" if self.is_doge else ("mainnet" if self.network == "main" else "testnet")
 
     def credentials(self):
         """Explicit configuration if given, otherwise go and find the node.
@@ -210,6 +234,11 @@ class AppState:
     home: Path
     messaging: ChainContext
     ledger: ChainContext
+    #: Dogecoin mainnet, the third network (2026-10-13), when this machine runs a
+    #: Dogecoin node. Shown on every page from the start, and only USED -- indexed,
+    #: offered, paid on -- once the node has synced (`chain_ready`).
+    doge: ChainContext | None = None
+    _sync: dict = field(default_factory=dict)
 
     identity: Identity | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
@@ -1025,11 +1054,63 @@ class AppState:
 
     @property
     def token_chains(self) -> list[ChainContext]:
-        """The chains tokens are indexed on: the ledger first, then testnet."""
+        """The chains tokens are indexed on: the ledger first, then testnet, then
+        Dogecoin once its node has synced. Everything that does real work loops
+        over this, so a chain still syncing is simply not here yet."""
         chains = [self.ledger]
         if self.messaging.network != self.ledger.network:
             chains.append(self.messaging)
+        if self.doge is not None and self.chain_ready(self.doge):
+            chains.append(self.doge)
         return chains
+
+    @property
+    def all_chains(self) -> list[ChainContext]:
+        """Every chain this node has, ready or not, for the pages to SHOW: a
+        picker draws Dogecoin grayed out while it syncs (2026-10-13: "Have
+        the Doge options grayed out until the node is fully synced")."""
+        chains = [self.ledger]
+        if self.messaging.network != self.ledger.network:
+            chains.append(self.messaging)
+        if self.doge is not None:
+            chains.append(self.doge)
+        return chains
+
+    #: How long a sync answer is kept. Pages ask on every draw; the node is asked
+    #: at most once a minute, from whichever request comes first.
+    SYNC_SECONDS = 60
+
+    def chain_sync(self, chain: ChainContext) -> dict:
+        """{ready, progress (0..1), blocks, headers, online} for one chain.
+
+        Pepecoin's two chains are always ready: they are what the arcade is. A
+        Dogecoin node is ready when it is out of its initial download, its blocks
+        have reached its headers and it says it is all but done -- a node that is
+        merely reachable is not one to take money on."""
+        if not chain.is_doge:
+            return {"ready": True, "progress": 1.0, "online": True}
+        now = time.time()
+        kept = self._sync.get(chain.network)
+        if kept and kept[0] > now:
+            return kept[1]
+        said = {"ready": False, "progress": 0.0, "online": False, "blocks": 0, "headers": 0}
+        try:
+            with chain.rpc() as rpc:
+                info = rpc.get_blockchain_info()
+            blocks, headers = int(info.get("blocks", 0)), int(info.get("headers", 0))
+            progress = float(info.get("verificationprogress", 0) or 0)
+            said = {"online": True, "blocks": blocks, "headers": headers,
+                    "progress": min(1.0, progress),
+                    "ready": (not info.get("initialblockdownload", True)
+                              and headers > 0 and headers - blocks <= 2
+                              and progress >= 0.9999)}
+        except Exception:
+            pass
+        self._sync[chain.network] = (now + self.SYNC_SECONDS, said)
+        return said
+
+    def chain_ready(self, chain: ChainContext) -> bool:
+        return bool(self.chain_sync(chain).get("ready"))
 
     @property
     def rpc_cookie_path(self) -> Path:
@@ -1044,7 +1125,7 @@ class AppState:
     def rpc_chain(self, which: str) -> "ChainContext | None":
         """The chain `/rpc/main` or `/rpc/test` speaks for, if it is indexed."""
         for chain in self.token_chains:
-            if which == ("main" if chain.is_mainnet else "test"):
+            if which == ("doge" if chain.is_doge else "main" if chain.is_mainnet else "test"):
                 return chain
         return None
 

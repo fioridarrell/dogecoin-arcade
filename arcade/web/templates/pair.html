@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 {% import "_chart.html" as chart %}
 {% import "_exui.html" as ex %}
-{% block title %}{{ wall_text(prop.name, 'A token') }}/{{ 'PEP' if chain.is_mainnet else 'PEP TEST' }} · Exchange · DogecoinArcade{% endblock %}
+{% block title %}{{ wall_text(prop.name, 'A token') }}/{{ chain.params.coin }} · Exchange · DogecoinArcade{% endblock %}
 {% block body %}
 <div id="live" data-generation="{{ state.generation }}" class="live"></div>
 <a class="back-link" href="/exchange?tab=tokens">&#8592; All markets</a>
 
 {{ ex.style() }}
-{% set coin_name = 'PEP' if chain.is_mainnet else 'PEP TEST' %}
+{% set coin_name = chain.params.coin %}
 {# The market's face, its price big, and the day's move (the Exchange redesign,
    2026-10-09); the rest of the day's numbers in one quiet line under it. #}
 <div class="ex-hero">

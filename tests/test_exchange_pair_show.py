@@ -46,7 +46,7 @@ def test_mix_lists_both_chains_and_the_cross_chain_book(client, monkeypatch):
     app, state = _markets(client, monkeypatch)
     page = app.get("/exchange?tab=tokens").text
     for label in ("Mix", "Testnet only", "Mainnet only", "Cross chain only"):
-        assert f">{label}</a>" in page, label
+        assert f"{label}</a>" in page, label
     assert 'href="/exchange?tab=tokens" aria-current="true">Mix' in page, "Mix is the default"
     assert sorted(set(_nets(page))) == ["cross", "mainnet", "testnet"], _nets(page)
     assert "/exchange/x/token/59" in page
@@ -98,7 +98,7 @@ def test_the_nfts_tab_has_the_same_chips(client, monkeypatch):
     app, state = _collections(client, monkeypatch)
     page = app.get("/exchange?tab=market").text
     for label in ("Mix", "Testnet only", "Mainnet only", "Cross chain only"):
-        assert f">{label}</a>" in page, label
+        assert f"{label}</a>" in page, label
     nets = re.findall(r'class="ex-coll"[^>]*data-net="(\w+)"', page)
     assert {"testnet", "mainnet"} <= set(nets), nets
     for show in ("testnet", "mainnet"):
@@ -120,8 +120,8 @@ def test_the_launchpad_tab_chooses_a_network_too(client):
     app, state = client
     page = app.get("/exchange?tab=mintpads").text
     for label in ("Mix", "Testnet only", "Mainnet only"):
-        assert f">{label}</a>" in page, label
-    assert ">Cross chain only</a>" not in page
+        assert f"{label}</a>" in page, label
+    assert "Cross chain only</a>" not in page
     latest = app.get("/exchange?tab=mintpads&sort=new&show=mainnet").text
     assert 'tab=mintpads&amp;sort=new&amp;show=mainnet" aria-current="true"' in latest
     assert 'href="/exchange?tab=mintpads&amp;sort=new&amp;show=mainnet" aria-current="true">Latest' in latest, \

@@ -1013,6 +1013,13 @@ def create_app(state: AppState) -> FastAPI:
         """Mainnet node health. Read-only until a wallet is enabled there."""
         return state.ledger.status()
 
+    def _doge_status() -> dict[str, Any]:
+        """The Dogecoin node for the Wallet page: its health and how far its sync
+        has got. Empty when this machine runs no Dogecoin node."""
+        if state.doge is None:
+            return {"doge": None, "doge_sync": None}
+        return {"doge": state.doge.status(), "doge_sync": state.chain_sync(state.doge)}
+
     # --- overview -------------------------------------------------------------
 
     @app.get("/", response_class=HTMLResponse)
@@ -1067,7 +1074,7 @@ def create_app(state: AppState) -> FastAPI:
                     claiming = what[len("claim @"):]
                     break
         register = state.accounts()
-        return render(request, "overview.html", contact_code=code, announced=announced,
+        return render(request, "overview.html", **_doge_status(), contact_code=code, announced=announced,
                       seats_free=register.free(), seats_total=register.seats,
                       my_tag=my_tag, claiming=claiming,
                       my_address=state.derived_address,
@@ -2724,7 +2731,8 @@ def create_app(state: AppState) -> FastAPI:
                     prop = index.property(key[1])
                     if prop is None:
                         continue
-                    name = prop["name"] + (" (mainnet)" if chain.is_mainnet else "")
+                    name = prop["name"] + (" (Dogecoin)" if chain.is_doge else
+                                           " (mainnet)" if chain.is_mainnet else "")
                     said[name] = format_amount(units, prop["divisible"])
                 post.token_tipped = said
                 post.tips += len(seen)
@@ -2745,16 +2753,45 @@ def create_app(state: AppState) -> FastAPI:
             said = store.key_for(author)
         if said is None or "other_address" not in said.keys():
             return ""
-        return str(said["other_address"] or "")
+        other = str(said["other_address"] or "")
+        # On Dogecoin: the same key as their Pepecoin mainnet address.
+        return _doge_twin(other) if chain.is_doge else other
+
+    def _chain_menu(account_side: bool = False) -> list[dict[str, Any]]:
+        """Every chain, for a page to SHOW: its coin, its word, and whether it may
+        be picked yet. Dogecoin is in it from the start, grayed out with how far
+        its node has got, until the node has synced (2026-10-13). With
+        `account_side`, in the order an account's chains go: the tag chain first."""
+        chains = list(state.all_chains)
+        if account_side:
+            chains.sort(key=lambda c: (c is not _account_chain(), c.is_doge))
+        out = []
+        for c in chains:
+            sync = state.chain_sync(c)
+            out.append({"network": c.network, "mainnet": bool(c.is_mainnet),
+                        "doge": c.is_doge, "coin": c.params.coin, "net": c.net,
+                        "label": c.title, "family": c.family,
+                        "word": "mainnet" if c.is_mainnet else "testnet",
+                        "ready": bool(sync.get("ready")),
+                        "progress": round(100 * float(sync.get("progress") or 0), 1),
+                        "online": bool(sync.get("online"))})
+        return out
+
+    TEMPLATES.env.globals["chain_menu"] = _chain_menu
+
+    def _coin_of(where: Any) -> str:
+        """A chain's coin by its network name, or by the old mainnet bool."""
+        if isinstance(where, str) and where in NETWORKS:
+            return NETWORKS[where].coin
+        return "PEP" if where else "PEP TEST"
+
+    TEMPLATES.env.globals["coin_of"] = _coin_of
 
     def _tip_chains() -> list[dict[str, Any]]:
         """The chains a tip can be paid on, for the tip form: the tag chain
         first (2026-10-13: "testnet PEP mainnet PEP and testnet or
-        mainnet token")."""
-        return [{"network": c.network, "mainnet": bool(c.is_mainnet),
-                 "coin": "PEP" if c.is_mainnet else "PEP TEST",
-                 "word": "mainnet" if c.is_mainnet else "testnet"}
-                for c in _account_chains()]
+        mainnet token"), then Dogecoin -- shown grayed out until it syncs."""
+        return _chain_menu(account_side=True)
 
     TEMPLATES.env.globals["tip_chains"] = _tip_chains
 
@@ -3832,6 +3869,11 @@ def create_app(state: AppState) -> FastAPI:
     # --- wallet ---------------------------------------------------------------
 
     def _context(which: str):
+        # The node's own Dogecoin wallet too, once its node has synced (2026-10-13).
+        if which == "doge" and state.doge is not None:
+            if not state.chain_ready(state.doge):
+                raise ValueError("Dogecoin is not open yet: its node is still syncing")
+            return state.doge
         if which not in ("messaging", "ledger"):
             raise ValueError("unknown wallet")
         return state.messaging if which == "messaging" else state.ledger
@@ -3840,7 +3882,7 @@ def create_app(state: AppState) -> FastAPI:
     def wallet(request: Request):
         chain, _ = _token_chain()
         return render(request, "wallet.html", messaging=messaging_status(),
-                      ledger=ledger_status(), prepared=None, which=None, now=time.time(),
+                      ledger=ledger_status(), **_doge_status(), prepared=None, which=None, now=time.time(),
                       mining=_mining_json(), tab="coins", chain=chain,
                       other_chains=[c for c in state.token_chains if c is not chain])
 
@@ -3964,7 +4006,7 @@ def create_app(state: AppState) -> FastAPI:
             ctx = _context(which)
             sats = walletlib.parse_amount(amount)
             destination = _tag_address(state, destination,
-                                       mainnet=ctx.is_mainnet)
+                                       mainnet=ctx)
             with ctx.rpc() as rpc:
                 prepared = walletlib.prepare_send(rpc, destination, sats)
                 if confirmed == "yes":
@@ -4189,9 +4231,12 @@ def create_app(state: AppState) -> FastAPI:
     def create_chain(request: Request, to: str = "", back: str = "/create"):
         """Pick the chain this browser creates on: Testnet or Mainnet."""
         chosen = next((c for c in state.token_chains
-                       if to in (c.network, "main" if c.is_mainnet else "test")), None)
+                       if to in (c.network, c.net, "doge" if c.is_doge else
+                                 "main" if c.is_mainnet else "test")), None)
         where = back if back.startswith("/") and not back.startswith("//") else "/create"
         answer = RedirectResponse(where, status_code=303)
+        if chosen is None and state.doge is not None and to in ("doge", "dogecoin"):
+            state.flash("Dogecoin is not open yet: its node is still syncing.", "err")
         if chosen is not None:
             answer.set_cookie(CHAIN_COOKIE, chosen.network, max_age=365 * 86400,
                               samesite="lax", secure=_over_https(request), path="/")
@@ -5384,6 +5429,10 @@ def create_app(state: AppState) -> FastAPI:
     def _net_badge(where: Any = None) -> Markup:
         """TESTNET or MAINNET, with its icon. `where` is a chain, a network name, or
         a bool meaning mainnet."""
+        # Dogecoin, by its chain or its network name (2026-10-13), in yellow.
+        if getattr(where, "is_doge", False) or where in ("doge", "dogecoin"):
+            return Markup('<span class="netbadge doge" title="Dogecoin mainnet: real DOGE">'
+                          '<b class="netl">D</b> MAINNET</span>')
         if isinstance(where, bool):
             main = where
         elif isinstance(where, str):
@@ -5391,10 +5440,13 @@ def create_app(state: AppState) -> FastAPI:
         else:
             main = bool(getattr(where, "is_mainnet", False))
         if main:
-            return Markup('<span class="netbadge main" title="Mainnet: real coins with real value">'
-                          + _ICON_MAIN + ' MAINNET</span>')
-        return Markup('<span class="netbadge test" title="Testnet: test assets, no guaranteed '
-                      'value; the chain can be reset">' + _ICON_TEST + ' TESTNET</span>')
+            return Markup('<span class="netbadge main" title="Pepecoin mainnet: real PEP">'
+                          '<b class="netl">P</b> MAINNET</span>')
+        # Which coin as well as which net (2026-10-13: "Wherever it says
+        # testnet or mainnet it should also indicate pep or doge ... an uppercase
+        # P or D in the correct color"): P blue, P green, D yellow.
+        return Markup('<span class="netbadge test" title="Pepecoin testnet: test assets, no '
+                      'guaranteed value; the chain can be reset"><b class="netl">P</b> TESTNET</span>')
 
     def _supply_badge(prop: Any) -> Markup:
         """Fixed supply, or managed (the issuer can mint more whenever it likes)."""
@@ -6468,7 +6520,7 @@ def create_app(state: AppState) -> FastAPI:
         creator = page_row["creator"] if page_row else ""
         kind = str(body.get("kind") or "")
         try:
-            to = _tag_address(state, str(body.get("to") or ""), mainnet=chain.is_mainnet)
+            to = _tag_address(state, str(body.get("to") or ""), mainnet=chain)
         except ValueError:
             to = ""
         own = False
@@ -6546,7 +6598,7 @@ def create_app(state: AppState) -> FastAPI:
                 return contentlib._json({"error": "that inscription is not yours to send"},
                                         status=400)
         try:
-            to_address = _tag_address(state, to, mainnet=chain.is_mainnet)
+            to_address = _tag_address(state, to, mainnet=chain)
         except ValueError:
             to_address = ""
         now = time.time()
@@ -7154,7 +7206,7 @@ def create_app(state: AppState) -> FastAPI:
                             raise ValueError(f"nobody holds @{wanted}.")
                         destination = resolved
                     problem = _check_address(destination,
-                                             mainnet=chain.is_mainnet)
+                                             mainnet=chain)
                     if problem:
                         raise ValueError(problem)
 
@@ -7740,10 +7792,10 @@ def create_app(state: AppState) -> FastAPI:
             raise tokenlib.TokenError("a recipient address is needed.")
         try:
             address = _tag_address(state, address,
-                                   mainnet=state.token_chain.is_mainnet)
+                                   mainnet=state.token_chain)
         except ValueError as exc:
             raise tokenlib.TokenError(str(exc)) from None
-        complaint = _check_address(address, mainnet=state.token_chain.is_mainnet)
+        complaint = _check_address(address, mainnet=state.token_chain)
         if complaint:
             raise tokenlib.TokenError(complaint)
         return address
@@ -8972,8 +9024,12 @@ def create_app(state: AppState) -> FastAPI:
         once here stops every caller having to.
         """
         out = [_account_chain()]
-        for chain in (state.ledger,):
+        for chain in (state.ledger, state.doge):
             if chain is not None and chain.network != _account_chain().network:
+                # Dogecoin only once its node has synced (2026-10-13): until
+                # then nothing may be paid, held or signed there.
+                if chain.is_doge and not state.chain_ready(chain):
+                    continue
                 out.append(chain)
         return tuple(out)
 
@@ -8989,9 +9045,11 @@ def create_app(state: AppState) -> FastAPI:
         if not wanted:
             return _account_chain()
         for chain in _account_chains():
-            if wanted in (chain.network, chain.label.lower(),
-                          "mainnet" if chain.is_mainnet else "testnet"):
+            if wanted in (chain.network, chain.label.lower(), chain.net,
+                          chain.params.label.lower()):
                 return chain
+        if state.doge is not None and wanted in ("doge", "dogecoin"):
+            raise ValueError("Dogecoin is not open here yet: its node is still syncing")
         raise ValueError(f"this node does not run {wanted}")
 
     def _chain_on(network: str):
@@ -9311,7 +9369,7 @@ def create_app(state: AppState) -> FastAPI:
             blob = said.get("blob")
             if not isinstance(blob, dict) or not blob.get("sealed"):
                 raise ValueError("that is not an encrypted wallet")
-            complaint = _check_address(address, mainnet=chain.is_mainnet)
+            complaint = _check_address(address, mainnet=chain)
             if complaint:
                 raise ValueError(complaint)
             register = state.accounts()
@@ -9335,7 +9393,7 @@ def create_app(state: AppState) -> FastAPI:
             elsewhere = str(said.get(f"address_{other.network}", "")).strip()
             if not elsewhere:
                 continue
-            if _check_address(elsewhere, mainnet=other.is_mainnet):
+            if _check_address(elsewhere, mainnet=other):
                 continue
             state.set_setting(_address_key(pubkey, other), elsewhere)
             their_key = str(said.get(f"coin_pubkey_{other.network}",
@@ -9565,7 +9623,7 @@ def create_app(state: AppState) -> FastAPI:
         about somebody else.
         """
         account = signed_in(request)
-        chains = [{"network": one.network, "label": one.label,
+        chains = [{"network": one.network, "label": one.label, "title": one.title,
                    "version": one.params.pubkeyhash_version,
                    "mainnet": bool(one.is_mainnet),
                    "tags": one is _account_chain()}
@@ -11252,7 +11310,7 @@ def create_app(state: AppState) -> FastAPI:
             if row["owner"] != address:
                 raise ValueError("that piece is not this account's to send")
             to, to_tag = _payee(said.get("to", ""), chain)
-            complaint = _check_address(to, mainnet=chain.is_mainnet)
+            complaint = _check_address(to, mainnet=chain)
             if complaint:
                 raise ValueError(complaint)
             if to == address:
@@ -14065,7 +14123,7 @@ def create_app(state: AppState) -> FastAPI:
             # A run that is only to be recorded, not paid (2026-09-30): its seed
             # is bound to the judge that will score it, and to this address.
             row = _judge_row(chain, judge)
-            complaint = _check_address(address, mainnet=chain.is_mainnet)
+            complaint = _check_address(address, mainnet=chain)
             if complaint:
                 raise refereelib.RefereeError(complaint)
             return _referee.issue_seed("judge:" + row["txid"], address)
@@ -14079,7 +14137,7 @@ def create_app(state: AppState) -> FastAPI:
         refusal = _pool_refusal(chain, pool)
         if refusal:
             raise refereelib.RefereeError(refusal)
-        complaint = _check_address(address, mainnet=chain.is_mainnet)
+        complaint = _check_address(address, mainnet=chain)
         if complaint:
             raise refereelib.RefereeError(complaint)
         return _referee.issue_seed(pool["txid"], address,
@@ -14109,7 +14167,7 @@ def create_app(state: AppState) -> FastAPI:
                 raise refereelib.RefereeError("this game has no pool that takes a session seed")
         if not pools:
             raise refereelib.RefereeError("this game has no refereed pool this node referees")
-        complaint = _check_address(address, mainnet=chain.is_mainnet)
+        complaint = _check_address(address, mainnet=chain)
         if complaint:
             raise refereelib.RefereeError(complaint)
         facts = {p["txid"]: _facts_of(chain, p["referee"], address)
@@ -14461,7 +14519,7 @@ def create_app(state: AppState) -> FastAPI:
         if str(said.get("escrow") or address) != address:
             raise escrowlib.EscrowError("those facts make a different escrow")
         to = str(said.get("to") or "")
-        complaint = _check_address(to, mainnet=chain.is_mainnet)
+        complaint = _check_address(to, mainnet=chain)
         if complaint:
             raise escrowlib.EscrowError(complaint)
         held = _escrow_holdings(chain, address)
@@ -17985,7 +18043,7 @@ def create_app(state: AppState) -> FastAPI:
                                      f"not published a {chain.label.lower()} address")
             else:
                 to, to_tag = _payee(said.get("to", ""), chain)
-            complaint = _check_address(to, mainnet=chain.is_mainnet)
+            complaint = _check_address(to, mainnet=chain)
             if complaint:
                 raise ValueError(complaint)
             if to == address:
@@ -18185,7 +18243,7 @@ def create_app(state: AppState) -> FastAPI:
                 if action == "grant":
                     if str(said.get("to") or "").strip():
                         to, to_tag = _payee(said.get("to"), chain)
-                        complaint = _check_address(to, mainnet=chain.is_mainnet)
+                        complaint = _check_address(to, mainnet=chain)
                         if complaint:
                             raise ValueError(complaint)
                     if to == address:
@@ -18203,7 +18261,7 @@ def create_app(state: AppState) -> FastAPI:
                     what = f"revoke {shown} (they are destroyed)"
             elif action == "issuer":
                 to, to_tag = _payee(said.get("to"), chain)
-                complaint = _check_address(to, mainnet=chain.is_mainnet)
+                complaint = _check_address(to, mainnet=chain)
                 if complaint:
                     raise ValueError(complaint)
                 if to == address:
@@ -18524,7 +18582,7 @@ def create_app(state: AppState) -> FastAPI:
             if not sealed:
                 raise ValueError("there is nothing to send")
             to = str(said.get("to", "")).strip()
-            complaint = _check_address(to, mainnet=chain.is_mainnet)
+            complaint = _check_address(to, mainnet=chain)
             if complaint:
                 raise ValueError(complaint)
             # The envelope, as the scanner will read it back: a header
@@ -18859,7 +18917,7 @@ def create_app(state: AppState) -> FastAPI:
             chain = _chain_asked(said)
         except ValueError as exc:
             return JSONResponse({"detail": str(exc)}, status_code=400)
-        complaint = _check_address(address, mainnet=chain.is_mainnet)
+        complaint = _check_address(address, mainnet=chain)
         if complaint:
             return JSONResponse({"detail": complaint}, status_code=400)
         state.set_setting(_address_key(account.pubkey, chain), address)
@@ -19705,7 +19763,7 @@ def create_app(state: AppState) -> FastAPI:
             # the ANSWER is shown: somebody paying @robin should see the
             # address their coins are going to before they sign.
             to, to_tag = _payee(said.get("to", ""), chain)
-            complaint = _check_address(to, mainnet=chain.is_mainnet)
+            complaint = _check_address(to, mainnet=chain)
             if complaint:
                 raise ValueError(complaint)
             # Coins to your own address are allowed: it is how one coin becomes
@@ -20145,8 +20203,19 @@ def create_app(state: AppState) -> FastAPI:
 
     def _admin_wallets() -> list[dict]:
         out = []
-        for which, ctx in (("messaging", state.messaging), ("ledger", state.ledger)):
-            row = {"which": which, "label": ctx.label, "network": ctx.network}
+        wallets = [("messaging", state.messaging), ("ledger", state.ledger)]
+        if state.doge is not None:
+            wallets.append(("doge", state.doge))
+        for which, ctx in wallets:
+            row = {"which": which, "label": ctx.title, "network": ctx.network,
+                   "net": ctx.net, "coin": ctx.params.coin}
+            sync = state.chain_sync(ctx)
+            if not sync.get("ready"):
+                # Dogecoin while it syncs (2026-10-13): shown, grayed out, and how far.
+                row.update(syncing=True, progress=round(100 * float(sync.get("progress") or 0), 1),
+                           blocks=sync.get("blocks", 0), headers=sync.get("headers", 0))
+                out.append(row)
+                continue
             try:
                 with ctx.rpc() as rpc:
                     got = walletlib.balance(rpc)
@@ -20363,7 +20432,7 @@ def create_app(state: AppState) -> FastAPI:
         try:
             ctx = _context(str(said.get("which", "")))
             sats = walletlib.parse_amount(str(said.get("amount", "")))
-            to = _tag_address(state, str(said.get("to", "")), mainnet=ctx.is_mainnet)
+            to = _tag_address(state, str(said.get("to", "")), mainnet=ctx)
             with ctx.rpc() as rpc:
                 prepared = walletlib.prepare_send(rpc, to, sats)
         except Exception as exc:                        # noqa: BLE001
@@ -20871,7 +20940,7 @@ def create_app(state: AppState) -> FastAPI:
 
     #: The Tokens tab's chips (2026-10-13: "Add a mix, testnet only,
     #: mainnet only, and cross chain only Sort buttons to the token exchange").
-    PAIR_SHOWS = ("mix", "testnet", "mainnet", "cross")
+    PAIR_SHOWS = ("mix", "testnet", "mainnet", "dogecoin", "cross")
 
     def _pairs_by_net(chain, index, trades, show: str) -> list[dict[str, Any]]:
         """The Tokens tab's rows for one chip: every indexed chain's own pairs
@@ -20884,14 +20953,15 @@ def create_app(state: AppState) -> FastAPI:
         """
         rows: list[dict[str, Any]] = []
         for c in state.token_chains:
-            net = "mainnet" if c.is_mainnet else "testnet"
+            net = c.net
             if show not in ("mix", net):
                 continue
             try:
                 here = c is chain
                 idx = index if here else state.token_index(c)
                 for row in _pairs(idx, trades if here else idx.trades(), xchain=False):
-                    row.update(net=net, mainnet=c.is_mainnet, switch="" if here else c.network)
+                    row.update(net=net, mainnet=c.is_mainnet, chain_net=c.network,
+                               switch="" if here else c.network)
                     rows.append(row)
             except Exception:
                 log.debug("the %s pairs could not be read", net, exc_info=True)
@@ -20901,7 +20971,8 @@ def create_app(state: AppState) -> FastAPI:
             try:
                 for row in _xchain_markets(state.token_index(state.messaging),
                                            faces_for=_faces_for):
-                    row.update(net="cross", mainnet=False, switch="")
+                    row.update(net="cross", mainnet=False, chain_net=state.messaging.network,
+                               switch="")
                     rows.append(row)
             except Exception:
                 log.debug("cross-chain markets unavailable", exc_info=True)
@@ -20912,7 +20983,7 @@ def create_app(state: AppState) -> FastAPI:
         """(chain, its index, net word, switch) for every chain a chip shows;
         `switch` as in `_pairs_by_net`."""
         for c in state.token_chains:
-            net = "mainnet" if c.is_mainnet else "testnet"
+            net = c.net
             if show in ("mix", net):
                 yield c, (state.token_index(chain) if c is chain else state.token_index(c)), \
                     net, ("" if c is chain else c.network)
@@ -20949,12 +21020,13 @@ def create_app(state: AppState) -> FastAPI:
                 except Exception:
                     crossing = set()
             for x in got_colls:
-                x.update(net=net, mainnet=c.is_mainnet, switch=switch,
+                x.update(net=net, mainnet=c.is_mainnet, chain_net=c.network, switch=switch,
                          cross=(x["creator"], x["name"]) in crossing)
             for x in got_sales:
                 # `mainnet` on a sale is the coin it was paid in.
                 was_cross = bool(x.get("mainnet")) and not c.is_mainnet
                 x.update(net="cross" if was_cross else net, switch=switch,
+                         chain_net="main" if was_cross else c.network,
                          mainnet=bool(x.get("mainnet")) or c.is_mainnet)
             if cross:
                 got_colls = [x for x in got_colls if x["cross"]]
@@ -20974,7 +21046,7 @@ def create_app(state: AppState) -> FastAPI:
         return colls, sales[:8], tags
 
     #: Launchpads have no cross-chain kind: each pad sells on its own chain.
-    PAD_SHOWS = ("mix", "testnet", "mainnet")
+    PAD_SHOWS = ("mix", "testnet", "mainnet", "dogecoin")
 
     def _xchain_markets(index, faces_for) -> list[dict[str, Any]]:
         """Every cross-chain market with an order standing or a trade done, as a
@@ -22990,7 +23062,8 @@ def create_app(state: AppState) -> FastAPI:
                 try:
                     shops = data["shops"] if c is chain else _shop_listings(idx, c)
                     for pad in _pads_ranked(request, idx, c, data["sort"], shops=shops):
-                        pad.update(net=net, mainnet=c.is_mainnet, switch=switch)
+                        pad.update(net=net, mainnet=c.is_mainnet, chain_net=c.network,
+                                   switch=switch)
                         pads.append(pad)
                 except Exception:
                     log.debug("the %s pads could not be read", net, exc_info=True)
@@ -23529,7 +23602,26 @@ def _node_cut(state) -> dict:
     return {"bps": bps, "to": state.derived_address} if bps else {}
 
 
-def _tag_address(state, destination: str, *, mainnet: bool) -> str:
+def _doge_twin(address: str) -> str:
+    """The same key's address on Dogecoin, for a Pepecoin MAINNET address, else "".
+
+    An account's mainnet key is derived on BIP44 coin type 3 (coins.js
+    COIN_TYPE), which is Dogecoin's own, so its Dogecoin key IS its Pepecoin
+    mainnet key: same hash, Dogecoin's version byte. That is how a person who
+    published a Pepecoin mainnet address can be paid in DOGE without publishing
+    anything new (2026-10-13). A node's own wallet holds that key in its
+    Pepecoin wallet; DOGE sent there is spent by importing it into Dogecoin Core.
+    """
+    try:
+        version, payload = b58check_decode(address)
+    except Exception:
+        return ""
+    if version != NETWORKS["main"].pubkeyhash_version or len(payload) != 20:
+        return ""
+    return b58check_encode(NETWORKS["doge"].pubkeyhash_version, payload)
+
+
+def _tag_address(state, destination: str, *, mainnet) -> str:
     """An @tag turned into the address that holds it, or the text unchanged.
 
     Every send takes one of these now -- coins, tokens, grants, revokes, an
@@ -23548,8 +23640,15 @@ def _tag_address(state, destination: str, *, mainnet: bool) -> str:
     if not taglib.looks_like_a_tag(destination):
         return destination
     wanted = taglib.normalise(destination)
+    if getattr(mainnet, "is_doge", False):
+        # Tags are not claimed on Dogecoin: the holder's Pepecoin mainnet
+        # address, as the same key on Dogecoin (`_doge_twin`).
+        twin = _doge_twin(_tag_address(state, destination, mainnet=True))
+        if not twin:
+            raise ValueError(f"@{wanted} has no address this node can pay in DOGE.")
+        return twin
     for chain in state.token_chains:
-        if bool(chain.is_mainnet) != bool(mainnet):
+        if bool(chain.is_mainnet) != bool(mainnet) or chain.is_doge:
             continue
         try:
             found = state.token_index(chain).address_of(wanted)
@@ -23580,7 +23679,17 @@ def _check_address(address: str, *, mainnet: bool) -> str | None:
     now "is this an address on one of the two chains this arcade moves coins
     on", which is the only question a send can act on.
     """
-    wanted = (NETWORKS["main"],) if mainnet else (NETWORKS["test"], NETWORKS["regtest"])
+    # `mainnet` is a chain or a bool. A CHAIN is exact (2026-10-13): Dogecoin is
+    # a real-coin chain too, and "mainnet" alone would let a Pepecoin address
+    # through on a Dogecoin send. A bool keeps its old meaning, Pepecoin's.
+    network = getattr(mainnet, "network", None)
+    if network in ("test", "regtest"):
+        wanted = (NETWORKS["test"], NETWORKS["regtest"])
+    elif network:
+        wanted = (NETWORKS[network],)
+    else:
+        wanted = (NETWORKS["main"],) if mainnet else (NETWORKS["test"], NETWORKS["regtest"])
+    word = (getattr(mainnet, "label", "") or "").lower() or ("mainnet" if mainnet else "testnet")
     try:
         version, payload = b58check_decode(address)
     except HTTPException:
@@ -23594,8 +23703,9 @@ def _check_address(address: str, *, mainnet: bool) -> str | None:
     other = [p.name for p in NETWORKS.values()
              if version in (p.pubkeyhash_version, p.scripthash_version)]
     if other:
-        return (f"that is a {other[0]} address, not a "
-                f"{'mainnet' if mainnet else 'testnet'} one.")
+        named = "Dogecoin" if other[0] == "doge" else other[0]
+        return (f"that is a {named} address, not a "
+                f"{word} one.")
     return ("that address is not one this arcade can pay -- it belongs to a "
             "chain this node does not run, and coins sent there cannot come "
             "back.")
