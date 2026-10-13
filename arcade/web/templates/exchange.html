@@ -516,6 +516,14 @@ document.querySelectorAll('.ex-seg a').forEach(function (a) {
 {% elif tab == 'tokens' %}
   {# The coin side is said as the coin, not the chain (2026-10-08: PEP, and PEP TEST on testnet). #}
   {% set coin_name = 'PEP' if chain.is_mainnet else 'PEP TEST' %}
+  {# Which markets (2026-10-13: "a mix, testnet only, mainnet only, and cross
+     chain only"): every chain's pairs together, or one kind of them. #}
+  <div class="row" style="gap:8px;margin:0 0 12px;flex-wrap:wrap;align-items:center">
+    <span class="ex-modes" style="margin:0" id="pairshow">
+      {%- for key, label in [('mix', 'Mix'), ('testnet', 'Testnet only'), ('mainnet', 'Mainnet only'), ('cross', 'Cross chain only')] %}
+      <a class="ex-chip{{ ' on' if show == key }}" href="/exchange?tab=tokens{{ '' if key == 'mix' else '&show=' ~ key }}"{% if show == key %} aria-current="true"{% endif %}>{{ label }}</a>
+      {%- endfor %}</span>
+  </div>
   {% if pairs %}
   {# One row per market, as a phone wants it (2026-10-09): its face, its name and
      what it is priced in, a line of its real recent trades, the last price and the
@@ -524,15 +532,21 @@ document.querySelectorAll('.ex-seg a').forEach(function (a) {
          oninput="findMarket(this.value)" aria-label="Search markets">
   <div class="ex-list" id="markets">
     {% for p in pairs %}
+    {% set coin_name = 'PEP' if p.mainnet else 'PEP TEST' %}
     {% set quote_text = wall_text(p.quote_label, 'a token') if p.quote_label else coin_name %}
+    {# A row on the other chain switches the browser's chain on the way in: a pair
+       page reads it, and would open the same number on this chain otherwise. An
+       account's browser keeps it in a cookie (/create/chain); the operator's node
+       switches with the header's own form (script below). #}
+    {% set row_href = ('/create/chain?to=' ~ p.switch ~ '&back=' ~ (p.href|urlencode)) if (p.switch and viewer == 'account') else p.href %}
     {# The row's own search key. A judged name contributes nothing to it, because the
        name is exactly what the cover hides; such a token is found by its number. #}
-    <a class="ex-mrow" href="{{ p.href }}" data-market="{{ wall_text(p.name, '')|lower }}/{{ quote_text|lower }} #{{ p.property_id }}">
+    <a class="ex-mrow" href="{{ row_href }}" data-net="{{ p.net }}"{% if p.switch and viewer != 'account' %} data-switch="{{ p.switch }}" data-back="{{ p.href }}"{% endif %} data-market="{{ wall_text(p.name, '')|lower }}/{{ quote_text|lower }} #{{ p.property_id }}">
       {%- if p.icon %}<img class="ex-tic" src="/content/{{ p.icon }}" alt="" loading="lazy">
       {%- else %}<span class="ex-tic" style="background:hsl({{ ((p.property_id|string|length * 97 + (p.name|length) * 31) % 360) }} 45% 42%)">{{ (wall_text(p.name, '?') or '?')[:1]|upper }}</span>{% endif %}
       {# Each row still says which chain and what supply (2026-10-06): the badges, small. #}
       <span class="ex-mid"><b>{{ wall(p.name, 'token name') }}<span class="muted" style="font-weight:500">/{% if p.quote_label %}{{ wall(p.quote_label, 'token name') }}{% else %}{{ coin_name }}{% endif %}</span></b>
-        <small>{{ net_badge(chain) }}{% if p.quote_main %}<span class="muted">/</span>{{ net_badge(true) }}{% endif %}{% if p.property_id %}{{ supply_badge(p) }}{% endif %}
+        <small>{{ net_badge(p.mainnet) }}{% if p.quote_main %}<span class="muted">/</span>{{ net_badge(true) }}{% endif %}{% if p.property_id %}{{ supply_badge(p) }}{% endif %}
           {#- The whole description, behind its wall (a verdict is kept per text): CSS cuts it short. -#}
           {%- if p.coins %} {{ p.trades }} trade{{ '' if p.trades == 1 else 's' }} today{% elif p.bid or p.ask %} {{ p.orders }} order{{ '' if p.orders == 1 else 's' }}{% endif %}
           {%- if p.about %}<span class="about" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ wall(p.about, 'description') }}</span>{% endif %}</small></span>
@@ -549,7 +563,20 @@ document.querySelectorAll('.ex-seg a').forEach(function (a) {
     {% endfor %}
   </div>
   <p class="muted" id="marketcount" style="font-size:.8rem;margin:6px 2px 0"></p>
+  <form method="post" action="/tokens/chain" id="pairswitch" hidden>
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <input type="hidden" name="chain"><input type="hidden" name="back"></form>
   <script>
+  document.querySelectorAll('#markets [data-switch]').forEach(function (row) {
+    row.addEventListener('click', function (ev) {
+      if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.button) return;
+      ev.preventDefault();
+      var f = document.getElementById('pairswitch');
+      f.elements.chain.value = row.dataset.switch;
+      f.elements.back.value = row.dataset.back;
+      f.submit();
+    });
+  });
   function findMarket(text) {
     var wanted = (text || '').trim().toLowerCase(), shown = 0;
     document.querySelectorAll('#markets [data-market]').forEach(function (row) {
@@ -562,8 +589,8 @@ document.querySelectorAll('.ex-seg a').forEach(function (a) {
   }
   </script>
   {% else %}
-  <div class="panel empty"><p>No market has an order or a trade yet on
-    {{ chain.label|lower }}.</p>
+  <div class="panel empty"><p>No market has an order or a trade yet
+    {%- if show == 'cross' %} on the cross-chain book{% elif show == 'mainnet' %} on mainnet{% elif show == 'testnet' %} on testnet{% endif %}.</p>
     <p class="muted" style="font-size:.86rem">Open a token from the
       <a href="/tokens">Tokens</a> page and put an order on its book.</p></div>
   {% endif %}
