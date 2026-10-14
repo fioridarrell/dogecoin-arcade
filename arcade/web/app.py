@@ -9641,6 +9641,10 @@ def create_app(state: AppState) -> FastAPI:
             max_age=accountslib.SESSION_DAYS * 86400,
             httponly=True, samesite="lax", secure=_over_https(request))
 
+    def _swap_big_lines() -> dict:
+        from ..node_trader import swap_big
+        return swap_big(state)
+
     @app.get("/account")
     def account_state(request: Request):
         """Everything the page needs to draw itself, and nothing else.
@@ -9667,6 +9671,8 @@ def create_app(state: AppState) -> FastAPI:
             # This node on the mesh: a swap a tab lists names it, and shows on other
             # arcades while it is online (trade_orders.py, 2026-10-13).
             "mesh_node": getattr(mesh, "node_id", "") if mesh is not None else "",
+            # Where a swap waits 3 confirmations instead of 1 (node_trader.swap_big).
+            "swap_big": _swap_big_lines(),
             "pubkey": account.pubkey, "network": chain.network,
             "version": chain.params.pubkeyhash_version,
             "address": "", "balance": 0, "watching": None, "tag": "",
@@ -14854,6 +14860,85 @@ def create_app(state: AppState) -> FastAPI:
             return JSONResponse({"detail": str(exc)}, status_code=400)
         state.bump_generation()
         return JSONResponse({"ok": True, "txid": txid})
+
+    @app.post("/account/trade/watch")
+    def account_trade_watch(request: Request, payload: Any = Body(None)):
+        """Hand this node a pre-signed claim or refund of one lock (trade_watch.py), so the
+        swap finishes with the tab closed (2026-10-13). Checked before it is held:
+        the lock pays (claim) or refunds (refund) this account; the spend pays nobody else;
+        a refund carries the lock's own time; and the signature is good over exactly it."""
+        from ..trade_watch import WatchError
+        account = _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        try:
+            htlclib, chain, owner, redeem, lock = _lock_for(account, said)
+            kind = str(said.get("kind") or "")
+            mine = _coin_pubkey(account.pubkey, chain)
+            if kind not in ("claim", "refund"):
+                raise ValueError("a held spend is a claim or a refund")
+            if (kind == "claim" and lock["claimer"] != mine) or (kind == "refund" and lock["refunder"] != mine):
+                raise ValueError("that lock is not this account's to " + kind)
+            txid, vout = str(said.get("txid") or "").lower(), int(said.get("vout") or 0)
+            raw = bytes.fromhex(str(said.get("raw") or ""))
+            signature = bytes.fromhex(str(said.get("signature") or ""))
+            lock_address = htlclib.address_of(redeem, chain.params)
+            with chain.rpc() as rpc:
+                decoded = rpc.call("decoderawtransaction", raw.hex())
+                prev = rpc.call("gettxout", txid, vout, True)
+            vin = decoded["vin"]
+            if len(vin) != 1 or vin[0].get("txid") != txid or int(vin[0].get("vout", -1)) != vout:
+                raise ValueError("a held spend spends that one lock coin")
+            if prev is None or prev["scriptPubKey"]["hex"] != htlclib.p2sh_script(redeem).hex():
+                raise ValueError("that coin is not under this lock, or is already spent")
+            if any(a not in (owner, lock_address) for o in decoded["vout"]
+                   for a in o["scriptPubKey"].get("addresses", [])):
+                raise ValueError("that spend pays somebody besides this account")
+            if decoded["vout"][-1]["scriptPubKey"].get("addresses", []) != [owner]:
+                raise ValueError("a lock spend's last output is this account's")
+            locktime = int(decoded.get("locktime", 0))
+            if kind == "refund" and locktime != lock["locktime"]:
+                raise ValueError("a refund carries the lock's own time")
+            inputs = [{"txid": txid, "vout": vout, "sequence": int(vin[0].get("sequence", 0xFFFFFFFF))}]
+            outputs = [(round(float(o["value"]) * COIN), bytes.fromhex(o["scriptPubKey"]["hex"]))
+                       for o in decoded["vout"]]
+            digest = escrowlib.sighash(inputs, outputs, 0, redeem, locktime)
+            if not _signature_good(mine, digest, signature):
+                raise ValueError("that signature is not this account's over that spend")
+            secret = str(said.get("secret") or "").lower()
+            where = said.get("secret_lock") if isinstance(said.get("secret_lock"), dict) else None
+            if where:
+                other = htlclib.parse(bytes.fromhex(str(where.get("redeem") or "")))
+                wnet = str(where.get("network") or "")
+                wctx = next((c for c in state.token_chains if c.network == wnet), None)
+                if other is None or wctx is None or other["secret_hash"] != lock["secret_hash"]:
+                    raise ValueError("the secret's lock is not the other half of this swap")
+                if other["refunder"] != _coin_pubkey(account.pubkey, wctx):
+                    raise ValueError("the secret's lock is not this account's own")
+                where = {"network": wnet, "txid": str(where.get("txid") or "").lower(),
+                         "vout": int(where.get("vout") or 0), "redeem": str(where["redeem"]).lower()}
+            job = state.trade_watch.hold(
+                account=account.pubkey, trade=str(said.get("trade") or "")[:64], network=chain.network,
+                txid=txid, vout=vout, kind=kind, redeem=redeem.hex(), raw=raw.hex(),
+                signature=signature.hex(), secret=secret, secret_lock=where,
+                min_conf=max(0, min(int(said.get("min_conf") or 0), 10)),
+                not_after=int(said.get("not_after") or 0))
+        except (ValueError, WatchError, RpcError) as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        return JSONResponse({"ok": True, "job": job})
+
+    def _signature_good(pubkey: bytes, digest: bytes, signature: bytes) -> bool:
+        """DER + sighash byte, by `pubkey` (compressed), over `digest` -- SIGHASH_ALL only."""
+        from cryptography.exceptions import InvalidSignature
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import ec, utils
+        if not signature or signature[-1] != 1:
+            return False
+        try:
+            key = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256K1(), bytes(pubkey))
+            key.verify(signature[:-1], bytes(digest), ec.ECDSA(utils.Prehashed(hashes.SHA256())))
+            return True
+        except (InvalidSignature, ValueError):
+            return False
 
     @app.post("/account/trade/facts")
     def account_trade_facts(request: Request, payload: Any = Body(None)):
@@ -23415,8 +23500,10 @@ def create_app(state: AppState) -> FastAPI:
             if not _node_trades():
                 raise ValueError(NODE_TRADES_OFF)
             give, get = _coin_side(give_network, give_amount), _coin_side(get_network, get_amount)
-            if (give["network"], give["kind"], give["asset"]) == (get["network"], get["kind"], get["asset"]):
-                raise ValueError("a swap is one thing for another")
+            if give["network"] == get["network"]:
+                where = (f" -- its market is /exchange/pair/{give['asset']}" if give["kind"] == "token" else "")
+                raise ValueError("a swap on one chain is instant on that chain's own market (one "
+                                 "transaction, no locks)" + where)
             order_id = f"ord-{secrets.token_hex(8)}"
             trader = state.node_trader
             trader.stand(order_id, give, get)

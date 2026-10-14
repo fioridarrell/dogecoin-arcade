@@ -34,17 +34,32 @@ from . import htlc as H
 
 INITIATOR, RESPONDER = "initiator", "responder"
 
-#: How long the initiator's lock stands, in seconds. The responder's stands half as
-#: long, so after the initiator claims (revealing the secret) the responder always has
-#: at least half the window to claim the other side.
-LOCK_SECONDS = {"mainnet": 48 * 3600, "testnet": 6 * 3600}
-#: Confirmations a lock needs before the other side acts on it.
-CONFIRMATIONS = {"mainnet": 3, "testnet": 1}
+#: How long the initiator's lock stands, in seconds; the responder's stands half as long.
+#: 2026-10-13: 2 h. Short, because nobody has to be online to finish a swap: each
+#: side's node holds its pre-signed claim and refund (arcade/trade_watch.py), so the lock
+#: time only bounds how long coins sit when the other side vanishes.
+LOCK_SECONDS = {"mainnet": 2 * 3600, "testnet": 2 * 3600}
+#: Confirmations a lock needs before the other side acts on it. 2026-10-13: one --
+#: a swap takes two or three minutes -- and three for a big one (reorg safety), "big" being
+#: a coin leg at or above BIG[network]; the operator sets the real line (admin, swap_big_*).
+CONFIRMATIONS = 1
+CONFIRMATIONS_BIG = 3
+BIG = {"main": 1_000_000 * 100_000_000, "doge": 1_000 * 100_000_000}
 #: Never claim the responder's lock when less than this is left on it: the responder
 #: must still have time to see the secret and claim the initiator's lock before T1.
-CLAIM_MARGIN = 3600
+CLAIM_MARGIN = 20 * 60
 #: Never start a lock with less than this left before the other lock's refund opens.
-LOCK_MARGIN = 2 * 3600
+LOCK_MARGIN = 30 * 60
+
+
+def confirmations_for(give: "Leg", get: "Leg", big: dict | None = None) -> int:
+    """1, or 3 when a mainnet coin leg is at or above its BIG line."""
+    big = BIG if big is None else big
+    for leg in (give, get):
+        line = big.get(leg.network)
+        if leg.kind == "coin" and leg.tier() == "mainnet" and line and leg.amount >= int(line):
+            return CONFIRMATIONS_BIG
+    return CONFIRMATIONS
 
 # The steps next_step can answer.
 LOCK, WAIT, CLAIM, REFUND, DONE, ABORT = "lock", "wait", "claim", "refund", "done", "abort"
@@ -77,6 +92,7 @@ class Trade:
     state: str = "proposed"
     note: str = ""
     created: float = dataclasses.field(default_factory=time.time)
+    need: int = 0                # confirmations this trader waits for (0: confirmations_for)
 
     @property
     def my_locktime(self) -> int:
@@ -181,7 +197,7 @@ def check_lock(trade: Trade, seen: LockSeen, theirs: bool) -> str:
 
 def next_step(trade: Trade, facts: Facts, now: int) -> tuple[str, str]:
     """(step, why). The one thing this trader should do next, from the chains alone."""
-    need = max(CONFIRMATIONS[trade.give.tier()], CONFIRMATIONS[trade.get.tier()])
+    need = trade.need or confirmations_for(trade.give, trade.get)
     mine, theirs = facts.mine, facts.theirs
 
     # Finished: I claimed theirs (the trade went through), or mine came back to me.

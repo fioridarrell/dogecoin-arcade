@@ -121,6 +121,9 @@ def test_a_person_buys_on_the_market_page_and_the_page_settles_it(world, monkeyp
                     return `<!doctype html><html><head><meta charset="utf-8"><style>${css}</style></head>`
                          + `<body style="padding:16px;max-width:1000px">${document.querySelector("main") ? document.querySelector("main").innerHTML : document.body.innerHTML}</body></html>`; }"""))
             assert "0.3" in tab.inner_text("#coin-pair"), "3 DOGE for 10 PEP is 0.3 DOGE each"
+            said = []
+            tab.on("dialog", lambda d: (said.append(d.message), d.dismiss()))
+            tab.on("console", lambda m: said.append("console: " + m.text) if m.type == "error" else None)
             tab.evaluate("""() => { globalThis.arcadeAsk = async () => true;
                                     globalThis.arcadeMainnetReview = async () => true;
                                     document.querySelectorAll('[data-take-order]')[0].click(); }""")
@@ -139,5 +142,5 @@ def test_a_person_buys_on_the_market_page_and_the_page_settles_it(world, monkeyp
                     done = trades[0]
                     break
             browser.close()
-        assert done, trades
+        assert done, (trades, said)
         assert not b.book.open_trades(), "node B finished its side too"

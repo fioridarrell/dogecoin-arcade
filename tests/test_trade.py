@@ -205,3 +205,17 @@ def test_when_the_responder_vanishes_the_initiator_refunds(regtest, doge):
     assert alice.step(None)[0] == T.REFUND
     _mine(pep_rpc)
     assert alice.step(None)[0] == T.DONE
+
+
+def test_one_confirmation_and_three_for_a_big_swap():
+    """2026-10-13: one confirmation, more for big trades (the line is the operator's)."""
+    k = "02" + "11" * 32
+    small = T.Leg("doge", "coin", "", 10 * COIN, k, k)
+    big = T.Leg("doge", "coin", "", T.BIG["doge"], k, k)
+    pep = T.Leg("main", "coin", "", 5 * COIN, k, k)
+    test = T.Leg("regtest", "coin", "", 10 ** 15, k, k)
+    assert T.confirmations_for(small, pep) == 1
+    assert T.confirmations_for(pep, big) == 3, "either leg at its line"
+    assert T.confirmations_for(test, test) == 1, "testnet coins never count as big"
+    assert T.confirmations_for(small, pep, {"doge": 5 * COIN}) == 3, "the operator's own line"
+    assert T.LOCK_SECONDS["mainnet"] == 2 * 3600, "the operator: 2 h locks"

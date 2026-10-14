@@ -130,6 +130,7 @@ class BlockWatcher:
                       self._import_listings,
                       self._import_orders,
                       self._run_trader,
+                      self._run_watch,
                       self._walk_home):
             try:
                 phase()
@@ -195,6 +196,16 @@ class BlockWatcher:
                                               chain.network)
             except Exception:
                 log.debug("order import on %s failed", chain.network, exc_info=True)
+
+    def _run_watch(self) -> None:
+        """Accounts' pre-signed swap claims and refunds (arcade/trade_watch.py), every 15 s:
+        what lets a swap finish with its tabs closed. Not behind node_trades -- it only ever
+        sends what an account signed itself, paying that account."""
+        if time.time() - getattr(self, "_watch_at", 0.0) < 15:
+            return
+        self._watch_at = time.time()
+        for job, said in self.state.trade_watch.tick(self.state.chain_rpc_for):
+            log.info("swap watch: %s %s", job, said)
 
     def _run_trader(self) -> None:
         """This node's own lock-script trades, every 15 s -- only while the operator has

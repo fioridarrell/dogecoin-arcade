@@ -1274,6 +1274,19 @@ class AppState:
         return self._trade_orders
 
     @property
+    def trade_watch(self):
+        """Its accounts' pre-signed swap claims and refunds, sent when due (trade_watch.py)."""
+        if getattr(self, "_trade_watch", None) is None:
+            from ..trade_watch import Watch
+            self._trade_watch = Watch(self.home / "trade-watch.sqlite")
+        return self._trade_watch
+
+    def chain_rpc_for(self, network: str):
+        """network -> that chain's RPC context manager, or None if this node does not run it."""
+        found = next((c for c in self.token_chains if c.network == network), None)
+        return found.rpc() if found is not None else None
+
+    @property
     def node_trader(self):
         """This node's own lock-script trader (arcade/node_trader.py): idle unless the
         operator turned node-facilitated trades on. Its chains are the ones ready now."""

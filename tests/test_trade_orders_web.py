@@ -81,7 +81,7 @@ def test_a_token_swap_is_named_by_its_token(client, monkeypatch):
     _token(state, property_id=150, name="Gold")
     order = {"id": "order-gold1", "give": {"network": "regtest", "kind": "token", "asset": "150",
                                            "amount": 40 * COIN},
-             "get": {"network": "regtest", "kind": "coin", "asset": "", "amount": 3 * COIN},
+             "get": {"network": "main", "kind": "coin", "asset": "", "amount": 3 * COIN},
              "trade_key": "02" + secrets.token_hex(32), "msg_key": secrets.token_hex(32),
              "node": NODE, "expires": int(time.time()) + 3600}
     state.trade_orders.file_batch("nListerAddressXXXXXXXXXXXXXXXXXXXXX", "regtest", "aa" * 32,
@@ -110,3 +110,26 @@ def test_the_operator_posts_a_token_from_its_home_address(client, monkeypatch):
     # More than the home address holds is refused.
     app.post("/exchange/trade-orders/stand", data={**said, "give_amount": "60"}, follow_redirects=False)
     assert len(state.node_trader.standing()) == 1
+
+
+def test_a_swap_on_one_chain_is_sent_to_its_instant_market(client, monkeypatch):
+    """2026-10-13: same-chain swaps are one atomic transaction on the chain's own
+    market; lock-script orders are for two chains only."""
+    from test_account_tokens import _balance, _token
+    app, state = client
+    monkeypatch.setattr(state, "mesh", None, raising=False)
+    home = "nHomeAddressXXXXXXXXXXXXXXXXXXXXXXX"
+    monkeypatch.setattr(state, "home_address", lambda chain: home, raising=False)
+    _token(state, property_id=150, name="Gold")
+    _balance(state, home, 150, 50 * COIN)
+    app.post("/exchange/trade-orders/stand", data=dict(
+        give_network="token:regtest:150:1", give_amount="40", get_network="regtest", get_amount="2",
+        csrf_token=state.csrf_token), follow_redirects=False)
+    assert state.node_trader.standing() == []
+    import pytest
+    with pytest.raises(O.OrderError):
+        O.check_order({"id": "order-same1", "give": {"network": "regtest", "kind": "token", "asset": "150",
+                                                     "amount": 1},
+                       "get": {"network": "regtest", "kind": "coin", "asset": "", "amount": 1},
+                       "trade_key": "02" + "11" * 32, "msg_key": "22" * 32, "node": NODE,
+                       "expires": int(time.time()) + 60})

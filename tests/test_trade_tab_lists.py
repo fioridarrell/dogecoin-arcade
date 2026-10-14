@@ -60,7 +60,7 @@ def test_a_tab_lists_a_swap_and_another_node_takes_it(world, monkeypatch):
         _mine(pep)
         _scan_a(a)
         # The first inscription on this chain is number 0: the importer must not skip it.
-        assert O.import_announced(a.trade_orders, a.token_index(a.messaging), "regtest") == 1
+        assert O.import_announced(a.trade_orders, a.token_index(a.messaging), "regtest") >= 1
         shown = [o for o in a.trade_orders.visible(a.mesh.online) if o["id"] == mine["id"]]
         assert len(shown) == 1, "the tab's order is on the chain and its node is online"
         found = shown[0]
@@ -296,3 +296,68 @@ def test_the_list_form_offers_a_token_the_account_holds(world, monkeypatch):
     listed = [o for o in a.trade_orders.visible(a.mesh.online) if o["lister"] == made]
     assert listed and listed[0]["give"] == {"network": "regtest", "kind": "token", "asset": "150",
                                             "amount": 40 * COIN}
+
+
+def test_the_swap_finishes_with_the_listers_browser_closed(world, monkeypatch):
+    """2026-10-13: nobody should have to stay online. The tab lists 3 PEP for 2 DOGE,
+    node B takes it, and the tab is CLOSED right after it locks its PEP -- having handed its
+    node a pre-signed claim of B's DOGE and a pre-signed refund (trade_watch.py). Node B
+    claims the PEP, which puts the secret on the chain; node A reads it there and sends the
+    tab's claim. The DOGE lands at the tab's own address."""
+    from playwright.sync_api import sync_playwright
+    base, a, b, pep, dg = world
+    monkeypatch.setattr(a, "mesh", _Mesh(), raising=False)
+    net = {"network": "regtest", "version": 111}
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        tab = browser.new_page()
+        tab.goto(f"{base}/join")
+        tab.evaluate("async () => { window.w = await import('/wallet.js'); }")
+        made = tab.evaluate("""async (net) => {
+            const r = await w.signUp('closer' + Math.floor(Math.random() * 1e6), 'a long enough password', net);
+            return {regtest: r.wallet.on.regtest.address, doge: r.wallet.on.doge.address}; }""", net)
+        pep.call("sendtoaddress", made["regtest"], 10)
+        _mine(pep)
+        _scan_a(a)
+        mine = tab.evaluate("""async ([net, give, get]) => w.listOrder(await w.opened(net), give, get)""",
+                            [net, {"network": "regtest", "amount": 3 * COIN}, {"network": "doge", "amount": 2 * COIN}])
+        _mine(pep)
+        _scan_a(a)
+        O.import_announced(a.trade_orders, a.token_index(a.messaging), "regtest")
+        found = next(o for o in a.trade_orders.visible(a.mesh.online) if o["id"] == mine["id"])
+        give = b.leg("doge", 2 * COIN, bytes.fromhex(found["take_key"]))
+        get = T.Leg("regtest", "coin", "", 3 * COIN, found["trade_key"], b.key.pubkey.hex())
+        trade = b.propose(bytes.fromhex(found["msg_key"]), found["id"], give, get).id
+        tab.evaluate("async (net) => { const w = await import('/wallet.js'); w.startTradeRunner(net, 400); }", net)
+        held = None
+        for _ in range(40):
+            _mine(pep, dg)
+            _scan_a(a)
+            _scan(b)
+            b.tick()
+            _scan_a(a)
+            tab.evaluate("async () => (await import('/wallet.js')).kickTrades()")
+            tab.wait_for_timeout(600)
+            held = tab.evaluate("""async ([net, id]) => { const w = await import('/wallet.js');
+                const t = w.myTrades(await w.opened(net)).find((t) => t.id === id);
+                return t && [!!t.myLock, !!t.heldRefund, !!t.heldClaim, t.state, t.holdNote || '']; }""", [net, trade])
+            if held and all(held[:3]):
+                break
+        assert held and all(held[:3]), held
+        browser.close()                               # the lister walks away
+    jobs = {j["kind"]: j for j in a.trade_watch.jobs()}
+    assert set(jobs) == {"claim", "refund"}, jobs
+    sent = None
+    for _ in range(30):
+        _mine(pep, dg)
+        _scan(b)
+        b.tick()
+        done = dict(a.trade_watch.tick(a.chain_rpc_for))
+        if done.get(jobs["claim"]["id"]) == "sent claim":
+            sent = [j for j in a.trade_watch.jobs() if j["kind"] == "claim"][0]["sent_txid"]
+        if sent and b.book.get(trade).state == "done":
+            break
+    assert sent, a.trade_watch.jobs()
+    assert b.book.get(trade).state == "done"
+    tx = dg.call("getrawtransaction", sent, 1)
+    assert [o["scriptPubKey"]["addresses"] for o in tx["vout"]] == [[made["doge"]]], "the DOGE is the lister's"

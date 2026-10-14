@@ -96,6 +96,18 @@ def observe(rpc: Any, lock: dict | None, my_addresses: set[str],
     return seen
 
 
+def swap_big(state: Any) -> dict:
+    """The operator's "big swap" lines per mainnet network, in sats (admin: swap_big:<net>);
+    a swap with a coin leg at or above its line waits 3 confirmations instead of 1."""
+    out = {}
+    for network, default in T.BIG.items():
+        try:
+            out[network] = int(state.setting(f"swap_big:{network}", default) or default)
+        except (TypeError, ValueError):
+            out[network] = default
+    return out
+
+
 def asset_seen(seen: T.LockSeen | None, leg: T.Leg, lock_address: str, index: Any,
                rpc: Any) -> T.LockSeen | None:
     """`seen` with the ledger's word on a token or NFT leg: asset_ok, or -- while the
@@ -187,6 +199,9 @@ class NodeTrader:
         """An order this node answers: it gives `give` for `get`, each
         {network, kind, asset, amount}. Keys come with a proposal, not the order."""
         import json
+        if give["network"] == get["network"]:
+            raise ValueError("a swap on one chain settles in one transaction on its own market; "
+                             "lock-script swaps are between two chains")
         what = lambda d: {k: d.get(k, "") for k in ("network", "kind", "asset")} | {"amount": int(d["amount"])}
         with self._db() as conn:
             conn.execute("INSERT OR REPLACE INTO standing_order(id, give, get) VALUES(?,?,?)",
@@ -200,7 +215,7 @@ class NodeTrader:
         t1, t2 = T.plan_locktimes(give, get, T.INITIATOR, int(now or time.time()))
         trade = T.Trade(id=f"tr-{uuid.uuid4().hex[:16]}", role=T.INITIATOR, give=give, get=get,
                         secret_hash=h.hex(), secret=secret.hex(),
-                        initiator_locktime=t1, responder_locktime=t2)
+                        initiator_locktime=t1, responder_locktime=t2, need=self.need(give, get))
         self.book.save(trade)
         with self._db() as conn:
             conn.execute("INSERT INTO link(id, peer) VALUES(?,?)", (trade.id, peer_pub.hex()))
@@ -208,6 +223,10 @@ class NodeTrader:
             "propose", trade.id, order=order_id, give=M.leg_json(give), get=M.leg_json(get),
             secret_hash=h.hex(), t1=t1, t2=t2))
         return trade
+
+    def need(self, give: T.Leg, get: T.Leg) -> int:
+        """Confirmations this node waits for on a swap: the operator's lines (swap_big)."""
+        return T.confirmations_for(give, get, swap_big(self.state))
 
     def leg(self, network: str, amount: int, taker_key: bytes, kind: str = "coin",
             asset: str = "") -> T.Leg:
@@ -326,7 +345,8 @@ class NodeTrader:
             return
         trade = T.Trade(id=said["id"], role=T.RESPONDER, give=they_get, get=they_give,
                         secret_hash=said["secret_hash"],
-                        initiator_locktime=said["t1"], responder_locktime=said["t2"])
+                        initiator_locktime=said["t1"], responder_locktime=said["t2"],
+                        need=self.need(they_get, they_give))
         self.book.save(trade)
         with self._db() as conn:
             conn.execute("INSERT INTO link(id, peer, agreed) VALUES(?,?,1)", (trade.id, peer))

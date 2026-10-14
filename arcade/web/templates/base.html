@@ -2610,15 +2610,19 @@ window.arcadeBlocked = (function () {
   const first = (said.chains || [])[0] || {};
   const coins = Number(first.spendable ?? (Number(first.balance || 0) + Number(first.incoming || 0)));
   if (!(coins > 0) || document.body.dataset.working) return;
-  if (!said.tag && !said.claiming && said.name) {
-    try { await wallet.claim(keys); } catch (e) { return; }
-  }
-  if (!said.announced && !said.announcing) {
-    const mail = await import("/messaging.js");
-    const me = await mail.identity(keys.phrase);
-    try { await mail.announce(keys, me, said.tag || said.name || ""); }
-    catch (e) { try { sessionStorage.removeItem(LAST); } catch (x) {} }
-  }
+  // One spend at a time in this browser (wallet.spending): a swap proposed in the same
+  // second picked the same coin and the node refused one of them (2026-10-13).
+  await wallet.spending(async () => {
+    if (!said.tag && !said.claiming && said.name) {
+      try { await wallet.claim(keys); } catch (e) { return; }
+    }
+    if (!said.announced && !said.announcing) {
+      const mail = await import("/messaging.js");
+      const me = await mail.identity(keys.phrase);
+      try { await mail.announce(keys, me, said.tag || said.name || ""); }
+      catch (e) { try { sessionStorage.removeItem(LAST); } catch (x) {} }
+    }
+  });
 })().catch(() => {});
 </script>
 {% endif %}

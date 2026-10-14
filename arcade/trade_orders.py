@@ -70,8 +70,10 @@ def check_order(said: Any, now: float | None = None) -> dict:
     if not isinstance(said.get("id"), str) or not _ID.match(said["id"]):
         raise OrderError("an order id is 8-64 letters, digits, - or _")
     give, get = _side(said.get("give")), _side(said.get("get"))
-    if (give["network"], give["kind"], give["asset"]) == (get["network"], get["kind"], get["asset"]):
-        raise OrderError("an order swaps one thing for another")
+    if give["network"] == get["network"]:
+        # 2026-10-13: a swap on ONE chain is instant -- one atomic transaction on that
+        # chain's own markets (pre-signed legs) -- so lock scripts are for two chains only.
+        raise OrderError("a swap on one chain settles in one transaction on its own market")
     for field, pattern in (("trade_key", _KEY33), ("msg_key", _HEX32), ("node", _HEX32)):
         if not isinstance(said.get(field), str) or not pattern.match(said[field]):
             raise OrderError(f"an order's {field} is hex of the right length")

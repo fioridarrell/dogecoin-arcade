@@ -2348,8 +2348,8 @@ export async function tip(held, form, txid, kinds, ask) {
  */
 
 /** Claim (`kind` "claim", with `secret` hex) or refund one lock coin to this account. */
-export async function tradeSpend(wallet, {chain, redeem, txid, vout, kind, secret, leg}) {
-  return working(async () => {
+/** A lock spend built by the node and checked and signed HERE: [node's answer, signature]. */
+async function signLockSpend(wallet, {chain, redeem, txid, vout, kind, secret, leg, presign = false}) {
     const what = legWhat(leg);
     const asked = await fetch("/account/trade/spend", {
       method: "POST", headers: {"Content-Type": "application/json"},
@@ -2363,7 +2363,8 @@ export async function tradeSpend(wallet, {chain, redeem, txid, vout, kind, secre
     const me = coinsHex(keys.pubkey);
     if (kind === "claim" && coinsHex(lock.claimer) !== me) throw new Error("that lock pays somebody else. Nothing was signed.");
     if (kind === "refund" && coinsHex(lock.refunder) !== me) throw new Error("that lock refunds somebody else. Nothing was signed.");
-    if (kind === "claim") {
+    // The secret is not signed (it goes in the input script); a held claim may not know it yet.
+    if (kind === "claim" && !(presign && !secret)) {
       const hashed = coinsHex(await coins.sha256Of(unhex(secret)));
       if (hashed !== coinsHex(lock.secretHash)) throw new Error("that secret does not open this lock. Nothing was signed.");
     }
@@ -2387,6 +2388,12 @@ export async function tradeSpend(wallet, {chain, redeem, txid, vout, kind, secre
     if (digest !== String(said.sighash).toLowerCase())
       throw new Error("the node asked for a signature over different bytes. Nothing was signed.");
     const signature = coinsHex(await coins.signInput(keys.key, unhex(digest)));
+    return [said, signature];
+}
+
+export async function tradeSpend(wallet, {chain, redeem, txid, vout, kind, secret, leg}) {
+  return working(async () => {
+    const [said, signature] = await signLockSpend(wallet, {chain, redeem, txid, vout, kind, secret, leg});
     const back = await fetch("/account/trade/spend/sign", {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({chain: said.chain, redeem, raw: said.raw, signature, kind,
@@ -2396,6 +2403,25 @@ export async function tradeSpend(wallet, {chain, redeem, txid, vout, kind, secre
     if (!back.ok) throw new Error(done.detail || "the node would not send it");
     return done;                                  // {ok, txid}
   });
+}
+
+/** Hand this node a pre-signed claim or refund (2026-10-13): it finishes the swap if
+ *  this tab is closed. Same checks as tradeSpend; the node adds only the secret, and only
+ *  sends at the right moment (arcade/trade_watch.py). Claims need no secret here when
+ *  `secret_lock` says where it will show up (this account's own lock, once claimed). */
+export async function tradePresign(wallet, {chain, redeem, txid, vout, kind, secret, leg, secret_lock,
+                                            min_conf, not_after, trade}) {
+  const [said, signature] = await signLockSpend(wallet, {chain, redeem, txid, vout, kind,
+                                                          secret: secret || "", leg, presign: true});
+  const asked = await fetch("/account/trade/watch", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({chain: said.chain, redeem, txid, vout, kind, raw: said.raw, signature,
+                          secret: secret || "", secret_lock: secret_lock || null,
+                          min_conf: min_conf || 0, not_after: not_after || 0, trade: trade || ""}),
+  });
+  const done = await asked.json();
+  if (!asked.ok) throw new Error(done.detail || "the node would not hold it");
+  return done;
 }
 
 /** A lock as its chain shows it (null if not there yet). */
@@ -2418,12 +2444,22 @@ function legWhat(leg) {
 /* The trade state machine: arcade/trade.py's next_step, rule for rule (tests compare
  * them). Pure: what the chains show in, the one thing to do next out. */
 export const TRADE = {
-  LOCK_SECONDS: {mainnet: 48 * 3600, testnet: 6 * 3600},
-  CONFIRMATIONS: {mainnet: 3, testnet: 1},
-  CLAIM_MARGIN: 3600, LOCK_MARGIN: 2 * 3600,
+  LOCK_SECONDS: {mainnet: 2 * 3600, testnet: 2 * 3600},
+  CONFIRMATIONS: 1, CONFIRMATIONS_BIG: 3,
+  BIG: {main: 1_000_000 * 100_000_000, doge: 1_000 * 100_000_000},
+  CLAIM_MARGIN: 20 * 60, LOCK_MARGIN: 30 * 60,
   LOCK_RESERVE: 2_000_000,          // htlc.SPEND_FEE + htlc.DUST (trade.LOCK_RESERVE)
 };
 const tierOf = (leg) => (leg.network === "main" || leg.network === "doge") ? "mainnet" : "testnet";
+
+/** 1, or 3 when a mainnet coin leg is at or above its line (trade.confirmations_for). */
+export function confirmationsFor(give, get, big = TRADE.BIG) {
+  for (const leg of [give, get]) {
+    const line = big[leg.network];
+    if (leg.kind === "coin" && tierOf(leg) === "mainnet" && line && leg.amount >= Number(line)) return TRADE.CONFIRMATIONS_BIG;
+  }
+  return TRADE.CONFIRMATIONS;
+}
 
 /** {initiatorLocktime, responderLocktime} for a trade starting now (trade.plan_locktimes). */
 export function planLocktimes(give, get, now) {
@@ -2455,7 +2491,7 @@ export function lockValue(leg) {
 /** [step, why]: "lock" | "wait" | "claim" | "refund" | "done" | "abort" (trade.next_step).
  *  `trade` = {role, give, get, secret?, secretHash, t1, t2, myRedeem, theirRedeem}. */
 export async function nextTradeStep(trade, facts, now) {
-  const need = Math.max(TRADE.CONFIRMATIONS[tierOf(trade.give)], TRADE.CONFIRMATIONS[tierOf(trade.get)]);
+  const need = trade.need || confirmationsFor(trade.give, trade.get);
   const mine = facts.mine, theirs = facts.theirs;
   const myTime = trade.role === "initiator" ? trade.t1 : trade.t2;
   const theirTime = trade.role === "initiator" ? trade.t2 : trade.t1;
@@ -2534,6 +2570,14 @@ export async function secretFromScriptSig(scriptSig, redeem) {
  * tab closed mid-trade can still claim or refund when it is opened again.
  */
 
+/** Run `fn` while holding this browser's one spending lock (a Web Lock, so other tabs wait
+ *  too): two spends built at once pick the same coin, and the node refuses the second
+ *  (txn-mempool-conflict). Not re-entrant -- never call it from inside itself. */
+export async function spending(fn) {
+  if (!(globalThis.navigator && navigator.locks)) return fn();
+  return navigator.locks.request("arcade-spend", () => fn());
+}
+
 const TRADES = "arcade-trades";
 //: A lock's address on each chain: P2SH version bytes (arcade/config.py). The node's own
 //: word (/account chains[].p2sh) wins: a chain standing in for another has its own.
@@ -2564,6 +2608,10 @@ export function myTrades(wallet) {
 
 /** One trade step, sealed in this tab to `toKey` (hex, a messaging key), carried by this node. */
 export async function tradeSay(wallet, toKey, body) {
+  return spending(() => _tradeSay(wallet, toKey, body));
+}
+
+async function _tradeSay(wallet, toKey, body) {
   const {mail, me} = await messenger(wallet);
   const asked = await fetch("/account/talk", {
     method: "POST", headers: {"Content-Type": "application/json"},
@@ -2608,11 +2656,29 @@ export async function takeOrder(wallet, order) {
                  secret: coinsHex(secret), secretHash: coinsHex(secretHash), t1, t2,
                  myLock: null, theirLock: null, agreed: false, cancelled: false,
                  state: "proposed", note: "proposed; waiting for the other side to accept",
-                 cursor: 0, created: Date.now()};
+                 cursor: 0, created: Date.now(), need: confirmationsFor(give, get, await swapBig())};
   keepTrade(wallet, trade);
-  await tradeSay(wallet, order.msg_key, {t: "trade", v: 1, id, step: "propose", order: order.id,
-                                         give, get, secret_hash: trade.secretHash, t1, t2});
+  try {
+    await tradeSay(wallet, order.msg_key, {t: "trade", v: 1, id, step: "propose", order: order.id,
+                                           give, get, secret_hash: trade.secretHash, t1, t2});
+  } catch (e) {
+    // Nothing was locked: a proposal that never went out leaves no trade behind.
+    const all = tradesOf(wallet);
+    delete all[id];
+    try { localStorage.setItem(`${TRADES}:${wallet.pubkey}`, JSON.stringify(all)); } catch (x) {}
+    throw e;
+  }
   return trade;
+}
+
+//: The node's "big swap" lines (/account swap_big): above one, a swap waits 3 confirmations.
+let bigKnown = null;
+async function swapBig() {
+  if (!bigKnown) {
+    try { bigKnown = (await (await fetch("/account")).json()).swap_big || TRADE.BIG; }
+    catch (e) { bigKnown = TRADE.BIG; }
+  }
+  return bigKnown;
 }
 
 async function redeemsOf(trade) {
@@ -2667,6 +2733,7 @@ export async function tradeTick(wallet, id) {
   trade.note = why;
   if (step === "lock") {
     const address = await coins.htlcAddress(myRedeem, await p2shOf(trade.give.network));
+    const sent = await spending(async () => {
     let offer;
     if (trade.give.kind === "coin") offer = await offerSend(address, coinsText(trade.give.amount), trade.give.network);
     else {
@@ -2680,7 +2747,8 @@ export async function tradeTick(wallet, id) {
       if (!asked.ok) throw new Error(offer.detail || "the node could not build that lock");
       if (offer.lock !== address) throw new Error("the node built a different lock. Nothing was signed.");
     }
-    const sent = await confirm(wallet, offer);
+    return confirm(wallet, offer);
+    });
     const script = coinsHex(await coins.htlcScript(myRedeem));
     let vout = -1;
     for (let n = 0; n < 4 && vout < 0; n++) {
@@ -2706,7 +2774,41 @@ export async function tradeTick(wallet, id) {
   else if (step === "abort") trade.state = "aborted";
   else trade.state = trade.myLock ? "locked" : "accepted";
   keepTrade(wallet, trade);
+  if (trade.state !== "done" && trade.state !== "aborted") {
+    await holdSpends(wallet, trade, view, facts).catch((e) => { trade.holdNote = String(e.message || e); });
+    keepTrade(wallet, trade);
+  }
   return {...trade, step};
+}
+
+/** Give this node what it needs to finish the swap with the tab closed (trade_watch.py):
+ *  the refund of my lock, and my claim of theirs -- each signed here, once. */
+async function holdSpends(wallet, trade, view, facts) {
+  const hex = coinsHex;
+  if (trade.myLock && !trade.heldRefund) {
+    await tradePresign(wallet, {chain: trade.give.network, redeem: hex(view.myRedeem), txid: trade.myLock.txid,
+                                vout: trade.myLock.vout, kind: "refund", leg: trade.give, trade: trade.id});
+    trade.heldRefund = true;
+  }
+  if (trade.heldClaim || !trade.theirLock || !facts.theirs || facts.theirs.spent_by_script_sig) return;
+  if (await checkLock(view, facts.theirs, true)) return;            // not the lock agreed: never
+  const theirTime = trade.role === "initiator" ? trade.t2 : trade.t1;
+  const base = {chain: trade.get.network, redeem: hex(view.theirRedeem), txid: trade.theirLock.txid,
+                vout: trade.theirLock.vout, kind: "claim", leg: trade.get, trade: trade.id};
+  const need = trade.need || confirmationsFor(trade.give, trade.get);
+  if (trade.role === "initiator") {
+    // A token or NFT is only known to be in the lock once the ledger has read it confirmed;
+    // claiming an empty one would hand over the secret for nothing.
+    if (trade.get.kind !== "coin" && !(facts.theirs.confirmations >= need && facts.theirs.asset_ok)) return;
+    await tradePresign(wallet, {...base, secret: trade.secret, min_conf: need,
+                                not_after: theirTime - TRADE.CLAIM_MARGIN});
+  } else {
+    if (!trade.myLock) return;
+    await tradePresign(wallet, {...base, not_after: theirTime,
+      secret_lock: {network: trade.give.network, txid: trade.myLock.txid, vout: trade.myLock.vout,
+                    redeem: hex(view.myRedeem)}});
+  }
+  trade.heldClaim = true;
 }
 
 
@@ -2740,7 +2842,7 @@ let posting = Promise.resolve();
 
 /** The order batch for this tab's listed swaps, inscribed from this account. */
 export function postMyOrders(wallet) {
-  const run = posting.then(() => postNow(wallet));
+  const run = posting.then(() => spending(() => postNow(wallet)));
   posting = run.catch(() => {});
   return run;
 }
@@ -2828,7 +2930,8 @@ export async function answerProposals(wallet) {
     const trade = {id: p.id, role: "responder", order: p.order, peer: a.sender, give: p.get, get: p.give,
                    secret: "", secretHash: p.secret_hash, t1: p.t1, t2: p.t2, myLock: null, theirLock: null,
                    agreed: true, acceptSent: false, cancelled: false, state: "accepted",
-                   note: "accepted; waiting for their lock", cursor: book.cursor, created: Date.now()};
+                   note: "accepted; waiting for their lock", cursor: book.cursor, created: Date.now(),
+                   need: confirmationsFor(p.get, p.give, await swapBig())};
     keepTrade(wallet, trade);
     // Kept BEFORE it is said, and said again by tradeTick until it goes: an accept that
     // failed to send must not leave the other side waiting for ever.

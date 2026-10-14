@@ -54,7 +54,16 @@
         : {network: pick[0], amount: sats(f.give_amount.value)};
       const get = {network: f.get_network.value, amount: sats(f.get_amount.value)};
       if (!(give.amount > 0 && get.amount > 0)) return alert("Both amounts, please.");
-      if (!give.kind && give.network === get.network) return alert("A swap is one coin for another.");
+      if (give.network === get.network) {
+        // One chain: instant, one transaction, on that chain's own market (2026-10-13).
+        if (give.kind === "token") {
+          if (await arcadeAsk("Trade it on its own market?", "Both sides are on one chain, so this trade "
+              + "settles instantly in a single transaction on the token's own market -- no locks, no waiting.",
+              "Open the market")) location.href = `/exchange/pair/${give.asset}`;
+          return;
+        }
+        return alert("A swap is one coin for another, on two different chains.");
+      }
       const ok = await arcadeAsk("List this swap?",
         `${amt(give)} for ${amt(get)}. It is written on the chain (a small fee) and other arcades see it `
         + "while this tab is open. Somebody who takes it locks their coins first; yours go into a lock only "
