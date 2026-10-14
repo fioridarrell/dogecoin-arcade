@@ -124,8 +124,10 @@ def test_a_person_buys_on_the_market_page_and_the_page_settles_it(world, monkeyp
             said = []
             tab.on("dialog", lambda d: (said.append(d.message), d.dismiss()))
             tab.on("console", lambda m: said.append("console: " + m.text) if m.type == "error" else None)
-            tab.evaluate("""() => { globalThis.arcadeAsk = async () => true;
-                                    globalThis.arcadeMainnetReview = async () => true;
+            # The Take dialog is the approval (amounts and fees shown there): the DOGE lock must
+            # not ask again, so the separate real-coin review here says NO to anything.
+            tab.evaluate("""() => { globalThis.arcadeAsk = async (title, body) => { window.asked = body; return true; };
+                                    globalThis.arcadeMainnetReview = async () => false;
                                     document.querySelectorAll('[data-take-order]')[0].click(); }""")
             done = None
             for _ in range(90):
@@ -138,9 +140,11 @@ def test_a_person_buys_on_the_market_page_and_the_page_settles_it(world, monkeyp
                 trades = tab.evaluate("""async () => { const w = await import('/wallet.js');
                     const wal = await w.opened({network: 'regtest', version: 111});
                     return w.myTrades(wal).map((t) => [t.state, t.note]); }""")
+                asked = tab.evaluate("() => window.asked || ''")
                 if trades and trades[0][0] == "done":
                     done = trades[0]
                     break
             browser.close()
         assert done, (trades, said)
+        assert "Network fees: about 0.01 DOGE to lock yours" in asked and "0.01 PEP TEST comes off" in asked, asked
         assert not b.book.open_trades(), "node B finished its side too"

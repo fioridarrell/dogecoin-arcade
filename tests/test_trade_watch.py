@@ -137,3 +137,25 @@ def test_the_node_holds_only_the_accounts_own_good_spends(node):
     good = _hold(who, said, raw, sig, secret=secret.hex(), min_conf=1)
     assert good.status_code == 200, good.text
     assert dict(_tick(state)).get(good.json()["job"]) == "sent claim"
+
+
+def test_the_admin_sees_held_swaps_and_sets_the_big_line(node):
+    from test_admin import WRITE
+    from test_admin import LOCAL
+    app, state, rpc = node
+    who, secret_int, pubkey, address = _seated(app, state, rpc, 84, key=False)
+    payer, stranger = Owner(state, rpc), Key()
+    _, h = H.make_secret()
+    redeem = H.redeem_script(h, stranger.pub, pubkey, int(time.time()) + 7200)
+    coin = _lock(rpc, payer, redeem, COIN)
+    said = {"chain": "regtest", "redeem": redeem.hex(), "txid": coin["txid"], "vout": coin["vout"], "kind": "refund"}
+    raw, sig = _presign(who, secret_int, said)
+    assert _hold(who, said, raw, sig).status_code == 200
+    seen = app.get("/admin/api/swaps", headers=LOCAL).json()
+    assert seen["counts"]["waiting"] >= 1
+    assert any(j["kind"] == "refund" and j["status"] == "waiting" for j in seen["held"])
+    went = app.post("/admin/api/settings", headers={**LOCAL, **WRITE}, json={"swap_big": {"doge": "250"}})
+    assert went.status_code == 200, went.text
+    assert app.get("/admin/api/state", headers=LOCAL).json()["swap_big"]["doge"] == 250
+    from arcade.node_trader import swap_big
+    assert swap_big(state)["doge"] == 250 * COIN

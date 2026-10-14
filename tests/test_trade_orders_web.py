@@ -133,3 +133,24 @@ def test_a_swap_on_one_chain_is_sent_to_its_instant_market(client, monkeypatch):
                        "get": {"network": "regtest", "kind": "coin", "asset": "", "amount": 1},
                        "trade_key": "02" + "11" * 32, "msg_key": "22" * 32, "node": NODE,
                        "expires": int(time.time()) + 60})
+
+
+def test_the_operator_posts_an_nft_from_its_home_address(client, monkeypatch):
+    from test_escrow import _piece
+    app, state = client
+    monkeypatch.setattr(state, "mesh", None, raising=False)
+    home = "nHomeAddressXXXXXXXXXXXXXXXXXXXXXXX"
+    monkeypatch.setattr(state, "home_address", lambda chain: home, raising=False)
+    sword = "b7" * 32
+    _piece(state, sword, home)
+    page = app.get("/exchange?tab=tokens").text
+    assert f'value="nft:regtest:{sword}"' in page, "the node's NFT is offered in Post swap"
+    app.post("/exchange/trade-orders/stand", data=dict(
+        give_network=f"nft:regtest:{sword}", give_amount="1", get_network="main", get_amount="20",
+        csrf_token=state.csrf_token), follow_redirects=False)
+    standing = state.node_trader.standing()
+    assert standing and standing[0]["give"] == {"network": "regtest", "kind": "nft", "asset": sword, "amount": 1}
+    app.post("/exchange/trade-orders/stand", data=dict(
+        give_network=f"nft:regtest:{'b8' * 32}", give_amount="1", get_network="main", get_amount="20",
+        csrf_token=state.csrf_token), follow_redirects=False)
+    assert len(state.node_trader.standing()) == 1, "an NFT the node does not hold is refused"

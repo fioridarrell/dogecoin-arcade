@@ -264,8 +264,12 @@ def test_the_list_form_offers_a_token_the_account_holds(world, monkeypatch):
         _mine(pep)
         _scan_a(a)
         _gold_everywhere(a, b, made, 100 * COIN)
+        from test_escrow import _piece
+        _piece(a, "c9" * 32, made)
         tab.goto(f"{base}/exchange?tab=tokens")
         tab.wait_for_selector("#tab-list-form")
+        nft = tab.locator(f'#tab-list-form select[name=give_network] option[value="nft:regtest:{"c9" * 32}"]')
+        assert nft.count() == 1 and nft.inner_text().startswith("NFT #"), "the account's NFT can be listed"
         option = tab.locator('#tab-list-form select[name=give_network] option[value^="token:regtest:150:"]')
         assert option.count() == 1 and "Gold" in option.inner_text()
         tab.evaluate("() => { globalThis.arcadeAsk = async () => true; }")

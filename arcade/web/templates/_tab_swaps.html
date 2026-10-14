@@ -3,13 +3,13 @@
    Exchange's "Swaps between arcades" card and by a coin pair's market (coin_pair.html).
    Binds [data-take-order] buttons, #tab-list-form and form[data-pair-side]. #}
     <div id="tab-trades" hidden style="margin-top:10px">
-      <div class="ex-h">Your swaps <span class="muted" style="font-weight:500">&middot; keep this tab open until they finish</span></div>
+      <div class="ex-h">Your swaps <span class="muted" style="font-weight:500">&middot; once yours is locked, your node finishes it even if you close the page</span></div>
       <div id="tab-trades-list"></div>
     </div>
     {# A tab LISTS its own swap (2026-10-13): inscribed from this account, answered by this
        tab, so it stands only while the tab is open (it lapses about an hour after). #}
     <div id="tab-orders" hidden style="margin-top:10px">
-      <div class="ex-h">Your listed swaps <span class="muted" style="font-weight:500">&middot; shown while this tab is open</span></div>
+      <div class="ex-h">Your listed swaps <span class="muted" style="font-weight:500">&middot; shown while an arcade page is open here</span></div>
       <div id="tab-orders-list"></div>
     </div>
     <script type="module">
@@ -47,7 +47,10 @@
       const sats = (v) => Math.round(Number(String(v).trim()) * 1e8);
       // "regtest" is a coin; "token:<network>:<id>:<divisible>" a token this account holds.
       const pick = f.give_network.value.split(":");
-      const give = pick[0] === "token"
+      const label = f.give_network.selectedOptions[0].textContent.trim();
+      const give = pick[0] === "nft"
+        ? {network: pick[1], kind: "nft", asset: pick[2], amount: 1, label}
+        : pick[0] === "token"
         ? {network: pick[1], kind: "token", asset: pick[2],
            amount: pick[3] === "1" ? sats(f.give_amount.value) : Math.round(Number(f.give_amount.value)),
            label: `${String(f.give_amount.value).trim()} ${f.give_network.selectedOptions[0].textContent.trim()}`}
@@ -56,6 +59,12 @@
       if (!(give.amount > 0 && get.amount > 0)) return alert("Both amounts, please.");
       if (give.network === get.network) {
         // One chain: instant, one transaction, on that chain's own market (2026-10-13).
+        if (give.kind === "nft") {
+          if (await arcadeAsk("Sell it on its own page?", "Both sides are on one chain, so this trade settles "
+              + "instantly in a single transaction: list the piece for a price on its own page.", "Open the piece"))
+            location.href = `/inscriptions/${give.asset}`;
+          return;
+        }
         if (give.kind === "token") {
           if (await arcadeAsk("Trade it on its own market?", "Both sides are on one chain, so this trade "
               + "settles instantly in a single transaction on the token's own market -- no locks, no waiting.",
@@ -65,15 +74,16 @@
         return alert("A swap is one coin for another, on two different chains.");
       }
       const ok = await arcadeAsk("List this swap?",
-        `${amt(give)} for ${amt(get)}. It is written on the chain (a small fee) and other arcades see it `
-        + "while this tab is open. Somebody who takes it locks their coins first; yours go into a lock only "
-        + "they can claim with the secret, and come back to you if they never finish.", "List it");
+        `${amt(give)} for ${amt(get)}. It is written on the chain (about 0.01 in fees) and other arcades `
+        + "see it while an arcade page is open here. Whoever takes it locks first; yours then go into a "
+        + "lock only they can claim, and come back to you if they never finish. "
+        + wallet.swapFees(give, get) + " Saying yes approves locking yours when somebody takes it.", "List it");
       if (!ok) return;
       button.disabled = true;
       try {
         const w = await keys();
         if (!w) throw new Error("Unlock your wallet to trade.");
-        await wallet.listOrder(w, give, get);
+        await wallet.listOrder(w, give, get, {approved: true});
         f.reset(); drawOrders(w);
       } catch (e) { alert(String(e.message || e)); }
       finally { button.disabled = false; }
@@ -106,14 +116,15 @@
       const [give, get] = f.dataset.pairSide === "sell" ? [base, quote] : [quote, base];
       const ok = await arcadeAsk(f.dataset.pairSide === "sell" ? "List this sale?" : "List this bid?",
         `${amt(give)} for ${amt(get)} (${price} ${coinName(f.dataset.quote)} per ${coinName(f.dataset.base)}). `
-        + "It is written on the chain (a small fee) and other arcades see it while this tab is open; it "
-        + "settles through lock scripts on both chains.", "List it");
+        + "It is written on the chain (about 0.01 in fees) and other arcades see it while an arcade page "
+        + "is open here; it settles through lock scripts on both chains. " + wallet.swapFees(give, get)
+        + " Saying yes approves locking yours when somebody takes it.", "List it");
       if (!ok) return;
       button.disabled = true;
       try {
         const w = await keys();
         if (!w) throw new Error("Unlock your wallet to trade.");
-        await wallet.listOrder(w, give, get);
+        await wallet.listOrder(w, give, get, {approved: true});
         f.reset(); drawOrders(w);
       } catch (e) { alert(String(e.message || e)); }
       finally { button.disabled = false; }
@@ -121,15 +132,16 @@
     document.querySelectorAll("[data-take-order]").forEach((b) => b.addEventListener("click", async () => {
       const order = JSON.parse(b.dataset.takeOrder);
       const ok = await arcadeAsk("Take this swap?",
-        "It settles through lock scripts: your coins go into a lock only you can take back if the other side "
-        + "never pays, and theirs into one only you can claim. Keep this tab open until it finishes "
-        + "(it takes a few blocks); you can close it and come back to claim or refund.", "Take it");
+        `You give ${amt(order.get)} and get ${amt(order.give)}. It settles through lock scripts on both `
+        + "chains in a few minutes: either both sides get paid, or both get their own coins back. "
+        + wallet.swapFees(order.get, order.give) + " Saying yes approves locking yours; you are not asked "
+        + "again. Your node finishes it even if you close this tab.", "Take it");
       if (!ok) return;
       b.disabled = true;
       try {
         const w = await keys();
         if (!w) throw new Error("Unlock your wallet to trade.");
-        await wallet.takeOrder(w, order);
+        await wallet.takeOrder(w, order, {approved: true});
         draw(w);
         wallet.kickTrades();
       } catch (e) { b.disabled = false; alert(String(e.message || e)); }

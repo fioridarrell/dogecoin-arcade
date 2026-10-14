@@ -20654,7 +20654,46 @@ def create_app(state: AppState) -> FastAPI:
             "node": {"version": state.running_version,
                      "public_hosts": list(state.public_hosts)},
             "xchain": _admin_xchain(),
+            "swap_big": {k: v / COIN for k, v in _swap_big_lines().items()},
         }, headers={"Cache-Control": "no-store"})
+
+    @app.get("/admin/api/swaps")
+    def admin_swaps(request: Request):
+        """Lock-script swaps on this node, as the operator needs to see them: the node's own
+        trades, and the claims and refunds it holds for its accounts (trade_watch.py) --
+        what is waiting, what was sent, and when each one is due."""
+        _admin_check(request)
+        own = []
+        try:
+            trader = state.node_trader
+            for t in trader.book.open_trades():
+                own.append({"id": t.id, "role": t.role, "state": t.state, "note": t.note,
+                            "give": M_leg_text(t.give), "get": M_leg_text(t.get),
+                            "refund_at": t.my_locktime, "created": t.created})
+        except Exception as exc:                           # noqa: BLE001
+            own = [{"error": str(exc)}]
+        held = []
+        names = {}
+        for j in state.trade_watch.jobs()[:200]:
+            lock = htlclib_parse(j["redeem"])
+            if j["account"] not in names:
+                try:
+                    names[j["account"]] = (state.accounts().get(j["account"]) or {}).get("name") or ""
+                except Exception:                          # noqa: BLE001
+                    names[j["account"]] = ""
+            held.append({"id": j["id"], "kind": j["kind"], "network": j["network"], "status": j["status"],
+                         "note": j["note"], "account": names.get(j["account"]) or j["account"][:12],
+                         "trade": j["trade"], "due": (lock or {}).get("locktime") if j["kind"] == "refund"
+                         else j["not_after"], "sent_txid": j["sent_txid"], "updated": j["updated"]})
+        counts = {s: sum(1 for h in held if h["status"] == s) for s in ("waiting", "sent", "spent", "expired")}
+        return JSONResponse({"own": own, "held": held, "counts": counts}, headers={"Cache-Control": "no-store"})
+
+    def htlclib_parse(redeem_hex: str):
+        from .. import htlc as htlclib
+        try:
+            return htlclib.parse(bytes.fromhex(redeem_hex))
+        except ValueError:
+            return None
 
     def _admin_xchain() -> dict:
         """The mainnet PEPE swap (arcade/xchain.py) as the operator needs to see it:
@@ -20758,6 +20797,15 @@ def create_app(state: AppState) -> FastAPI:
             for flag in ("auto_update", "auto_sell", "auto_fill", "node_trades"):
                 if flag in said:
                     state.set_setting(flag, bool(said[flag]))
+            if isinstance(said.get("swap_big"), dict):
+                # Where a swap waits 3 confirmations instead of 1 (2026-10-13: "1,
+                # more for big trades"): a mainnet coin leg at or above this, in whole coins.
+                for network, text in said["swap_big"].items():
+                    if network in tradelib.BIG and str(text).strip():
+                        sats = walletlib.parse_amount(str(text).strip())
+                        if sats <= 0:
+                            raise ValueError("a big-swap line is more than nothing")
+                        state.set_setting(f"swap_big:{network}", int(sats))
             if "xchain_enabled" in said:      # the mainnet PEPE swap (arcade/xchain.py)
                 state.set_setting("xchain:enabled", bool(said["xchain_enabled"]))
             if "moderation" in said:
@@ -23452,6 +23500,15 @@ def create_app(state: AppState) -> FastAPI:
             if units > int(index.balance(home, int(pid))):
                 raise ValueError(f"this node's home address holds less than that of {prop['name']}")
             return {"network": net, "kind": "token", "asset": pid, "amount": int(units)}
+        if network.startswith("nft:"):
+            _, net, txid = (network.split(":") + ["", "", ""])[:3]
+            ctx = next((c for c in state.token_chains if c.network == net), None)
+            if ctx is None:
+                raise ValueError("that NFT is not on a chain this node runs")
+            row = state.token_index(ctx).inscription(txid.lower())
+            if row is None or row["owner"] != state.home_address(ctx):
+                raise ValueError("this node's home address does not hold that NFT")
+            return {"network": net, "kind": "nft", "asset": row["txid"], "amount": 1}
         if network not in {c.network for c in state.token_chains}:
             raise ValueError("that network is not open on this node")
         sats = parse_amount(amount, True)
@@ -23703,7 +23760,7 @@ def create_app(state: AppState) -> FastAPI:
             # The open-a-pair box (2026-10-06: "When creating a pair the
             # drop-down should only list assets that you have in your wallet"):
             # what this reader holds on one side, any token on the other.
-            data["held_tokens"], data["pair_viewer"] = [], "nobody"
+            data["held_tokens"], data["pair_viewer"], data["held_nfts"] = [], "nobody", []
             data["xchain_open"] = _x_open()
             try:
                 held_at: list[str] = []
@@ -23723,11 +23780,27 @@ def create_app(state: AppState) -> FastAPI:
                                                     "managed": prop.get("managed", 0),
                                                     "divisible": bool(prop.get("divisible", True))}
                 data["held_tokens"] = sorted(held.values(), key=lambda t: str(t["name"]).lower())
-                data["held_net"] = chain.network
             except HTTPException:
                 raise
             except Exception:
                 data["held_tokens"] = []
+            data["held_net"] = chain.network
+            # The NFTs this reader holds here, to swap for a coin on another chain: an
+            # account's own; the node's at its home address, where it locks them from.
+            try:
+                if data["pair_viewer"] == "account":
+                    nft_at = [_account_address(signed_in(request).pubkey, chain)]
+                elif data["pair_viewer"] == "wallet":
+                    nft_at = [state.home_address(chain)]
+                else:
+                    nft_at = []
+                if any(nft_at):
+                    data["held_nfts"] = [{"txid": r["txid"], "number": r["number"]}
+                                         for r in index.inscriptions(owners=[a for a in nft_at if a], limit=50)]
+            except HTTPException:
+                raise
+            except Exception:
+                data["held_nfts"] = []
         elif tab == "market":
             # A collection is a market of its own, and the marketplace is the
             # list of them -- the same table the Tokens tab draws for pairs.

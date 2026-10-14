@@ -114,8 +114,9 @@
 
 {% if viewer == 'account' %}
 <div class="ex-card">{% include "_tab_swaps.html" %}
-  <p class="muted" style="font-size:.8rem;margin:8px 0 0">Your swaps run in this tab: keep it open until they finish
-    (a few blocks on each chain). Close it and come back, and it carries on -- or refunds, if the other side never paid.</p>
+  <p class="muted" style="font-size:.8rem;margin:8px 0 0">A swap takes two or three minutes. Once your side is
+    locked, your node finishes it with transactions you signed here -- you can close the page; if the other side
+    never pays, your coins come back by themselves within two hours. <a href="/docs/swaps.md">How a swap works</a></p>
 </div>
 {% endif %}
 {% endblock %}

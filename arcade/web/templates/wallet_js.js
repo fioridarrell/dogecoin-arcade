@@ -2640,7 +2640,19 @@ export async function tradeHeard(wallet, after) {
 const coinsText = (sats) => (Number(sats) / 1e8).toFixed(8).replace(/\.?0+$/, "");
 
 /** Take an order (trade_orders.py) as the initiator: secret made here, terms proposed. */
-export async function takeOrder(wallet, order) {
+/** What a swap costs in network fees, in words, from the side of whoever gives `give` and
+ *  gets `get` -- shown before anything is signed. A lock costs about one minimum fee (0.01);
+ *  a coin claimed out of a lock pays its own fee (0.01 comes off it); a token or NFT goes
+ *  into its lock with 0.02 that pays its way out (trade.LOCK_RESERVE). */
+export function swapFees(give, get) {
+  const coin = (n) => n === "doge" ? "DOGE" : n === "main" ? "PEP" : "PEP TEST";
+  const parts = [`about 0.01 ${coin(give.network)} to lock yours`];
+  if (give.kind && give.kind !== "coin") parts.push(`0.02 ${coin(give.network)} that goes in with it to pay for moving it out`);
+  if (!get.kind || get.kind === "coin") parts.push(`0.01 ${coin(get.network)} comes off what you receive`);
+  return "Network fees: " + parts.join("; ") + ".";
+}
+
+export async function takeOrder(wallet, order, options = {}) {
   const mineOn = (network) => coinsHex(keysOn(wallet, network).pubkey);
   const give = {network: order.get.network, kind: order.get.kind, asset: order.get.asset || "",
                 amount: order.get.amount,
@@ -2656,7 +2668,10 @@ export async function takeOrder(wallet, order) {
                  secret: coinsHex(secret), secretHash: coinsHex(secretHash), t1, t2,
                  myLock: null, theirLock: null, agreed: false, cancelled: false,
                  state: "proposed", note: "proposed; waiting for the other side to accept",
-                 cursor: 0, created: Date.now(), need: confirmationsFor(give, get, await swapBig())};
+                 cursor: 0, created: Date.now(), need: confirmationsFor(give, get, await swapBig()),
+                 // Said yes to in the Take dialog, which showed the amounts and fees: the lock is
+                 // not asked about again (real coins included -- 2026-10-13).
+                 approved: !!options.approved};
   keepTrade(wallet, trade);
   try {
     await tradeSay(wallet, order.msg_key, {t: "trade", v: 1, id, step: "propose", order: order.id,
@@ -2747,7 +2762,8 @@ export async function tradeTick(wallet, id) {
       if (!asked.ok) throw new Error(offer.detail || "the node could not build that lock");
       if (offer.lock !== address) throw new Error("the node built a different lock. Nothing was signed.");
     }
-    return confirm(wallet, offer);
+    // Approved in the Take or List dialog (amounts and fees shown there): not asked again.
+    return confirm(wallet, offer, trade.approved ? {reviewed: true} : null);
     });
     const script = coinsHex(await coins.htlcScript(myRedeem));
     let vout = -1;
@@ -2879,12 +2895,13 @@ async function postNow(wallet) {
 }
 
 /** List a swap from this tab: give `give` {network, kind?, asset?, amount}, get `get` (coin, token or NFT). */
-export async function listOrder(wallet, give, get) {
+export async function listOrder(wallet, give, get, options = {}) {
   const book = myOrdersOf(wallet);
   const id = "ord-" + coinsHex(crypto.getRandomValues(new Uint8Array(8)));
   const side = (s) => ({network: s.network, kind: s.kind || "coin", asset: String(s.asset || ""),
                         amount: s.kind === "nft" ? 1 : Math.round(Number(s.amount))});
   book.orders[id] = {id, give: side(give), get: side(get), labels: [give.label || "", get.label || ""],
+                     approved: !!options.approved,
                      trade_key: coinsHex(keysOn(wallet, give.network).pubkey),
                      take_key: coinsHex(keysOn(wallet, get.network).pubkey)};
   keepMyOrders(wallet, book);
@@ -2931,7 +2948,8 @@ export async function answerProposals(wallet) {
                    secret: "", secretHash: p.secret_hash, t1: p.t1, t2: p.t2, myLock: null, theirLock: null,
                    agreed: true, acceptSent: false, cancelled: false, state: "accepted",
                    note: "accepted; waiting for their lock", cursor: book.cursor, created: Date.now(),
-                   need: confirmationsFor(p.get, p.give, await swapBig())};
+                   need: confirmationsFor(p.get, p.give, await swapBig()),
+                   approved: !!mine.approved};      // approved when it was listed
     keepTrade(wallet, trade);
     // Kept BEFORE it is said, and said again by tradeTick until it goes: an accept that
     // failed to send must not leave the other side waiting for ever.

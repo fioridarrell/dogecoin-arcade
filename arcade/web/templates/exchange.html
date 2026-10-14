@@ -658,7 +658,8 @@ document.addEventListener('click', function (ev) {
   <div class="ex-card" id="trade-orders" style="margin-top:18px">
     <h3 style="margin:0 0 4px">Swaps between arcades</h3>
     <p class="muted" style="font-size:.84rem;margin:0 0 10px">Settled by lock scripts on both chains:
-      either both sides get paid or both get their own coins back. Nobody holds anybody's coins.</p>
+      either both sides get paid or both get their own coins back. Nobody holds anybody's coins.
+      <a href="/docs/swaps.md">How a swap works</a></p>
     {% if coin_pairs %}<p style="margin:0 0 10px">{% for cp in coin_pairs %}<a class="ex-pill open" style="font-size:.8rem;padding:4px 12px;margin-right:6px"
       href="/exchange/coins/{{ cp.base }}/{{ cp.quote }}">{{ cp.name }} market &rarr;</a>{% endfor %}</p>{% endif %}
     {% for o in trade_orders %}
@@ -685,7 +686,8 @@ document.addEventListener('click', function (ev) {
       <span class="muted" style="font-size:.84rem">Offer</span>
       <input name="give_amount" inputmode="decimal" placeholder="amount" style="width:90px;flex:0 0 auto" autocomplete="off">
       <select name="give_network" style="flex:0 0 auto;width:auto">{% for m in chain_menu() if m.ready %}<option value="{{ m.network }}">{{ m.coin }}</option>{% endfor %}
-        {% for t in held_tokens or [] %}<option value="token:{{ held_net }}:{{ t.property_id }}:{{ 1 if t.divisible else 0 }}">{{ wall_text(t.name, 'token') }} (#{{ t.property_id }})</option>{% endfor %}</select>
+        {% for t in held_tokens or [] %}<option value="token:{{ held_net }}:{{ t.property_id }}:{{ 1 if t.divisible else 0 }}">{{ wall_text(t.name, 'token') }} (#{{ t.property_id }})</option>{% endfor %}
+        {% for p in held_nfts or [] %}<option value="nft:{{ held_net }}:{{ p.txid }}">NFT #{{ p.number }}</option>{% endfor %}</select>
       <span class="muted" style="font-size:.84rem">for</span>
       <input name="get_amount" inputmode="decimal" placeholder="amount" style="width:90px;flex:0 0 auto" autocomplete="off">
       <select name="get_network" style="flex:0 0 auto;width:auto">{% for m in chain_menu() if m.ready %}<option value="{{ m.network }}"{% if loop.index == 2 %} selected{% endif %}>{{ m.coin }}</option>{% endfor %}</select>
@@ -717,7 +719,8 @@ document.addEventListener('click', function (ev) {
       <span class="muted" style="font-size:.84rem">Offer</span>
       <input name="give_amount" inputmode="decimal" placeholder="amount" style="width:90px;flex:0 0 auto" autocomplete="off">
       <select name="give_network" style="flex:0 0 auto;width:auto">{% for m in chain_menu() if m.ready %}<option value="{{ m.network }}">{{ m.coin }}</option>{% endfor %}
-        {% for t in held_tokens or [] %}<option value="token:{{ held_net }}:{{ t.property_id }}:{{ 1 if t.divisible else 0 }}">{{ wall_text(t.name, 'token') }} (#{{ t.property_id }})</option>{% endfor %}</select>
+        {% for t in held_tokens or [] %}<option value="token:{{ held_net }}:{{ t.property_id }}:{{ 1 if t.divisible else 0 }}">{{ wall_text(t.name, 'token') }} (#{{ t.property_id }})</option>{% endfor %}
+        {% for p in held_nfts or [] %}<option value="nft:{{ held_net }}:{{ p.txid }}">NFT #{{ p.number }}</option>{% endfor %}</select>
       <span class="muted" style="font-size:.84rem">for</span>
       <input name="get_amount" inputmode="decimal" placeholder="amount" style="width:90px;flex:0 0 auto" autocomplete="off">
       <select name="get_network" style="flex:0 0 auto;width:auto">{% for m in chain_menu() if m.ready %}<option value="{{ m.network }}"{% if loop.index == 2 %} selected{% endif %}>{{ m.coin }}</option>{% endfor %}</select>
