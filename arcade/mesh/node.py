@@ -122,6 +122,12 @@ RATE = 5.0                  # messages per second per member, sustained
 BURST = 10                  # messages a member may send at once
 FORWARD_SLACK = 2.0         # forwarders allow this multiple before dropping
 IDLE = 10.0                 # seconds before a silent member or node is gone
+#: How long one of THIS node's own members keeps its seat with its page's stream gone quiet.
+#: A phone or Wi-Fi drops every stream at once for a few seconds and the browser reconnects
+#: on the same token; at IDLE (10 s) that cost the seat -- everyone saw the player leave and
+#: come back, and its game had to start over (2026-10-13, @gx1/@apple). A page that really
+#: went away says leave; one that vanished without a word is gone after this.
+LOCAL_GRACE = 30.0
 SUB_EVERY = 30.0            # how often a node re-announces its rooms (it also does on every change)
 HERE_EVERY = 8.0            # how often a node says, in each of its rooms, who of its players is there
 HERE_FULL = 6               # every so many HEREs carry the certificates (or at once, for a newcomer)
@@ -832,7 +838,7 @@ class MeshNode:
     async def _expire_locals(self) -> None:
         now = time.monotonic()
         for (room, member), entry in list(self.local.items()):
-            if now - entry.touched > IDLE:          # its page went away without saying
+            if now - entry.touched > max(IDLE, LOCAL_GRACE):   # its page went away without saying
                 del self.local[(room, member)]
                 self._announce_local(room, member, "leave")
                 await self._publish(room, member, "leave", b"")

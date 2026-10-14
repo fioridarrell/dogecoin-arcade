@@ -25,6 +25,7 @@ def fast(monkeypatch):
     monkeypatch.setattr(meshlib, "SUB_EVERY", 0.15)
     monkeypatch.setattr(meshlib, "HERE_EVERY", 0.15)
     monkeypatch.setattr(meshlib, "IDLE", 1.0)
+    monkeypatch.setattr(meshlib, "LOCAL_GRACE", 1.0)
     monkeypatch.setattr(meshlib, "DIAL_EVERY", 0.05)
 
 
@@ -836,4 +837,27 @@ def test_the_tunnel_carries_room_routes_to_the_web_app_and_nothing_else():
         finally:
             ws_srv.close(); web_srv.close(); await ws_srv.wait_closed(); await web_srv.wait_closed()
             await asyncio.sleep(0.1)
+    run(go())
+
+
+def test_a_local_member_keeps_its_seat_through_a_short_drop(monkeypatch):
+    """2026-10-13: a phone dropped every stream for a few seconds and lost its seat at IDLE;
+    one of this node's own members now keeps it for LOCAL_GRACE without a touch."""
+    import time as _time
+    monkeypatch.setattr(meshlib, "LOCAL_GRACE", 3.0)
+
+    async def go():
+        node = MeshNode(nacl.signing.SigningKey.generate(), NET, listen_host="127.0.0.1", listen_port=0)
+        await node.start()
+        try:
+            await node.join("plaza", "phone")
+            entry = node.local[("plaza", "phone")]
+            entry.touched = _time.monotonic() - 2.0          # past IDLE (1 s), within the grace
+            await node._expire_locals()
+            assert ("plaza", "phone") in node.local, "a short drop keeps the seat"
+            entry.touched = _time.monotonic() - 3.5          # past the grace
+            await node._expire_locals()
+            assert ("plaza", "phone") not in node.local, "gone for good after the grace"
+        finally:
+            await node.stop()
     run(go())

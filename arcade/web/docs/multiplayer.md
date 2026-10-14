@@ -60,6 +60,7 @@ outside an arcade viewer, or anything else goes wrong, the room has
 | `room.send(value)` | send to everyone else; a string as is, anything else as JSON |
 | `room.on('message', fn(data, player))` | `data` is parsed JSON when it parses |
 | `room.on('join', fn(player))`, `room.on('leave', fn(player))` | |
+| `room.on('rejoined', fn(me))` | your connection dropped for longer than the node waits (30 seconds) and you were seated again: everyone else saw you leave and come back, so **send your state again** (position, gear) |
 | `room.on('closed', fn(why))` | the room is gone for good (the node unreachable for about ten minutes); join again to retry |
 | `room.leave()` | leave the room |
 

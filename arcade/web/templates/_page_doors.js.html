@@ -183,6 +183,9 @@
           }
           if (!j || !j.ok || !j.online || !j.token) throw new Error('not yet');
           var before = h.members, now = realtimeOpen(name, frame, j, h.game);
+          // The page's own seat was replaced: say so, every time, so a game can send its
+          // state again -- the others saw this player leave and come back (2026-10-13).
+          frame.postMessage({arcade: 'realtime', event: {type: 'rejoined', room: name, member: now.me}}, '*');
           if (!h.me || now.me.id !== h.me.id) {
             frame.postMessage({arcade: 'realtime', event: {type: 'me', room: name, member: now.me}}, '*');
           }

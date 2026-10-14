@@ -81,12 +81,12 @@
     this.me = said.me || null;
     this.why = said.why || '';
     this._members = {};
-    this._on = {message: [], join: [], leave: [], closed: []};
+    this._on = {message: [], join: [], leave: [], closed: [], rejoined: []};
     var self = this;
     (said.members || []).forEach(function (p) { self._members[p.id] = p; });
   }
   Room.prototype.on = function (type, fn) {
-    if (!this._on[type]) throw new Error('events are: message, join, leave, closed');
+    if (!this._on[type]) throw new Error('events are: message, join, leave, closed, rejoined');
     this._on[type].push(fn);
     return this;
   };
@@ -114,6 +114,9 @@
     else if (ev.type === 'leave') { delete this._members[p.id]; this._emit('leave', p); }
     else if (ev.type === 'closed') { this.online = false; this._emit('closed', ev.why || ''); }
     else if (ev.type === 'me') { this.me = p; }    // back after the node restarted, under a new name
+    // This page's own seat was taken again (its connection dropped for longer than the
+    // node waits): the others saw it leave and come back, so send your state again.
+    else if (ev.type === 'rejoined') { this.me = p || this.me; this.online = true; this._emit('rejoined', this.me); }
     else if (ev.type === 'message') {
       var data = ev.data;
       if (typeof data === 'string') { try { data = JSON.parse(data); } catch (err) {} }
@@ -164,7 +167,7 @@
     this.where = {};            // player id -> {cell key: true}
     this.players = {};          // player id -> player
     this.online = false; this.me = null; this.here = null;
-    this._on = {message: [], join: [], leave: [], closed: []};
+    this._on = {message: [], join: [], leave: [], closed: [], rejoined: []};
   }
   Area.prototype.on = Room.prototype.on;
   Area.prototype._emit = Room.prototype._emit;
