@@ -100,6 +100,26 @@ class Doginals:
             db.execute("INSERT OR REPLACE INTO tx VALUES (?,?,?)", (txid, json.dumps(held), time.time()))
         return held
 
+    def kept(self, txid: str) -> dict[int, list[dict]] | None:
+        """What is already known about a transaction, without asking anybody: None when it was never asked."""
+        with self._lock, self._db() as db:
+            row = db.execute("SELECT held FROM tx WHERE txid=?", (txid,)).fetchone()
+        return {int(k): v for k, v in json.loads(row[0]).items()} if row else None
+
+    def spendable_known(self, coins: list[dict]) -> list[dict]:
+        """`spendable` from what is already known, asking Doge Soft nothing (it can take most of a minute a transaction):
+        a coin known to carry a Doginal stays out; a small coin nobody vouched for stays out; anything else may go -- the
+        rule `spendable` keeps while Doge Soft is away."""
+        out = []
+        for coin in coins:
+            on = self.kept(coin["txid"])
+            if on is None:
+                if int(coin["value"]) > POSTAGE_MAX:
+                    out.append(coin)
+            elif not on.get(int(coin["vout"])):
+                out.append(coin)
+        return out
+
     def spendable(self, coins: list[dict]) -> list[dict]:
         """The coins an ordinary send may use: none Doge Soft says is inscribed, and no small one it has not vouched for."""
         out = []

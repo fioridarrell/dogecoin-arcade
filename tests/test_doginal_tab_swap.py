@@ -119,6 +119,8 @@ def test_the_nodes_doge_coin_leg_sets_doginal_coins_aside(tmp_path):
     guard = doginals.Doginals(tmp_path / "g.sqlite", fetch=lambda txid: {
         T1: {"txid": T1, "inscriptions": [{"vout": 0, "inscription_id": INS, "sat_offset": 0}]},
         T3: {"txid": T3, "inscriptions": []}}[txid])
+    guard.held(T1); guard.held(T3)                    # what is already known; the send asks nobody
+    guard.fetch = lambda txid: (_ for _ in ()).throw(AssertionError("asked Doge Soft during a send"))
     trader = NodeTrader.__new__(NodeTrader)
     trader._doginals = guard
     assert trader._send_coins(Rpc(), "doge", "DLockAddress", 2 * COIN) == "ff" * 32

@@ -408,7 +408,9 @@ class NodeTrader:
             return rpc.call("sendtoaddress", address, amount / COIN)
         coins = [{"txid": u["txid"], "vout": int(u["vout"]), "value": round(float(u["amount"]) * COIN)}
                  for u in rpc.call("listunspent", 0)]
-        clean = {(c["txid"], c["vout"]) for c in guard.spendable(coins)}
+        # From what is already known only: asking Doge Soft about every coin in the wallet took most of a minute EACH and
+        # held the swap (and the tests) up for good (2026-10-15).
+        clean = {(c["txid"], c["vout"]) for c in guard.spendable_known(coins)}
         keep = [{"txid": c["txid"], "vout": c["vout"]} for c in coins if (c["txid"], c["vout"]) not in clean]
         if keep:
             rpc.call("lockunspent", False, keep)
