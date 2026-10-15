@@ -57,6 +57,7 @@ PUBLIC_PAGES = frozenset({
     "/feed",
     "/guide",
     "/docs",
+    "/affiliates",            # who the arcade works with (2026-10-15)
     "/collections",
     "/tokens",
     "/nfts",

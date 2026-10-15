@@ -422,6 +422,9 @@ NAV = [
     # One Create tab for NFTs, tokens and the launchpad wizard (2026-09-27).
     ("/create",       "Create",       "mainnet",   True),
     ("/exchange",     "Exchange",     "mainnet",   True),
+    # Who the arcade works with (2026-10-15: "Between the exchange and the Docs tab,
+    # add an affiliate tab").
+    ("/affiliates",   "Affiliates",   None,        True),
     ("/approvals",    "Approvals",    None,        True),
     ("/docs",         "Docs",         None,        True),
 ]
@@ -451,6 +454,7 @@ ACCOUNT_NAV = [
     # NFTs, Tokens and the launchpad wizard, behind one tab (2026-09-27).
     ("/create",          "Create",       "mainnet",   True),
     ("/exchange",        "Exchange",     "mainnet",   True),
+    ("/affiliates",      "Affiliates",   None,        True),
     ("/docs",            "Docs",         None,        True),
 ]
 
@@ -7250,6 +7254,22 @@ def create_app(state: AppState) -> FastAPI:
         thing in front of them can do.
         """
         return RedirectResponse("/docs/features.md", status_code=307)
+
+    #: The arcade's affiliates (2026-10-15): (name, link, what they do). Doge Soft's
+    #: explorer is where this arcade reads Doginals from (arcade/doginals.py).
+    AFFILIATES = (
+        ("Doge Soft", "https://dogesoft.io",
+         "Dogecoin tools and the explorer this arcade reads Doginals from: which coins carry an "
+         "inscription, so a wallet never spends one by accident, and what each Doginal is."),
+        ("Anti Doginal Dogs", "https://antidoginaldogs.com",
+         "Recursive transformative art on Dogecoin."),
+    )
+
+    @app.get("/affiliates", response_class=HTMLResponse)
+    def affiliates(request: Request):
+        """The Affiliates tab, between the Exchange and the Docs (2026-10-15)."""
+        return render(request, "affiliates.html",
+                      affiliates=[{"name": n, "url": u, "about": a} for n, u, a in AFFILIATES])
 
     @app.get("/docs", response_class=HTMLResponse)
     def docs_index(request: Request):
