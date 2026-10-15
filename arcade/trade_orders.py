@@ -37,6 +37,7 @@ CONTENT_TYPE = "application/vnd.arcade.orders+json"
 VERSION = 1
 MAX_ORDERS = 50                 # per batch: an inscription, not a database
 MAX_EXPIRY = 30 * 24 * 3600
+COIN = 100_000_000
 _ID = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 _KEY33 = re.compile(r"^0[23][0-9a-f]{64}$")
 _HEX32 = re.compile(r"^[0-9a-f]{64}$")
@@ -235,3 +236,52 @@ def coin_book(orders: list[dict], base: str, quote: str) -> dict:
     bids.sort(key=lambda o: -o["price"])
     return {"asks": asks, "bids": bids,
             "spread": (asks[0]["price"] - bids[0]["price"]) if asks and bids else None}
+
+
+def asset_book(orders: list[dict], network: str, kind: str, asset: str, quote: str,
+               divisible: bool = True) -> dict:
+    """A testnet asset's market against a coin on another chain, out of the visible orders
+    (2026-10-15: cross-chain pairs like ASHVALE GOLD/PEP "should automatically be
+    switched over to our new non-custodial swap mechanism"): swaps that give the asset
+    (`kind` token or nft, `asset` its id, on `network`) for the `quote` coin, or the coin for it.
+
+    asks: they give the asset for the coin, cheapest first; bids: they give the coin for
+    the asset, dearest first. `price` is quote coins per WHOLE unit of the asset (one NFT,
+    one token -- a divisible token's raw units are hundred-millionths). Each order is taken
+    whole: a lock moves exactly its amount."""
+    asset = str(asset)
+    scale = COIN if (kind == "token" and divisible) else 1
+
+    def mine(side: dict) -> bool:
+        return (side["kind"] == kind and side["network"] == network
+                and str(side.get("asset") or "") == asset and int(side["amount"]) > 0)
+
+    def coin(side: dict) -> bool:
+        return side["kind"] == "coin" and side["network"] == quote and int(side["amount"]) > 0
+
+    asks, bids = [], []
+    for o in orders:
+        if mine(o["give"]) and coin(o["get"]):
+            units, coins = int(o["give"]["amount"]), int(o["get"]["amount"])
+            asks.append({**o, "price": (coins / COIN) / (units / scale),
+                         "base_amount": units, "quote_amount": coins})
+        elif coin(o["give"]) and mine(o["get"]):
+            units, coins = int(o["get"]["amount"]), int(o["give"]["amount"])
+            bids.append({**o, "price": (coins / COIN) / (units / scale),
+                         "base_amount": units, "quote_amount": coins})
+    asks.sort(key=lambda o: o["price"])
+    bids.sort(key=lambda o: -o["price"])
+    return {"asks": asks, "bids": bids,
+            "spread": (asks[0]["price"] - bids[0]["price"]) if asks and bids else None}
+
+
+def asset_markets(orders: list[dict], network: str, quote: str) -> dict[tuple[str, str], int]:
+    """Which testnet assets have a swap standing against the `quote` coin: {(kind, asset): orders}."""
+    seen: dict[tuple[str, str], int] = {}
+    for o in orders:
+        for a, b in ((o["give"], o["get"]), (o["get"], o["give"])):
+            if (a["kind"] in ("token", "nft") and a["network"] == network
+                    and b["kind"] == "coin" and b["network"] == quote):
+                key = (a["kind"], str(a.get("asset") or ""))
+                seen[key] = seen.get(key, 0) + 1
+    return seen

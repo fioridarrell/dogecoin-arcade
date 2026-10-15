@@ -151,7 +151,7 @@
     {% if viewer == 'account' %}<button type="button" class="secondary small" data-x-cancel="{{ o.id }}" data-x-waiting="{{ 'yes' if o.status == 'awaiting' else '' }}">Cancel</button>
     {% else %}<form method="post" action="/exchange/x/cancel" style="margin:0">
       <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="order" value="{{ o.id }}">
-      <input type="hidden" name="back" value="/exchange/x/{{ a.kind }}/{{ a.asset }}">
+      <input type="hidden" name="back" value="/exchange/x/{{ a.kind }}/{{ a.asset }}?held=1">
       <button type="submit" class="secondary small">Cancel</button></form>{% endif %}
   {% endif %}</span>
 </div>

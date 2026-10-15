@@ -305,7 +305,7 @@ document.addEventListener('click', function (ev) {
       {{ xthumb(b) }}
       <div class="oftext">Somebody offers <strong>{{ b.pep }} PEP</strong> {{ net_badge(true) }} for your {{ xpiece(b) }}
         <div class="muted" style="font-size:.8rem">Real coins, held by this node until you sell. It takes 0.5%.</div></div>
-      <div class="ofdo"><a class="btn small" href="/exchange/x/nft/{{ b.inscription }}?side=sell&amp;price={{ b.pep }}#x-form">Sell for {{ b.pep }} PEP</a></div>
+      <div class="ofdo"><a class="btn small" href="/exchange/x/nft/{{ b.inscription }}?held=1&amp;side=sell&amp;price={{ b.pep }}#x-form">Sell for {{ b.pep }} PEP</a></div>
     </div>
     {% endfor %}
   </div>
@@ -320,7 +320,7 @@ document.addEventListener('click', function (ev) {
       <div class="oftext">You offer <strong>{{ b.pep }} PEP</strong> {{ net_badge(true) }} for {{ xpiece(b) }}
         <div style="margin-top:3px">{% if b.status == 'awaiting' %}<span class="ex-pill wait">Checking deposit</span>
           {% else %}<span class="ex-pill open">Waiting for the owner</span>{% endif %}</div></div>
-      <div class="ofdo"><a class="btn ghost small" href="/exchange/x/nft/{{ b.inscription }}">Manage</a></div>
+      <div class="ofdo"><a class="btn ghost small" href="/exchange/x/nft/{{ b.inscription }}?held=1">Manage</a></div>
     </div>
     {% endfor %}
   </div>
@@ -754,8 +754,7 @@ document.addEventListener('click', function (ev) {
     {% macro pair_options(selected_first) -%}
       {%- for t in held_tokens %}<option value="{{ t.property_id }}"{% if selected_first and loop.first %} selected{% endif %}>{{ wall_text(t.name, 'token') }} (#{{ t.property_id }}){{ ' · managed' if t.managed }}</option>{% endfor %}
       <option value="coin"{% if not selected_first %} selected{% endif %}>Pepecoin, testnet (PEP TEST)</option>
-      {% if xchain_open %}<option value="main">Pepecoin, mainnet (PEP): held by this node while it trades</option>
-      {% else %}<option value="main" disabled>Pepecoin, mainnet (PEP): not open on this node</option>{% endif %}
+      <option value="main">Pepecoin, mainnet (PEP): swapped through lock scripts</option>
     {%- endmacro %}
     <form method="get" action="/exchange/pairs" style="margin:0">
       <div class="ex-box"><label for="pair-base">You have</label>

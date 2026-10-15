@@ -21966,6 +21966,46 @@ def create_app(state: AppState) -> FastAPI:
                 "ask": float(book["sells"][0]["price"]) * scale if book["sells"] else None,
                 "bid": float(book["buys"][0]["price"]) * scale if book["buys"] else None,
             })
+        return _x_swap_rows(index, faces_for, rows)
+
+    def _x_swap_rows(index, faces_for, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Cross-chain token markets trade through lock scripts now (2026-10-15:
+        pairs like ASHVALE GOLD/PEP "should automatically be switched over to our new
+        non-custodial swap mechanism"): the asks, bids and orders on a row are the swaps
+        every arcade lists, and a token with only swaps standing gets a row of its own.
+        The held book's past trades still draw the price history."""
+        try:
+            test, main = state.messaging.network, state.ledger.network
+            orders = state.trade_orders.visible(_online)
+            standing = trade_orders.asset_markets(orders, test, main)
+        except Exception:
+            log.debug("the swap markets could not be read", exc_info=True)
+            return rows
+        by_id = {r["property_id"]: r for r in rows}
+        for r in rows:
+            r.update(ask=None, bid=None, orders=0)
+        for (kind, asset), n in standing.items():
+            if kind != "token":
+                continue        # a piece is not a pair: its swaps are on its own page
+            row = by_id.get(asset)
+            if row is None:
+                try:
+                    a = _x_asset("token", asset)
+                except ValueError:
+                    continue
+                face = faces_for(index, [a["prop"]])[a["prop"]["property_id"]]
+                row = {"property_id": a["asset"], "name": a["name"], "divisible": a["divisible"],
+                       "managed": a["prop"].get("managed", 0), "href": f"/exchange/x/token/{a['asset']}",
+                       "quote_label": "PEP", "quote_main": True, "icon": face["icon"],
+                       "about": face["about"], "last": None, "change": None, "new": False,
+                       "high": None, "low": None, "trades": 0, "volume": 0, "coins": 0,
+                       "all_trades": 0, "spark": _spark([]), "ask": None, "bid": None, "orders": 0}
+                rows.append(row)
+                by_id[asset] = row
+            book = trade_orders.asset_book(orders, test, "token", asset, main, row["divisible"])
+            row["orders"] = n
+            row["ask"] = book["asks"][0]["price"] if book["asks"] else None
+            row["bid"] = book["bids"][0]["price"] if book["bids"] else None
         return rows
 
     def _token_pair_markets(index, faces_for) -> list[dict[str, Any]]:
@@ -22747,9 +22787,7 @@ def create_app(state: AppState) -> FastAPI:
         back = RedirectResponse("/exchange?tab=tokens", status_code=303)
         if "main" in (base, quote):
             other = quote if base == "main" else base
-            if not _x_open():
-                state.flash("Trading for mainnet Pepecoin is not open on this node.", "err")
-                return back
+            # Lock scripts need no switch (2026-10-15): this node holds nothing for anybody.
             if other == "main":
                 state.flash("A pair is two different things: pick another one to trade it for.", "err")
                 return back
@@ -22978,6 +23016,48 @@ def create_app(state: AppState) -> FastAPI:
                              "the price or the amount until it divides even")
         return units, raw // scale
 
+    def _x_swaps_page(request: Request, a: dict):
+        """A testnet asset against mainnet PEP, settled through lock scripts on both chains
+        (asset_pair.html): the swaps every arcade lists, taken whole, nobody holding anything."""
+        test, main = state.messaging.network, state.ledger.network
+        view = _trade_order_view(request)
+        book = trade_orders.asset_book(view["trade_orders"], test, a["kind"], a["asset"], main, a["divisible"])
+        shown = (lambda units: format_amount(units, a["divisible"])) if a["kind"] == "token" else (lambda units: "1")
+        for o in book["asks"] + book["bids"]:
+            o["units_shown"] = shown(o["base_amount"])
+
+        def this_pair(o: dict) -> bool:
+            sides = (o["give"], o["get"])
+            return (any(s["network"] == test and s["kind"] == a["kind"] and str(s.get("asset") or "") == a["asset"]
+                        for s in sides)
+                    and any(s["network"] == main and s["kind"] == "coin" for s in sides))
+        mine = [dict(o, units_shown=shown(int((o["give"] if o["give"]["kind"] != "coin" else o["get"])["amount"])))
+                for o in (view.get("my_trade_orders") or []) if this_pair(o)]
+        # The held book: its last trade is the price until a swap has happened, and anybody
+        # with an order still standing there is pointed at it.
+        held_open, last = False, None
+        public = _account_view(request)
+        viewer = "wallet" if not public else ("account" if signed_in(request) is not None else "nobody")
+        try:
+            xbook = state.xchain.book
+            fills = xbook.fills(a["kind"], a["asset"], limit=1)
+            if fills and fills[0]["amount"]:
+                f = fills[0]
+                last = (f["pepe"] / COIN) / ((f["amount"] / COIN) if a["divisible"] else f["amount"])
+            owner = "node" if viewer == "wallet" else (signed_in(request).pubkey.lower() if viewer == "account" else "")
+            if owner:
+                held_open = any(o["kind"] == a["kind"] and o["asset"] == a["asset"]
+                                and o["status"] in ("open", "awaiting") for o in xbook.orders_of(owner))
+        except Exception:
+            log.debug("the held book could not be read", exc_info=True)
+        ready = {c.network for c in state.token_chains}
+        return render(request, "asset_pair.html", a=a, chain=state.messaging, main=state.ledger,
+                      base=test, quote=main, asks=book["asks"], bids=book["bids"], spread=book["spread"],
+                      last=last, held_open=held_open, open_here=test in ready and main in ready,
+                      viewer="account" if viewer == "account" else viewer,
+                      my_pair_orders=mine, side=request.query_params.get("side", ""),
+                      **{k: view[k] for k in ("can_trade_orders", "can_list_orders")})
+
     @app.get("/exchange/x/{kind}/{asset}", response_class=HTMLResponse)
     def exchange_xchain(request: Request, kind: str, asset: str):
         """One cross-chain market: an asset on testnet against Pepecoin on mainnet."""
@@ -22985,6 +23065,13 @@ def create_app(state: AppState) -> FastAPI:
             a = _x_asset(kind, asset)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc))
+        if request.query_params.get("held") != "1":
+            # Lock scripts by default (2026-10-15): the held book stays at ?held=1,
+            # for orders already standing there and for an operator who opened it.
+            if a["kind"] == "coin":
+                return RedirectResponse(f"/exchange/coins/{state.messaging.network}/{state.ledger.network}",
+                                        status_code=303)
+            return _x_swaps_page(request, a)
         book = state.xchain.book
         rows = book.book(a["kind"], a["asset"])
         scale = (COIN if a["divisible"] else 1) / COIN
@@ -23039,7 +23126,7 @@ def create_app(state: AppState) -> FastAPI:
         """The node's own wallet trades on the cross-chain book: it deposits from its
         home address on each chain and is paid back to them."""
         check_csrf(csrf_token)
-        back = RedirectResponse(f"/exchange/x/{kind}/{asset}", status_code=303)
+        back = RedirectResponse(f"/exchange/x/{kind}/{asset}?held=1", status_code=303)
         try:
             if not _x_open():
                 raise ValueError("the cross-chain book is not open on this node")
@@ -23930,7 +24017,7 @@ def create_app(state: AppState) -> FastAPI:
             log.debug("could not name a swap side", exc_info=True)
         return f"{amount} of token #{side['asset']}" if kind == "token" else f"NFT {side['asset'][:10]}…"
 
-    def _coin_side(network: str, amount: str) -> dict:
+    def _coin_side(network: str, amount: str, holding: bool = True) -> dict:
         """A side of the operator's swap: a coin ("regtest"), or a token this node holds at
         its home address ("token:<network>:<id>:<divisible>", the List form's value) --
         the node locks tokens from there (NodeTrader._lock_asset)."""
@@ -23946,8 +24033,7 @@ def create_app(state: AppState) -> FastAPI:
             units = parse_amount(amount, prop["divisible"])
             if units <= 0:
                 raise ValueError("an amount is more than nothing")
-            home = state.home_address(ctx)
-            if units > int(index.balance(home, int(pid))):
+            if holding and units > int(index.balance(state.home_address(ctx), int(pid))):
                 raise ValueError(f"this node's home address holds less than that of {prop['name']}")
             return {"network": net, "kind": "token", "asset": pid, "amount": int(units)}
         if network.startswith("nft:"):
@@ -23956,7 +24042,9 @@ def create_app(state: AppState) -> FastAPI:
             if ctx is None:
                 raise ValueError("that NFT is not on a chain this node runs")
             row = state.token_index(ctx).inscription(txid.lower())
-            if row is None or row["owner"] != state.home_address(ctx):
+            if row is None:
+                raise ValueError("there is no such NFT on this node")
+            if holding and row["owner"] != state.home_address(ctx):
                 raise ValueError("this node's home address does not hold that NFT")
             return {"network": net, "kind": "nft", "asset": row["txid"], "amount": 1}
         if network not in {c.network for c in state.token_chains}:
@@ -23968,7 +24056,7 @@ def create_app(state: AppState) -> FastAPI:
 
     def _swap_back(back: str) -> str:
         """Where a swap form returns to: a coin pair's page that sent it, else the card."""
-        if re.fullmatch(r"/exchange/coins/[a-z]+/[a-z]+", back or ""):
+        if re.fullmatch(r"/exchange/coins/[a-z]+/[a-z]+|/exchange/x/(token|nft)/[0-9a-fi]+", back or ""):
             return back
         return "/exchange?tab=tokens#trade-orders"
 
@@ -24006,7 +24094,7 @@ def create_app(state: AppState) -> FastAPI:
         try:
             if not _node_trades():
                 raise ValueError(NODE_TRADES_OFF)
-            give, get = _coin_side(give_network, give_amount), _coin_side(get_network, get_amount)
+            give, get = _coin_side(give_network, give_amount), _coin_side(get_network, get_amount, holding=False)
             if give["network"] == get["network"]:
                 where = (f" -- its market is /exchange/pair/{give['asset']}" if give["kind"] == "token" else "")
                 raise ValueError("a swap on one chain is instant on that chain's own market (one "

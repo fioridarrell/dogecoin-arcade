@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% import "_exui.html" as ex %}
+{% set aname = wall_text(a.name, 'an asset') %}
+{% set unit = 'each' if a.kind == 'token' else 'for it' %}
+{% block title %}{{ aname }}/PEP (mainnet) · Exchange · DogecoinArcade{% endblock %}
+{% block body %}
+{# A testnet asset against mainnet PEP, through lock scripts (2026-10-15: cross-chain
+   pairs like ASHVALE GOLD/PEP "should automatically be switched over to our new non-custodial
+   swap mechanism"). The coin pair's market (coin_pair.html) with a token or a piece as its base:
+   the swaps every arcade lists, priced in PEP per whole unit, each taken whole and settled on
+   both chains (arcade/trade.py). The node-held book it replaced stays at ?held=1. #}
+{{ ex.style() }}
+<style>
+.cp-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media (max-width:720px){.cp-grid{grid-template-columns:1fr}}
+.cp-form{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:10px}
+.cp-form input{width:110px;flex:0 0 auto}
+.cp-px{font-variant-numeric:tabular-nums;font-weight:700}
+.cp-ask{color:var(--bad)}.cp-bid{color:var(--ok)}
+</style>
+<a class="back-link" href="/exchange?tab=tokens">&#8592; All markets</a>
+
+<div class="ex-hero">
+  <span class="ex-tic" style="width:46px;height:46px">{{ (aname or '?')[:1]|upper }}</span>
+  <div style="min-width:0">
+    <h1>{{ wall(a.name, 'token name') }}<span class="muted" style="font-weight:600"> / PEP</span></h1>
+    <div class="muted" style="font-size:.78rem">
+      {% if a.kind == 'token' %}#{{ a.asset }} {{ supply_badge(a.prop) }} &middot; <a href="/tokens/{{ a.asset }}">token page</a>
+      {% else %}<a href="/inscriptions/{{ a.asset }}">{{ aname }}</a>{% endif %}
+      &middot; {{ net_badge(chain) }} asset, priced in mainnet PEP {{ net_badge(main) }}</div>
+  </div>
+</div>
+<div class="ex-price">
+  {%- if asks %}<b>{{ ex.px(asks[0].price) }}</b><span class="unit">PEP {{ unit }}, lowest ask</span>
+  {%- elif bids %}<b>{{ ex.px(bids[0].price) }}</b><span class="unit">PEP {{ unit }}, highest bid</span>
+  {%- elif last is not none %}<b>{{ ex.px(last) }}</b><span class="unit">PEP, last trade</span>
+  {%- else %}<b>&mdash;</b><span class="unit">nobody is offering a swap yet</span>{% endif %}
+</div>
+<p class="ex-note" style="margin:0 0 12px"><span class="ex-pill done">Lock scripts</span>
+  Each swap settles on both chains at once: either both sides get paid, or both get their own back.
+  Nobody holds anybody's {{ 'tokens' if a.kind == 'token' else 'pieces' }} or coins, and each swap is taken whole.</p>
+
+{% if held_open %}
+<div class="ex-card"><p class="muted" style="margin:0">You still have an order on the node-held book for this asset.
+  <a href="?held=1">Manage it there</a> (cancel to get your deposit back).</p></div>
+{% endif %}
+{% if not open_here %}
+<div class="ex-card"><p class="msg err" style="margin:0">This node does not run both chains yet. The market opens here when it does.</p></div>
+{% endif %}
+
+<div class="cp-grid" id="asset-pair">
+  {% for side_, rows, word in (('ask', asks, 'Selling ' ~ aname), ('bid', bids, 'Buying ' ~ aname)) %}
+  <div class="ex-card">
+    <div class="ex-h" style="margin-top:0">{{ word }}</div>
+    {% if rows %}
+    <table class="ex-table">
+      {% for o in rows %}
+      <tr>
+        <td><span class="cp-px cp-{{ side_ }}">{{ ex.px(o.price) }}</span><br><small class="muted">PEP {{ unit }}</small></td>
+        <td>{% if a.kind == 'token' %}{{ o.units_shown }} {{ aname }}<br>{% endif %}<small class="muted">for {{ '%g' % (o.quote_amount / 100000000) }} PEP &middot; {{ o.lister|who }}</small></td>
+        <td style="text-align:right">
+          {% if can_trade_orders %}
+          <form method="post" action="/exchange/trade-orders/take" style="margin:0">
+            <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="back" value="/exchange/x/{{ a.kind }}/{{ a.asset }}">
+            <input type="hidden" name="order" value="{{ o.id }}"><input type="hidden" name="lister" value="{{ o.lister }}">
+            <button type="submit" class="small">{{ 'Buy' if side_ == 'ask' else 'Sell' }}</button></form>
+          {% elif viewer == 'account' and open_here %}
+          <button type="button" class="small" data-take-order="{{ o|tojson|forceescape }}">{{ 'Buy' if side_ == 'ask' else 'Sell' }}</button>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p class="muted" style="margin:0">{{ 'Nobody is selling ' ~ aname ~ ' for PEP' if side_ == 'ask' else 'Nobody is buying ' ~ aname ~ ' with PEP' }} right now.</p>
+    {% endif %}
+
+    {% if open_here and viewer == 'account' and can_list_orders %}
+    <form class="cp-form" id="{{ 'x-form' if (side or 'buy') == ('sell' if side_ == 'ask' else 'buy') else '' }}"
+          data-pair-side="{{ 'sell' if side_ == 'ask' else 'buy' }}" data-base="{{ base }}" data-quote="{{ quote }}"
+          data-base-kind="{{ a.kind }}" data-base-asset="{{ a.asset }}" data-base-div="{{ '1' if a.divisible else '0' }}"
+          data-base-label="{{ aname }}">
+      <span class="muted" style="font-size:.84rem">{{ 'Sell' if side_ == 'ask' else 'Buy' }}</span>
+      {% if a.kind == 'token' %}
+      <input name="amount" inputmode="decimal" placeholder="{{ aname }}" autocomplete="off">
+      <span class="muted" style="font-size:.84rem">at</span>
+      <input name="price" inputmode="decimal" placeholder="PEP each" autocomplete="off">
+      {% else %}
+      <input type="hidden" name="amount" value="1">
+      <span class="muted" style="font-size:.84rem">it for</span>
+      <input name="price" inputmode="decimal" placeholder="PEP" autocomplete="off">
+      {% endif %}
+      <button type="submit" class="small">{{ 'List sale' if side_ == 'ask' else 'List bid' }}</button>
+    </form>
+    {% elif open_here and can_trade_orders %}
+    {% set leg = ('token:' ~ base ~ ':' ~ a.asset ~ ':' ~ ('1' if a.divisible else '0')) if a.kind == 'token' else ('nft:' ~ base ~ ':' ~ a.asset) %}
+    <form class="cp-form" method="post" action="/exchange/trade-orders/stand">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="back" value="/exchange/x/{{ a.kind }}/{{ a.asset }}">
+      {% if side_ == 'ask' %}
+      <input type="hidden" name="give_network" value="{{ leg }}"><input type="hidden" name="get_network" value="{{ quote }}">
+      <span class="muted" style="font-size:.84rem">Sell</span>
+      {% if a.kind == 'token' %}<input name="give_amount" inputmode="decimal" placeholder="{{ aname }}" autocomplete="off">
+      {% else %}<input type="hidden" name="give_amount" value="1"><span class="muted" style="font-size:.84rem">it</span>{% endif %}
+      <span class="muted" style="font-size:.84rem">for</span>
+      <input name="get_amount" inputmode="decimal" placeholder="PEP in all" autocomplete="off">
+      {% else %}
+      <input type="hidden" name="give_network" value="{{ quote }}"><input type="hidden" name="get_network" value="{{ leg }}">
+      <span class="muted" style="font-size:.84rem">Buy</span>
+      {% if a.kind == 'token' %}<input name="get_amount" inputmode="decimal" placeholder="{{ aname }}" autocomplete="off">
+      {% else %}<input type="hidden" name="get_amount" value="1"><span class="muted" style="font-size:.84rem">it</span>{% endif %}
+      <span class="muted" style="font-size:.84rem">for</span>
+      <input name="give_amount" inputmode="decimal" placeholder="PEP in all" autocomplete="off">
+      {% endif %}
+      <button type="submit" class="small">Post</button>
+    </form>
+    {% elif open_here and viewer == 'nobody' %}
+    <p class="muted" style="font-size:.84rem;margin:10px 0 0">Sign in to trade.</p>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+{% if can_trade_orders and my_pair_orders %}
+<div class="ex-card">
+  <div class="ex-h" style="margin-top:0">This node's {{ aname }}/PEP swaps</div>
+  {% for o in my_pair_orders %}
+  <div class="row" style="gap:8px;align-items:center;padding:4px 0">
+    <span style="flex:1">{{ o.give_label }} for {{ o.get_label }}</span>
+    <form method="post" action="/exchange/trade-orders/withdraw" style="margin:0">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="order" value="{{ o.id }}">
+      <input type="hidden" name="back" value="/exchange/x/{{ a.kind }}/{{ a.asset }}">
+      <button type="submit" class="ghost small">Withdraw</button></form>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if viewer == 'account' %}
+<div class="ex-card">{% include "_tab_swaps.html" %}
+  <p class="muted" style="font-size:.8rem;margin:8px 0 0">A swap takes a few minutes. Once your side is
+    locked, your node finishes it with transactions you signed here -- you can close the page; if the other side
+    never pays, yours comes back by itself within two hours. <a href="/docs/swaps.md">How a swap works</a></p>
+</div>
+{% endif %}
+{% endblock %}
