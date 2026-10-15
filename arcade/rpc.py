@@ -23,6 +23,9 @@ from .config import RpcCredentials
 ADDRESS_MAKERS = frozenset({"getnewaddress", "getrawchangeaddress", "importaddress",
                             "importprivkey", "importpubkey", "importmulti", "importdescriptors"})
 ADDRESS_EPOCH = 0
+#: Bumped by every broadcast from this process, so a mempool read kept for a few seconds
+#: (web.app._pending_feed) shows what was just sent the moment it is sent.
+BROADCAST_EPOCH = 0
 
 class RpcError(Exception):
     """A JSON-RPC level error returned by the node."""
@@ -67,6 +70,9 @@ class RpcClient:
         if method in ADDRESS_MAKERS:
             global ADDRESS_EPOCH
             ADDRESS_EPOCH += 1
+        elif method == "sendrawtransaction":
+            global BROADCAST_EPOCH
+            BROADCAST_EPOCH += 1
         payload = {"jsonrpc": "1.0", "id": next(self._ids), "method": method, "params": list(params)}
         data = self._post(payload)
         if data.get("error"):

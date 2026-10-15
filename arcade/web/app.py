@@ -2575,6 +2575,9 @@ def create_app(state: AppState) -> FastAPI:
     #: silent lie about what is waiting to be confirmed.
     _POOL = object()
 
+    _PENDING_KEPT: dict = {}
+    PENDING_SECONDS = 4.0
+
     def _pending_feed(network: str):
         """What the mempool holds for the feed right now.
 
@@ -2583,14 +2586,27 @@ def create_app(state: AppState) -> FastAPI:
         written down, exactly as the marketplace reads offers and asks
         (D-117, D-141).
         """
+        # Kept for a few seconds (2026-10-15: sign-in waited on it -- /account reads it for the
+        # profile, and every read was a getrawmempool plus one getrawtransaction per waiting
+        # transaction, each of which could land in the node's multi-second wallet stalls).
+        # A broadcast from here drops it (rpc.BROADCAST_EPOCH): your own post shows at once.
+        from .. import rpc as rpclib
+        mine = state.derived_address or ""
+        key = (network, mine)
+        held = _PENDING_KEPT.get(key)
+        now = time.monotonic()
+        if held and held[0] > now and held[1] == rpclib.BROADCAST_EPOCH:
+            return held[2]
+        epoch = rpclib.BROADCAST_EPOCH
         try:
             with state.messaging.rpc() as rpc:
-                return mempoollib.read(rpc, state.messaging.params, network,
-                                       mine=state.derived_address or "")
+                found = mempoollib.read(rpc, state.messaging.params, network, mine=mine)
         except HTTPException:
             raise
         except Exception:
             return mempoollib.Pending()
+        _PENDING_KEPT[key] = (now + PENDING_SECONDS, epoch, found)
+        return found
 
     def _feed_page(network: str, author: str = "", before: Any = None,
                    limit: int = FEED_PAGE, sort: str = "new") -> tuple[list[Any], Any, Any]:
