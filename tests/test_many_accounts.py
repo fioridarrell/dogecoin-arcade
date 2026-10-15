@@ -2096,22 +2096,36 @@ def test_the_split_s_coins_can_be_listed_on_before_its_block(node, crowd):
 
 def test_a_mintpad_s_look_is_the_seller_s_to_choose(node, crowd):
     """Five templates (2026-09-26), chosen by the seller and nobody else,
-    and drawn on the page: here the lottery's wall and reel."""
+    and drawn on the page: here the lottery's wall and reel.
+
+    The pad is this test's own. It used to borrow "Pad Set" from the test
+    above and check the page only `if "left" in page` -- which a redirect to
+    the Exchange (no such collection, as on an xdist worker that never ran the
+    test above) also passes, since its CSS says `left:`."""
     state = node[1]
     maple, ferns = crowd[0], crowd[1]
+    _funded(*node, who=maple, amount=5.0)
+    piece = _inscribed(*node, owner=maple.address, name="Look Set #1",
+                       content=b"look" * 60)
+    split = _do(maple, "/account/split", {"count": 2})
+    assert split.status_code == 200, split.text
+    _settle(*node)
+    listed = _listed(maple, piece, "1")
+    assert listed.status_code == 200, listed.text
+
     said = maple.client.post("/account/mintpad", json={
-        "collection": "Pad Set", "template": "lottery", "blurb": "Spin it."})
+        "collection": "Look Set", "template": "lottery", "blurb": "Spin it."})
     assert said.status_code == 200 and said.json()["template"] == "lottery", said.text
     assert maple.client.post("/account/mintpad", json={
-        "collection": "Pad Set", "template": "casino-9000"}).status_code == 400
+        "collection": "Look Set", "template": "casino-9000"}).status_code == 400
     was, state.public = state.public, True
     try:
-        page = ferns.client.get(f"/mintpad/{maple.address}/Pad%20Set").text
+        page = ferns.client.get(f"/mintpad/{maple.address}/Look%20Set").text
     finally:
         state.public = was
-    if "left" in page:
-        assert "mp-lottery" in page and 'id="ltreel"' in page and "Spin it." in page
-        assert "Spin to mint" in page
+    assert "1</strong> left" in page, "the mintpad itself, with its one listing up"
+    assert "mp-lottery" in page and 'id="ltreel"' in page and "Spin it." in page
+    assert "Spin to mint" in page
 
 
 def test_a_listing_ends_when_its_piece_is_sent_away(node, crowd):
