@@ -17,6 +17,13 @@ import requests
 from .config import RpcCredentials
 
 
+
+#: Bumped by every call that gives a node wallet another address, so a list of a wallet's
+#: addresses kept for minutes (web.app._ledger_addresses) is dropped the moment it is short.
+ADDRESS_MAKERS = frozenset({"getnewaddress", "getrawchangeaddress", "importaddress",
+                            "importprivkey", "importpubkey", "importmulti", "importdescriptors"})
+ADDRESS_EPOCH = 0
+
 class RpcError(Exception):
     """A JSON-RPC level error returned by the node."""
 
@@ -57,6 +64,9 @@ class RpcClient:
 
     def call(self, method: str, *params: Any) -> Any:
         """Issue a single call and return its result."""
+        if method in ADDRESS_MAKERS:
+            global ADDRESS_EPOCH
+            ADDRESS_EPOCH += 1
         payload = {"jsonrpc": "1.0", "id": next(self._ids), "method": method, "params": list(params)}
         data = self._post(payload)
         if data.get("error"):

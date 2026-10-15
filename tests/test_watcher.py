@@ -718,3 +718,69 @@ def test_a_source_checkout_is_never_updated_automatically(monkeypatch):
     assert ran == [], "neither asked the site nor ran the updater"
     assert state.update_status["what"].startswith("a source checkout")
     assert state.update_status["installed"] == "453b7b5"
+
+
+def test_the_shops_standing_passes_run_per_block_not_per_tick(monkeypatch):
+    """The slow Wallet tab (2026-10-15): selling at the asking price and filling what crosses
+    each asked the test node for every address it owns -- seconds of its lock on a big wallet
+    -- every five seconds. They only act on what a block made true, so they run when the tip
+    moves, when the shop just acted, or once a minute."""
+    from types import SimpleNamespace
+    import arcade.web.watcher as Wm
+    ran = []
+
+    class Shop:
+        acted = False
+
+        def tick(self):
+            return self.acted
+
+        def sell_at_asking_price(self):
+            ran.append("sell")
+
+        def fill_what_crosses(self):
+            ran.append("fill")
+    state = SimpleNamespace(messaging=SimpleNamespace(can_spend=True, network="regtest"),
+                            ledger_tips={"regtest": 100}, bump_generation=lambda: None)
+    w = Wm.BlockWatcher(state)
+    w._shopkeeper = shop = Shop()
+    clock = [1000.0]
+    monkeypatch.setattr(Wm.time, "monotonic", lambda: clock[0])
+    w._keep_shop()
+    assert ran == ["sell", "fill"], "the first pass runs"
+    w._keep_shop()
+    clock[0] += 5
+    w._keep_shop()
+    assert len(ran) == 2, "no new block: no pass"
+    state.ledger_tips["regtest"] = 101
+    w._keep_shop()
+    assert len(ran) == 4, "a new block: a pass"
+    shop.acted = True
+    w._keep_shop()
+    assert len(ran) == 6, "the shop just acted: a pass"
+    shop.acted = False
+    clock[0] += Wm.SHOP_EVERY + 1
+    w._keep_shop()
+    assert len(ran) == 8, "and once a minute regardless"
+
+
+def test_a_wallets_addresses_are_kept_until_it_makes_one(monkeypatch):
+    import arcade.rpc as R
+    import arcade.web.app as A
+    asked = []
+    monkeypatch.setattr(A, "_ledger_addresses_uncached", lambda rpc: asked.append(1) or ["nA"])
+    monkeypatch.setattr(A, "_LEDGER_ADDRESSES", {})
+    rpc = type("Rpc", (), {"_creds": type("C", (), {"host": "h", "port": 1})()})()
+    assert A._ledger_addresses(rpc) == ["nA"] and A._ledger_addresses(rpc) == ["nA"]
+    assert len(asked) == 1, "kept"
+    monkeypatch.setattr(R, "ADDRESS_EPOCH", R.ADDRESS_EPOCH + 1)      # what getnewaddress does
+    A._ledger_addresses(rpc)
+    assert len(asked) == 2, "a new address drops the kept list"
+    calls = []
+    client = R.RpcClient.__new__(R.RpcClient)
+    client._ids = iter(range(10))
+    client._post = lambda payload: calls.append(payload["method"]) or {"result": "nB"}
+    before = R.ADDRESS_EPOCH
+    client.call("getnewaddress")
+    client.call("getblockcount")
+    assert R.ADDRESS_EPOCH == before + 1, "only a call that makes an address bumps it"

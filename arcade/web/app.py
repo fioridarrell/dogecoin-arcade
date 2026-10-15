@@ -24664,10 +24664,15 @@ def _on_a_real_chain(address: str) -> bool:
 #: (node) -> (until, addresses): _ledger_addresses for fifteen seconds (2026-10-05:
 #: about a tenth of a second, on most pages of the operator's wallet).
 _LEDGER_ADDRESSES: dict = {}
+#: How long a wallet's address list is kept (was 15 s). Asking costs a `listreceivedbyaddress`
+#: and a full `listunspent`, seconds each on a big test wallet, holding the node's lock all the
+#: while (the slow Wallet tab, 2026-10-15). An address this process makes drops it at once
+#: (rpc.ADDRESS_EPOCH); `fresh` still asks right now.
+LEDGER_ADDRESSES_SECONDS = 300
 
 
 def _ledger_addresses(rpc, fresh: bool = False) -> list[str]:
-    """Kept for fifteen seconds, unless `fresh` asks the node right now.
+    """Kept for five minutes, or until this process makes an address, unless `fresh` asks the node right now.
 
     `fresh` is for a caller about to act on an address being missing. The kept
     list cannot know about one the wallet made after it was written, and
@@ -24683,11 +24688,13 @@ def _ledger_addresses(rpc, fresh: bool = False) -> list[str]:
         # second node (a test chain's, then a real chain's) got the first's list.
         return _ledger_addresses_uncached(rpc)
     key = (getattr(creds, "host", ""), getattr(creds, "port", 0))
+    from .. import rpc as rpclib
+    epoch = rpclib.ADDRESS_EPOCH
     held = None if fresh else _LEDGER_ADDRESSES.get(key)
-    if held and held[0] > time.time():
+    if held and held[0] > time.time() and held[2] == epoch:
         return list(held[1])
     found = _ledger_addresses_uncached(rpc)
-    _LEDGER_ADDRESSES[key] = (time.time() + 15, list(found))
+    _LEDGER_ADDRESSES[key] = (time.time() + LEDGER_ADDRESSES_SECONDS, list(found), epoch)
     return found
 
 
