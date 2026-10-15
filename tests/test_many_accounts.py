@@ -2136,6 +2136,7 @@ def test_a_listing_ends_when_its_piece_is_sent_away(node, crowd):
     then sent it to @apple three minutes later)."""
     state = node[1]
     maple, ferns, oak = crowd[0], crowd[1], crowd[2]
+    _funded(*node, who=maple)   # [Claude 2026-10-15] this file's rule: a test makes what it needs (it had spent what earlier tests left)
     piece = _inscribed(*node, owner=maple.address, name="Sent-away piece",
                        content=b"moved" * 60)
     priced = _listed(maple, piece, "4")
@@ -2166,6 +2167,7 @@ def test_a_presigned_offer_completes_the_moment_it_is_accepted(node, crowd):
     state = node[1]
     maple, ferns = crowd[0], crowd[1]
     index = state.token_index(state.messaging)
+    _funded(*node, who=maple)   # [Claude 2026-10-15] the 3-coin offer is the buyer's own money, made here
     piece = _inscribed(*node, owner=ferns.address, name="Presigned piece",
                        content=b"presigned" * 30)
     had = _balance(state, ferns.address)
