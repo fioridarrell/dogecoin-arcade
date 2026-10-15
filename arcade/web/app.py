@@ -8199,17 +8199,26 @@ def create_app(state: AppState) -> FastAPI:
                       form_send=fields)
 
     @app.get("/tokens/{property_id}", response_class=HTMLResponse)
-    def token(request: Request, property_id: int):
-        detail = _token_detail(property_id)
-        # An account that issued it gets its own controls, signed in its tab
-        # (the operator's forms below act from the node's wallet instead).
-        account = signed_in(request)
-        mine = _account_address(account.pubkey, detail["chain"]) if account else ""
-        return render(request, "token.html", prepared=None,
-                      account_issuer=bool(mine) and mine == detail["prop"]["issuer"],
-                      mine_address=mine,
-                      token_pads=_token_pads(state.token_index(detail["chain"]), property_id),
-                      **detail)
+    def token(request: Request, property_id: int, chain: str = ""):
+        # `?chain=` names the chain the token is on (2026-10-15: a wallet's token links say where they point), so a
+        # testnet token's link never opens the same number on mainnet because this browser is on mainnet. Only for
+        # this page: the browser's own chain is not changed.
+        wanted = next((c for c in state.token_chains if c.network == chain), None)
+        mark = _BROWSER_CHAIN.set(wanted.network) if wanted is not None else None
+        try:
+            detail = _token_detail(property_id)
+            # An account that issued it gets its own controls, signed in its tab
+            # (the operator's forms below act from the node's wallet instead).
+            account = signed_in(request)
+            mine = _account_address(account.pubkey, detail["chain"]) if account else ""
+            return render(request, "token.html", prepared=None,
+                          account_issuer=bool(mine) and mine == detail["prop"]["issuer"],
+                          mine_address=mine,
+                          token_pads=_token_pads(state.token_index(detail["chain"]), property_id),
+                          **detail)
+        finally:
+            if mark is not None:
+                _BROWSER_CHAIN.reset(mark)
 
     def _token_pads(index, property_id: int | None = None, limit: int = 50) -> list[dict]:
         """Token mintpads on the chain, newest first (a tester, 2026-09-28: one

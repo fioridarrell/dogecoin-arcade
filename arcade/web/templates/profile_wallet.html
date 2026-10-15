@@ -25,6 +25,12 @@
   Nothing here is private &mdash; a chain is public, and this page only looks
   up what anybody could.</p>
 
+<style>
+.pw-tokens{display:flex;flex-direction:column;margin-top:6px;border-top:1px solid var(--line)}
+.pw-token{display:flex;justify-content:space-between;gap:12px;padding:9px 2px;border-bottom:1px solid var(--line);text-decoration:none}
+.pw-token .pw-name{text-align:left;min-width:0;overflow-wrap:anywhere}
+.pw-token .pw-amt{color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+</style>
 {% for held in holdings %}
 <div class="panel" style="margin-bottom:16px">
   <div class="row" style="align-items:baseline">
@@ -39,13 +45,19 @@
           {%- else %}<span class="muted">this node cannot see that wallet's
           coins</span>{% endif %}</td></tr>
     <tr><td class="muted">Tokens</td>
-        <td>{% if held.tokens %}
-          {% for row in held.tokens %}
-            <a href="/tokens/{{ row['property_id'] }}">{% if row['name'] %}{{ wall(row['name']) }}{% else %}#{{ row['property_id'] }}{% endif %}</a>
-            <span class="muted">{{ row['display'] }}</span>{{ "," if not loop.last }}
-          {% endfor %}
-        {% else %}<span class="muted">none</span>{% endif %}</td></tr>
+        <td>{% if not held.tokens %}<span class="muted">none</span>{% endif %}</td></tr>
   </table>
+  {# One token per row, down the left, each a link to its own page on its own chain (2026-10-15). #}
+  {% if held.tokens %}
+  <div class="pw-tokens">
+    {% for row in held.tokens %}
+    <a class="pw-token" href="/tokens/{{ row['property_id'] }}?chain={{ held.chain.network }}">
+      <span class="pw-name">{% if row['name'] %}{{ wall(row['name']) }}{% else %}#{{ row['property_id'] }}{% endif %}</span>
+      <span class="pw-amt">{{ row['display'] }}</span>
+    </a>
+    {% endfor %}
+  </div>
+  {% endif %}
 
   {% if held.pieces %}
   <h3 style="margin:14px 0 8px;font-size:.95rem">Inscriptions</h3>

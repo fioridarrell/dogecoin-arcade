@@ -367,7 +367,13 @@ function drawHead() {
   if (asset && asset.network !== c.network) asset = null;
   UNIT = asset ? asset.name : coinOf(c);
   $("bal").textContent = asset ? tokenAmt(asset.balance, asset) : coinsOf(c.spendable ?? c.balance);
-  $("unit").textContent = UNIT;
+  // A token's name is a link to its own page, on its own chain (2026-10-15).
+  if (asset) {
+    const link = el("a", "wl-unitlink", UNIT);
+    link.href = `/tokens/${asset.property_id}?chain=${encodeURIComponent(c.network)}`;
+    link.style.cssText = "color:inherit;text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:4px";
+    $("unit").replaceChildren(link);
+  } else $("unit").textContent = UNIT;
   const chip = $("netchip");
   chip.textContent = asset ? "token" : c.mainnet ? "real coins" : "test coins, no value";
   chip.className = "wl-chip" + (c.mainnet ? " real" : "");
@@ -377,7 +383,9 @@ function drawHead() {
   if (c.incoming) bits.push(["in", `${coinsOf(c.incoming)} arriving`]);
   if (c.leaving) bits.push(["out", `${coinsOf(c.leaving)} leaving`]);
   if (asset) {
-    sub.append(`Token #${asset.property_id} on ${c.label.toLowerCase()}. The network fee is paid in ${COIN()}. `);
+    const page = el("a", "", `Token #${asset.property_id}`);
+    page.href = `/tokens/${asset.property_id}?chain=${encodeURIComponent(c.network)}`;
+    sub.append(page, ` on ${c.label.toLowerCase()}. The network fee is paid in ${COIN()}. `);
     const back = el("button", "wl-backcoin", `Back to ${COIN()}`); back.type = "button";
     back.onclick = () => { asset = null; drawHead(); if (tab === "tokens") drawTokens(); };
     sub.append(back);
