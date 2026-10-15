@@ -400,11 +400,15 @@ class NodeTrader:
         Dogecoin could pick one carrying a Doginal (2026-10-15). So there, every coin an ordinary
         send may not use (doginals.spendable: inscribed, or small and not vouched for) is locked
         in the wallet for the one send and let go after; a coin already locked stays locked."""
-        if network != "doge":
+        from . import funding
+        guard = self._doginals or funding.GUARD
+        if network != "doge" or guard is None:
+            # Off Dogecoin there is nothing to set aside; a node that checks no Doginals sends as it always did
+            # (the app sets the guard whenever it runs Dogecoin, so a live node always has one).
             return rpc.call("sendtoaddress", address, amount / COIN)
         coins = [{"txid": u["txid"], "vout": int(u["vout"]), "value": round(float(u["amount"]) * COIN)}
                  for u in rpc.call("listunspent", 0)]
-        clean = {(c["txid"], c["vout"]) for c in self.doginals.spendable(coins)}
+        clean = {(c["txid"], c["vout"]) for c in guard.spendable(coins)}
         keep = [{"txid": c["txid"], "vout": c["vout"]} for c in coins if (c["txid"], c["vout"]) not in clean]
         if keep:
             rpc.call("lockunspent", False, keep)
