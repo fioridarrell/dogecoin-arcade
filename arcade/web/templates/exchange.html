@@ -652,6 +652,84 @@ document.addEventListener('click', function (ev) {
 
   {# Token/token pairs (Params.token_pairs_from, 2026-10-06): one token priced in
      another, matched by the chain itself when two orders cross. #}
+  {# Swaps between arcades, settled by lock scripts (2026-10-13, trustless-trading-plan.md):
+     orders every arcade inscribed, shown while the arcade that answers them is online. #}
+  {% if trade_orders or can_trade_orders or can_list_orders or coin_pairs %}
+  <div class="ex-card" id="trade-orders" style="margin-top:18px">
+    <h3 style="margin:0 0 4px">Swaps between arcades</h3>
+    <p class="muted" style="font-size:.84rem;margin:0 0 10px">Settled by lock scripts on both chains:
+      either both sides get paid or both get their own coins back. Nobody holds anybody's coins.
+      <a href="/docs/swaps.md">How a swap works</a></p>
+    {% if coin_pairs %}<p style="margin:0 0 10px">{% for cp in coin_pairs %}<a class="ex-pill open" style="font-size:.8rem;padding:4px 12px;margin-right:6px"
+      href="/exchange/coins/{{ cp.base }}/{{ cp.quote }}">{{ cp.name }} market &rarr;</a>{% endfor %}</p>{% endif %}
+    {% for o in trade_orders %}
+    <div class="row" style="gap:8px;align-items:center;padding:6px 0;border-top:1px solid var(--line)">
+      <span style="flex:1">{{ net_badge(o['give'].network) }} <strong>{{ o.give_label }}</strong>
+        for {{ net_badge(o['get'].network) }} <strong>{{ o.get_label }}</strong>
+        <small class="muted">&middot; by {{ o.lister|who }}</small></span>
+      {% if can_trade_orders %}
+      <form method="post" action="/exchange/trade-orders/take" style="margin:0">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <input type="hidden" name="order" value="{{ o.id }}"><input type="hidden" name="lister" value="{{ o.lister }}">
+        <button type="submit" class="small">Take</button></form>
+      {% elif viewer == 'account' %}
+      <button type="button" class="small" data-take-order="{{ o|tojson|forceescape }}">Take</button>
+      {% endif %}
+    </div>
+    {% endfor %}
+    {% if not trade_orders %}<p class="muted" style="margin:0 0 8px">No arcade is offering a swap right now.</p>{% endif %}
+    {% if viewer == 'account' %}
+    {# A tab's own swaps (2026-10-13): run here while this tab is open, settled by the locks. #}
+    {% include "_tab_swaps.html" %}
+    {% if can_list_orders %}
+    <form id="tab-list-form" class="row" style="gap:6px;flex-wrap:wrap;align-items:center;margin-top:10px">
+      <span class="muted" style="font-size:.84rem">Offer</span>
+      <input name="give_amount" inputmode="decimal" placeholder="amount" style="width:90px;flex:0 0 auto" autocomplete="off">
+      <select name="give_network" style="flex:0 0 auto;width:auto">{% for m in chain_menu() if m.ready %}<option value="{{ m.network }}">{{ m.coin }}</option>{% endfor %}
+        {% for t in held_tokens or [] %}<option value="token:{{ held_net }}:{{ t.property_id }}:{{ 1 if t.divisible else 0 }}">{{ wall_text(t.name, 'token') }} (#{{ t.property_id }})</option>{% endfor %}
+        {% for p in held_nfts or [] %}<option value="nft:{{ held_net }}:{{ p.txid }}">NFT #{{ p.number }}</option>{% endfor %}</select>
+      <span class="muted" style="font-size:.84rem">for</span>
+      <input name="get_amount" inputmode="decimal" placeholder="amount" style="width:90px;flex:0 0 auto" autocomplete="off">
+      <select name="get_network" style="flex:0 0 auto;width:auto">{% for m in chain_menu() if m.ready %}<option value="{{ m.network }}"{% if loop.index == 2 %} selected{% endif %}>{{ m.coin }}</option>{% endfor %}</select>
+      <button type="submit" class="small">List swap</button>
+    </form>
+    {% endif %}
+    {% endif %}
+    {% if can_trade_orders %}
+    {% if my_trade_orders %}
+    <div class="ex-h" style="margin-top:10px">This node's swaps</div>
+    {% for o in my_trade_orders %}
+    <div class="row" style="gap:8px;align-items:center;padding:4px 0">
+      <span style="flex:1">{{ net_badge(o['give'].network) }} {{ o.give_label }}
+        for {{ net_badge(o['get'].network) }} {{ o.get_label }}</span>
+      <form method="post" action="/exchange/trade-orders/withdraw" style="margin:0">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="order" value="{{ o.id }}">
+        <button type="submit" class="ghost small">Withdraw</button></form>
+    </div>
+    {% endfor %}
+    {% endif %}
+    {% if my_trades %}
+    <div class="ex-h" style="margin-top:10px">In progress</div>
+    {% for t in my_trades %}
+    <p class="muted" style="font-size:.82rem;margin:2px 0">{{ t.give }} for {{ t.get }} &middot; {{ t.role }} &middot; {{ t.note or t.state }}</p>
+    {% endfor %}
+    {% endif %}
+    <form method="post" action="/exchange/trade-orders/stand" class="row" style="gap:6px;flex-wrap:wrap;align-items:center;margin-top:10px">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <span class="muted" style="font-size:.84rem">Offer</span>
+      <input name="give_amount" inputmode="decimal" placeholder="amount" style="width:90px;flex:0 0 auto" autocomplete="off">
+      <select name="give_network" style="flex:0 0 auto;width:auto">{% for m in chain_menu() if m.ready %}<option value="{{ m.network }}">{{ m.coin }}</option>{% endfor %}
+        {% for t in held_tokens or [] %}<option value="token:{{ held_net }}:{{ t.property_id }}:{{ 1 if t.divisible else 0 }}">{{ wall_text(t.name, 'token') }} (#{{ t.property_id }})</option>{% endfor %}
+        {% for p in held_nfts or [] %}<option value="nft:{{ held_net }}:{{ p.txid }}">NFT #{{ p.number }}</option>{% endfor %}</select>
+      <span class="muted" style="font-size:.84rem">for</span>
+      <input name="get_amount" inputmode="decimal" placeholder="amount" style="width:90px;flex:0 0 auto" autocomplete="off">
+      <select name="get_network" style="flex:0 0 auto;width:auto">{% for m in chain_menu() if m.ready %}<option value="{{ m.network }}"{% if loop.index == 2 %} selected{% endif %}>{{ m.coin }}</option>{% endfor %}</select>
+      <button type="submit" class="small">Post swap</button>
+    </form>
+    {% endif %}
+  </div>
+  {% endif %}
+
   <div class="ex-card" style="margin-top:18px">
     <h3 style="margin:0 0 4px">Start a market</h3>
     <p class="muted" style="font-size:.84rem;margin:0 0 12px">Pick a token you hold and what you want for it.

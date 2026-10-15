@@ -257,6 +257,10 @@ class MeshNode:
         self._here_beat = 0
         self._sub_sent: frozenset = frozenset()     # the room ids last announced
         self._last_sub: OrderedDict[str, dict] = OrderedDict()   # origin -> its latest SUB, for a new neighbour
+        #: origin -> when (this machine's clock) a fresh, verified SUB from it last arrived.
+        #: Every node floods one every SUB_EVERY seconds, rooms or none, so this is the
+        #: mesh-wide heartbeat (2026-10-13: orders show while their lister is online).
+        self._heard: dict[str, float] = {}
         self._seen: OrderedDict[str, None] = OrderedDict()
         # room -> {(origin, member)} this node's members have been told are there
         self._present: dict[str, set[tuple[str, str]]] = {}
@@ -541,6 +545,18 @@ class MeshNode:
             return
         rtt = time.monotonic() - sent
         link.rtt = rtt if link.rtt is None else 0.7 * link.rtt + 0.3 * rtt
+
+    def last_seen(self, node_id: str) -> float | None:
+        """When `node_id` was last heard from (unix time): now if linked directly, else
+        its last heartbeat SUB; None if never. A node is online if this is within
+        3.5 x SUB_EVERY -- the same window a room route lives (`until`)."""
+        if node_id == self.node_id or node_id in self.links:
+            return time.time()
+        return self._heard.get(node_id)
+
+    def online(self, node_id: str, now: float | None = None) -> bool:
+        seen = self.last_seen(node_id)
+        return seen is not None and (now or time.time()) - seen <= 3.5 * SUB_EVERY
 
     def rtts(self) -> dict[str, float | None]:
         """Each linked node's round-trip time in milliseconds (None until measured)."""
@@ -1077,6 +1093,10 @@ class MeshNode:
             # Every node takes it from the same wave, so the paths to `origin` form one tree;
             # keeping an older path instead let two nodes each point at the other.
             self.routes.setdefault(rid, {})[origin] = {"via": link.peer_id, "until": until}
+        self._heard[origin] = time.time()
+        if len(self._heard) > 20_000:
+            for old in sorted(self._heard, key=self._heard.get)[:10_000]:
+                del self._heard[old]
         header["hops"] = hops + 1
         self._last_sub[origin] = dict(header)
         self._last_sub.move_to_end(origin)

@@ -88,6 +88,8 @@ from .. import listings as listingslib
 from .. import utxos as utxoslib
 from .. import update as updatelib
 from ..messaging.keys import fingerprint_of
+from .. import trade as tradelib
+from .. import trade_orders
 from ..messaging.miner import Miner, MiningError
 from ..messaging.scanner import Scanner, find_own_announcements
 from ..messaging.sender import (
@@ -9639,6 +9641,10 @@ def create_app(state: AppState) -> FastAPI:
             max_age=accountslib.SESSION_DAYS * 86400,
             httponly=True, samesite="lax", secure=_over_https(request))
 
+    def _swap_big_lines() -> dict:
+        from ..node_trader import swap_big
+        return swap_big(state)
+
     @app.get("/account")
     def account_state(request: Request):
         """Everything the page needs to draw itself, and nothing else.
@@ -9648,8 +9654,10 @@ def create_app(state: AppState) -> FastAPI:
         about somebody else.
         """
         account = signed_in(request)
+        mesh = getattr(state, "mesh", None)
         chains = [{"network": one.network, "label": one.label, "title": one.title,
                    "version": one.params.pubkeyhash_version,
+                   "p2sh": one.params.scripthash_version,
                    "mainnet": bool(one.is_mainnet),
                    "tags": one is _account_chain()}
                   for one in _account_chains()]
@@ -9660,6 +9668,11 @@ def create_app(state: AppState) -> FastAPI:
             return JSONResponse({"pubkey": None, "chains": chains})
         chain = _account_chain()
         said: dict[str, Any] = {
+            # This node on the mesh: a swap a tab lists names it, and shows on other
+            # arcades while it is online (trade_orders.py, 2026-10-13).
+            "mesh_node": getattr(mesh, "node_id", "") if mesh is not None else "",
+            # Where a swap waits 3 confirmations instead of 1 (node_trader.swap_big).
+            "swap_big": _swap_big_lines(),
             "pubkey": account.pubkey, "network": chain.network,
             "version": chain.params.pubkeyhash_version,
             "address": "", "balance": 0, "watching": None, "tag": "",
@@ -9728,6 +9741,7 @@ def create_app(state: AppState) -> FastAPI:
             here = _account_address(account.pubkey, one)
             row = {"network": one.network, "label": one.label,
                    "version": one.params.pubkeyhash_version,
+                   "p2sh": one.params.scripthash_version,
                    "mainnet": bool(one.is_mainnet),
                    "address": here, "balance": 0, "incoming": 0,
                    "watching": None, "tags": one.network == chain.network,
@@ -14679,6 +14693,280 @@ def create_app(state: AppState) -> FastAPI:
         except (escrowlib.EscrowError, refereelib.RefereeError, AmountError, ValueError,
                 RpcError) as exc:
             return contentlib._json({"ok": False, "error": str(exc)}, status=400)
+
+    # --- a tab's own lock-script trades (trustless-trading-plan.md, phase 2) --------------
+    #
+    # 2026-10-13: trades "only available if they leave their tab open so that
+    # transaction building is complete on the client side solely ... 100% trustless with
+    # lock scripts". The tab builds and reads the lock itself (coins.js htlcRedeem) and
+    # locks with an ordinary send to its address; these routes only hand it the unsigned
+    # spend of a lock -- a claim with the secret, or a refund after the time -- paying
+    # this account's own address, then put its signature in place and broadcast. The
+    # digest the tab signs is worked out in the tab from the lock's own script.
+
+    def _lock_for(account, said: dict):
+        from .. import htlc as htlclib
+        chain = _chain_asked(said)
+        owner = _account_address(account.pubkey, chain)
+        if not owner:
+            raise ValueError(f"this account has no {chain.label.lower()} address yet")
+        redeem = bytes.fromhex(str(said.get("redeem") or ""))
+        lock = htlclib.parse(redeem)
+        if lock is None:
+            raise ValueError("that is not a lock script")
+        return htlclib, chain, owner, redeem, lock
+
+    def _trade_leg(said: Any, chain, account):
+        """The leg a lock holds, as the tab names it: {kind, asset, amount}; coin if none.
+        Only what moving it needs -- the keys are the lock script's own."""
+        leg = said if isinstance(said, dict) else {}
+        kind = str(leg.get("kind") or "coin")
+        if kind not in ("coin", "token", "nft"):
+            raise ValueError("a lock holds a coin, a token or an NFT")
+        asset = str(leg.get("asset") or "").lower()
+        amount = int(leg.get("amount") or 0)
+        if kind == "token" and (not asset.isdigit() or amount <= 0):
+            raise ValueError("a token leg names a token number and an amount")
+        if kind == "nft" and (len(asset) != 64 or any(c not in "0123456789abcdef" for c in asset)):
+            raise ValueError("an NFT leg names its inscription")
+        return tradelib.Leg(chain.network, kind, asset, 1 if kind == "nft" else amount, "", "")
+
+    @app.post("/account/trade/lock")
+    def account_trade_lock(request: Request, payload: Any = Body(None)):
+        """Offer to put a token or an NFT into one of this account's own trade locks (it
+        refunds to this account), with the coin that pays its way out as the lock output
+        -- last, so the ledger names the lock as the recipient. Nothing is broadcast here;
+        a coin leg is an ordinary send and needs no route."""
+        account = _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        try:
+            htlclib, chain, owner, redeem, lock = _lock_for(account, said)
+            if lock["refunder"] != _coin_pubkey(account.pubkey, chain):
+                raise ValueError("that lock would refund somebody else; only lock your own")
+            leg = _trade_leg(said.get("leg"), chain, account)
+            index = state.token_index(chain)
+            mine = _coin_pubkey(account.pubkey, chain)
+            if leg.kind == "token":
+                prop = index.property(int(leg.asset))
+                if prop is None:
+                    raise ValueError(f"there is no token {leg.asset}")
+                held = index.balance(owner, int(leg.asset)) - index.pending_out(owner, int(leg.asset))
+                if leg.amount > held:
+                    raise ValueError(f"only {format_amount(max(0, held), prop['divisible'])} "
+                                     f"of {prop['name']} is here to trade")
+                outputs = _class_c_or_b(chain, owner, tokenlib.send_payload(int(leg.asset), leg.amount),
+                                        mine, wrap=False)
+                what = f"lock {format_amount(leg.amount, prop['divisible'])} {prop['name']} for a swap"
+            elif leg.kind == "nft":
+                row = index.inscription(contentlib._key(leg.asset))
+                if row is None or row["owner"] != owner:
+                    raise ValueError("that piece is not this account's")
+                outputs = _class_c_or_b(chain, owner,
+                                        inscriptionlib.Transfer(txid=bytes.fromhex(row["txid"])).encode(), mine)
+                what = f"lock inscription #{row['number']} for a swap"
+            else:
+                raise ValueError("a coin goes into its lock with an ordinary send")
+            address = htlclib.address_of(redeem, chain.params)
+            outputs.append((tradelib.LOCK_RESERVE, txbuild.p2pkh_script(address)))
+            with contextlib.closing(index.open()) as db:
+                unsigned = fundinglib.build(
+                    db, chain.params, owner, outputs, rate=fees.MIN_FEE_PER_KB, what=what,
+                    exclude=_flights.spent_by(account.pubkey, chain.network),
+                    extra=_flights.change_for(account.pubkey, chain.network))
+            _quota(account, "send")
+        except (fundinglib.FundingError, tokenlib.TokenError, AmountError, ValueError, RpcError) as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        offer = _offers.add(account.pubkey, chain.network, unsigned, unsigned.what)
+        return JSONResponse({"offer": offer.id, "lock": address, "chain": chain.network,
+                             **unsigned.as_json()})
+
+    @app.post("/account/trade/spend")
+    def account_trade_spend(request: Request, payload: Any = Body(None)):
+        """The unsigned claim (`kind` claim) or refund (`kind` refund) of one lock coin,
+        paying this account's own address, with the digest to sign."""
+        account = _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        try:
+            htlclib, chain, owner, redeem, lock = _lock_for(account, said)
+            kind = str(said.get("kind") or "")
+            mine = _coin_pubkey(account.pubkey, chain)
+            if kind == "claim" and lock["claimer"] != mine:
+                raise ValueError("this account is not the one that lock pays")
+            if kind == "refund" and lock["refunder"] != mine:
+                raise ValueError("that lock refunds somebody else")
+            if kind not in ("claim", "refund"):
+                raise ValueError("a lock is claimed or refunded")
+            txid, vout = str(said.get("txid") or "").lower(), int(said.get("vout") or 0)
+            with chain.rpc() as rpc:
+                out = rpc.call("gettxout", txid, vout, True)
+            if out is None:
+                raise ValueError("that lock coin is spent, or not there")
+            if out["scriptPubKey"]["hex"] != htlclib.p2sh_script(redeem).hex():
+                raise ValueError("that coin is not under this lock")
+            coin = {"txid": txid, "vout": vout, "value": int(round(float(out["value"]) * COIN))}
+            leg = _trade_leg(said.get("leg"), chain, account)
+            if leg.kind == "coin":
+                inputs, outputs = htlclib.pay_out(coin, owner)
+            else:
+                # The token or NFT moved out by the lock's own reserve, to this account.
+                inputs, outputs = htlclib.move_out(coin, htlclib.address_of(redeem, chain.params),
+                                                   tradelib.move_data(leg), owner)
+            if kind == "refund":
+                inputs = [{**c, "sequence": htlclib.NOT_FINAL} for c in inputs]
+                locktime = lock["locktime"]
+            else:
+                locktime = 0
+            raw = escrowlib.serialize(inputs, outputs, locktime).hex()
+            digest = escrowlib.sighash(inputs, outputs, 0, redeem, locktime).hex()
+        except (ValueError, RpcError) as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        return JSONResponse({"chain": chain.network, "kind": kind, "raw": raw, "sighash": digest,
+                             "value": coin["value"], "to": owner, "locktime": locktime})
+
+    @app.post("/account/trade/spend/sign")
+    def account_trade_spend_sign(request: Request, payload: Any = Body(None)):
+        """The tab's signature (and, for a claim, the secret) put into the one input, the
+        spend checked to pay only this account, and broadcast."""
+        account = _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        try:
+            htlclib, chain, owner, redeem, lock = _lock_for(account, said)
+            raw = bytes.fromhex(str(said.get("raw") or ""))
+            sig = bytes.fromhex(str(said.get("signature") or ""))
+            with chain.rpc() as rpc:
+                decoded = rpc.call("decoderawtransaction", raw.hex())
+                if len(decoded["vin"]) != 1:
+                    raise ValueError("a lock spend spends one coin")
+                # This account, and -- moving a token or NFT out -- what is left of the
+                # lock's coin back into the lock itself; nobody else.
+                ok = {owner, htlclib.address_of(redeem, chain.params)}
+                if any(a not in ok for o in decoded["vout"]
+                       for a in o["scriptPubKey"].get("addresses", [])):
+                    raise ValueError("that spend pays somebody besides this account")
+                last = decoded["vout"][-1]["scriptPubKey"].get("addresses", [])
+                if last != [owner]:
+                    raise ValueError("a lock spend's last output is this account's")
+                if said.get("kind") == "refund":
+                    script_sig = htlclib.refund_script_sig(sig, redeem)
+                else:
+                    secret = bytes.fromhex(str(said.get("secret") or ""))
+                    if htlclib.hash_of(secret) != lock["secret_hash"]:
+                        raise ValueError("that secret does not open this lock")
+                    script_sig = htlclib.claim_script_sig(sig, secret, redeem)
+                at = 4 + 1 + 36
+                signed_raw = raw[:at] + txbuild.varint(len(script_sig)) + script_sig + raw[at + 1:]
+                txid = rpc.call("sendrawtransaction", signed_raw.hex())
+        except (ValueError, RpcError) as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        state.bump_generation()
+        return JSONResponse({"ok": True, "txid": txid})
+
+    @app.post("/account/trade/watch")
+    def account_trade_watch(request: Request, payload: Any = Body(None)):
+        """Hand this node a pre-signed claim or refund of one lock (trade_watch.py), so the
+        swap finishes with the tab closed (2026-10-13). Checked before it is held:
+        the lock pays (claim) or refunds (refund) this account; the spend pays nobody else;
+        a refund carries the lock's own time; and the signature is good over exactly it."""
+        from ..trade_watch import WatchError
+        account = _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        try:
+            htlclib, chain, owner, redeem, lock = _lock_for(account, said)
+            kind = str(said.get("kind") or "")
+            mine = _coin_pubkey(account.pubkey, chain)
+            if kind not in ("claim", "refund"):
+                raise ValueError("a held spend is a claim or a refund")
+            if (kind == "claim" and lock["claimer"] != mine) or (kind == "refund" and lock["refunder"] != mine):
+                raise ValueError("that lock is not this account's to " + kind)
+            txid, vout = str(said.get("txid") or "").lower(), int(said.get("vout") or 0)
+            raw = bytes.fromhex(str(said.get("raw") or ""))
+            signature = bytes.fromhex(str(said.get("signature") or ""))
+            lock_address = htlclib.address_of(redeem, chain.params)
+            with chain.rpc() as rpc:
+                decoded = rpc.call("decoderawtransaction", raw.hex())
+                prev = rpc.call("gettxout", txid, vout, True)
+            vin = decoded["vin"]
+            if len(vin) != 1 or vin[0].get("txid") != txid or int(vin[0].get("vout", -1)) != vout:
+                raise ValueError("a held spend spends that one lock coin")
+            if prev is None or prev["scriptPubKey"]["hex"] != htlclib.p2sh_script(redeem).hex():
+                raise ValueError("that coin is not under this lock, or is already spent")
+            if any(a not in (owner, lock_address) for o in decoded["vout"]
+                   for a in o["scriptPubKey"].get("addresses", [])):
+                raise ValueError("that spend pays somebody besides this account")
+            if decoded["vout"][-1]["scriptPubKey"].get("addresses", []) != [owner]:
+                raise ValueError("a lock spend's last output is this account's")
+            locktime = int(decoded.get("locktime", 0))
+            if kind == "refund" and locktime != lock["locktime"]:
+                raise ValueError("a refund carries the lock's own time")
+            inputs = [{"txid": txid, "vout": vout, "sequence": int(vin[0].get("sequence", 0xFFFFFFFF))}]
+            outputs = [(round(float(o["value"]) * COIN), bytes.fromhex(o["scriptPubKey"]["hex"]))
+                       for o in decoded["vout"]]
+            digest = escrowlib.sighash(inputs, outputs, 0, redeem, locktime)
+            if not _signature_good(mine, digest, signature):
+                raise ValueError("that signature is not this account's over that spend")
+            secret = str(said.get("secret") or "").lower()
+            where = said.get("secret_lock") if isinstance(said.get("secret_lock"), dict) else None
+            if where:
+                other = htlclib.parse(bytes.fromhex(str(where.get("redeem") or "")))
+                wnet = str(where.get("network") or "")
+                wctx = next((c for c in state.token_chains if c.network == wnet), None)
+                if other is None or wctx is None or other["secret_hash"] != lock["secret_hash"]:
+                    raise ValueError("the secret's lock is not the other half of this swap")
+                if other["refunder"] != _coin_pubkey(account.pubkey, wctx):
+                    raise ValueError("the secret's lock is not this account's own")
+                where = {"network": wnet, "txid": str(where.get("txid") or "").lower(),
+                         "vout": int(where.get("vout") or 0), "redeem": str(where["redeem"]).lower()}
+            job = state.trade_watch.hold(
+                account=account.pubkey, trade=str(said.get("trade") or "")[:64], network=chain.network,
+                txid=txid, vout=vout, kind=kind, redeem=redeem.hex(), raw=raw.hex(),
+                signature=signature.hex(), secret=secret, secret_lock=where,
+                min_conf=max(0, min(int(said.get("min_conf") or 0), 10)),
+                not_after=int(said.get("not_after") or 0))
+        except (ValueError, WatchError, RpcError) as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        return JSONResponse({"ok": True, "job": job})
+
+    def _signature_good(pubkey: bytes, digest: bytes, signature: bytes) -> bool:
+        """DER + sighash byte, by `pubkey` (compressed), over `digest` -- SIGHASH_ALL only."""
+        from cryptography.exceptions import InvalidSignature
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import ec, utils
+        if not signature or signature[-1] != 1:
+            return False
+        try:
+            key = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256K1(), bytes(pubkey))
+            key.verify(signature[:-1], bytes(digest), ec.ECDSA(utils.Prehashed(hashes.SHA256())))
+            return True
+        except (InvalidSignature, ValueError):
+            return False
+
+    @app.post("/account/trade/facts")
+    def account_trade_facts(request: Request, payload: Any = Body(None)):
+        """A lock as its chain shows it, for the tab's own state machine: depth, value,
+        script, and the spender's input script if it was spent (a claim's reveals the
+        secret). Read from this node's chain, like every balance the tab is shown."""
+        from ..node_trader import observe
+        account = _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        try:
+            chain = _chain_asked(said)
+            owner = _account_address(account.pubkey, chain)
+            lock = {"txid": str(said.get("txid") or "").lower(), "vout": int(said.get("vout") or 0)}
+            leg = _trade_leg(said.get("leg"), chain, account)
+            with chain.rpc() as rpc:
+                seen = observe(rpc, lock, {owner})
+                if leg.kind != "coin" and seen is not None:
+                    # The ledger's word on the token or NFT at that lock (node_trader.asset_seen).
+                    from ..node_trader import asset_seen
+                    from .. import htlc as htlclib
+                    redeem = bytes.fromhex(str(said.get("redeem") or ""))
+                    if htlclib.parse(redeem) is None:
+                        raise ValueError("name the lock script to read a token or NFT lock")
+                    seen = asset_seen(seen, leg, htlclib.address_of(redeem, chain.params),
+                                      state.token_index(chain), rpc)
+        except (ValueError, RpcError) as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        return JSONResponse({"seen": dataclasses.asdict(seen) if seen else None})
 
     @app.post("/account/escrow/reclaim")
     def account_escrow_reclaim(request: Request, payload: Any = Body(None)):
@@ -20366,7 +20654,46 @@ def create_app(state: AppState) -> FastAPI:
             "node": {"version": state.running_version,
                      "public_hosts": list(state.public_hosts)},
             "xchain": _admin_xchain(),
+            "swap_big": {k: v / COIN for k, v in _swap_big_lines().items()},
         }, headers={"Cache-Control": "no-store"})
+
+    @app.get("/admin/api/swaps")
+    def admin_swaps(request: Request):
+        """Lock-script swaps on this node, as the operator needs to see them: the node's own
+        trades, and the claims and refunds it holds for its accounts (trade_watch.py) --
+        what is waiting, what was sent, and when each one is due."""
+        _admin_check(request)
+        own = []
+        try:
+            trader = state.node_trader
+            for t in trader.book.open_trades():
+                own.append({"id": t.id, "role": t.role, "state": t.state, "note": t.note,
+                            "give": M_leg_text(t.give), "get": M_leg_text(t.get),
+                            "refund_at": t.my_locktime, "created": t.created})
+        except Exception as exc:                           # noqa: BLE001
+            own = [{"error": str(exc)}]
+        held = []
+        names = {}
+        for j in state.trade_watch.jobs()[:200]:
+            lock = htlclib_parse(j["redeem"])
+            if j["account"] not in names:
+                try:
+                    names[j["account"]] = (state.accounts().get(j["account"]) or {}).get("name") or ""
+                except Exception:                          # noqa: BLE001
+                    names[j["account"]] = ""
+            held.append({"id": j["id"], "kind": j["kind"], "network": j["network"], "status": j["status"],
+                         "note": j["note"], "account": names.get(j["account"]) or j["account"][:12],
+                         "trade": j["trade"], "due": (lock or {}).get("locktime") if j["kind"] == "refund"
+                         else j["not_after"], "sent_txid": j["sent_txid"], "updated": j["updated"]})
+        counts = {s: sum(1 for h in held if h["status"] == s) for s in ("waiting", "sent", "spent", "expired")}
+        return JSONResponse({"own": own, "held": held, "counts": counts}, headers={"Cache-Control": "no-store"})
+
+    def htlclib_parse(redeem_hex: str):
+        from .. import htlc as htlclib
+        try:
+            return htlclib.parse(bytes.fromhex(redeem_hex))
+        except ValueError:
+            return None
 
     def _admin_xchain() -> dict:
         """The mainnet PEPE swap (arcade/xchain.py) as the operator needs to see it:
@@ -20470,6 +20797,15 @@ def create_app(state: AppState) -> FastAPI:
             for flag in ("auto_update", "auto_sell", "auto_fill", "node_trades"):
                 if flag in said:
                     state.set_setting(flag, bool(said[flag]))
+            if isinstance(said.get("swap_big"), dict):
+                # Where a swap waits 3 confirmations instead of 1 (2026-10-13: "1,
+                # more for big trades"): a mainnet coin leg at or above this, in whole coins.
+                for network, text in said["swap_big"].items():
+                    if network in tradelib.BIG and str(text).strip():
+                        sats = walletlib.parse_amount(str(text).strip())
+                        if sats <= 0:
+                            raise ValueError("a big-swap line is more than nothing")
+                        state.set_setting(f"swap_big:{network}", int(sats))
             if "xchain_enabled" in said:      # the mainnet PEPE swap (arcade/xchain.py)
                 state.set_setting("xchain:enabled", bool(said["xchain_enabled"]))
             if "moderation" in said:
@@ -23073,6 +23409,222 @@ def create_app(state: AppState) -> FastAPI:
         return render(request, "listings.html", groups=groups,
                       book_error=book_error)
 
+    # --- lock-script trades between arcades (trustless-trading-plan.md, phases 4-5) -------
+
+    def _online(node_id: str) -> bool:
+        mesh = getattr(state, "mesh", None)
+        return bool(mesh is not None and mesh.online(node_id))
+
+    def _trade_order_view(request: Request) -> dict:
+        """Orders inscribed by every arcade, shown while their node is online; and, for the
+        operator, this node's own standing orders and trades."""
+        out: dict[str, Any] = {"trade_orders": [], "my_trade_orders": [], "my_trades": [],
+                               "can_trade_orders": False, "can_list_orders": False, "coin_pairs": []}
+        try:
+            mesh = getattr(state, "mesh", None)
+            mine = mesh.node_id if mesh is not None else ""
+            account = signed_in(request) if _account_view(request) else None
+            if _account_view(request):
+                # A person here lists from their own tab (wallet.listOrder) and may take any
+                # order but their own -- other accounts' on this very arcade included.
+                out["can_list_orders"] = bool(mine)
+                own = {_account_address(account.pubkey, c) for c in _account_chains()} if account else set()
+                out["trade_orders"] = [o for o in state.trade_orders.visible(_online)
+                                       if o["lister"] not in own]
+            else:
+                out["trade_orders"] = [o for o in state.trade_orders.visible(_online)
+                                       if o["node"] != mine]
+            if not _account_view(request) and _node_trades():
+                trader = state.node_trader
+                out["can_trade_orders"] = True
+                out["my_trade_orders"] = [{**o, "give_label": _side_label(o["give"]),
+                                           "get_label": _side_label(o["get"])}
+                                          for o in trader.standing()]
+                out["my_trades"] = [{"id": t.id, "role": t.role, "state": t.state, "note": t.note,
+                                     "give": M_leg_text(t.give), "get": M_leg_text(t.get)}
+                                    for t in trader.book.open_trades()]
+            for o in out["trade_orders"]:
+                o["give_label"], o["get_label"] = _side_label(o["give"]), _side_label(o["get"])
+            # Coin pairs with a market of their own: mainnet Pepecoin against Dogecoin
+            # (2026-10-13: "Will a PEP/DOGE pair be available?"). Real coin for real
+            # coin only; test coins against DOGE would be a market nobody should use.
+            nets = [c.network for c in state.all_chains]
+            if "doge" in nets and "main" in nets:
+                out["coin_pairs"] = [{"base": "main", "quote": "doge", "name": "PEP/DOGE"}]
+        except Exception:
+            log.debug("trade orders unavailable", exc_info=True)
+        return out
+
+    def M_leg_text(leg) -> str:
+        return _side_label({"network": leg.network, "kind": leg.kind, "asset": leg.asset,
+                            "amount": leg.amount})
+
+    def _side_label(side: dict) -> str:
+        """One side of a swap in words: "3 PEP", "40 Gold", "NFT #12"."""
+        net, kind, amount = side["network"], side["kind"], int(side["amount"])
+        if kind == "coin":
+            return f"{amount / COIN:g} {NETWORKS[net].coin}"
+        index = None
+        try:
+            ctx = next((c for c in state.token_chains if c.network == net), None)
+            index = state.token_index(ctx) if ctx is not None else None
+            if kind == "token":
+                prop = index.property(int(side["asset"])) if index is not None else None
+                if prop:
+                    return f"{format_amount(amount, prop['divisible'])} {prop['name']}"
+            else:
+                row = index.inscription(side["asset"]) if index is not None else None
+                if row:
+                    return f"NFT #{row['number']}"
+        except Exception:
+            log.debug("could not name a swap side", exc_info=True)
+        return f"{amount} of token #{side['asset']}" if kind == "token" else f"NFT {side['asset'][:10]}…"
+
+    def _coin_side(network: str, amount: str) -> dict:
+        """A side of the operator's swap: a coin ("regtest"), or a token this node holds at
+        its home address ("token:<network>:<id>:<divisible>", the List form's value) --
+        the node locks tokens from there (NodeTrader._lock_asset)."""
+        if network.startswith("token:"):
+            _, net, pid, _div = (network.split(":") + ["", "", "", ""])[:4]
+            ctx = next((c for c in state.token_chains if c.network == net), None)
+            if ctx is None or not pid.isdigit():
+                raise ValueError("that token is not on a chain this node runs")
+            index = state.token_index(ctx)
+            prop = index.property(int(pid))
+            if prop is None:
+                raise ValueError(f"there is no token {pid}")
+            units = parse_amount(amount, prop["divisible"])
+            if units <= 0:
+                raise ValueError("an amount is more than nothing")
+            home = state.home_address(ctx)
+            if units > int(index.balance(home, int(pid))):
+                raise ValueError(f"this node's home address holds less than that of {prop['name']}")
+            return {"network": net, "kind": "token", "asset": pid, "amount": int(units)}
+        if network.startswith("nft:"):
+            _, net, txid = (network.split(":") + ["", "", ""])[:3]
+            ctx = next((c for c in state.token_chains if c.network == net), None)
+            if ctx is None:
+                raise ValueError("that NFT is not on a chain this node runs")
+            row = state.token_index(ctx).inscription(txid.lower())
+            if row is None or row["owner"] != state.home_address(ctx):
+                raise ValueError("this node's home address does not hold that NFT")
+            return {"network": net, "kind": "nft", "asset": row["txid"], "amount": 1}
+        if network not in {c.network for c in state.token_chains}:
+            raise ValueError("that network is not open on this node")
+        sats = parse_amount(amount, True)
+        if sats <= 0:
+            raise ValueError("an amount is more than nothing")
+        return {"network": network, "kind": "coin", "asset": "", "amount": int(sats)}
+
+    def _swap_back(back: str) -> str:
+        """Where a swap form returns to: a coin pair's page that sent it, else the card."""
+        if re.fullmatch(r"/exchange/coins/[a-z]+/[a-z]+", back or ""):
+            return back
+        return "/exchange?tab=tokens#trade-orders"
+
+    @app.get("/exchange/coins/{base}/{quote}", response_class=HTMLResponse)
+    def coin_pair(request: Request, base: str, quote: str):
+        """A coin pair's market -- PEP/DOGE first (2026-10-13: "Will a PEP/DOGE pair
+        be available?") -- out of the swaps every arcade lists, priced in `quote` per
+        `base`, every one settled through lock scripts on both chains (trade_orders.coin_book)."""
+        nets = {c.network: c for c in state.all_chains}
+        if base not in NETWORKS or quote not in NETWORKS or base == quote:
+            raise HTTPException(404)
+        ready = {c.network for c in state.token_chains}
+        view = _trade_order_view(request)
+        book = trade_orders.coin_book(view["trade_orders"], base, quote)
+        mine = [o for o in (view.get("my_trade_orders") or [])
+                if {o["give"]["network"], o["get"]["network"]} == {base, quote}
+                and o["give"]["kind"] == o["get"]["kind"] == "coin"]
+        return render(request, "coin_pair.html", base=base, quote=quote,
+                      base_coin=NETWORKS[base].coin, quote_coin=NETWORKS[quote].coin,
+                      base_label=getattr(nets.get(base), "title", "") or NETWORKS[base].coin,
+                      quote_label=getattr(nets.get(quote), "title", "") or NETWORKS[quote].coin,
+                      open_here=base in ready and quote in ready,
+                      viewer="account" if _account_view(request) else "wallet",
+                      asks=book["asks"], bids=book["bids"], spread=book["spread"],
+                      my_pair_orders=mine, **{k: view[k] for k in ("can_trade_orders", "can_list_orders")})
+
+    @app.post("/exchange/trade-orders/stand")
+    def trade_order_stand(give_network: str = Form(""), give_amount: str = Form(""),
+                          get_network: str = Form(""), get_amount: str = Form(""),
+                          csrf_token: str = Form(""), back: str = Form("")):
+        """The operator's node offers a swap -- coins, or a token from its home address --
+        settled through lock scripts, and inscribes it so every arcade shows it while this
+        node is online."""
+        check_csrf(csrf_token)
+        try:
+            if not _node_trades():
+                raise ValueError(NODE_TRADES_OFF)
+            give, get = _coin_side(give_network, give_amount), _coin_side(get_network, get_amount)
+            if give["network"] == get["network"]:
+                where = (f" -- its market is /exchange/pair/{give['asset']}" if give["kind"] == "token" else "")
+                raise ValueError("a swap on one chain is instant on that chain's own market (one "
+                                 "transaction, no locks)" + where)
+            order_id = f"ord-{secrets.token_hex(8)}"
+            trader = state.node_trader
+            trader.stand(order_id, give, get)
+            mesh = getattr(state, "mesh", None)
+            if mesh is not None:
+                trader.post(mesh.node_id)
+                state.flash("Posted: every arcade shows it while this node is online.", "ok")
+            else:
+                state.flash("Saved. It is inscribed for other arcades once this node is on the mesh.", "ok")
+        except Exception as exc:
+            state.flash(str(exc), "err")
+        return RedirectResponse(_swap_back(back), status_code=303)
+
+    @app.post("/exchange/trade-orders/withdraw")
+    def trade_order_withdraw(order: str = Form(""), csrf_token: str = Form(""), back: str = Form("")):
+        check_csrf(csrf_token)
+        state.node_trader.withdraw(order)
+        mesh = getattr(state, "mesh", None)
+        try:
+            if mesh is not None:
+                state.node_trader.post(mesh.node_id)
+        except Exception as exc:
+            state.flash(f"Withdrawn here; the cancel could not be inscribed yet: {exc}", "err")
+        return RedirectResponse(_swap_back(back), status_code=303)
+
+    @app.post("/exchange/trade-orders/take")
+    def trade_order_take(order: str = Form(""), lister: str = Form(""), csrf_token: str = Form(""),
+                         back: str = Form("")):
+        """The operator's node takes another arcade's order: it proposes the terms over the
+        Messenger, then both sides settle through lock scripts (arcade/trade.py)."""
+        check_csrf(csrf_token)
+        try:
+            if not _node_trades():
+                raise ValueError(NODE_TRADES_OFF)
+            found = next((o for o in state.trade_orders.visible(_online)
+                          if o["id"] == order and o["lister"] == lister), None)
+            if found is None:
+                raise ValueError("that order is gone, or its arcade is offline right now")
+            trader = state.node_trader
+            for side in (found["give"], found["get"]):
+                if side["network"] not in trader.chains:
+                    raise ValueError(f"this node does not run {side['network']} yet")
+            mine = trader.key.pubkey
+            want = found["get"]
+            if want["kind"] == "token":
+                ctx = next(c for c in state.token_chains if c.network == want["network"])
+                if int(state.token_index(ctx).balance(state.home_address(ctx), int(want["asset"]))) < want["amount"]:
+                    raise ValueError("this node's home address does not hold that much of that token")
+            elif want["kind"] == "nft":
+                ctx = next(c for c in state.token_chains if c.network == want["network"])
+                row = state.token_index(ctx).inscription(want["asset"])
+                if row is None or row["owner"] != state.home_address(ctx):
+                    raise ValueError("this node's home address does not hold that NFT")
+            give = trader.leg(want["network"], want["amount"],
+                              bytes.fromhex(found.get("take_key") or found["trade_key"]),
+                              kind=want["kind"], asset=want["asset"])
+            get = tradelib.Leg(found["give"]["network"], found["give"]["kind"], found["give"]["asset"],
+                               found["give"]["amount"], found["trade_key"], mine.hex())
+            trade = trader.propose(bytes.fromhex(found["msg_key"]), found["id"], give, get)
+            state.flash(f"Proposed ({trade.id}). It locks and settles by itself; follow it below.", "ok")
+        except Exception as exc:
+            state.flash(str(exc), "err")
+        return RedirectResponse(_swap_back(back), status_code=303)
+
     @app.get("/exchange", response_class=HTMLResponse)
     def exchange(request: Request, tab: str = "tokens", sort: str = "popular",
                  show: str = "mix", count: int = 0):
@@ -23199,6 +23751,7 @@ def create_app(state: AppState) -> FastAPI:
         except Exception:
             trades = []
         if tab == "tokens":
+            data.update(_trade_order_view(request))
             # Every token paired against the coin: the ones with a book and
             # the ones that have traded, last price and the day's move
             # (D-048). Clicking one opens its own page.
@@ -23207,7 +23760,7 @@ def create_app(state: AppState) -> FastAPI:
             # The open-a-pair box (2026-10-06: "When creating a pair the
             # drop-down should only list assets that you have in your wallet"):
             # what this reader holds on one side, any token on the other.
-            data["held_tokens"], data["pair_viewer"] = [], "nobody"
+            data["held_tokens"], data["pair_viewer"], data["held_nfts"] = [], "nobody", []
             data["xchain_open"] = _x_open()
             try:
                 held_at: list[str] = []
@@ -23224,12 +23777,30 @@ def create_app(state: AppState) -> FastAPI:
                     if row["property_id"] not in held:
                         prop = index.property(row["property_id"]) or {}
                         held[row["property_id"]] = {"property_id": row["property_id"], "name": row["name"],
-                                                    "managed": prop.get("managed", 0)}
+                                                    "managed": prop.get("managed", 0),
+                                                    "divisible": bool(prop.get("divisible", True))}
                 data["held_tokens"] = sorted(held.values(), key=lambda t: str(t["name"]).lower())
             except HTTPException:
                 raise
             except Exception:
                 data["held_tokens"] = []
+            data["held_net"] = chain.network
+            # The NFTs this reader holds here, to swap for a coin on another chain: an
+            # account's own; the node's at its home address, where it locks them from.
+            try:
+                if data["pair_viewer"] == "account":
+                    nft_at = [_account_address(signed_in(request).pubkey, chain)]
+                elif data["pair_viewer"] == "wallet":
+                    nft_at = [state.home_address(chain)]
+                else:
+                    nft_at = []
+                if any(nft_at):
+                    data["held_nfts"] = [{"txid": r["txid"], "number": r["number"]}
+                                         for r in index.inscriptions(owners=[a for a in nft_at if a], limit=50)]
+            except HTTPException:
+                raise
+            except Exception:
+                data["held_nfts"] = []
         elif tab == "market":
             # A collection is a market of its own, and the marketplace is the
             # list of them -- the same table the Tokens tab draws for pairs.
@@ -23801,7 +24372,9 @@ def _check_address(address: str, *, mainnet: bool) -> str | None:
     if network in ("test", "regtest"):
         wanted = (NETWORKS["test"], NETWORKS["regtest"])
     elif network:
-        wanted = (NETWORKS[network],)
+        # The chain's own params: in production NETWORKS[network], and on a test chain
+        # standing in for it, that chain's (2026-10-13).
+        wanted = (getattr(mainnet, "params", None) or NETWORKS[network],)
     else:
         wanted = (NETWORKS["main"],) if mainnet else (NETWORKS["test"], NETWORKS["regtest"])
     word = (getattr(mainnet, "label", "") or "").lower() or ("mainnet" if mainnet else "testnet")

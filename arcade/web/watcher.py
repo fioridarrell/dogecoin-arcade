@@ -128,6 +128,9 @@ class BlockWatcher:
                       self._keep_shop,
                       self._run_xchain,
                       self._import_listings,
+                      self._import_orders,
+                      self._run_trader,
+                      self._run_watch,
                       self._walk_home):
             try:
                 phase()
@@ -179,6 +182,47 @@ class BlockWatcher:
 
 
     _listings_at = 0.0
+
+    def _import_orders(self) -> None:
+        """Trade orders inscribed on the chain (arcade/trade_orders.py), filed here so the
+        Exchange can show them while their node is online. Every 30 s."""
+        from .. import trade_orders
+        if time.time() - getattr(self, "_orders_at", 0.0) < 30:
+            return
+        self._orders_at = time.time()
+        for chain in self.state.token_chains:
+            try:
+                trade_orders.import_announced(self.state.trade_orders, self.state.token_index(chain),
+                                              chain.network)
+            except Exception:
+                log.debug("order import on %s failed", chain.network, exc_info=True)
+
+    def _run_watch(self) -> None:
+        """Accounts' pre-signed swap claims and refunds (arcade/trade_watch.py), every 15 s:
+        what lets a swap finish with its tabs closed. Not behind node_trades -- it only ever
+        sends what an account signed itself, paying that account."""
+        if time.time() - getattr(self, "_watch_at", 0.0) < 15:
+            return
+        self._watch_at = time.time()
+        for job, said in self.state.trade_watch.tick(self.state.chain_rpc_for):
+            log.info("swap watch: %s %s", job, said)
+
+    def _run_trader(self) -> None:
+        """This node's own lock-script trades, every 15 s -- only while the operator has
+        node-facilitated trades on (the trader checks the switch itself)."""
+        if not self.state.setting("node_trades", False):
+            return
+        if time.time() - getattr(self, "_trader_at", 0.0) < 15:
+            return
+        self._trader_at = time.time()
+        trader = self.state.node_trader
+        try:
+            trader.tick()
+            mesh = getattr(self.state, "mesh", None)
+            if mesh is not None and trader.post_due():
+                trader.post(mesh.node_id)
+        except Exception:
+            log.warning("node trader pass failed", exc_info=True)
 
     def _import_listings(self) -> None:
         """Listings other nodes' sellers put on the chain, filed here too, so a

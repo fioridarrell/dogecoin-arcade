@@ -1096,3 +1096,83 @@ export async function verifyFill(offer, keys) {
   }
   return {hash: derived, sats: Number(said.sats), token: said.token};
 }
+
+/* --- lock scripts (HTLC): what a trustless trade settles through --------------
+ *
+ * The same bytes arcade/htlc.py writes (tests/test_htlc_browser.py compares them):
+ *
+ *   OP_IF OP_SHA256 <hash> OP_EQUALVERIFY <claimer> OP_CHECKSIG
+ *   OP_ELSE <lock time> OP_CHECKLOCKTIMEVERIFY OP_DROP <refunder> OP_CHECKSIG OP_ENDIF
+ *
+ * Built and read HERE, never taken from a node: a tab that locks its coins must know
+ * for itself that only it can take them back, and only after the time it agreed.
+ */
+
+/** sha256 of the secret, for a lock (exported for the trade code). */
+export async function sha256Of(bytes) {
+  return sha256(bytes);
+}
+
+/** A script number, minimally encoded (CHECKLOCKTIMEVERIFY reads one). */
+export function scriptNum(n) {
+  let value = BigInt(n);
+  if (value === 0n) return new Uint8Array(0);
+  const neg = value < 0n;
+  if (neg) value = -value;
+  const out = [];
+  while (value > 0n) { out.push(Number(value & 0xffn)); value >>= 8n; }
+  if (out[out.length - 1] & 0x80) out.push(neg ? 0x80 : 0x00);
+  else if (neg) out[out.length - 1] |= 0x80;
+  return new Uint8Array(out);
+}
+
+function pushData(bytes) {
+  if (bytes.length > 75) throw new Error("this file pushes at most 75 bytes in a lock");
+  return new Uint8Array([bytes.length, ...bytes]);
+}
+
+/** The lock's redeem script. `locktime` is a unix time (>= 500,000,000), never a height. */
+export function htlcRedeem(secretHash, claimer, refunder, locktime) {
+  if (secretHash.length !== 32) throw new Error("the secret's hash is 32 bytes");
+  for (const key of [claimer, refunder])
+    if (key.length !== 33 || (key[0] !== 2 && key[0] !== 3)) throw new Error("a key in a lock is 33 bytes, compressed");
+  if (hex(claimer) === hex(refunder)) throw new Error("the claimer and the refunder are two different people");
+  if (!(locktime >= 500000000 && locktime < 2 ** 32)) throw new Error("a lock time is a time, not a block height");
+  return join([new Uint8Array([0x63, 0xa8]), pushData(secretHash), new Uint8Array([0x88]),
+               pushData(claimer), new Uint8Array([0xac, 0x67]), pushData(scriptNum(locktime)),
+               new Uint8Array([0xb1, 0x75]), pushData(refunder), new Uint8Array([0xac, 0x68])]);
+}
+
+/** {secretHash, claimer, locktime, refunder} for a lock this file would write, or null. */
+export function htlcParse(redeem) {
+  try {
+    const b = redeem instanceof Uint8Array ? redeem : unhex(redeem);
+    if (b[0] !== 0x63 || b[1] !== 0xa8 || b[2] !== 32) return null;
+    const secretHash = b.slice(3, 35);
+    if (b[35] !== 0x88 || b[36] !== 33) return null;
+    const claimer = b.slice(37, 70);
+    if (b[70] !== 0xac || b[71] !== 0x67) return null;
+    const size = b[72];
+    if (size < 1 || size > 5) return null;
+    let locktime = 0;
+    for (let i = size - 1; i >= 0; i--) locktime = locktime * 256 + b[73 + i];
+    let at = 73 + size;
+    if (b[at] !== 0xb1 || b[at + 1] !== 0x75 || b[at + 2] !== 33) return null;
+    const refunder = b.slice(at + 3, at + 36);
+    at += 36;
+    if (b[at] !== 0xac || b[at + 1] !== 0x68 || at + 2 !== b.length) return null;
+    const again = htlcRedeem(secretHash, claimer, refunder, locktime);
+    if (hex(again) !== hex(b)) return null;
+    return {secretHash, claimer, locktime, refunder};
+  } catch (e) { return null; }
+}
+
+/** The P2SH output script a lock's coins sit under. */
+export async function htlcScript(redeem) {
+  return new Uint8Array([0xa9, 20, ...(await hash160(redeem)), 0x87]);
+}
+
+/** The lock's address on a chain (its script-hash version byte). */
+export async function htlcAddress(redeem, scripthashVersion) {
+  return base58check(scripthashVersion, await hash160(redeem));
+}
