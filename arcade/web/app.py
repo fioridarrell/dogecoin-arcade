@@ -2575,6 +2575,9 @@ def create_app(state: AppState) -> FastAPI:
     #: silent lie about what is waiting to be confirmed.
     _POOL = object()
 
+    _PENDING_KEPT: dict = {}
+    PENDING_SECONDS = 4.0
+
     def _pending_feed(network: str):
         """What the mempool holds for the feed right now.
 
@@ -2583,14 +2586,27 @@ def create_app(state: AppState) -> FastAPI:
         written down, exactly as the marketplace reads offers and asks
         (D-117, D-141).
         """
+        # Kept for a few seconds (2026-10-15: sign-in waited on it -- /account reads it for the
+        # profile, and every read was a getrawmempool plus one getrawtransaction per waiting
+        # transaction, each of which could land in the node's multi-second wallet stalls).
+        # A broadcast from here drops it (rpc.BROADCAST_EPOCH): your own post shows at once.
+        from .. import rpc as rpclib
+        mine = state.derived_address or ""
+        key = (network, mine)
+        held = _PENDING_KEPT.get(key)
+        now = time.monotonic()
+        if held and held[0] > now and held[1] == rpclib.BROADCAST_EPOCH:
+            return held[2]
+        epoch = rpclib.BROADCAST_EPOCH
         try:
             with state.messaging.rpc() as rpc:
-                return mempoollib.read(rpc, state.messaging.params, network,
-                                       mine=state.derived_address or "")
+                found = mempoollib.read(rpc, state.messaging.params, network, mine=mine)
         except HTTPException:
             raise
         except Exception:
             return mempoollib.Pending()
+        _PENDING_KEPT[key] = (now + PENDING_SECONDS, epoch, found)
+        return found
 
     def _feed_page(network: str, author: str = "", before: Any = None,
                    limit: int = FEED_PAGE, sort: str = "new") -> tuple[list[Any], Any, Any]:
@@ -25018,10 +25034,15 @@ def _on_a_real_chain(address: str) -> bool:
 #: (node) -> (until, addresses): _ledger_addresses for fifteen seconds (2026-10-05:
 #: about a tenth of a second, on most pages of the operator's wallet).
 _LEDGER_ADDRESSES: dict = {}
+#: How long a wallet's address list is kept (was 15 s). Asking costs a `listreceivedbyaddress`
+#: and a full `listunspent`, seconds each on a big test wallet, holding the node's lock all the
+#: while (the slow Wallet tab, 2026-10-15). An address this process makes drops it at once
+#: (rpc.ADDRESS_EPOCH); `fresh` still asks right now.
+LEDGER_ADDRESSES_SECONDS = 300
 
 
 def _ledger_addresses(rpc, fresh: bool = False) -> list[str]:
-    """Kept for fifteen seconds, unless `fresh` asks the node right now.
+    """Kept for five minutes, or until this process makes an address, unless `fresh` asks the node right now.
 
     `fresh` is for a caller about to act on an address being missing. The kept
     list cannot know about one the wallet made after it was written, and
@@ -25037,11 +25058,13 @@ def _ledger_addresses(rpc, fresh: bool = False) -> list[str]:
         # second node (a test chain's, then a real chain's) got the first's list.
         return _ledger_addresses_uncached(rpc)
     key = (getattr(creds, "host", ""), getattr(creds, "port", 0))
+    from .. import rpc as rpclib
+    epoch = rpclib.ADDRESS_EPOCH
     held = None if fresh else _LEDGER_ADDRESSES.get(key)
-    if held and held[0] > time.time():
+    if held and held[0] > time.time() and held[2] == epoch:
         return list(held[1])
     found = _ledger_addresses_uncached(rpc)
-    _LEDGER_ADDRESSES[key] = (time.time() + 15, list(found))
+    _LEDGER_ADDRESSES[key] = (time.time() + LEDGER_ADDRESSES_SECONDS, list(found), epoch)
     return found
 
 
