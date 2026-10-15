@@ -86,6 +86,7 @@ from .. import admin as adminlib
 from .. import funding as fundinglib
 from .. import listings as listingslib
 from .. import utxos as utxoslib
+from .. import doginals as doginalslib
 from .. import update as updatelib
 from ..messaging.keys import fingerprint_of
 from .. import trade as tradelib
@@ -11464,6 +11465,110 @@ def create_app(state: AppState) -> FastAPI:
                              "number": row["number"], "chain": chain.network,
                              **unsigned.as_json()})
 
+    def _own_coins(account, chain) -> list[dict]:
+        """The coins this account can spend on `chain`: the index's, less what
+        this node has already broadcast away, plus change it has not filed yet."""
+        address = _account_address(account.pubkey, chain)
+        if not address:
+            return []
+        gone = _flights.spent_by(account.pubkey, chain.network)
+        with contextlib.closing(state.token_index(chain).open()) as db:
+            coins = utxoslib.unspent(db, address)
+        coins += [dict(c) for c in _flights.change_for(account.pubkey, chain.network)
+                  if c.get("address", address) == address]
+        seen, out = set(), []
+        for c in coins:
+            key = (c["txid"], int(c["vout"]))
+            if key in gone or key in seen:
+                continue
+            seen.add(key)
+            out.append({"txid": c["txid"], "vout": int(c["vout"]), "value": int(c["value"]),
+                        "address": address})
+        return out
+
+    @app.get("/account/coins")
+    def account_coins(request: Request, chain: str = ""):
+        """The account's own coins on one chain, one row per output.
+
+        [Claude 2026-10-15] For the Wallet's Doginals check (2026-10-14: "We have to have the wallet check its own utxo
+        to see if they are doginals", and "I want the client side to access Doge soft"): the BROWSER takes this list to Doge
+        Soft and asks which of these coins carry an inscription. This node only lists them; it asks nobody."""
+        account = _signed_in_account(request)
+        try:
+            one = _chain_asked({"chain": chain})
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        try:
+            coins = _own_coins(account, one)
+        except Exception as exc:                          # noqa: BLE001 -- a node still catching up
+            return JSONResponse({"detail": f"this node cannot read those coins yet: {exc}"}, status_code=503)
+        return JSONResponse({"chain": one.network, "address": _account_address(account.pubkey, one),
+                             "doge": bool(one.is_doge), "coins": coins})
+
+    @app.post("/account/doginal/send")
+    def account_doginal_send(request: Request, payload: Any = Body(None)):
+        """Offer to send one Doginal to somebody. Nothing is broadcast.
+
+        [Claude 2026-10-15] The one way a coin carrying a Doginal is spent (2026-10-14: "make sure they are not spent
+        unless somebody is trying to send a doginal to someone else"). The same handshake as a coin or NFT send: the node
+        builds it (funding.build_doginal_send -- the inscribed coin is input 0 and goes whole to the recipient as output 0,
+        the fee comes from clean coins, change last), the tab signs, /account/sign checks and broadcasts. The coin's value
+        is read from this node's index, never from the browser, and the builder asks Doge Soft itself whether the coin holds
+        exactly this Doginal -- the server's one use of Doge Soft here, and only because a send needs it.
+        """
+        account = _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        try:
+            chain = _chain_asked(said)
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        if not chain.is_doge:
+            return JSONResponse({"detail": "Doginals live on Dogecoin: this is a "
+                                           f"{chain.label} send"}, status_code=400)
+        address = _account_address(account.pubkey, chain)
+        if not address:
+            return JSONResponse({"detail": "this account has no dogecoin address yet"}, status_code=400)
+        try:
+            txid = str(said.get("txid", "")).lower()
+            if not re.fullmatch(r"[0-9a-f]{64}", txid):
+                raise ValueError("that is not a transaction id")
+            try:
+                vout = int(said.get("vout"))
+            except (TypeError, ValueError):
+                raise ValueError("which output of that transaction?") from None
+            inscription = str(said.get("inscription", "")).strip().lower()
+            if not re.fullmatch(r"[0-9a-f]{64}i\d+", inscription):
+                raise ValueError("that is not a Doginal's id")
+            coin = next((c for c in _own_coins(account, chain)
+                         if (c["txid"], c["vout"]) == (txid, vout)), None)
+            if coin is None:
+                raise ValueError("that coin is not this account's to spend")
+            to, to_tag = _payee(said.get("to", ""), chain)
+            complaint = _check_address(to, mainnet=chain)
+            if complaint:
+                raise ValueError(complaint)
+            if to == address:
+                raise ValueError("that is this account's own address")
+            with contextlib.closing(state.token_index(chain).open()) as db:
+                unsigned = fundinglib.build_doginal_send(
+                    db, chain.params, address, coin, inscription, to,
+                    rate=fees.MIN_FEE_PER_KB,
+                    exclude=_flights.spent_by(account.pubkey, chain.network),
+                    extra=_flights.change_for(account.pubkey, chain.network))
+            _quota(account, "send")
+        except (taglib.TagError, fundinglib.FundingError, ValueError) as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        except doginalslib.Unknown as exc:              # Doge Soft away: said as it is, never guessed
+            return JSONResponse({"detail": f"Doginals can't be checked right now: {exc}"},
+                                status_code=503)
+        except Exception as exc:                          # noqa: BLE001
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        offer = _offers.add(account.pubkey, chain.network, unsigned, unsigned.what)
+        return JSONResponse({"offer": offer.id, "to": to, "to_tag": to_tag,
+                             "inscription": inscription, "txid": txid, "vout": vout,
+                             "amount": coin["value"], "chain": chain.network,
+                             **unsigned.as_json()})
+
     @app.post("/account/nft/sell")
     def account_nft_sell(request: Request, payload: Any = Body(None)):
         """Offer to put a price on a piece, or to take the price off.
@@ -18787,7 +18892,9 @@ def create_app(state: AppState) -> FastAPI:
         """
         if signed_in(request) is None:
             return _to_join(request)
-        return render(request, "my_wallet.html", chain=_account_chain())
+        # [Claude 2026-10-15] Doge Soft's address, said once (arcade/doginals.DOGESOFT): the page's Doginals check asks it
+        # from the browser.
+        return render(request, "my_wallet.html", chain=_account_chain(), dogesoft=doginalslib.DOGESOFT)
 
     @app.get("/me/wallet/tokens", response_class=HTMLResponse)
     def my_wallet_tokens(request: Request):
