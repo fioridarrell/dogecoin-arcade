@@ -1325,7 +1325,12 @@ async function drawDoginals() {
       if (i.vout === coin.vout) found.push({...i, txid: coin.txid, vout: coin.vout, value: coin.value, doginal: true});
     }
   }
-  box.replaceChildren(head);
+  // Credit where the Doginals come from (2026-10-15: "credit Doge soft").
+  const credit = el("p", "wl-note dg-credit", "Doginal data by ");
+  const by = el("a", "", "Doge Soft");
+  by.href = "https://dogesoft.io"; by.target = "_blank"; by.rel = "noopener";
+  credit.append(by);
+  box.replaceChildren(head, credit);
   if (dg.failed) {
     box.append(el("div", "msg err", `Doginals can't be checked right now: Doge Soft did not answer for `
       + `${dg.failed} transaction${dg.failed === 1 ? "" : "s"}. Those coins are not shown as Doginals or as plain `
