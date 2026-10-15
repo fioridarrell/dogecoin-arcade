@@ -95,7 +95,8 @@ def test_the_market_page_is_lock_scripts_and_lists_the_swaps(client, monkeypatch
 
 
 def test_the_operator_posts_a_bid_for_a_token_it_does_not_hold(client, monkeypatch):
-    """Buying is getting the token: the node's home address need not hold it yet."""
+    """Buying is getting the token: the node's home address need not hold it yet. Said the way
+    everybody says it (2026-10-15): an amount of the base at a price in the quote each."""
     app, state = client
     _gold(monkeypatch)
     state.set_setting("node_trades", True)
@@ -104,16 +105,45 @@ def test_the_operator_posts_a_bid_for_a_token_it_does_not_hold(client, monkeypat
                         lambda self, oid, give, get: stood.append((give, get)), raising=False)
     monkeypatch.setattr(state, "mesh", None, raising=False)
     net, main = state.messaging.network, state.ledger.network
-    page = app.get("/exchange/x/token/59").text
-    assert f'name="get_network" value="token:{net}:59:1"' in page, "the Buy form gets the token"
-    went = app.post("/exchange/trade-orders/stand", data={
-        "give_network": main, "give_amount": "3", "get_network": f"token:{net}:59:1", "get_amount": "2",
-        "back": "/exchange/x/token/59", "csrf_token": state.csrf_token}, follow_redirects=False)
-    assert went.headers["location"] == "/exchange/x/token/59"
-    page = app.get("/exchange/x/token/59").text
+    page = app.get(f"/exchange/swap/{net}-token-59/{main}-coin").text
+    assert 'action="/exchange/trade-orders/place"' in page and f'name="base" value="{net}-token-59"' in page
+    went = app.post("/exchange/trade-orders/place", data={
+        "side": "buy", "base": f"{net}-token-59", "quote": f"{main}-coin", "amount": "2", "price": "1.5",
+        "csrf_token": state.csrf_token}, follow_redirects=False)
+    assert went.headers["location"] == f"/exchange/swap/{net}-token-59/{main}-coin"
+    page = app.get("/exchange?tab=tokens").text
     assert stood, re.findall(r'class="flash[^"]*"[^>]*>(.*?)<', page) or re.findall(r'class="msg err"[^>]*>(.*?)<', page)
     assert stood == [({"network": main, "kind": "coin", "asset": "", "amount": 3 * COIN},
-                      {"network": net, "kind": "token", "asset": "59", "amount": 2 * COIN})]
+                      {"network": net, "kind": "token", "asset": "59", "amount": 2 * COIN})], "2 LOGS at 1.5 PEP each"
+    # Picked the other way round -- PEP priced in LOGS -- it is still the same two things.
+    app.post("/exchange/trade-orders/place", data={
+        "side": "sell", "base": f"{main}-coin", "quote": f"{net}-token-59", "amount": "4", "price": "0.25",
+        "csrf_token": state.csrf_token}, follow_redirects=False)
+    assert stood[-1] == ({"network": main, "kind": "coin", "asset": "", "amount": 4 * COIN},
+                         {"network": net, "kind": "token", "asset": "59", "amount": 1 * COIN})
+    # A typed token number is a token like any other (a bid for what you do not hold).
+    app.post("/exchange/trade-orders/place", data={
+        "side": "buy", "base": f"other:{net}", "token": "59", "quote": f"{main}-coin", "amount": "1",
+        "price": "2", "csrf_token": state.csrf_token}, follow_redirects=False)
+    assert stood[-1][1] == {"network": net, "kind": "token", "asset": "59", "amount": COIN}
+    n = len(stood)
+    app.post("/exchange/trade-orders/place", data={
+        "side": "buy", "base": f"{net}-token-59", "quote": f"{main}-coin", "amount": "1",
+        "price": "0.000000001", "csrf_token": state.csrf_token}, follow_redirects=False)
+    assert len(stood) == n, "a total that is not a whole number of satoshis is refused"
+
+
+def test_a_listed_swap_says_its_price_per_unit(client, monkeypatch):
+    app, state = client
+    _gold(monkeypatch)
+    net, main = state.messaging.network, state.ledger.network
+    _file(state, monkeypatch, [_order("ask-0001", _side(net, 10 * COIN, "token", "59"), _side(main, 20 * COIN)),
+                               _order("bid-0001", _side(main, 3 * COIN), _side(net, 300 * COIN))])
+    page = app.get("/exchange?tab=tokens").text
+    assert "2 PEP per LOGS" in page, "priced in the other asset"
+    assert "0.01 PEP per PEP TEST" in page, "a coin pair the same way, base first"
+    assert "Trade any pair" in page and "I want to buy (bid)" in page and "I want to sell (ask)" in page
+    assert "Start a market" not in page and "Swaps between arcades" not in page, "one box, not two"
 
 
 def test_one_picker_opens_every_pair(client, monkeypatch):
@@ -135,7 +165,9 @@ def test_one_picker_opens_every_pair(client, monkeypatch):
     page = app.get("/exchange?tab=tokens").text
     for key in (f"{net}-coin", f"{main}-coin"):
         assert f'value="{key}"' in page, key
-    assert 'action="/exchange/pairs"' in page and 'name="csrf_token"' in page, "the operator's box is a form"
+    assert 'action="/exchange/trade-orders/place"' in page and 'name="csrf_token"' in page, \
+        "the operator's box is a form"
+    assert f'value="other:{net}"' in page, "a bid can name a token nobody here holds"
     assert f"/exchange/swap/{net}-coin/{main}-coin" in page, "every two chains' coin pair is listed"
     swap = app.get(f"/exchange/swap/{net}-coin/{main}-coin").text
     assert "Lock scripts" in swap and "PEP TEST" in swap

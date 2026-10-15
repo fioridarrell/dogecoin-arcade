@@ -62,8 +62,9 @@ def test_opening_a_pair_offers_only_what_you_hold_and_the_two_coins(client, monk
     for ch in {id(state.messaging): state.messaging, **{id(c): c for c in getattr(state, "chains", {}).values()}}.values():
         monkeypatch.setattr(ch, "rpc", fake_rpc)
     page = app.get("/exchange?tab=tokens").text
-    assert "You have" in page
-    for side in (page[page.index("You have"):page.index("Trade it for")], page[page.index("Trade it for"):]):
+    # One trade box (2026-10-15): "I want to buy/sell <amount> <A> at <price> <B> per <A>".
+    assert 'id="pair-base"' in page and 'id="pair-quote"' in page
+    for side in (page[page.index('id="pair-base"'):], page[page.index('id="pair-quote"'):]):
         side = side[:side.index("</select>")]
         assert "GOLD (#8)" in side, "what this wallet holds"
         assert "LOGS (#7)" not in side and "ORE (#9)" not in side, "and nothing it does not"

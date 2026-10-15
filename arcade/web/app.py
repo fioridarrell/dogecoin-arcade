@@ -22803,7 +22803,8 @@ def create_app(state: AppState) -> FastAPI:
         chains = list(state.token_chains)
         for c in chains:
             out.append({"key": f"{c.network}-coin", "kind": "coin", "net": c.network,
-                        "label": f"{c.params.coin} \u00b7 {c.title or c.net}"})
+                        "name": NETWORKS[c.network].coin, "divisible": True,
+                        "label": f"{NETWORKS[c.network].coin} \u00b7 {c.title or c.net}"})
         if viewer == "nobody":
             return out
         account = signed_in(request) if viewer == "account" else None
@@ -22830,30 +22831,46 @@ def create_app(state: AppState) -> FastAPI:
                 held: dict[int, dict] = {}
                 for row in index.balances(at):
                     if row["property_id"] not in held:
+                        prop = index.property(row["property_id"]) or {}
                         held[row["property_id"]] = {
                             "key": f"{c.network}-token-{row['property_id']}", "kind": "token", "net": c.network,
-                            "label": f"{wall_plain(row['name'], 'token')} (#{row['property_id']}) \u00b7 {c.params.coin}"}
+                            "name": wall_plain(row["name"], "token"), "divisible": bool(prop.get("divisible", True)),
+                            "label": f"{wall_plain(row['name'], 'token')} (#{row['property_id']}) \u00b7 {NETWORKS[c.network].coin}"}
                 out += sorted(held.values(), key=lambda t: t["label"].lower())
                 for r in index.inscriptions(owners=[a for a in pieces_at if a], limit=50):
                     out.append({"key": f"{c.network}-nft-{r['txid']}", "kind": "nft", "net": c.network,
-                                "label": f"NFT #{r['number']} \u00b7 {c.params.coin}"})
+                                "name": f"NFT #{r['number']}", "divisible": False,
+                                "label": f"NFT #{r['number']} \u00b7 {NETWORKS[c.network].coin}"})
             except HTTPException:
                 raise
             except Exception:
                 log.debug("what is held on %s could not be read", c.network, exc_info=True)
+        # A bid is usually for a token you do not hold yet (2026-10-15: "You should be able
+        # to start a market with a bid or an ask"): any token, by its number.
+        for c in chains:
+            if not c.is_doge:
+                out.append({"key": f"other:{c.network}", "kind": "other", "net": c.network, "name": "",
+                            "divisible": True, "label": f"Another token on {NETWORKS[c.network].coin} (by number)\u2026"})
         return out
 
     @app.post("/exchange/pairs")
     def exchange_pairs_open_here(request: Request, base: str = Form(""), quote: str = Form(""),
-                                 csrf_token: str = Form("")):
+                                 csrf_token: str = Form(""), token: str = Form("")):
         """The operator's own "Start a market" box: a form, because a pair on the other chain
         switches this node's chain first (POST /tokens/chain does the same)."""
         check_csrf(csrf_token)
-        return _open_pair(request, base, quote, may_switch=True)
+        return _open_pair(request, _other_token(base, token), quote, may_switch=True)
 
     @app.get("/exchange/pairs")
-    def exchange_pairs_open(request: Request, base: str = "", quote: str = ""):
-        return _open_pair(request, base, quote, may_switch=False)
+    def exchange_pairs_open(request: Request, base: str = "", quote: str = "", token: str = ""):
+        return _open_pair(request, _other_token(base, token), quote, may_switch=False)
+
+    def _other_token(value: str, token: str) -> str:
+        """"other:<network>" from the trade box, with the token number typed beside it."""
+        if str(value).startswith("other:"):
+            number = str(token or "").strip().lstrip("#")
+            return f"{value[6:]}-token-{int(number)}" if number.isdigit() else "nothing"
+        return value
 
     def _open_pair(request: Request, base: str, quote: str, may_switch: bool):
         """The "Start a market" box, one way for every pair (2026-10-15: "I want all
@@ -23288,7 +23305,8 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.post("/exchange/x/order")
     def xchain_node_order(kind: str = Form(""), asset: str = Form(""), side: str = Form(""),
-                          amount: str = Form(""), price: str = Form(""), csrf_token: str = Form("")):
+                          amount: str = Form(""), price: str = Form(""), csrf_token: str = Form(""),
+                          token: str = Form("")):
         """The node's own wallet trades on the cross-chain book: it deposits from its
         home address on each chain and is paid back to them."""
         check_csrf(csrf_token)
@@ -24151,6 +24169,7 @@ def create_app(state: AppState) -> FastAPI:
                 b, q = trade_orders.base_first(o["give"], o["get"])
                 o["market"] = (f"/exchange/swap/{trade_orders.leg_key(b)}/{trade_orders.leg_key(q)}"
                                if b["network"] != q["network"] and b["kind"] != "nft" else "")
+                o["price_text"] = _price_text(b, q)
             # Coin pairs with a market of their own: mainnet Pepecoin against Dogecoin
             # (2026-10-13: "Will a PEP/DOGE pair be available?"). Real coin for real
             # coin only; test coins against DOGE would be a market nobody should use.
@@ -24160,6 +24179,18 @@ def create_app(state: AppState) -> FastAPI:
         except Exception:
             log.debug("trade orders unavailable", exc_info=True)
         return out
+
+    def _price_text(base: dict, quote: dict) -> str:
+        """What one whole unit of `base` costs in `quote`, in words: "0.01 PEP per PEP TEST"
+        (2026-10-15: a swap shows its price per asset, priced in the other asset)."""
+        try:
+            b, q = _leg_info(trade_orders.leg_key(base)), _leg_info(trade_orders.leg_key(quote))
+            scale = lambda leg: COIN if leg["kind"] == "coin" or (leg["kind"] == "token" and leg["divisible"]) else 1  # noqa: E731
+            each = (int(quote["amount"]) / scale(q)) / (int(base["amount"]) / scale(b))
+            per = "it" if b["kind"] == "nft" else wall_plain(b["name"], "token")
+            return f"{each:.8g} {wall_plain(q['name'], 'token')} per {per}"
+        except Exception:
+            return ""
 
     def M_leg_text(leg) -> str:
         return _side_label({"network": leg.network, "kind": leg.kind, "asset": leg.asset,
@@ -24266,6 +24297,85 @@ def create_app(state: AppState) -> FastAPI:
         except Exception as exc:
             state.flash(str(exc), "err")
         return RedirectResponse(_swap_back(back), status_code=303)
+
+    def _price_terms(side: str, a: dict, b: dict, amount: str, price: str) -> tuple[dict, dict]:
+        """(give, get) for "I want to buy/sell `amount` of A at `price` B per A" (the operator,
+        2026-10-15: "you should say I want 1000 <token/coinA> at <N values> <token/coinB> per
+        <token/coinA>"), in each side's raw units. The total of B must come out in whole units
+        of B (a hundred-millionth of a coin or divisible token, one of anything else)."""
+        from decimal import Decimal, InvalidOperation
+        if side not in ("buy", "sell"):
+            raise ValueError("say whether you buy or sell")
+        if b["kind"] == "nft":
+            raise ValueError("a price is in a coin or a token, not a piece")
+        try:
+            many, each = Decimal(str(amount or "1" if a["kind"] == "nft" else amount).strip()), Decimal(str(price).strip())
+        except InvalidOperation:
+            raise ValueError("an amount and a price, both numbers")
+        if a["kind"] == "nft":
+            many = Decimal(1)
+        if many <= 0 or each <= 0:
+            raise ValueError("an amount and a price, both above zero")
+
+        def raw(leg: dict, value: Decimal) -> int:
+            scale = COIN if leg["kind"] == "coin" or (leg["kind"] == "token" and leg["divisible"]) else 1
+            units = value * scale
+            if units != units.to_integral_value():
+                name = wall_plain(leg["name"], "that token")
+                raise ValueError(f"{value.normalize():f} {name} is not a whole number of its smallest units: "
+                                 f"change the amount or the price until it comes out even")
+            return int(units)
+        units_a, units_b = raw(a, many), raw(b, many * each)
+        side_a = {"network": a["network"], "kind": a["kind"], "asset": "" if a["kind"] == "coin" else a["asset"],
+                  "amount": units_a}
+        side_b = {"network": b["network"], "kind": b["kind"], "asset": "" if b["kind"] == "coin" else b["asset"],
+                  "amount": units_b}
+        return (side_a, side_b) if side == "sell" else (side_b, side_a)
+
+    @app.post("/exchange/trade-orders/place")
+    def trade_order_place(request: Request, side: str = Form(""), base: str = Form(""), quote: str = Form(""),
+                          amount: str = Form(""), price: str = Form(""), csrf_token: str = Form("")):
+        """The operator's order from the one trade box (and a swap market's own forms): buy or
+        sell `amount` of `base` at `price` of `quote` each. Two sides on one chain open that
+        chain's own market, where it trades instantly; two chains post a swap from this node,
+        settled through lock scripts."""
+        check_csrf(csrf_token)
+        base = _other_token(base, token)
+        try:
+            a, b = _leg_info(base), _leg_info(quote)
+        except ValueError as exc:
+            state.flash(f"That order cannot be placed: {exc}.", "err")
+            return RedirectResponse("/exchange?tab=tokens#trade-orders", status_code=303)
+        x, y = trade_orders.base_first(a, b)
+        market = f"/exchange/swap/{x['key']}/{y['key']}"
+        if a["network"] == b["network"]:
+            return _open_pair(request, base, quote, may_switch=True)
+        try:
+            if not _node_trades():
+                raise ValueError(NODE_TRADES_OFF)
+            give, get = _price_terms(side, a, b, amount, price)
+            # What the node gives comes from its home address: it must hold it (a coin is checked
+            # when it locks); what it gets need not be held yet.
+            if give["kind"] == "token":
+                ctx = next(c for c in state.token_chains if c.network == give["network"])
+                if int(state.token_index(ctx).balance(state.home_address(ctx), int(give["asset"]))) < give["amount"]:
+                    raise ValueError("this node's home address holds less than that")
+            elif give["kind"] == "nft":
+                ctx = next(c for c in state.token_chains if c.network == give["network"])
+                row = state.token_index(ctx).inscription(give["asset"])
+                if row is None or row["owner"] != state.home_address(ctx):
+                    raise ValueError("this node's home address does not hold that piece")
+            trader = state.node_trader
+            trader.stand(f"ord-{secrets.token_hex(8)}", give, get)
+            mesh = getattr(state, "mesh", None)
+            if mesh is not None:
+                trader.post(mesh.node_id)
+                state.flash("Posted: every arcade shows it while this node is online.", "ok")
+            else:
+                state.flash("Saved. It is inscribed for other arcades once this node is on the mesh.", "ok")
+        except Exception as exc:
+            state.flash(str(exc), "err")
+        return RedirectResponse(market, status_code=303)
 
     @app.post("/exchange/trade-orders/withdraw")
     def trade_order_withdraw(order: str = Form(""), csrf_token: str = Form(""), back: str = Form("")):

@@ -98,24 +98,23 @@
       <button type="submit" class="small">{{ 'List sale' if side_ == 'ask' else 'List bid' }}</button>
     </form>
     {% elif open_here and can_trade_orders %}
-    <form class="cp-form" method="post" action="/exchange/trade-orders/stand">
-      <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="back" value="{{ here }}">
-      {% if side_ == 'ask' %}
-      <input type="hidden" name="give_network" value="{{ b_form }}"><input type="hidden" name="get_network" value="{{ q_form }}">
-      <span class="muted" style="font-size:.84rem">Sell</span>
-      {% if b.kind != 'nft' %}<input name="give_amount" inputmode="decimal" placeholder="{{ bname }}" autocomplete="off">
-      {% else %}<input type="hidden" name="give_amount" value="1"><span class="muted" style="font-size:.84rem">it</span>{% endif %}
-      <span class="muted" style="font-size:.84rem">for</span>
-      <input name="get_amount" inputmode="decimal" placeholder="{{ qname }} in all" autocomplete="off">
+    {# The operator's node, in the same words as everybody's (2026-10-15): an amount of the base
+       at a price in the quote each (trade_order_place). #}
+    <form class="cp-form" method="post" action="/exchange/trade-orders/place">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <input type="hidden" name="side" value="{{ 'sell' if side_ == 'ask' else 'buy' }}">
+      <input type="hidden" name="base" value="{{ b.key }}"><input type="hidden" name="quote" value="{{ q.key }}">
+      <span class="muted" style="font-size:.84rem">{{ 'Sell' if side_ == 'ask' else 'Buy' }}</span>
+      {% if b.kind != 'nft' %}
+      <input name="amount" inputmode="decimal" placeholder="{{ bname }}" autocomplete="off">
+      <span class="muted" style="font-size:.84rem">at</span>
+      <input name="price" inputmode="decimal" placeholder="{{ qname }} each" autocomplete="off">
       {% else %}
-      <input type="hidden" name="give_network" value="{{ q_form }}"><input type="hidden" name="get_network" value="{{ b_form }}">
-      <span class="muted" style="font-size:.84rem">Buy</span>
-      {% if b.kind != 'nft' %}<input name="get_amount" inputmode="decimal" placeholder="{{ bname }}" autocomplete="off">
-      {% else %}<input type="hidden" name="get_amount" value="1"><span class="muted" style="font-size:.84rem">it</span>{% endif %}
-      <span class="muted" style="font-size:.84rem">for</span>
-      <input name="give_amount" inputmode="decimal" placeholder="{{ qname }} in all" autocomplete="off">
+      <input type="hidden" name="amount" value="1">
+      <span class="muted" style="font-size:.84rem">it for</span>
+      <input name="price" inputmode="decimal" placeholder="{{ qname }}" autocomplete="off">
       {% endif %}
-      <button type="submit" class="small">Post</button>
+      <button type="submit" class="small">{{ 'List sale' if side_ == 'ask' else 'List bid' }}</button>
     </form>
     {% elif viewer == 'nobody' %}
     <p class="muted" style="font-size:.84rem;margin:10px 0 0">Sign in to trade.</p>

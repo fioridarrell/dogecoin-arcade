@@ -145,6 +145,41 @@
       } catch (e) { alert(String(e.message || e)); }
       finally { button.disabled = false; }
     }));
+    // The Exchange's one trade box (2026-10-15): "I want to buy/sell <amount> A at <price> B per A".
+    // Two chains: listed from this tab, then its market opens. One chain, or a token typed by
+    // number: the box opens the market (the chain's own instant one, or the swap market's form).
+    const box2 = document.querySelector("form[data-account-trade]");
+    box2?.addEventListener("submit", async (ev) => {
+      const pick = (sel) => sel.selectedOptions[0]?.dataset || {};
+      const A = pick(box2.base), B = pick(box2.quote);
+      const amount = Number(String(box2.amount.value).trim()), price = Number(String(box2.price.value).trim());
+      if (!A.net || A.net === B.net || A.kind === "other" || !(amount > 0 && price > 0)) return;
+      ev.preventDefault();
+      const [, , assetA = ""] = box2.base.value.split("-"), [, , assetB = ""] = box2.quote.value.split("-");
+      const whole = (d) => d.kind === "nft" || (d.kind === "token" && d.div === "0");
+      if (A.kind === "token" && A.div === "0" && !Number.isInteger(amount)) return alert(`${A.name} comes in whole units only.`);
+      const units = (d, n) => d.kind === "nft" ? 1 : whole(d) ? Math.round(n) : Math.round(n * 1e8);
+      const side = (d, asset, n) => d.kind === "coin" ? {network: d.net, amount: units(d, n)}
+        : {network: d.net, kind: d.kind, asset, amount: units(d, n), label: d.kind === "nft" ? d.name : `${n} ${d.name}`};
+      const a = side(A, assetA, A.kind === "nft" ? 1 : amount), b = side(B, assetB, (A.kind === "nft" ? 1 : amount) * price);
+      if (!(b.amount > 0)) return alert(`That comes to less than one unit of ${B.name}.`);
+      const selling = box2.side.value === "sell";
+      const [give, get] = selling ? [a, b] : [b, a];
+      const ok = await arcadeAsk(selling ? "List this ask?" : "List this bid?",
+        `${amt(give)} for ${amt(get)} (${price} ${B.name} per ${A.kind === "nft" ? "it" : A.name}). `
+        + "It is written on the chain (about 0.01 in fees) and other arcades see it while an arcade page "
+        + "is open here; it settles through lock scripts on both chains. " + wallet.swapFees(give, get)
+        + " Saying yes approves locking yours when somebody takes it.", "List it");
+      if (!ok) return;
+      const go = box2.querySelector("button[type=submit]");
+      go.disabled = true;
+      try {
+        const w = await keys();
+        if (!w) throw new Error("Unlock your wallet to trade.");
+        await wallet.listOrder(w, give, get, {approved: true});
+        location.href = `/exchange/pairs?base=${encodeURIComponent(box2.base.value)}&quote=${encodeURIComponent(box2.quote.value)}`;
+      } catch (e) { go.disabled = false; alert(String(e.message || e)); }
+    });
     document.querySelectorAll("[data-take-order]").forEach((b) => b.addEventListener("click", async () => {
       const order = JSON.parse(b.dataset.takeOrder);
       const ok = await arcadeAsk("Take this swap?",

@@ -277,15 +277,16 @@ def test_the_list_form_offers_a_token_the_account_holds(world, monkeypatch):
         assert option.count() == 1 and "Gold" in option.inner_text()
         tab.select_option("#pair-base", "regtest-token-150")
         tab.select_option("#pair-quote", "doge-coin")
-        tab.evaluate("() => document.querySelector('#start-market form').requestSubmit()")
-        tab.wait_for_url("**/exchange/swap/regtest-token-150/doge-coin", timeout=15000)
+        # "I want to sell 40 Gold at 0.05 DOGE per Gold" (2026-10-15), straight from the box.
+        tab.click('#start-market label:has(input[value=sell])')
+        tab.fill("#start-market input[name=amount]", "40")
+        tab.fill("#start-market input[name=price]", "0.05")
+        assert "You get 2 DOGE for 40 Gold" in tab.inner_text("#pair-sum")
         tab.evaluate("() => { globalThis.arcadeAsk = async () => true; }")
-        sell = 'form[data-pair-side="sell"]'
-        tab.fill(f"{sell} input[name=amount]", "40")
-        tab.fill(f"{sell} input[name=price]", "0.05")
         said = []
         tab.on("dialog", lambda d: (said.append(d.message), d.dismiss()))
-        tab.evaluate(f"() => document.querySelector('{sell}').requestSubmit()")
+        tab.evaluate("() => document.querySelector('#start-market').requestSubmit()")
+        tab.wait_for_url("**/exchange/swap/regtest-token-150/doge-coin", timeout=30000)
         for _ in range(40):
             if said or "Gold" in tab.inner_text("#tab-orders-list"):
                 break

@@ -42,11 +42,11 @@ def test_other_arcades_orders_show_while_their_node_is_online(client, monkeypatc
     _file(state)
     monkeypatch.setattr(state, "mesh", _Mesh({NODE}), raising=False)
     page = app.get("/exchange?tab=tokens").text
-    assert "Swaps between arcades" in page and 'action="/exchange/trade-orders/take"' in page
+    assert "Swaps listed now" in page and 'action="/exchange/trade-orders/take"' in page
     # One way to list any pair (2026-10-15): the Start-a-market box offers every chain's coin,
     # and the swap's market page has the operator's Post form.
     assert 'value="regtest-coin"' in page and 'value="main-coin"' in page
-    assert 'action="/exchange/trade-orders/stand"' in app.get("/exchange/swap/regtest-coin/main-coin").text, \
+    assert 'action="/exchange/trade-orders/place"' in app.get("/exchange/swap/regtest-coin/main-coin").text, \
         "the operator may post one (node-facilitated trades on)"
     monkeypatch.setattr(state, "mesh", _Mesh(set()), raising=False)
     page = app.get("/exchange?tab=tokens").text
@@ -71,9 +71,9 @@ def test_with_the_switch_off_the_node_neither_posts_nor_takes(client, monkeypatc
     _file(state)
     monkeypatch.setattr(state, "mesh", _Mesh({NODE}), raising=False)
     page = app.get("/exchange?tab=tokens").text
-    assert "Swaps between arcades" in page, "the orders still show"
+    assert "Swaps listed now" in page, "the orders still show"
     assert 'action="/exchange/trade-orders/take"' not in page
-    assert 'action="/exchange/trade-orders/stand"' not in app.get("/exchange/swap/regtest-coin/main-coin").text
+    assert 'action="/exchange/trade-orders/place"' not in app.get("/exchange/swap/regtest-coin/main-coin").text
     app.post("/exchange/trade-orders/stand", data={
         "give_network": "regtest", "give_amount": "3", "get_network": "main", "get_amount": "2",
         "csrf_token": state.csrf_token}, follow_redirects=False)
