@@ -5626,6 +5626,48 @@ def create_app(state: AppState) -> FastAPI:
         _, index = _token_chain()
         return index
 
+    def _other_indexes() -> list[tuple[Any, Any]]:
+        """Every indexed chain but the viewer's, with its index (for an address or a piece of another chain)."""
+        chain, _ = _token_chain(); out, seen = [], {id(chain)}
+        for other in list(state.token_chains) + list(getattr(state, "all_chains", []) or []):
+            if id(other) in seen:
+                continue
+            seen.add(id(other))
+            try:
+                ix = state.token_index(other)
+            except Exception:
+                continue
+            if ix is not None:
+                out.append((other, ix))
+        return out
+
+    def _chain_of(key: Any) -> tuple[Any, Any]:
+        """The chain that holds this inscription, and its index (2026-10-14: "Any inscription should be able to call
+        any inscription cross chain"). The viewer's own chain first; a txid it does not hold is looked for on every other
+        chain this node indexes (an inscription id is its creating txid, which no two chains share). A NUMBER stays on the
+        viewer's chain: numbers count per chain, so the same number elsewhere is a different piece."""
+        chain, index = _token_chain()
+        k = contentlib._key(str(key))
+        try:
+            if index.inscription(k) is not None:
+                return chain, index
+        except Exception:
+            pass
+        if not (isinstance(k, str) and len(k) == 64):
+            return chain, index
+        seen = {id(chain)}
+        for other in list(state.token_chains) + list(getattr(state, "all_chains", []) or []):
+            if id(other) in seen:
+                continue
+            seen.add(id(other))
+            try:
+                ix = state.token_index(other)
+                if ix is not None and ix.inscription(k) is not None:
+                    return other, ix
+            except Exception:
+                continue
+        return chain, index
+
     #: Prepended to an HTML inscription served to a signed-in viewer's frame, so
     #: the page's own root-relative calls to the page API carry the viewer's
     #: ticket (`?v=`) without the page knowing about it (a tester, 2026-09-26:
@@ -5677,14 +5719,14 @@ def create_app(state: AppState) -> FastAPI:
         yet judged is judged now (about a second) or, if the model is away, shown
         as "checking". Everything else about the response is unchanged."""
         screen = state.screen()
+        index = _chain_of(key)[1]   # any chain's piece (2026-10-14)
         if screen.enabled:
-            index = _content_index()
             found = index.inscription_content(contentlib._key(key))
             if found is not None:
                 answer = _screened(screen, *found, reveal=bool(reveal))
                 if answer is not None:
                     return answer
-        return contentlib.content(_content_index(), key, download=bool(download))
+        return contentlib.content(index, key, download=bool(download))
 
     def _screened(screen, content_type: str, body: bytes, reveal: bool):
         """The response a screened piece gets instead of its bytes, or None to serve
@@ -5732,7 +5774,7 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.get("/r/inscription/{key}")
     def r_inscription(key: str):
-        index = _content_index()
+        index = _chain_of(key)[1]
         row = index.inscription(contentlib._key(key))
         if row is None:
             return contentlib._missing("no such inscription")
@@ -5749,7 +5791,7 @@ def create_app(state: AppState) -> FastAPI:
         read (D-071). `left_creator` is that question answered directly,
         because it is the one people actually ask.
         """
-        index = _content_index()
+        index = _chain_of(key)[1]
         row = index.inscription(contentlib._key(key))
         if row is None:
             return contentlib._missing("no such inscription")
@@ -5774,7 +5816,7 @@ def create_app(state: AppState) -> FastAPI:
         route resolves to before asking, and a holder cannot quietly widen it
         (D-091).
         """
-        row = _content_index().inscription(contentlib._key(key))
+        row = _chain_of(key)[1].inscription(contentlib._key(key))
         if row is None:
             return contentlib._missing("no such inscription")
         return contentlib._json({"id": row["txid"], "routes": pageapi.declared(row)})
@@ -5795,13 +5837,13 @@ def create_app(state: AppState) -> FastAPI:
         """
         if not isinstance(body, dict):
             return contentlib._json({"error": "send a JSON object"}, status=400)
-        index = _content_index()
+        held_on, index = _chain_of(str(body.get("inscription") or ""))   # the piece may live on any chain (2026-10-14)
         row = index.inscription(contentlib._key(str(body.get("inscription") or "")))
         if row is None:
             return contentlib._missing("no such inscription")
         route = str(body.get("route") or "")
         try:
-            with _token_chain()[0].rpc() as rpc:
+            with held_on.rpc() as rpc:
                 own = _ledger_addresses(rpc)
         except Exception:
             own = []
@@ -5813,7 +5855,7 @@ def create_app(state: AppState) -> FastAPI:
         watched = False
         if row["owner"] not in own:
             try:
-                with contextlib.closing(_content_index().open()) as db:
+                with contextlib.closing(index.open()) as db:
                     watched = utxoslib.since(db, row["owner"]) is not None
             except Exception:
                 watched = False
@@ -5849,7 +5891,7 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.get("/r/metadata/{key}")
     def r_metadata(key: str):
-        return contentlib.metadata(_content_index(), key)
+        return contentlib.metadata(_chain_of(key)[1], key)
 
     @app.get("/r/blockheight")
     def r_blockheight():
@@ -5875,24 +5917,49 @@ def create_app(state: AppState) -> FastAPI:
         `offset` walks back through pages; `after` filters to numbers above one
         you have already seen, which is what a page polling for new work wants.
         """
-        rows = _content_index().inscriptions(
+        index = _content_index()
+        rows = index.inscriptions(
             limit=limit, offset=offset, after=after,
             creator=creator or None, owner=owner or None)
+        if not rows and (creator or owner) and offset == 0 and after < 0:   # an address of another chain (2026-10-14): ask the chain it lives on
+            for _, ix in _other_indexes():
+                try:
+                    rows = ix.inscriptions(limit=limit, offset=offset, after=after, creator=creator or None, owner=owner or None)
+                except Exception:
+                    rows = []
+                if rows:
+                    break
         named = _tags_for([r["owner"] for r in rows] + [r["creator"] for r in rows])
         return contentlib._json([contentlib.describe(row, named) for row in rows])
 
     @app.get("/r/inscriptions/count")
     def r_inscription_count(owner: str = "", creator: str = ""):
         """How many there are, so a page can size its own paging."""
-        return contentlib._json({
-            "count": _content_index().inscription_count(
-                owner=owner or None, creator=creator or None)})
+        n = _content_index().inscription_count(owner=owner or None, creator=creator or None)
+        if not n and (owner or creator):   # an address of another chain (2026-10-14)
+            for _, ix in _other_indexes():
+                try:
+                    n = ix.inscription_count(owner=owner or None, creator=creator or None)
+                except Exception:
+                    n = 0
+                if n:
+                    break
+        return contentlib._json({"count": n})
 
     @app.get("/r/inscriptions/{address}")
     def r_inscriptions_of(address: str, limit: int = 200, offset: int = 0,
                           pending: int = 0):
         index = _content_index()
         rows = index.inscriptions(owner=address, limit=limit, offset=offset)
+        if not rows and offset == 0:   # an address of another chain (2026-10-14)
+            for _, ix in _other_indexes():
+                try:
+                    found = ix.inscriptions(owner=address, limit=limit, offset=offset)
+                except Exception:
+                    found = []
+                if found:
+                    index, rows = ix, found
+                    break
         named = _tags_for([r["owner"] for r in rows] + [r["creator"] for r in rows])
         out = [contentlib.describe(row, named) for row in rows]
         if pending:
