@@ -29,6 +29,7 @@ import re
 from typing import Any
 
 from .config import NETWORKS
+from .doginals import INSCRIPTION_ID
 from .trade import Leg
 
 KIND = "trade"
@@ -89,8 +90,8 @@ def leg_from(said: Any) -> Leg:
     if network not in NETWORKS:
         raise TradeMessageError(f"no such network {network!r}")
     kind = said.get("kind")
-    if kind not in ("coin", "token", "nft"):
-        raise TradeMessageError("a leg moves a coin, a token or an nft")
+    if kind not in ("coin", "token", "nft", "doginal"):
+        raise TradeMessageError("a leg moves a coin, a token, an nft or a doginal")
     amount = said.get("amount")
     if not isinstance(amount, int) or amount <= 0 or amount > 21 * 10 ** 18:
         raise TradeMessageError("a leg's amount is a positive whole number")
@@ -101,6 +102,8 @@ def leg_from(said: Any) -> Leg:
         raise TradeMessageError("a token leg names its property id")
     if kind == "nft" and (not _HEX64.match(asset) or amount != 1):
         raise TradeMessageError("an nft leg names its inscription and moves exactly one")
+    if kind == "doginal" and (network != "doge" or not INSCRIPTION_ID.match(asset) or amount != 1):
+        raise TradeMessageError("a doginal leg is on Dogecoin, names its inscription id and moves exactly one")
     for side in ("giver_key", "taker_key"):
         if not isinstance(said.get(side), str) or not _KEY.match(said[side]):
             raise TradeMessageError(f"a leg's {side} is a compressed public key, in hex")

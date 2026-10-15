@@ -10,7 +10,8 @@ paying back into the node's wallet. The counterparty trusts it with nothing: the
 script holds both sides.
 
 Coins on every leg for now; tokens and NFTs move through a lock exactly as htlc.move_out
-shows, and come next (plan phase 5).
+shows, and come next (plan phase 5). A Doginal on Dogecoin moves through a lock by koinu
+order, first and whole (htlc.doginal_out; [Claude 2026-10-15]).
 """
 
 from __future__ import annotations
@@ -177,8 +178,10 @@ class NodeTrader:
     is the operator's switch (node-facilitated trades)."""
 
     def __init__(self, state: Any, chains: dict[str, Any], messaging: Any,
-                 enabled: Callable[[], bool] = lambda: True):
+                 enabled: Callable[[], bool] = lambda: True, doginals: Any = None):
         self.state, self.chains, self.messaging, self.enabled = state, chains, messaging, enabled
+        # What sits on Dogecoin coins (arcade/doginals.Doginals): the app's own (funding.GUARD) unless one is given.
+        self._doginals = doginals
         self.home = Path(state.home)
         self.key = TradeKey(self.home)
         self.book = T.Book(self.home / "trades.sqlite")
@@ -374,8 +377,80 @@ class NodeTrader:
                rpc: Any) -> T.LockSeen | None:
         """For a token or NFT leg, what the ledger says is at the lock. While the ledger
         has not read the lock's block yet the lock counts as unconfirmed (trade.asset_at)."""
+        if leg.kind == "doginal":
+            return self._doginal_seen(seen, leg, redeem, rpc)
         return asset_seen(seen, leg, H.address_of(redeem, chain.params),
                           self.state.token_index(chain), rpc)
+
+    @property
+    def doginals(self) -> Any:
+        from . import funding
+        got = self._doginals or funding.GUARD
+        if got is None:
+            raise ValueError("Doginals are not checked on this node: it trades none")
+        return got
+
+    def _doginal_seen(self, seen: T.LockSeen | None, leg: T.Leg, redeem: bytes,
+                      rpc: Any) -> T.LockSeen | None:
+        """For a Doginal leg, whether the lock holds it at offset 0 of output 0 with its
+        reserve as output 1 (trade.doginal_at). While Doge Soft cannot be asked the lock
+        counts as unconfirmed, never as wrong."""
+        if seen is None or seen.spent_by_script_sig:
+            return seen
+        lock_tx = rpc.call("getrawtransaction", seen.txid, 1)
+        parent = rpc.call("getrawtransaction", lock_tx["vin"][0]["txid"], 1)
+        said = T.doginal_at(self.doginals, leg, redeem, lock_tx, parent) if seen.vout == 0 else False
+        if said is None:
+            seen.confirmations = 0
+        else:
+            seen.asset_ok = said
+        if len(lock_tx["vout"]) > 1:
+            seen.reserve = round(float(lock_tx["vout"][1]["value"]) * COIN)
+        return seen
+
+    def _lock_doginal(self, leg: T.Leg, redeem: bytes, rpc: Any) -> str:
+        """The Doginal into its lock from this node's wallet (htlc.doginal_lock_outputs):
+        the coin holding exactly it at offset 0 as input 0, whole to the lock as output 0;
+        the reserve to the same lock as output 1; clean wallet coins for both and the fee
+        after it -- never a coin carrying another Doginal; change last."""
+        from . import doginals as D, funding, txbuild
+        found = None
+        coins = [{"txid": u["txid"], "vout": int(u["vout"]), "value": round(float(u["amount"]) * COIN)}
+                 for u in rpc.call("listunspent", 1)]
+        for coin in coins:
+            try:
+                on = self.doginals.held(coin["txid"]).get(coin["vout"])
+            except D.Unknown:
+                continue
+            if any(i.get("id") == leg.asset for i in on or []):
+                bad = D.exactly(on, leg.asset)
+                if bad:
+                    raise ValueError(bad)
+                found = coin
+                break
+        if found is None:
+            raise ValueError(f"this node's wallet does not hold Doginal {leg.asset}")
+        outputs = H.doginal_lock_outputs(found["value"], redeem)
+        owed = sum(v for v, _ in outputs[1:])
+        clean = sorted(self.doginals.spendable([c for c in coins if c is not found]), key=lambda c: c["value"])
+        change_script = txbuild.p2pkh_script(rpc.call("getrawchangeaddress"))
+        fees_in: list[dict] = []
+        for coin in clean:
+            fees_in.append(coin)
+            fee = funding.price(1 + len(fees_in), outputs, funding.fees.MIN_FEE_PER_KB, change=True)
+            if sum(c["value"] for c in fees_in) >= owed + fee:
+                break
+        else:
+            raise ValueError("this node's wallet has too little clean Dogecoin to lock a Doginal")
+        change = sum(c["value"] for c in fees_in) - owed - fee
+        if change >= funding.fees.DUST_LIMIT:
+            outputs = outputs + [(change, change_script)]
+        chosen = [found] + fees_in
+        raw = txbuild.build_raw_tx([(c["txid"], c["vout"]) for c in chosen], outputs)
+        signed = rpc.call("signrawtransaction", raw)
+        if not signed.get("complete"):
+            raise ValueError("this node's wallet could not sign its Doginal lock")
+        return rpc.call("sendrawtransaction", signed["hex"])
 
     def _lock_asset(self, leg: T.Leg, lock_address: str, chain: Any, rpc: Any) -> str:
         """The token or NFT into the lock, from this node's home address, with the reserve
@@ -397,6 +472,8 @@ class NodeTrader:
         to = self._address(leg.network)
         if leg.kind == "coin":
             return H.pay_out(coin, to)
+        if leg.kind == "doginal":
+            return H.doginal_out(coin, {"txid": coin["txid"], "vout": 1, "value": coin["reserve"]}, to)
         return H.move_out(coin, H.address_of(redeem, chain.params), T.move_data(leg), to)
 
     def _advance(self, trade: T.Trade, now: int) -> tuple[str, str]:
@@ -425,6 +502,8 @@ class NodeTrader:
                 lock_address = H.address_of(trade.my_redeem(), give_chain.params)
                 if trade.give.kind == "coin":
                     txid = grpc.call("sendtoaddress", lock_address, trade.give.amount / COIN)
+                elif trade.give.kind == "doginal":
+                    txid = self._lock_doginal(trade.give, trade.my_redeem(), grpc)
                 else:
                     txid = self._lock_asset(trade.give, lock_address, give_chain, grpc)
                 tx = grpc.call("getrawtransaction", txid, 1)
@@ -435,14 +514,14 @@ class NodeTrader:
                 courier.send(self.state, self.messaging, peer, M.build(
                     "locked", trade.id, network=trade.give.network, txid=txid, vout=vout))
             elif step == T.CLAIM:
-                coin = {**theirs, "value": facts.theirs.value}
+                coin = {**theirs, "value": facts.theirs.value, "reserve": facts.theirs.reserve}
                 inputs, outputs = self._way_out(coin, trade.get, trade.their_redeem(), get_chain)
                 txid = trpc.call("sendrawtransaction", H.claimed(
                     inputs, outputs, trade.their_redeem(), bytes.fromhex(trade.secret), self.key.sign))
                 courier.send(self.state, self.messaging, peer, M.build(
                     "claimed", trade.id, network=trade.get.network, txid=txid))
             elif step == T.REFUND:
-                coin = {**mine, "value": facts.mine.value}
+                coin = {**mine, "value": facts.mine.value, "reserve": facts.mine.reserve}
                 inputs, outputs = self._way_out(coin, trade.give, trade.my_redeem(), give_chain)
                 txid = grpc.call("sendrawtransaction", H.refunded(
                     inputs, outputs, trade.my_redeem(), self.key.sign))

@@ -205,6 +205,45 @@ def move_out(coin: dict, lock_address: str, data: bytes, to: str,
     return E.move_out(coin, lock_address, data, to, fee=fee)
 
 
+# --- a Doginal in a lock -----------------------------------------------------------------
+#
+# [Claude 2026-10-15] the operator: "use the atomic swap feature we have to trade doginals." A Doginal moves by koinu order,
+# first in, first out (ord-dogecoin), so the lock and both its spends keep the inscribed coin first and whole:
+#
+#   lock    in:  0 the inscribed coin (V)       1.. clean coins of the giver
+#           out: 0 V -> the lock                1 DOGINAL_RESERVE -> the same lock     2 change -> the giver
+#   claim   in:  0 lock:0 (V)                   1 lock:1 (the reserve)
+#   refund  out: 0 V -> the claimer (or, after the lock time, the refunder); the whole reserve is the fee
+#
+# The inscription is at offset 0 of output 0 at every step and its coin's value never changes. The fee of a spend comes
+# from the reserve, the second input, which the giver locked beside the Doginal -- so neither side needs Dogecoin of its
+# own to finish, and no other coin of anybody's (above all no other Doginal) is ever spent with it. Both inputs are
+# lock coins, signed by `claimed` / `refunded` as any lock spend.
+
+#: Coin locked beside a Doginal (output 1 of its lock) to pay for the one spend that moves it out: a lock spend's fee,
+#: and the soft-dust charge again, since the Doginal's own coin (0.001 DOGE, usually) is under the soft-dust line.
+DOGINAL_RESERVE = SPEND_FEE + DUST
+
+
+def doginal_lock_outputs(value: int, redeem: bytes) -> list[tuple[int, bytes]]:
+    """Outputs 0 and 1 of a Doginal's lock: the inscribed coin's whole `value`, then the reserve, both to the lock."""
+    script = p2sh_script(redeem)
+    return [(int(value), script), (DOGINAL_RESERVE, script)]
+
+
+def doginal_out(lock_coin: dict, reserve_coin: dict, to: str) -> tuple[list[dict], list[tuple[int, bytes]]]:
+    """A Doginal out of a lock, claim or refund: lock:0 first and whole to `to` as output 0, the reserve (lock:1) second
+    and spent whole as the fee. Nothing else goes in, so nothing else can land on the Doginal's koinu."""
+    if lock_coin["txid"] != reserve_coin["txid"] or int(lock_coin["vout"]) != 0 or int(reserve_coin["vout"]) != 1:
+        raise HtlcError("a Doginal's lock is output 0 of its transaction and its reserve output 1")
+    if int(reserve_coin["value"]) < SPEND_FEE:
+        raise HtlcError("the reserve beside that Doginal is too small to pay for its spend")
+    if int(lock_coin["value"]) <= 0:
+        raise HtlcError("a Doginal's coin has value")
+    return ([{"txid": lock_coin["txid"], "vout": 0}, {"txid": reserve_coin["txid"], "vout": 1}],
+            [(int(lock_coin["value"]), p2pkh_script(to))])
+
+
 def claimed(inputs: list[dict], outputs: list[tuple[int, bytes]], redeem: bytes,
             secret: bytes, sign) -> str:
     """The claim, signed: every input a lock coin, each spent with the secret.
@@ -238,4 +277,5 @@ def refunded(inputs: list[dict], outputs: list[tuple[int, bytes]], redeem: bytes
 
 __all__ = ["HtlcError", "make_secret", "hash_of", "redeem_script", "parse", "address_of",
            "p2sh_script", "claim_script_sig", "refund_script_sig", "secret_from_script_sig",
-           "pay_out", "move_out", "claimed", "refunded", "op_return_script"]
+           "pay_out", "move_out", "claimed", "refunded", "op_return_script", "DOGINAL_RESERVE",
+           "doginal_lock_outputs", "doginal_out"]

@@ -991,28 +991,46 @@ def build_doginal_send(db, params: Params, address: str, coin: dict, inscription
     coins (GUARD.spendable) added after it; change last, back to the sender. Refused unless Doge Soft says this coin holds
     exactly this inscription at offset 0 -- a coin with two inscriptions, or one sitting further in, would need an
     alignment output first, and sending it plainly could hand the wrong piece away or burn it to fees."""
+    return _doginal_first(db, address, coin, inscription, p2pkh_script(to), [], rate, exclude, extra,
+                          what=f"send Doginal {inscription} to {to}")
+
+
+def build_doginal_lock(db, params: Params, address: str, coin: dict, inscription: str, lock_script: bytes,
+                       reserve: int, rate: int, exclude=frozenset(), extra: list | None = None) -> Unsigned:
+    """A Doginal into a swap's lock ([Claude 2026-10-15]; the operator: "use the atomic swap feature we have to trade doginals").
+    The send above with the lock as recipient: the inscribed coin input 0 and whole to the lock as output 0 (the inscription
+    at offset 0 of the lock), then `reserve` clean coin to the SAME lock as output 1 -- what pays the claim or the refund
+    later without touching the Doginal's own koinu (htlc.doginal_out) -- then change. Every coin after input 0 is clean."""
+    return _doginal_first(db, address, coin, inscription, bytes(lock_script), [(int(reserve), bytes(lock_script))],
+                          rate, exclude, extra, what=f"lock Doginal {inscription} for a swap")
+
+
+def _doginal_first(db, address: str, coin: dict, inscription: str, first: bytes, more: list, rate: int,
+                   exclude, extra, what: str) -> Unsigned:
+    """The inscribed coin as input 0, whole to `first` as output 0; `more` outputs after it; clean coins pay for them and
+    the fee; change last."""
     if GUARD is None:
         raise FundingError("Doginals are not checked on this node: nothing that carries one is sent")
-    on = GUARD.held(coin["txid"]).get(int(coin["vout"])) or []
-    if [i.get("id") for i in on] != [inscription]:
-        raise FundingError("that coin does not hold exactly that Doginal (Doge Soft says: %s)"
-                           % (", ".join(str(i.get("id")) for i in on) or "nothing"))
-    if int(on[0].get("offset") or 0) != 0:
-        raise FundingError("that Doginal does not sit at the start of its coin: it needs an alignment output first")
+    from .doginals import exactly
+    bad = exactly(GUARD.held(coin["txid"]).get(int(coin["vout"])), inscription)
+    if bad:
+        raise FundingError(bad)
     if not any((u["txid"], u["vout"]) == (coin["txid"], int(coin["vout"])) for u in utxos.unspent(db, address)) \
             and not any((c["txid"], c["vout"]) == (coin["txid"], int(coin["vout"])) for c in (extra or [])):
         raise FundingError("that coin is not this address's to spend")
-    piece = (int(coin["value"]), p2pkh_script(to))
+    piece = (int(coin["value"]), first)
+    paid = [piece] + list(more)
+    owed = sum(v for v, _ in more)
     keep_out = set(exclude) | {(coin["txid"], int(coin["vout"]))}
-    fee = price(2, [piece], rate, change=True)
-    fees_in = choose(db, address, fee, exclude=keep_out, extra=extra)
-    fee = price(1 + len(fees_in), [piece], rate, change=True)
-    if sum(c["value"] for c in fees_in) < fee:
-        fees_in = choose(db, address, fee, exclude=keep_out, extra=extra)
-        fee = price(1 + len(fees_in), [piece], rate, change=True)
+    fee = price(2, paid, rate, change=True)
+    fees_in = choose(db, address, owed + fee, exclude=keep_out, extra=extra)
+    fee = price(1 + len(fees_in), paid, rate, change=True)
+    if sum(c["value"] for c in fees_in) < owed + fee:
+        fees_in = choose(db, address, owed + fee, exclude=keep_out, extra=extra)
+        fee = price(1 + len(fees_in), paid, rate, change=True)
     chosen = [dict(coin, vout=int(coin["vout"]))] + fees_in
-    change = sum(c["value"] for c in fees_in) - fee
-    outputs = [piece]
+    change = sum(c["value"] for c in fees_in) - owed - fee
+    outputs = list(paid)
     if change >= fees.DUST_LIMIT:
         outputs.append((change, p2pkh_script(address)))
     else:
@@ -1021,5 +1039,4 @@ def build_doginal_send(db, params: Params, address: str, coin: dict, inscription
     raw = build_raw_tx([(c["txid"], c["vout"]) for c in chosen], outputs)
     script = p2pkh_script(address)
     hashes = [sighash(chosen, outputs, n, script).hex() for n in range(len(chosen))]
-    return Unsigned(raw=raw, inputs=chosen, outputs=outputs, sighashes=hashes, fee=fee, change=change,
-                    what=f"send Doginal {inscription} to {to}")
+    return Unsigned(raw=raw, inputs=chosen, outputs=outputs, sighashes=hashes, fee=fee, change=change, what=what)

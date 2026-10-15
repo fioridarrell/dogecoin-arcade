@@ -69,9 +69,9 @@ LOCK, WAIT, CLAIM, REFUND, DONE, ABORT = "lock", "wait", "claim", "refund", "don
 class Leg:
     """One side of a trade: what moves, on which chain, from whom to whom."""
     network: str                 # "test", "main", "doge", "regtest"...
-    kind: str                    # "coin", "token", "nft"
-    asset: str                   # "" for coin, property id for a token, txid for an NFT
-    amount: int                  # sats for coin, units for a token, 1 for an NFT
+    kind: str                    # "coin", "token", "nft", "doginal" (Dogecoin only)
+    asset: str                   # "" for coin, property id for a token, txid for an NFT, inscription id for a Doginal
+    amount: int                  # sats for coin, units for a token, 1 for an NFT or a Doginal
     giver_key: str               # hex pubkey of whoever locks it (refunds to them)
     taker_key: str               # hex pubkey of whoever claims it
 
@@ -118,7 +118,11 @@ LOCK_RESERVE = H.SPEND_FEE + H.DUST
 
 
 def lock_value(leg: Leg) -> int:
-    """The coin a lock output for `leg` must hold: the amount for coin, the reserve else."""
+    """The coin a lock output for `leg` must hold: the amount for coin, the reserve else.
+    A Doginal's lock output holds its own coin, whatever that is worth; its reserve stands
+    beside it as output 1 and is checked with the Doginal itself (doginal_at)."""
+    if leg.kind == "doginal":
+        return 1
     return leg.amount if leg.kind == "coin" else LOCK_RESERVE
 
 
@@ -129,7 +133,7 @@ def move_data(leg: Leg) -> bytes:
         return E.token_payload(int(leg.asset), leg.amount)
     if leg.kind == "nft":
         return E.nft_payload(leg.asset)
-    raise ValueError("a coin leg moves no asset")
+    raise ValueError("a coin leg moves no asset, and a Doginal moves by koinu order, not by a payload")
 
 
 def asset_at(index: Any, leg: Leg, address: str, lock_height: int | None) -> bool | None:
@@ -151,6 +155,35 @@ def asset_at(index: Any, leg: Leg, address: str, lock_height: int | None) -> boo
     return bool(row) and row["owner"] == address
 
 
+def doginal_at(doginals: Any, leg: Leg, redeem: bytes, lock_tx: dict, parent_tx: dict) -> bool | None:
+    """Is `leg`'s Doginal at offset 0 of output 0 of `lock_tx` (verbose, as getrawtransaction
+    gives it), with its reserve beside it? None while Doge Soft cannot be asked.
+
+    [Claude 2026-10-15] Read from the coin the lock SPENT, not from the lock itself: Doge Soft
+    may not have indexed a minutes-old lock, but koinu order settles it -- when input 0 is a
+    coin holding exactly this inscription at its first koinu (`parent_tx`'s output, which
+    Doge Soft has long seen) and output 0 takes that coin's whole value, the inscription is
+    output 0's first koinu, whatever the other inputs carry (they fill output 1 and change)."""
+    from . import doginals as D
+    script = H.p2sh_script(redeem).hex()
+    outs = lock_tx.get("vout") or []
+    if len(outs) < 2 or outs[0]["scriptPubKey"]["hex"] != script or outs[1]["scriptPubKey"]["hex"] != script:
+        return False
+    if round(float(outs[1]["value"]) * 100_000_000) < H.DOGINAL_RESERVE:
+        return False
+    first = (lock_tx.get("vin") or [{}])[0]
+    if first.get("txid") != parent_tx.get("txid"):
+        return False
+    spent = parent_tx["vout"][int(first["vout"])]
+    if round(float(spent["value"]) * 100_000_000) != round(float(outs[0]["value"]) * 100_000_000):
+        return False
+    try:
+        on = doginals.held(parent_tx["txid"]).get(int(first["vout"]))
+    except D.Unknown:
+        return None
+    return not D.exactly(on, leg.asset)
+
+
 @dataclasses.dataclass
 class LockSeen:
     """A lock as a chain shows it: where, how much, how deep, and whether it was spent."""
@@ -162,6 +195,7 @@ class LockSeen:
     asset_ok: bool = True        # the ledger shows the token/NFT at the lock address (coin: True)
     spent_by_script_sig: str = ""   # hex input script of the spend, if it was spent
     spent_by_me: bool = False
+    reserve: int = 0             # a Doginal lock: the coin at output 1 that pays its spend
 
 
 @dataclasses.dataclass
@@ -186,6 +220,8 @@ def check_lock(trade: Trade, seen: LockSeen, theirs: bool) -> str:
     redeem = trade.their_redeem() if theirs else trade.my_redeem()
     if seen.script_hex != H.p2sh_script(redeem).hex():
         return "that lock's script is not the one agreed (hash, keys or lock time differ)"
+    if leg.kind == "doginal" and (seen.vout != 0 or not seen.asset_ok):
+        return "that lock does not hold the agreed Doginal at the start of output 0, with its reserve beside it"
     if seen.value < lock_value(leg):
         if leg.kind == "coin":
             return f"that lock holds {seen.value}, less than the {leg.amount} agreed"

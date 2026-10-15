@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .config import NETWORKS
+from .doginals import INSCRIPTION_ID
 
 CONTENT_TYPE = "application/vnd.arcade.orders+json"
 VERSION = 1
@@ -51,8 +52,8 @@ def _side(said: Any) -> dict:
     network, kind = said.get("network"), said.get("kind")
     if network not in NETWORKS:
         raise OrderError(f"no such network {network!r}")
-    if kind not in ("coin", "token", "nft"):
-        raise OrderError("an order moves a coin, a token or an nft")
+    if kind not in ("coin", "token", "nft", "doginal"):
+        raise OrderError("an order moves a coin, a token, an nft or a doginal")
     amount = said.get("amount")
     if not isinstance(amount, int) or amount <= 0:
         raise OrderError("an amount is a positive whole number")
@@ -60,6 +61,10 @@ def _side(said: Any) -> dict:
     if (kind == "coin" and asset) or (kind == "token" and not asset.isdigit()) or \
             (kind == "nft" and (not _HEX32.match(asset) or amount != 1)):
         raise OrderError("that asset does not fit that kind")
+    # [Claude 2026-10-15] A Doginal (the operator: "use the atomic swap feature we have to trade doginals"): `asset` names its
+    # inscription id, as ord-dogecoin writes it; one, on Dogecoin, locked by koinu order (htlc.doginal_out).
+    if kind == "doginal" and (network != "doge" or not INSCRIPTION_ID.match(asset) or amount != 1):
+        raise OrderError("a doginal is on Dogecoin, named by its inscription id, and moves exactly one")
     return {"network": network, "kind": kind, "asset": asset, "amount": amount}
 
 

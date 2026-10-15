@@ -12,6 +12,7 @@ one question per transaction, ever. Sending a Doginal ON PURPOSE spends its coin
 
 import json
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -102,3 +103,20 @@ class Doginals:
             if not on:
                 out.append(coin)
         return out
+
+
+#: An inscription id as ord-dogecoin and Doge Soft write it: the reveal transaction's id, "i", its index.
+INSCRIPTION_ID = re.compile(r"^[0-9a-f]{64}i[0-9]{1,6}$")
+
+
+def exactly(on: list[dict] | None, inscription: str) -> str:
+    """"" when what Doge Soft says sits on a coin (`held(txid)[vout]`) is exactly `inscription`, at the coin's first koinu;
+    else why not. A coin with two inscriptions, or one sitting further in, would need an alignment output first, and moving it
+    plainly could hand the wrong piece away or burn it to fees ([Claude 2026-10-15] shared by the plain send and the swap lock)."""
+    on = on or []
+    if [i.get("id") for i in on] != [inscription]:
+        return "that coin does not hold exactly that Doginal (Doge Soft says: %s)" % (
+            ", ".join(str(i.get("id")) for i in on) or "nothing")
+    if int(on[0].get("offset") or 0) != 0:
+        return "that Doginal does not sit at the start of its coin: it needs an alignment output first"
+    return ""
