@@ -24169,7 +24169,7 @@ def create_app(state: AppState) -> FastAPI:
                 b, q = trade_orders.base_first(o["give"], o["get"])
                 o["market"] = (f"/exchange/swap/{trade_orders.leg_key(b)}/{trade_orders.leg_key(q)}"
                                if b["network"] != q["network"] and b["kind"] != "nft" else "")
-                o["price_text"] = _price_text(b, q)
+                o["price_text"] = _swap_price_text(b, q)
             # Coin pairs with a market of their own: mainnet Pepecoin against Dogecoin
             # (2026-10-13: "Will a PEP/DOGE pair be available?"). Real coin for real
             # coin only; test coins against DOGE would be a market nobody should use.
@@ -24180,7 +24180,7 @@ def create_app(state: AppState) -> FastAPI:
             log.debug("trade orders unavailable", exc_info=True)
         return out
 
-    def _price_text(base: dict, quote: dict) -> str:
+    def _swap_price_text(base: dict, quote: dict) -> str:
         """What one whole unit of `base` costs in `quote`, in words: "0.01 PEP per PEP TEST"
         (2026-10-15: a swap shows its price per asset, priced in the other asset)."""
         try:
