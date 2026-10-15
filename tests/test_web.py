@@ -189,7 +189,8 @@ def test_the_exchange_reads_the_chain_rather_than_a_list(client):
     every tab still draws (D-037)."""
     app, _ = client
     for tab, empty in (("mintpads", "No mintpads are on"),
-                       ("tokens", "No market has an order or a trade yet"),
+                       # Every two chains' coin pair is always a market (2026-10-15).
+                       ("tokens", "/exchange/swap/regtest-coin/main-coin"),
                        # The marketplace is the list of collections, and an
                        # empty chain has none -- nor a shop selling a single
                        # piece under it.
@@ -210,7 +211,7 @@ def test_the_exchange_opens_on_tokens(client):
         body = app.get(where).text
         assert 'href="/exchange?tab=tokens" aria-current="page"' in body, where
         assert body.count('aria-current="page"') == 1, where
-        assert "No market has an order or a trade yet" in body, where
+        assert "/exchange/swap/regtest-coin/main-coin" in body, where
 
 
 # --- address book -------------------------------------------------------------

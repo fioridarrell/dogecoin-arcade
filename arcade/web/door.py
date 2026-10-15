@@ -147,6 +147,8 @@ PUBLIC_TREES = (
     "/exchange/pair/",
     "/exchange/pairs/",       # a token/token pair's page (2026-10-06)
     "/exchange/x/",           # a cross-chain market: a testnet asset for mainnet PEPE (2026-10-06)
+    "/exchange/swap/",        # every cross-chain market, through lock scripts (2026-10-15)
+    "/exchange/coins/",       # a coin pair: redirects to its swap market
 )
 
 #: Whole paths with something variable in the middle of them, where a tree

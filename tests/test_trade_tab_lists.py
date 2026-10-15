@@ -68,10 +68,11 @@ def test_a_tab_lists_a_swap_and_another_node_takes_it(world, monkeypatch):
         assert found["lister"] == made["regtest"], "listed by the account that inscribed it"
         assert not [o for o in a.trade_orders.visible(lambda n: False) if o["id"] == mine["id"]]
 
-        # The account's Exchange shows its listed swap, with Withdraw, and the List form.
+        # The account's Exchange shows its listed swap, with Withdraw, and the one way to list
+        # another (Start a market, 2026-10-15).
         tab.goto(f"{base}/exchange?tab=tokens")
         tab.wait_for_selector("#tab-orders:not([hidden])", timeout=15000)
-        assert "for 2 DOGE" in tab.inner_text("#tab-orders-list") and tab.is_visible("#tab-list-form")
+        assert "for 2 DOGE" in tab.inner_text("#tab-orders-list") and tab.is_visible("#start-market")
         if os.environ.get("ARCADE_SHOT"):
             # A still picture of the card (the live page never settles for a screenshot).
             pathlib.Path(os.environ["ARCADE_SHOT"]).write_text(tab.evaluate("""() => {
@@ -266,26 +267,31 @@ def test_the_list_form_offers_a_token_the_account_holds(world, monkeypatch):
         _gold_everywhere(a, b, made, 100 * COIN)
         from test_escrow import _piece
         _piece(a, "c9" * 32, made)
+        # One way for every pair (2026-10-15): Start a market offers what the account holds,
+        # and the swap is listed on the market it opens.
         tab.goto(f"{base}/exchange?tab=tokens")
-        tab.wait_for_selector("#tab-list-form")
-        nft = tab.locator(f'#tab-list-form select[name=give_network] option[value="nft:regtest:{"c9" * 32}"]')
+        tab.wait_for_selector("#start-market")
+        nft = tab.locator(f'#pair-base option[value="regtest-nft-{"c9" * 32}"]')
         assert nft.count() == 1 and nft.inner_text().startswith("NFT #"), "the account's NFT can be listed"
-        option = tab.locator('#tab-list-form select[name=give_network] option[value^="token:regtest:150:"]')
+        option = tab.locator('#pair-base option[value="regtest-token-150"]')
         assert option.count() == 1 and "Gold" in option.inner_text()
+        tab.select_option("#pair-base", "regtest-token-150")
+        tab.select_option("#pair-quote", "doge-coin")
+        tab.evaluate("() => document.querySelector('#start-market form').requestSubmit()")
+        tab.wait_for_url("**/exchange/swap/regtest-token-150/doge-coin", timeout=15000)
         tab.evaluate("() => { globalThis.arcadeAsk = async () => true; }")
-        tab.select_option("#tab-list-form select[name=give_network]", option.get_attribute("value"))
-        tab.fill("#tab-list-form input[name=give_amount]", "40")
-        tab.select_option("#tab-list-form select[name=get_network]", "doge")
-        tab.fill("#tab-list-form input[name=get_amount]", "2")
+        sell = 'form[data-pair-side="sell"]'
+        tab.fill(f"{sell} input[name=amount]", "40")
+        tab.fill(f"{sell} input[name=price]", "0.05")
         said = []
         tab.on("dialog", lambda d: (said.append(d.message), d.dismiss()))
-        tab.evaluate("() => document.getElementById('tab-list-form').requestSubmit()")
+        tab.evaluate(f"() => document.querySelector('{sell}').requestSubmit()")
         for _ in range(40):
             if said or "Gold" in tab.inner_text("#tab-orders-list"):
                 break
             tab.wait_for_timeout(500)
         assert not said, said
-        assert "40 Gold (#150) for 2 DOGE" in tab.inner_text("#tab-orders-list")
+        assert "40 Gold for 2 DOGE" in tab.inner_text("#tab-orders-list")
         if os.environ.get("ARCADE_SHOT"):
             pathlib.Path(os.environ["ARCADE_SHOT"]).write_text(tab.evaluate("""() => {
                 let css = "";
