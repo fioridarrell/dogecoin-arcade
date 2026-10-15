@@ -226,3 +226,99 @@ def test_two_nodes_trade_an_nft_for_doge(market, monkeypatch):
     assert b.book.get(trade.id).state == "done", log[-6:]
     _ledgers(a)
     assert a.state.token_index(a.state.messaging).inscription(sword)["owner"] == a._address("regtest")
+
+
+def _doginals_on_doge(dg, tmp_path, traders, postage):
+    """Two small coins in the Dogecoin wallet, each carrying a Doginal by the fake Doge Soft's word: (txid, vout of the
+    one traded, vout of a decoy -- ANOTHER Doginal, the smallest coin there, which must never pay a fee)."""
+    from arcade import doginals
+    home, decoy_home = dg.call("getnewaddress"), dg.call("getnewaddress")
+    # Under the wallet's own send floor (0.01 DOGE), over relay's hard dust line (0.001): built raw, as an inscriber does.
+    src = max(dg.call("listunspent", 1), key=lambda u: u["amount"])
+    rest = round(src["amount"] * COIN) - 2 * postage - COIN // 50
+    raw = dg.call("createrawtransaction", [{"txid": src["txid"], "vout": src["vout"]}],
+                  {home: postage / COIN, decoy_home: postage / COIN, dg.call("getrawchangeaddress"): rest / COIN})
+    txid = dg.call("sendrawtransaction", dg.call("signrawtransaction", raw)["hex"])
+    outs = dg.call("getrawtransaction", txid, 1)["vout"]
+    vout = next(o["n"] for o in outs if home in o["scriptPubKey"].get("addresses", []))
+    decoy = next(o["n"] for o in outs if decoy_home in o["scriptPubKey"].get("addresses", []))
+
+    def fake(t):
+        found = [{"vout": vout, "inscription_id": f"{txid}i0", "sat_offset": 0},
+                 {"vout": decoy, "inscription_id": f"{txid}i1", "sat_offset": 0}] if t == txid else []
+        return {"txid": t, "inscriptions": found}
+    for n, t in enumerate(traders):
+        t._doginals = doginals.Doginals(tmp_path / f"dg-{n}.sqlite", fetch=fake)
+    _mine(dg)
+    return txid, vout, decoy
+
+
+def test_two_nodes_trade_a_doginal_for_pep(market, tmp_path):
+    """[Claude 2026-10-15] the operator: "use the atomic swap feature we have to trade doginals." B gives a Doginal on
+    Dogecoin regtest for A's 3 PEP, through the same locks and steps as any leg; Doge Soft is faked (never the real one).
+    The Doginal goes into B's lock first and whole (output 0, its reserve output 1) and comes out to A first and whole,
+    the reserve paying the claim."""
+    from arcade import htlc as H
+    from arcade.node_trader import _spender
+    a, b, pep, dg = market
+    postage = 100_000                                              # 0.001 DOGE, as Doginals usually sit
+    txid, vout, decoy = _doginals_on_doge(dg, tmp_path, (a, b), postage)
+    ins = f"{txid}i0"
+    b.stand("order-doginal", {"network": "doge", "kind": "doginal", "asset": ins, "amount": 1},
+            {"network": "regtest", "kind": "coin", "amount": 3 * COIN})
+    give = a.leg("regtest", 3 * COIN, b.key.pubkey)
+    get = T.Leg("doge", "doginal", ins, 1, b.key.pubkey.hex(), a.key.pubkey.hex())
+    trade = a.propose(b.state.identity.public_bytes, "order-doginal", give, get)
+    log = []
+    for _ in range(40):
+        for t in (a, b):
+            _scan(t)
+            log.extend((("a" if t is a else "b"),) + r for r in t.tick())
+        _mine(pep, dg)
+        if a.book.get(trade.id).state == "done" and (b.book.get(trade.id) or trade).state == "done":
+            break
+    assert a.book.get(trade.id).state == "done", log[-6:]
+    assert b.book.get(trade.id).state == "done", log[-6:]
+    with b._db() as conn:
+        lock_txid = conn.execute("SELECT my_lock FROM link WHERE id=?", (trade.id,)).fetchone()[0].split(":")[0]
+    lock = dg.call("getrawtransaction", lock_txid, 1)
+    assert (lock["vin"][0]["txid"], lock["vin"][0]["vout"]) == (txid, vout), "the Doginal's coin is the lock's input 0"
+    assert round(lock["vout"][0]["value"] * COIN) == postage and round(lock["vout"][1]["value"] * COIN) == H.DOGINAL_RESERVE
+    assert (txid, decoy) not in [(v["txid"], v["vout"]) for v in lock["vin"]], "no other Doginal paid the lock's fee"
+    claim = _spender(dg, {"txid": lock_txid, "vout": 0}, {})
+    assert [(v["txid"], v["vout"]) for v in claim["vin"]] == [(lock_txid, 0), (lock_txid, 1)]
+    assert len(claim["vout"]) == 1 and round(claim["vout"][0]["value"] * COIN) == postage, \
+        "the Doginal's coin came out whole, the inscription at offset 0 of output 0"
+    assert claim["vout"][0]["scriptPubKey"]["addresses"] == [a._address("doge")]
+
+
+def test_a_locked_doginal_refunds_first_and_whole_after_the_lock_time(market, tmp_path):
+    """The refund branch on a real Dogecoin node: the Doginal's lock spent by its refunder, lock:0 and lock:1 in, the
+    Doginal's coin whole out as output 0, the reserve the fee -- refused before the lock time, accepted after it."""
+    from arcade import htlc as H
+    from arcade.rpc import RpcError
+    a, b, pep, dg = market
+    postage = 100_000
+    _, h = H.make_secret()
+    back = dg.call("getnewaddress")
+    for when, locktime in (("before", int(time.time()) + 7200), ("after", int(time.time()) - 7200)):
+        (tmp_path / when).mkdir()
+        txid, vout, decoy = _doginals_on_doge(dg, tmp_path / when, (b,), postage)
+        leg = T.Leg("doge", "doginal", f"{txid}i0", 1, b.key.pubkey.hex(), a.key.pubkey.hex())
+        redeem = H.redeem_script(h, a.key.pubkey, b.key.pubkey, locktime)
+        lock_txid = b._lock_doginal(leg, redeem, dg)
+        lock = dg.call("getrawtransaction", lock_txid, 1)
+        assert (lock["vin"][0]["txid"], lock["vin"][0]["vout"]) == (txid, vout)
+        assert (txid, decoy) not in [(v["txid"], v["vout"]) for v in lock["vin"]]
+        _mine(dg)
+        coin = {"txid": lock_txid, "vout": 0, "value": postage}
+        reserve = {"txid": lock_txid, "vout": 1, "value": H.DOGINAL_RESERVE}
+        refund = H.refunded(*H.doginal_out(coin, reserve, back), redeem, b.key.sign)
+        if when == "before":
+            with pytest.raises(RpcError):
+                dg.call("sendrawtransaction", refund)
+            continue
+        spent = dg.call("getrawtransaction", dg.call("sendrawtransaction", refund), 1)
+        assert [(v["txid"], v["vout"]) for v in spent["vin"]] == [(lock_txid, 0), (lock_txid, 1)]
+        assert len(spent["vout"]) == 1 and round(spent["vout"][0]["value"] * COIN) == postage
+        assert spent["vout"][0]["scriptPubKey"]["addresses"] == [back]
