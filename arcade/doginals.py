@@ -1,0 +1,85 @@
+"""Doginals on the coins a Dogecoin wallet spends (2026-10-14: "identify which UTXOs are doginals to make sure they
+are not spent unless somebody is trying to send a doginal to someone else").
+
+A coin is kept OUT of an ordinary send when either
+  1. Doge Soft's explorer (docs.dogesoft.io/explorer/api, `GET /api/explorer/tx/<txid>`, its `inscriptions` with `vout`)
+     says an inscription sits on it, or
+  2. it is worth POSTAGE_MAX or less and Doge Soft has not said it is clean -- Doginals sit on small coins (usually 0.001
+     DOGE) and Doge Soft's index is still filling in, so a small coin nobody vouched for is treated as inscribed.
+The server asks Doge Soft only when a send needs coins, and keeps every answer (an unspent coin's answer never changes):
+one question per transaction, ever. Sending a Doginal ON PURPOSE spends its coin through doginal_send, not this filter.
+"""
+
+import json
+import os
+import sqlite3
+import threading
+import time
+import urllib.request
+from pathlib import Path
+
+DOGESOFT = os.environ.get("ARCADE_DOGESOFT", "https://explorer.dogesoft.io")
+POSTAGE_MAX = 1_000_000          # koinu (0.01 DOGE): at or under this, a coin may be carrying a Doginal
+ASK_TIMEOUT = 90                 # Doge Soft can take most of a minute to answer one transaction
+
+
+class Unknown(Exception):
+    """Doge Soft could not be asked (down, slow, refused)."""
+
+
+class Doginals:
+    """What Doge Soft says sits on each output of a transaction, remembered for good."""
+
+    def __init__(self, path: Path, fetch=None):
+        self.path = Path(path)
+        self.fetch = fetch or self._fetch
+        self._lock = threading.Lock()
+        with self._db() as db:
+            db.execute("CREATE TABLE IF NOT EXISTS tx (txid TEXT PRIMARY KEY, held TEXT NOT NULL, at REAL NOT NULL)")
+
+    def _db(self):
+        db = sqlite3.connect(self.path, timeout=30)
+        return db
+
+    @staticmethod
+    def _fetch(txid: str) -> dict:
+        req = urllib.request.Request(f"{DOGESOFT}/api/explorer/tx/{txid}", headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=ASK_TIMEOUT) as r:
+            return json.load(r)
+
+    def held(self, txid: str) -> dict[int, list[dict]]:
+        """{vout: [{"id", "offset"}]} for one transaction; {} when nothing is inscribed on any of its outputs."""
+        with self._lock, self._db() as db:
+            row = db.execute("SELECT held FROM tx WHERE txid=?", (txid,)).fetchone()
+        if row:
+            return {int(k): v for k, v in json.loads(row[0]).items()}
+        try:
+            said = self.fetch(txid) or {}
+        except Exception as exc:                            # noqa: BLE001
+            raise Unknown(f"Doge Soft did not answer for {txid}: {exc}") from exc
+        if said.get("txid") not in (None, txid):
+            raise Unknown(f"Doge Soft answered about another transaction ({said.get('txid')})")
+        held: dict[int, list[dict]] = {}
+        for ins in said.get("inscriptions") or []:
+            try:
+                vout = int(ins["vout"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            held.setdefault(vout, []).append({"id": ins.get("inscription_id"), "offset": ins.get("sat_offset")})
+        with self._lock, self._db() as db:
+            db.execute("INSERT OR REPLACE INTO tx VALUES (?,?,?)", (txid, json.dumps(held), time.time()))
+        return held
+
+    def spendable(self, coins: list[dict]) -> list[dict]:
+        """The coins an ordinary send may use: none Doge Soft says is inscribed, and no small one it has not vouched for."""
+        out = []
+        for coin in coins:
+            try:
+                on = self.held(coin["txid"]).get(int(coin["vout"]))
+            except Unknown:
+                if int(coin["value"]) > POSTAGE_MAX:
+                    out.append(coin)                        # a big coin while Doge Soft is away: not a Doginal's postage
+                continue
+            if not on:
+                out.append(coin)
+        return out

@@ -692,6 +692,10 @@ def _above_dust(sats: int, what: str) -> None:
 
 def create_app(state: AppState) -> FastAPI:
     TEMPLATES._screen_of = state.screen          # the feed card's screen_text()
+    # [Claude 2026-10-14] Doginals stay put: a Dogecoin wallet's ordinary sends never spend a coin carrying one (arcade/doginals.py)
+    if getattr(state, "doge", None) is not None and getattr(state, "home", None) is not None:
+        from .. import doginals as _doginals
+        fundinglib.GUARD = _doginals.Doginals(Path(state.home) / "doginals.sqlite")
     @contextlib.asynccontextmanager
     async def _lifespan(_app: FastAPI):
         """Hold the shutdown while a send is in flight.

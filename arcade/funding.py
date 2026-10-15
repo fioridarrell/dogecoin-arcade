@@ -131,6 +131,12 @@ class Unsigned:
         }
 
 
+#: Set by the app when this node has Dogecoin (arcade/doginals.Doginals): choose() never hands out a coin carrying a Doginal
+#: to an ordinary send. GUARD_APPLIES says which addresses it watches (Dogecoin's, version 30: "D...").
+GUARD = None
+GUARD_APPLIES = lambda address: str(address).startswith("D")   # noqa: E731
+
+
 def choose(db, address: str, target: int, exclude=frozenset(),
            extra: list | None = None) -> list[dict]:
     """Coins for `address` worth at least `target`.
@@ -151,6 +157,8 @@ def choose(db, address: str, target: int, exclude=frozenset(),
     listed = utxos.unspent(db, address)
     available = [u for u in listed
                  if (u["txid"], u["vout"]) not in exclude]
+    if GUARD is not None and GUARD_APPLIES(address):   # a Dogecoin wallet: coins carrying Doginals stay put (arcade/doginals.py)
+        available = GUARD.spendable(available)
     # An `extra` coin the index also lists is the same coin twice. Once a block
     # has read a change output it stands in both places at once -- the note this
     # node made of it, and the row the scanner wrote -- and until the note ages
