@@ -111,19 +111,27 @@
       const button = f.querySelector("button");
       const amount = Number(String(f.amount.value).trim()), price = Number(String(f.price.value).trim());
       if (!(amount > 0 && price > 0)) return alert("An amount and a price, please.");
-      // A testnet token or piece against a coin (asset_pair.html, 2026-10-15) says what it is
-      // on the form; a coin pair says nothing and both sides are coins.
-      const kind = f.dataset.baseKind || "coin", label = f.dataset.baseLabel || coinName(f.dataset.base);
-      const base = kind === "coin" ? {network: f.dataset.base, amount: Math.round(amount * 1e8)}
-        : {network: f.dataset.base, kind, asset: f.dataset.baseAsset,
-           amount: kind === "nft" ? 1 : f.dataset.baseDiv === "0" ? Math.round(amount) : Math.round(amount * 1e8),
-           label: kind === "nft" ? label : `${amount} ${label}`};
-      if (kind === "token" && f.dataset.baseDiv === "0" && !Number.isInteger(amount))
-        return alert(`${label} comes in whole units only.`);
-      const quote = {network: f.dataset.quote, amount: Math.round(amount * price * 1e8)};
+      // Any market's side (swap_pair.html, 2026-10-15): a coin, a token or a piece, said on the
+      // form; a form that says nothing is a coin.
+      const leg = (which) => {
+        const d = f.dataset, kind = d[which + "Kind"] || "coin", net = d[which];
+        const label = d[which + "Label"] || coinName(net), whole = d[which + "Div"] === "0";
+        return {kind, label, whole, net, asset: d[which + "Asset"] || ""};
+      };
+      const B = leg("base"), Q = leg("quote");
+      if (B.kind === "token" && B.whole && !Number.isInteger(amount))
+        return alert(`${B.label} comes in whole units only.`);
+      const units = (L, n) => L.kind === "nft" ? 1 : L.kind === "token" && L.whole ? Math.round(n) : Math.round(n * 1e8);
+      const side = (L, n) => L.kind === "coin" ? {network: L.net, amount: units(L, n)}
+        : {network: L.net, kind: L.kind, asset: L.asset, amount: units(L, n),
+           label: L.kind === "nft" ? L.label : `${n} ${L.label}`};
+      const base = side(B, amount), quote = side(Q, amount * price);
+      if (!(quote.amount > 0)) return alert(`That comes to less than one unit of ${Q.label}.`);
+      const label = B.label;
+      const kind = B.kind;
       const [give, get] = f.dataset.pairSide === "sell" ? [base, quote] : [quote, base];
       const ok = await arcadeAsk(f.dataset.pairSide === "sell" ? "List this sale?" : "List this bid?",
-        `${amt(give)} for ${amt(get)} (${price} ${coinName(f.dataset.quote)} ${kind === "nft" ? "for it" : "per " + label}). `
+        `${amt(give)} for ${amt(get)} (${price} ${Q.label} ${kind === "nft" ? "for it" : "per " + label}). `
         + "It is written on the chain (about 0.01 in fees) and other arcades see it while an arcade page "
         + "is open here; it settles through lock scripts on both chains. " + wallet.swapFees(give, get)
         + " Saying yes approves locking yours when somebody takes it.", "List it");

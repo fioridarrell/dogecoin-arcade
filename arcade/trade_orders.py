@@ -238,42 +238,87 @@ def coin_book(orders: list[dict], base: str, quote: str) -> dict:
             "spread": (asks[0]["price"] - bids[0]["price"]) if asks and bids else None}
 
 
-def asset_book(orders: list[dict], network: str, kind: str, asset: str, quote: str,
-               divisible: bool = True) -> dict:
-    """A testnet asset's market against a coin on another chain, out of the visible orders
-    (2026-10-15: cross-chain pairs like ASHVALE GOLD/PEP "should automatically be
-    switched over to our new non-custodial swap mechanism"): swaps that give the asset
-    (`kind` token or nft, `asset` its id, on `network`) for the `quote` coin, or the coin for it.
 
-    asks: they give the asset for the coin, cheapest first; bids: they give the coin for
-    the asset, dearest first. `price` is quote coins per WHOLE unit of the asset (one NFT,
-    one token -- a divisible token's raw units are hundred-millionths). Each order is taken
-    whole: a lock moves exactly its amount."""
-    asset = str(asset)
-    scale = COIN if (kind == "token" and divisible) else 1
+#: The order coins go in a coin pair's name: the lower rank is the base (PEP TEST/PEP,
+#: PEP TEST/DOGE, PEP/DOGE), so each pair of chains has one market, not two.
+RANK = {"regtest": 0, "test": 0, "main": 1, "doge": 2}
 
-    def mine(side: dict) -> bool:
-        return (side["kind"] == kind and side["network"] == network
-                and str(side.get("asset") or "") == asset and int(side["amount"]) > 0)
 
-    def coin(side: dict) -> bool:
-        return side["kind"] == "coin" and side["network"] == quote and int(side["amount"]) > 0
+def leg_key(side: dict) -> str:
+    """One side of a market as a path piece: "main-coin", "test-token-26", "test-nft-<txid>"."""
+    if side["kind"] == "coin":
+        return f"{side['network']}-coin"
+    return f"{side['network']}-{side['kind']}-{side.get('asset') or ''}"
 
+
+def parse_leg_key(key: str) -> dict | None:
+    """`leg_key` read back: {network, kind, asset}, or None if it is not one."""
+    parts = str(key or "").split("-", 2)
+    if len(parts) == 2 and parts[1] == "coin" and parts[0] in NETWORKS:
+        return {"network": parts[0], "kind": "coin", "asset": ""}
+    if (len(parts) == 3 and parts[0] in NETWORKS and parts[1] in ("token", "nft") and parts[2]
+            and re.fullmatch(r"[0-9]+" if parts[1] == "token" else r"[0-9a-fA-F]{64}(i[0-9]+)?", parts[2])):
+        return {"network": parts[0], "kind": parts[1], "asset": parts[2].lower()}
+    return None
+
+
+def base_first(a: dict, b: dict) -> tuple[dict, dict]:
+    """(base, quote) for a market between two sides: a token or piece is priced in what it
+    is traded for (a coin, or a token on another chain by rank); two coins by RANK."""
+    def order(s: dict) -> tuple:
+        return ({"nft": 0, "token": 1, "coin": 2}[s["kind"]], RANK.get(s["network"], 9),
+                int(s["asset"]) if s["kind"] == "token" else 0)
+    return (a, b) if order(a) <= order(b) else (b, a)
+
+
+def pair_book(orders: list[dict], base: dict, quote: dict) -> dict:
+    """Any market's book out of the visible orders (2026-10-15: "all pairs established
+    the same way"): swaps that give `base` for `quote` (asks) or `quote` for `base` (bids).
+    `base` and `quote` are {network, kind, asset, divisible}.
+
+    `price` is quote per WHOLE unit of base -- a coin's and a divisible token's raw units are
+    hundred-millionths, an NFT is one. asks cheapest first, bids dearest first. Each order is
+    taken whole: a lock moves exactly its amount, so there are no partial fills."""
+    def scale(s: dict) -> int:
+        return COIN if s["kind"] == "coin" or (s["kind"] == "token" and s.get("divisible", True)) else 1
+
+    def same(side: dict, want: dict) -> bool:
+        return (side["kind"] == want["kind"] and side["network"] == want["network"]
+                and (want["kind"] == "coin" or str(side.get("asset") or "").lower() == str(want["asset"]).lower())
+                and int(side["amount"]) > 0)
+
+    bs, qs = scale(base), scale(quote)
     asks, bids = [], []
     for o in orders:
-        if mine(o["give"]) and coin(o["get"]):
-            units, coins = int(o["give"]["amount"]), int(o["get"]["amount"])
-            asks.append({**o, "price": (coins / COIN) / (units / scale),
-                         "base_amount": units, "quote_amount": coins})
-        elif coin(o["give"]) and mine(o["get"]):
-            units, coins = int(o["get"]["amount"]), int(o["give"]["amount"])
-            bids.append({**o, "price": (coins / COIN) / (units / scale),
-                         "base_amount": units, "quote_amount": coins})
+        if same(o["give"], base) and same(o["get"], quote):
+            units, paid = int(o["give"]["amount"]), int(o["get"]["amount"])
+            asks.append({**o, "price": (paid / qs) / (units / bs), "base_amount": units, "quote_amount": paid})
+        elif same(o["give"], quote) and same(o["get"], base):
+            units, paid = int(o["get"]["amount"]), int(o["give"]["amount"])
+            bids.append({**o, "price": (paid / qs) / (units / bs), "base_amount": units, "quote_amount": paid})
     asks.sort(key=lambda o: o["price"])
     bids.sort(key=lambda o: -o["price"])
     return {"asks": asks, "bids": bids,
             "spread": (asks[0]["price"] - bids[0]["price"]) if asks and bids else None}
 
+
+def swap_markets(orders: list[dict]) -> dict[tuple[str, str], int]:
+    """Every cross-chain market with a swap standing, base first: {(base key, quote key): orders}."""
+    seen: dict[tuple[str, str], int] = {}
+    for o in orders:
+        if o["give"]["network"] == o["get"]["network"]:
+            continue
+        base, quote = base_first(o["give"], o["get"])
+        key = (leg_key(base), leg_key(quote))
+        seen[key] = seen.get(key, 0) + 1
+    return seen
+
+def asset_book(orders: list[dict], network: str, kind: str, asset: str, quote: str,
+               divisible: bool = True) -> dict:
+    """A testnet asset's market against a coin on another chain (2026-10-15): `pair_book`
+    with the asset (`kind` token or nft) as base and the `quote` coin as quote."""
+    return pair_book(orders, {"network": network, "kind": kind, "asset": str(asset), "divisible": divisible},
+                     {"network": quote, "kind": "coin", "asset": ""})
 
 def asset_markets(orders: list[dict], network: str, quote: str) -> dict[tuple[str, str], int]:
     """Which testnet assets have a swap standing against the `quote` coin: {(kind, asset): orders}."""

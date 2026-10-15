@@ -59,7 +59,7 @@ def test_the_custodial_swap_needs_the_switch_too(client, monkeypatch):
     # The mainnet pick is the lock-script market now (2026-10-15), switch or no switch;
     # the held book behind ?held=1 is what stays closed while node trades are off.
     went = app.get("/exchange/pairs?base=59&quote=main", follow_redirects=False)
-    assert went.headers["location"] == "/exchange/x/token/59"
+    assert went.headers["location"] == "/exchange/swap/regtest-token-59/main-coin"
     assert "not open on this node" in app.get("/exchange/x/token/59?held=1").text, "closed while off"
     app.post("/admin/api/settings", headers={**LOCAL, **WRITE}, json={"node_trades": True})
     assert "not open on this node" not in app.get("/exchange/x/token/59?held=1").text, \

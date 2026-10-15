@@ -50,11 +50,13 @@ def test_the_page_shows_the_book_and_takes_both_ways(client, monkeypatch):
                           _order("bid-0001", ("doge", 2 * COIN), ("regtest", 8 * COIN))])
     state.trade_orders.file_batch("nListerAddressXXXXXXXXXXXXXXXXXXXXX", "regtest", "aa" * 32, batch)
     monkeypatch.setattr(state, "mesh", _Mesh({NODE}), raising=False)
+    assert app.get("/exchange/coins/regtest/doge", follow_redirects=False).headers["location"] \
+        == "/exchange/swap/regtest-coin/doge-coin", "a coin pair is a swap market like every other"
     page = app.get("/exchange/coins/regtest/doge").text
     assert "Selling PEP TEST" in page and "Buying PEP TEST" in page
     assert "0.3" in page and "0.25" in page, "DOGE per PEP: 3/10 and 2/8"
     assert page.count('action="/exchange/trade-orders/take"') == 2, "the operator can take either side"
-    assert 'name="back" value="/exchange/coins/regtest/doge"' in page
+    assert 'name="back" value="/exchange/swap/regtest-coin/doge-coin"' in page
     assert app.get("/exchange/coins/regtest/regtest").status_code == 404
     assert app.get("/exchange/coins/nope/doge").status_code == 404
 
@@ -120,7 +122,7 @@ def test_a_person_buys_on_the_market_page_and_the_page_settles_it(world, monkeyp
                     for (const sheet of document.styleSheets) { try { for (const r of sheet.cssRules) css += r.cssText + "\\n"; } catch (e) {} }
                     return `<!doctype html><html><head><meta charset="utf-8"><style>${css}</style></head>`
                          + `<body style="padding:16px;max-width:1000px">${document.querySelector("main") ? document.querySelector("main").innerHTML : document.body.innerHTML}</body></html>`; }"""))
-            assert "0.3" in tab.inner_text("#coin-pair"), "3 DOGE for 10 PEP is 0.3 DOGE each"
+            assert "0.3" in tab.inner_text("#swap-pair"), "3 DOGE for 10 PEP is 0.3 DOGE each"
             said = []
             tab.on("dialog", lambda d: (said.append(d.message), d.dismiss()))
             tab.on("console", lambda m: said.append("console: " + m.text) if m.type == "error" else None)

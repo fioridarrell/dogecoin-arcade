@@ -28,7 +28,7 @@ def test_the_market_page_says_it_is_not_trustless_and_starts_closed(client, monk
     swaps = app.get("/exchange/x/token/59").text
     assert "Lock scripts" in swaps and "Not trustless" not in swaps and "MAIN</span>" in swaps
     assert app.get("/exchange/pairs?base=59&quote=main", follow_redirects=False).headers["location"] \
-        == "/exchange/x/token/59", "the mainnet choice needs no switch"
+        == "/exchange/swap/regtest-token-59/main-coin", "the mainnet choice needs no switch"
 
 
 def test_the_operator_opens_the_book_and_its_markets_join_the_list(client, monkeypatch):
@@ -46,16 +46,18 @@ def test_the_operator_opens_the_book_and_its_markets_join_the_list(client, monke
     status = app.get("/admin/api/state", headers=LOCAL).json()["xchain"]
     assert status["enabled"] and status["addresses"]["mainnet"] == "nmainExchange"
     assert "Not trustless" in status["trust"]
-    assert app.get("/exchange/pairs?base=59&quote=main", follow_redirects=False).headers["location"] == "/exchange/x/token/59"
-    assert app.get("/exchange/pairs?base=coin&quote=main", follow_redirects=False).headers["location"] == "/exchange/x/coin/coin"
+    assert app.get("/exchange/pairs?base=59&quote=main", follow_redirects=False).headers["location"] \
+        == "/exchange/swap/regtest-token-59/main-coin"
+    assert app.get("/exchange/pairs?base=coin&quote=main", follow_redirects=False).headers["location"] \
+        == "/exchange/swap/regtest-coin/main-coin"
     book = state.xchain.book
     o = book.place(owner="x", side="sell", kind="token", asset="59", amount=10 * COIN, pepe=5 * COIN,
                    pay_test="nT", pay_main="PM")
     book.deposited(o["id"], "dep1")
     book.count_deposit(o["id"])
     listing = app.get("/exchange?tab=tokens").text
-    assert "/exchange/x/token/59" in listing, "an open market is a row of the one table"
-    row = listing[listing.index("/exchange/x/token/59"):][:2500]
+    assert "/exchange/swap/regtest-token-59/main-coin" in listing, "an open market is a row of the one table"
+    row = listing[listing.index("/exchange/swap/regtest-token-59/main-coin"):][:2500]
     assert "MAIN</span>" in row and "PEP" in row
     market = app.get("/exchange/x/token/59?held=1").text
     assert "0.5" in market and "Not trustless" in market

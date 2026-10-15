@@ -88,10 +88,10 @@ def test_the_market_page_is_lock_scripts_and_lists_the_swaps(client, monkeypatch
     held = app.get("/exchange/x/token/59?held=1").text
     assert "Held by this node" in held, "the old book is still there for what stands on it"
     assert app.get("/exchange/x/coin/coin", follow_redirects=False).headers["location"] \
-        == f"/exchange/coins/{net}/{main}", "testnet coins are a coin pair"
+        == f"/exchange/swap/{net}-coin/{main}-coin", "testnet coins are a coin pair"
 
     listing = app.get("/exchange?tab=tokens").text
-    assert "/exchange/x/token/59" in listing, "a token with swaps standing is a row of the table"
+    assert f"/exchange/swap/{net}-token-59/{main}-coin" in listing, "a token with swaps standing is a row of the table"
 
 
 def test_the_operator_posts_a_bid_for_a_token_it_does_not_hold(client, monkeypatch):
@@ -114,3 +114,31 @@ def test_the_operator_posts_a_bid_for_a_token_it_does_not_hold(client, monkeypat
     assert stood, re.findall(r'class="flash[^"]*"[^>]*>(.*?)<', page) or re.findall(r'class="msg err"[^>]*>(.*?)<', page)
     assert stood == [({"network": main, "kind": "coin", "asset": "", "amount": 3 * COIN},
                       {"network": net, "kind": "token", "asset": "59", "amount": 2 * COIN})]
+
+
+def test_one_picker_opens_every_pair(client, monkeypatch):
+    """2026-10-15: "I want all pairs to be established the same way on the clients page
+    whether it is a pairing on one chain or cross chains. Every doge/pep and doge/test pep and
+    pep/test and tokens." One box: two chains open their swap market (base first, whichever
+    side was picked first), one chain opens that chain's own instant market."""
+    app, state = client
+    _gold(monkeypatch)
+    net, main = state.messaging.network, state.ledger.network
+    go = lambda b, q: app.get(f"/exchange/pairs?base={b}&quote={q}", follow_redirects=False).headers["location"]  # noqa: E731
+    assert go(f"{main}-coin", f"{net}-coin") == f"/exchange/swap/{net}-coin/{main}-coin", "PEP TEST/PEP, either way round"
+    assert go(f"{net}-coin", f"{main}-coin") == f"/exchange/swap/{net}-coin/{main}-coin"
+    assert go(f"{main}-coin", f"{net}-token-59") == f"/exchange/swap/{net}-token-59/{main}-coin", "the token is the base"
+    state.switch_token_chain(net)
+    assert go(f"{net}-token-59", f"{net}-coin") == "/exchange/pair/59", "one chain: its own instant market"
+    assert go(f"{net}-coin", f"{net}-coin").startswith("/exchange?tab=tokens"), "a pair is two things"
+    assert go("59", "coin") == "/exchange/pair/59", "the old values still work"
+    page = app.get("/exchange?tab=tokens").text
+    for key in (f"{net}-coin", f"{main}-coin"):
+        assert f'value="{key}"' in page, key
+    assert 'action="/exchange/pairs"' in page and 'name="csrf_token"' in page, "the operator's box is a form"
+    assert f"/exchange/swap/{net}-coin/{main}-coin" in page, "every two chains' coin pair is listed"
+    swap = app.get(f"/exchange/swap/{net}-coin/{main}-coin").text
+    assert "Lock scripts" in swap and "PEP TEST" in swap
+    assert app.get(f"/exchange/swap/{main}-coin/{main}-coin").status_code == 404
+    assert app.get(f"/exchange/swap/{net}-token-59/{net}-coin", follow_redirects=False).headers["location"] \
+        == "/exchange/pair/59", "a one-chain pair is its chain's own market"

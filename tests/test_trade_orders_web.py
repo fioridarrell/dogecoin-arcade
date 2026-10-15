@@ -43,7 +43,11 @@ def test_other_arcades_orders_show_while_their_node_is_online(client, monkeypatc
     monkeypatch.setattr(state, "mesh", _Mesh({NODE}), raising=False)
     page = app.get("/exchange?tab=tokens").text
     assert "Swaps between arcades" in page and 'action="/exchange/trade-orders/take"' in page
-    assert "Post swap" in page, "the operator may post one (node-facilitated trades on)"
+    # One way to list any pair (2026-10-15): the Start-a-market box offers every chain's coin,
+    # and the swap's market page has the operator's Post form.
+    assert 'value="regtest-coin"' in page and 'value="main-coin"' in page
+    assert 'action="/exchange/trade-orders/stand"' in app.get("/exchange/swap/regtest-coin/main-coin").text, \
+        "the operator may post one (node-facilitated trades on)"
     monkeypatch.setattr(state, "mesh", _Mesh(set()), raising=False)
     page = app.get("/exchange?tab=tokens").text
     assert 'name="order" value="order-0001"' not in page, "its arcade went offline: not shown"
@@ -68,7 +72,8 @@ def test_with_the_switch_off_the_node_neither_posts_nor_takes(client, monkeypatc
     monkeypatch.setattr(state, "mesh", _Mesh({NODE}), raising=False)
     page = app.get("/exchange?tab=tokens").text
     assert "Swaps between arcades" in page, "the orders still show"
-    assert "Post swap" not in page and 'action="/exchange/trade-orders/take"' not in page
+    assert 'action="/exchange/trade-orders/take"' not in page
+    assert 'action="/exchange/trade-orders/stand"' not in app.get("/exchange/swap/regtest-coin/main-coin").text
     app.post("/exchange/trade-orders/stand", data={
         "give_network": "regtest", "give_amount": "3", "get_network": "main", "get_amount": "2",
         "csrf_token": state.csrf_token}, follow_redirects=False)
@@ -144,7 +149,7 @@ def test_the_operator_posts_an_nft_from_its_home_address(client, monkeypatch):
     sword = "b7" * 32
     _piece(state, sword, home)
     page = app.get("/exchange?tab=tokens").text
-    assert f'value="nft:regtest:{sword}"' in page, "the node's NFT is offered in Post swap"
+    assert f'value="regtest-nft-{sword}"' in page, "the node's NFT is offered in Start a market"
     app.post("/exchange/trade-orders/stand", data=dict(
         give_network=f"nft:regtest:{sword}", give_amount="1", get_network="main", get_amount="20",
         csrf_token=state.csrf_token), follow_redirects=False)
