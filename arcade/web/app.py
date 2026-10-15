@@ -11627,6 +11627,36 @@ def create_app(state: AppState) -> FastAPI:
         return JSONResponse({"chain": one.network, "address": _account_address(account.pubkey, one),
                              "doge": bool(one.is_doge), "coins": coins})
 
+    @app.get("/account/doginal-tx/{txid}")
+    def account_doginal_tx(request: Request, txid: str):
+        """What Doge Soft says sits on one transaction's outputs, asked BY THIS NODE for the Wallet's Doginals check.
+
+        2026-10-15: the browser asked Doge Soft itself, and every answer was thrown away by the browser -- Doge Soft sends
+        no Access-Control-Allow-Origin for this arcade (asked; not done yet), so "Doginals can't be checked right now"
+        on every wallet. Only a transaction that holds one of this account's own Dogecoin coins, so this node is nobody's
+        free Doge Soft client; the answer is kept for good (doginals.sqlite), so each is asked once. Doge Soft's own shape."""
+        from .. import doginals as D
+        account = _signed_in_account(request)
+        txid = str(txid or "").lower()
+        if len(txid) != 64 or any(c not in "0123456789abcdef" for c in txid):
+            return JSONResponse({"detail": "that is not a transaction id"}, status_code=400)
+        guard = fundinglib.GUARD
+        if guard is None or getattr(state, "doge", None) is None:
+            return JSONResponse({"detail": "this node does not check Doginals"}, status_code=404)
+        try:
+            mine = {c["txid"] for c in _own_coins(account, state.doge)}
+        except Exception as exc:                          # noqa: BLE001 -- a node still catching up
+            return JSONResponse({"detail": f"this node cannot read your coins yet: {exc}"}, status_code=503)
+        if txid not in mine:
+            return JSONResponse({"detail": "only a transaction holding one of your own coins"}, status_code=403)
+        try:
+            held = guard.held(txid)
+        except D.Unknown as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=503)
+        return JSONResponse({"txid": txid, "inscriptions": [
+            {"vout": vout, "inscription_id": i.get("id"), "sat_offset": i.get("offset")}
+            for vout, on in sorted(held.items()) for i in on]})
+
     @app.post("/account/doginal/send")
     def account_doginal_send(request: Request, payload: Any = Body(None)):
         """Offer to send one Doginal to somebody. Nothing is broadcast.

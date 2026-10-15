@@ -1289,8 +1289,10 @@ function dgKept(txid) {
 async function dgAsk(txid) {
   const kept = dgKept(txid);
   if (kept) return kept;
-  const r = await fetch(`${DOGESOFT}/api/explorer/tx/${txid}`, {headers: {Accept: "application/json"}});
-  if (!r.ok) throw new Error(`Doge Soft answered ${r.status}`);
+  // Asked through this arcade's node (2026-10-15): Doge Soft sends no Access-Control-Allow-Origin for this site, so a
+  // browser throws its answer away. The node asks it (once per transaction, kept for good) for this account's own coins.
+  const r = await fetch(`/account/doginal-tx/${txid}`, {headers: {Accept: "application/json"}, cache: "no-store"});
+  if (!r.ok) throw new Error(`Doge Soft could not be asked (${r.status})`);
   const said = await r.json();
   if (said.txid && said.txid !== txid) throw new Error("Doge Soft answered about another transaction");
   const held = (said.inscriptions || []).filter((i) => i && i.inscription_id != null && i.vout != null)

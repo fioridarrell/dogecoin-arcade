@@ -148,6 +148,7 @@ PUBLIC_TREES = (
     "/exchange/pair/",
     "/exchange/pairs/",       # a token/token pair's page (2026-10-06)
     "/exchange/x/",           # a cross-chain market: a testnet asset for mainnet PEPE (2026-10-06)
+    "/account/doginal-tx/",   # the Wallet's Doginals check, asked by the node for the account's own coins (2026-10-15)
     "/exchange/swap/",        # every cross-chain market, through lock scripts (2026-10-15)
     "/exchange/coins/",       # a coin pair: redirects to its swap market
 )

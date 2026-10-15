@@ -65,7 +65,8 @@ def test_the_wallet_page_has_the_doginals_section_and_the_configured_base(client
     _doge_account(app, state, monkeypatch, tmp_path)
     page = app.get("/me/wallet").text
     assert 'id="doginals"' in page and f'data-dogesoft="{doginals.DOGESOFT}"' in page
-    assert "/api/explorer/tx/${txid}" in page and "localStorage.setItem(DG_TX + txid" in page
+    # Through this node (2026-10-15): Doge Soft sends no CORS header for this site, so the browser cannot ask it.
+    assert "/account/doginal-tx/${txid}" in page and "localStorage.setItem(DG_TX + txid" in page
     assert "Doginals can't be checked right now" in page
     assert '"/account/doginal/send"' in page and "/account/coins?chain=" in page
 
@@ -148,3 +149,24 @@ def test_the_public_door_lets_both_routes_through():
     """A route the door does not know 404s on the public site while every local test passes."""
     from arcade.web import door
     assert "/account/coins" in door.PUBLIC_PAGES and "/account/doginal/send" in door.PUBLIC_POST
+
+
+def test_the_node_asks_doge_soft_for_the_accounts_own_coins_only(client, monkeypatch, tmp_path):
+    """The Wallet's Doginals check goes through this node (Doge Soft sends no CORS header for this site): the same
+    answer shape as Doge Soft's, kept for good, and only for a transaction holding one of this account's own coins."""
+    app, state = client
+    _, calls = _doge_account(app, state, monkeypatch, tmp_path)
+    got = app.get(f"/account/doginal-tx/{T1}")
+    assert got.status_code == 200, got.text
+    assert got.json() == {"txid": T1, "inscriptions": [{"vout": 0, "inscription_id": INS, "sat_offset": 0}]}
+    assert app.get(f"/account/doginal-tx/{T3}").json()["inscriptions"] == []
+    app.get(f"/account/doginal-tx/{T1}")
+    assert calls.count(T1) == 1, "asked once, kept for good"
+    assert app.get(f"/account/doginal-tx/{'99' * 32}").status_code == 403, "not this account's: nobody's free client"
+    assert app.get("/account/doginal-tx/nope").status_code == 400
+
+
+def test_doge_soft_away_says_so_through_the_node(client, monkeypatch, tmp_path):
+    app, state = client
+    _doge_account(app, state, monkeypatch, tmp_path, answers={})
+    assert app.get(f"/account/doginal-tx/{T1}").status_code == 503

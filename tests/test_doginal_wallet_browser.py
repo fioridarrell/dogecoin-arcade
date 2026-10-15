@@ -95,7 +95,9 @@ def served(tmp_path_factory, dogesoft):
     real_base, real_guard = doginals.DOGESOFT, funding.GUARD
     doginals.DOGESOFT = dogesoft[0]
     app = create_app(state)
-    funding.GUARD = doginals.Doginals(state.home / "dg.sqlite", fetch=lambda txid: ANSWERS[txid])
+    # The node asks the fake Doge Soft the real way (2026-10-15: the Wallet's check goes through this node, since
+    # Doge Soft sends no CORS header for the arcade), so `asked` counts the node's questions.
+    funding.GUARD = doginals.Doginals(state.home / "dg.sqlite")
     port = _free_port()
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error",
                                            timeout_graceful_shutdown=1.0))
@@ -173,7 +175,7 @@ def test_the_wallet_finds_its_doginal_asks_once_and_sends_it_to_review(browser, 
     tx_asks = [p for p in asked if "/api/explorer/tx/" in p]
     assert sorted(tx_asks) == sorted([f"/api/explorer/tx/{T1}", f"/api/explorer/tx/{T3}"])
 
-    _open_doginals(browser, base)            # again: answered from this browser, Doge Soft not asked
+    _open_doginals(browser, base)            # again: answered from this browser (and the node), Doge Soft not asked
     _wait(browser, f'return document.querySelector("#doginals [data-doginal=\\"{INS}\\"]")')
     assert [p for p in asked if "/api/explorer/tx/" in p] == tx_asks
 
@@ -191,12 +193,14 @@ def test_an_unreachable_doge_soft_is_said_plainly(browser, served, signed_in):
     base, _ = served
     browser.execute_script("localStorage.clear()")
     dead = f"http://127.0.0.1:{_free_port()}"
-    real = doginals.DOGESOFT
+    real, real_guard = doginals.DOGESOFT, funding.GUARD
     doginals.DOGESOFT = dead
+    # A node that has kept no answers yet: it asks, and Doge Soft is not there.
+    funding.GUARD = doginals.Doginals(served[1].home / "dg-empty.sqlite")
     try:
         _open_doginals(browser, base)
         _wait(browser, 'return document.getElementById("doginals").textContent'
                        '.includes("Doginals can\'t be checked right now")')
         assert not browser.find_elements(By.CSS_SELECTOR, "#doginals [data-doginal]"), "nothing guessed"
     finally:
-        doginals.DOGESOFT = real
+        doginals.DOGESOFT, funding.GUARD = real, real_guard
