@@ -1340,6 +1340,17 @@ class AppState:
             self._listings = Listings(self.home / "listings.sqlite")
         return self._listings
 
+    _doginal_book: Any = None
+
+    @property
+    def doginal_book(self):
+        """Doginals listed for DOGE (arcade/doginal_market.py): a seller's one signature over its inscribed coin and
+        price, held until a buyer completes it or the coin moves. A file of its own, beside `listings`."""
+        if self._doginal_book is None:
+            from ..doginal_market import Book
+            self._doginal_book = Book(self.home / "doginal_listings.sqlite")
+        return self._doginal_book
+
     # --- identity, derived from the wallet ------------------------------------
     #
     # There is no passphrase and no key file. The messaging identity is derived

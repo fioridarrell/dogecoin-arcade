@@ -29,6 +29,16 @@ POSTAGE_MAX = 1_000_000          # koinu (0.01 DOGE): at or under this, a coin m
 ASK_TIMEOUT = 90                 # Doge Soft can take most of a minute to answer one transaction
 
 
+def content_url(inscription: str) -> str:
+    """Where a page shows a Doginal's content from: the ord-style server's /content/<id>, or Doge Soft's
+    (ARCADE_DOGINAL_CONTENT overrides, with {id} for the inscription id) [Claude 2026-10-15]."""
+    shape = os.environ.get("ARCADE_DOGINAL_CONTENT", "")
+    if shape:
+        return shape.replace("{id}", inscription)
+    base = ORD_URL.rstrip("/") if SOURCE == "ord" and ORD_URL else DOGESOFT.rstrip("/")
+    return f"{base}/content/{inscription}"
+
+
 class Unknown(Exception):
     """Doge Soft could not be asked (down, slow, refused)."""
 

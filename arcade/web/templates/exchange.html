@@ -14,6 +14,13 @@
   <a class="{{ 'on' if current == 'tokens' }}" href="/exchange?tab=tokens"{% if current == 'tokens' %} aria-current="page"{% endif %}>Tokens</a>
   <a class="{{ 'on' if current == 'market' }}" href="/exchange?tab=market"{% if current == 'market' %} aria-current="page"{% endif %}>NFTs</a>
   <a class="{{ 'on' if current == 'mintpads' }}" href="/exchange?tab=mintpads"{% if current == 'mintpads' %} aria-current="page"{% endif %}>Launchpad</a>
+  {# Doginals for DOGE on a tab of their own (2026-10-14), grayed out while Dogecoin syncs. #}
+  {%- set dg = (chain_menu()|selectattr('doge')|list or [none])[0] %}
+  {%- if dg and dg.ready %}
+  <a class="{{ 'on' if current == 'doginals' }}" href="/exchange?tab=doginals"{% if current == 'doginals' %} aria-current="page"{% endif %}>Doginals</a>
+  {%- elif dg %}
+  <span class="chain-off" aria-disabled="true" title="Doginals open when the Dogecoin node has synced ({{ dg.progress }}% so far)">Doginals</span>
+  {%- endif %}
   <a id="ex-offers-tab" class="{{ 'on' if current == 'offers' }}" href="/exchange?tab=offers"{% if current == 'offers' %} aria-current="page"{% endif %}>Offers
     {%- if waiting_offers %}<span class="nav-count" aria-label="{{ waiting_offers }} waiting">{{ waiting_offers if waiting_offers < 100 else '99+' }}</span>{% endif %}</a>
 </nav>
@@ -422,6 +429,8 @@ document.addEventListener('click', function (ev) {
   </div>
   {% endif %}
 
+{% elif tab == 'doginals' %}
+{% include "_doginals_tab.html" %}
 {% elif tab == 'mintpads' %}
   {# Every mintpad, NFT and token alike, drawn as the feed draws it and ranked
      like the old Launches list (2026-09-28). The buttons are the feed's
