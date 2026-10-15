@@ -190,22 +190,32 @@ TEMPLATES = pathlib.Path(__file__).resolve().parent.parent / "arcade" / "web" / 
 
 #: The flags a page raises while it is mid-way through something, named one by
 #: one because the list is the claim. `working` is the wallet's own, set around
-#: each signature; `trading` is a buy being relayed across a frame, which spends
-#: most of its time between calls; `inscribing` is one file going up as several
+#: each signature; `trading` is a buy being relayed across a frame (the page
+#: doors inscription_view.html includes), which spends most of its time between
+#: calls; `inscribing` is one file going up as several
 #: transactions. A `...Ready` flag is not a hold and is not listed: it only says
 #: a page's script is wired up, which is what the browser tests wait for.
 HOLDS = {
     "working": ("wallet_js.js", "messaging_js.js"),
-    "trading": ("inscription_view.html",),
+    "trading": ("_page_doors.js.html",),     # included by inscription_view.html
     "inscribing": ("_account_inscribe.html",),
 }
+
+#: Flags that are not holds, named too so a new one is a choice and not an
+#: accident. `reading` (the feed scrolled past its first page) and
+#: `selfRefreshing` (a page drawn from the browser's own keys) change HOW
+#: base.html takes a new block in -- it offers it, or leaves the drawing to
+#: the page -- rather than holding it off; `restored` is the restore page's
+#: "done", which the browser tests wait for like a `...Ready`.
+NOT_HOLDS = {"reading", "selfRefreshing", "restored"}
 
 
 def test_a_page_holding_a_job_is_protected_from_the_reload():
     """A page in the middle of a job has to survive the block that job causes.
 
-    base.html polls `/events` and reloads when the generation moves, unless the
-    page says it is busy, and a page says so by raising a flag on the body. That
+    base.html polls `/events` and redraws the page in place when the generation
+    moves (it used to reload), unless the page says it is busy, and a page says
+    so by raising a flag on the body that `frozen()` looks at. That
     works only if the guard knows the flag's name, and the name lives in two
     files, so it drifts -- and it cost a real inscription on the live instance
     on 2026-09-24. A big file's split confirmed, the generation moved, the tab
@@ -215,27 +225,30 @@ def test_a_page_holding_a_job_is_protected_from_the_reload():
 
     So this reads the pages and the guard and asks that they agree: every hold
     is one this test names, is raised where it says it is raised, and is refused
-    by `busy()`. Which is also the shape of the bug -- the panel simply stopped
+    by `frozen()`. Which is also the shape of the bug -- the panel simply stopped
     holding it, and nothing else anywhere noticed.
     """
     held = {}
     for page in sorted(TEMPLATES.glob("*.html")) + sorted(TEMPLATES.glob("*.js")):
         for name in re.findall(r"document\.body\.dataset\.(\w+)\s*=[^=]",
                                page.read_text()):
-            if not name.endswith("Ready"):
+            if not name.endswith("Ready") and name not in NOT_HOLDS:
                 held.setdefault(name, set()).add(page.name)
     assert set(held) == set(HOLDS), \
         f"the pages raise {sorted(held)} and this names {sorted(HOLDS)}; a new " \
         "hold is a new thing a block can interrupt, so it belongs here and in " \
-        "busy(), not only in the page that wants it"
-    guard = (TEMPLATES / "base.html").read_text()
+        "frozen(), not only in the page that wants it"
+    base = (TEMPLATES / "base.html").read_text()
+    # The page is no longer reloaded but patched in place (base.html's poll),
+    # and frozen() is what holds the patch off.
+    guard = re.search(r"function frozen\(\) \{.*?\n  \}", base, re.S).group(0)
     for name, where in HOLDS.items():
         assert held.get(name, set()) & set(where), \
             f"{name} is no longer raised by {where}, so {name} no longer means " \
-            "anything to busy()"
-        assert f"if (document.body.dataset.{name}) return true;" in guard, \
-            f"busy() in base.html never looks at {name}, so a block reloads " \
-            "over the top of it"
+            "anything to frozen()"
+        assert re.search(rf"\bd\.{name}\b", guard), \
+            f"frozen() in base.html never looks at {name}, so a block redraws " \
+            "the page over the top of it"
 
 
 def test_a_scan_that_raises_does_not_kill_the_watcher(monkeypatch):

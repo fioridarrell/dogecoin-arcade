@@ -386,6 +386,24 @@ OTHERS_MOST = 5
 CHAIN_COOKIE = "arcade_chain"
 _BROWSER_CHAIN: "contextvars.ContextVar[str | None]" = contextvars.ContextVar(
     "arcade_browser_chain", default=None)
+
+
+class _BrowserChain:
+    """ASGI middleware setting `_BROWSER_CHAIN` for one request: `pick(request)`
+    says which chain (or None). Out here, not in create_app: nothing in the
+    routes awaits, so a send cannot hold the event loop (test_web)."""
+
+    def __init__(self, app, pick):
+        self.app, self.pick = app, pick
+
+    async def __call__(self, scope, receive, send):
+        wanted = self.pick(Request(scope)) if scope["type"] == "http" else None
+        token = _BROWSER_CHAIN.set(wanted) if wanted else None
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            if token is not None:
+                _BROWSER_CHAIN.reset(token)
 #: The operator's fee on a mainnet creation, in thousandths of what it costs
 #: (`mainnet_create_fee_permille` in settings.json): 0.5%, the exchange's own cut.
 MAINNET_CREATE_FEE_PERMILLE = 5
@@ -4210,24 +4228,19 @@ def create_app(state: AppState) -> FastAPI:
         chain = state.token_chain
         return chain, state.token_index(chain)
 
-    async def _per_browser_chain(request: Request, call_next):
-        """Set the chain an account's browser picked, for this request only."""
+    def _per_browser_chain(request: Request) -> str | None:
+        """The chain an account's browser picked, set for this request only (_BrowserChain)."""
         wanted = request.cookies.get(CHAIN_COOKIE, "")
-        token = None
         if wanted and any(c.network == wanted for c in state.token_chains):
             try:
                 mine = _account_view(request)
             except Exception:
                 mine = False
             if mine:
-                token = _BROWSER_CHAIN.set(wanted)
-        try:
-            return await call_next(request)
-        finally:
-            if token is not None:
-                _BROWSER_CHAIN.reset(token)
+                return wanted
+        return None
 
-    app.middleware("http")(_per_browser_chain)
+    app.add_middleware(_BrowserChain, pick=_per_browser_chain)
 
     @app.get("/create/chain")
     def create_chain(request: Request, to: str = "", back: str = "/create"):
@@ -24297,6 +24310,10 @@ def _ledger_addresses(rpc, fresh: bool = False) -> list[str]:
     Either way the node is asked, so what is kept afterwards is the newer list.
     """
     creds = getattr(rpc, "_creds", None)
+    if creds is None:
+        # No address to tell one node from another by: kept under one key, a
+        # second node (a test chain's, then a real chain's) got the first's list.
+        return _ledger_addresses_uncached(rpc)
     key = (getattr(creds, "host", ""), getattr(creds, "port", 0))
     held = None if fresh else _LEDGER_ADDRESSES.get(key)
     if held and held[0] > time.time():

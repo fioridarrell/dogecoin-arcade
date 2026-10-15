@@ -387,7 +387,10 @@ class MeshNode:
                     pass
             log.debug("mesh dial %s failed: %s", addr, exc)
             return
+        fresh = not entry["ok"]
         entry.update(id=link.peer_id, ok=time.time(), fail=0, next=time.monotonic() + 30)
+        if fresh:
+            self._tell_addr(addr, link.peer_id)
         await self._run_link(link)
 
     def _meets(self, addr: tuple[str, int], entry: dict) -> bool:
@@ -441,7 +444,10 @@ class MeshNode:
                 sock.close()
             log.debug("mesh meet %s refused: %s", addr, exc)
             return
+        fresh = not entry["ok"]
         entry.update(ok=time.time(), fail=0, met_bad=0)
+        if fresh:
+            self._tell_addr(addr, link.peer_id)
         log.info("mesh: met %s over IPv6", entry["id"][:12])
         await self._run_link(link)
 
@@ -598,6 +604,8 @@ class MeshNode:
             drop = slowest
         log.info("mesh: dropping the slower link to %s (%.0f ms)", drop.peer_id[:12], drop.rtt * 1000)
         await drop.close()
+        if self.links.get(drop.peer_id) is drop:     # gone now, not when its reader next wakes
+            del self.links[drop.peer_id]
         return drop.peer_id
 
     async def _send_addrs(self, link: Link) -> None:
@@ -605,6 +613,19 @@ class MeshNode:
                 if e["ok"] and e["id"] and e["id"] != link.peer_id][:50]
         if good:
             await link.send({"t": "addrs", "a": good})
+
+    def _tell_addr(self, addr: tuple[str, int], node_id: str) -> None:
+        """An address just reached for the first time, passed on to the links already up:
+        _send_addrs runs only as a link starts, and a link that came up while this dial
+        was still under way would never hear of it."""
+        async def tell(link: Link) -> None:
+            try:
+                await link.send({"t": "addrs", "a": [{"h": addr[0], "p": addr[1], "id": node_id}]})
+            except (LinkError, ConnectionError, OSError):
+                pass
+        for link in list(self.links.values()):
+            if link.peer_id != node_id:
+                self._spawn(tell(link))
 
     # ---------------------------------------------------------------- rooms: local side
 
