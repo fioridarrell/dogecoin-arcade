@@ -2067,21 +2067,28 @@ function arcadeSignIn(why){
   return _arcadeSignInOpen;
 }
 
+// Callers that ask at once share the looking as well as the sheet: each lookup asks
+// the other tabs and waits up to ~2 s for none to answer, so two callers' waits
+// ended on separate timers, and a sheet closed between them was cleared before the
+// second caller came to it -- which then drew a sheet of its own.
 async function arcadeKeys(chain, why){
   var w = await import('/wallet.js');
-  var keys = await w.opened(chain || ARCADE_CHAIN);
-  if (keys) return keys;
-  if (!ARCADE_ME) {
+  if (!_arcadeUnlockOpen) {
+    _arcadeUnlockOpen = (async function(){
+      var keys = await w.opened(chain || ARCADE_CHAIN);
+      if (keys) return {keys: keys, chain: chain || ARCADE_CHAIN};
+      if (!ARCADE_ME) return {signIn: true};
+      return {opened: await arcadeUnlockSheet(why || 'This needs your key.')};
+    })().finally(function(){ _arcadeUnlockOpen = null; });
+  }
+  var got = await _arcadeUnlockOpen;
+  if (got.keys) return got.chain === (chain || ARCADE_CHAIN) ? got.keys : await w.opened(chain || ARCADE_CHAIN);
+  if (got.signIn) {
     arcadeSignIn(why);
     throw new Error('Sign in first: this action needs your wallet.');
   }
-  if (!_arcadeUnlockOpen) {
-    _arcadeUnlockOpen = Promise.resolve(arcadeUnlockSheet(why || 'This needs your key.'))
-      .finally(function(){ _arcadeUnlockOpen = null; });
-  }
-  var opened = await _arcadeUnlockOpen;
-  if (!opened) throw new Error('Unlock your wallet to do that.');
-  return chain ? await w.opened(chain) : opened;
+  if (!got.opened) throw new Error('Unlock your wallet to do that.');
+  return chain ? await w.opened(chain) : got.opened;
 }
 
 // Every field has a name a screen reader can say (a tester, 2026-09-26: 78
