@@ -1176,3 +1176,89 @@ export async function htlcScript(redeem) {
 export async function htlcAddress(redeem, scripthashVersion) {
   return base58check(scripthashVersion, await hash160(redeem));
 }
+
+/* --- Doginals for DOGE (2026-10-14: "I want doginals to be incorporated into the exchange on its own separate
+ * tab. So people can list doginals for doge.") ------------------------------------------------------------------------
+ *
+ * [Claude 2026-10-15] `arcade/doginal_market.py` is the authority for the layout. The seller signs its inscribed coin
+ * at input 2, SINGLE|ANYONECANPAY, over output 2 = its price to its own address; the buyer's transaction is
+ * [dummy A, dummy B, inscribed, funding...] -> [A+B to the buyer, the coin's value to the buyer, the price to the
+ * seller, change]. Both checks below work the digests out here from what is being promised, so the node cannot have a
+ * key sign something else. */
+
+//: The input the seller signs, and the output its signature stands over.
+export const DOGINAL_AT = 2;
+
+/** The digest a seller signs to list its Doginal, worked out from the coin, the price and this key's own address. */
+export async function verifyDoginalAsk(ask, keys) {
+  if (!ask || !ask.coin || Number(ask.at) !== DOGINAL_AT
+      || Number(ask.sighash_type) !== SINGLE_ANYONECANPAY) {
+    throw new Error("that is not a Doginal listing. Nothing was signed.");
+  }
+  const own = keys.address || await address(keys.pubkey, keys.version);
+  if (String(ask.seller) !== own) {
+    throw new Error("that listing would pay somebody else's address. Nothing was signed.");
+  }
+  const mine = p2pkh(await hash160(keys.pubkey));
+  const coin = {txid: String(ask.coin.txid).toLowerCase(), vout: Number(ask.coin.vout)};
+  const tx = {version: 1, locktime: 0, inputs: [coin, coin, coin],
+              outputs: [null, null, {value: BigInt(String(ask.price)), script: mine}]};
+  const digest = await sighashLeg(tx, DOGINAL_AT, mine);
+  if (hex(digest) !== String(ask.digest).toLowerCase()) {
+    throw new Error("that listing asks for a signature over different bytes than its coin and price. "
+      + "Nothing was signed.");
+  }
+  return digest;
+}
+
+/** The buyer's side: the layout checked from the transaction itself, and one SIGHASH_ALL digest per buyer input. */
+export async function verifyDoginalBuy(buy, keys) {
+  const tx = parseTx(buy.raw);
+  const named = buy.inputs || [];
+  if (named.length !== tx.inputs.length || tx.inputs.length < 4 || tx.outputs.length < 3
+      || tx.outputs.length > 4) {
+    throw new Error("that is not the shape of a Doginal purchase. Nothing was signed.");
+  }
+  for (let i = 0; i < tx.inputs.length; i++) {
+    if (tx.inputs[i].txid !== String(named[i].txid).toLowerCase() || tx.inputs[i].vout !== Number(named[i].vout)) {
+      throw new Error(`input ${i} of that transaction is not the coin it names. Nothing was signed.`);
+    }
+  }
+  const own = keys.address || await address(keys.pubkey, keys.version);
+  const mine = p2pkh(await hash160(keys.pubkey));
+  const value = (n) => BigInt(String(named[n].value));
+  const seller = unbase58(String(buy.seller)).slice(1, 21);
+  if (!SAME(tx.outputs[0].script, mine) || tx.outputs[0].value !== value(0) + value(1)) {
+    throw new Error("output 0 does not hand your two small coins back whole. Nothing was signed.");
+  }
+  if (!SAME(tx.outputs[1].script, mine) || tx.outputs[1].value !== value(DOGINAL_AT)) {
+    throw new Error("output 1 -- where the Doginal lands -- is not yours, or not the whole coin. Nothing was signed.");
+  }
+  if (!SAME(tx.outputs[2].script, p2pkh(seller)) || tx.outputs[2].value !== BigInt(String(buy.price))) {
+    throw new Error("output 2 does not pay the seller the listed price. Nothing was signed.");
+  }
+  if (tx.outputs.length === 4 && !SAME(tx.outputs[3].script, mine)) {
+    throw new Error("the change does not come back to you. Nothing was signed.");
+  }
+  const asked = (buy.sighashes || []).map((h) => String(h).toLowerCase());
+  const signs = [];
+  for (let n = 0; n < tx.inputs.length; n++) if (n !== DOGINAL_AT) signs.push(n);
+  if (asked.length !== signs.length) throw new Error("that purchase asks for the wrong number of signatures.");
+  const hashes = [];
+  for (const [k, n] of signs.entries()) {
+    if (String(named[n].address) !== own) {
+      throw new Error(`input ${n} is not a coin of yours. Nothing was signed.`);
+    }
+    const derived = hex(await sighashAll(tx, n, mine));
+    if (derived !== asked[k]) {
+      throw new Error(`what this browser worked out for input ${n} is not what the node asked for. Nothing was signed.`);
+    }
+    hashes.push(derived);
+  }
+  let taken = 0n, paid = 0n;
+  for (const c of named) taken += BigInt(String(c.value));
+  for (const out of tx.outputs) paid += out.value;
+  if (paid > taken) throw new Error("that transaction pays out more than it takes in. Nothing was signed.");
+  const coinsOf = (sats) => (Number(sats) / 100000000).toFixed(8);
+  return {tx, hashes, fee: Number(taken - paid), coinsOf};
+}

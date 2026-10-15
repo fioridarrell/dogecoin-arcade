@@ -59,6 +59,7 @@ from ..messaging import feed as feedlib
 from ..messaging import mempool as mempoollib
 from ..messaging import envelope as envelopelib
 from .. import inscriptions as inscriptionlib
+from .. import doginal_market as doginal_marketlib
 from . import guide as guidelib
 from .. import charts as chartlib
 from .. import fees
@@ -16705,6 +16706,252 @@ def create_app(state: AppState) -> FastAPI:
             if piece_lane:
                 state.end_send(piece_lane)
 
+    # --- Doginals for DOGE (2026-10-14: "I want doginals to be incorporated into the exchange on its own
+    # separate tab. So people can list doginals for doge.") -------------------------------------------------------------
+    #
+    # [Claude 2026-10-15] The account listing/buy pattern (server builds, the tab signs, the server assembles and
+    # broadcasts), for arcade/doginal_market.py's layout: the seller signs its inscribed coin at input 2 over the price at
+    # output 2; the buyer's transaction puts two dummies in front of it, so the Doginal lands at output 1 offset 0. A
+    # listing waits for a buyer with its seller gone, so it is a node-facilitated trade like every other listing
+    # (`node_trades`, 2026-10-13): off, the tab shows what is listed and nobody lists or buys.
+
+    def _doge_asked(said: dict):
+        """The Dogecoin chain a Doginal route is about: only Dogecoin, and only once its node has synced."""
+        chain = _chain_asked({"chain": str((said or {}).get("chain") or "doge")})
+        if not chain.is_doge:
+            raise ValueError("Doginals are on Dogecoin")
+        return chain
+
+    def _doginal_row(chain, row: dict) -> dict:
+        from .. import doginals as doginalslib
+        return {**doginal_marketlib.public(row), "content": doginalslib.content_url(row["inscription"]),
+                "price_text": f"{int(row['price']) / COIN:g} DOGE",
+                "seller_tag": _tags_for([row["seller"]]).get(row["seller"], "")}
+
+    def _doginals_live(chain) -> list[dict]:
+        """The listings whose coin is still unspent, as a page shows them; [] while Dogecoin cannot be asked."""
+        try:
+            with chain.rpc() as rpc:
+                return [_doginal_row(chain, r) for r in state.doginal_book.live(rpc, chain.network)]
+        except Exception:
+            log.debug("the Doginal listings could not be checked", exc_info=True)
+            return []
+
+    @app.get("/doginals/listings")
+    def doginals_listings():
+        """Every Doginal listed for DOGE on this node, while its coin is unspent."""
+        doge = state.doge
+        if doge is None or not state.chain_ready(doge):
+            return JSONResponse({"ready": False, "listings": []}, headers={"Cache-Control": "no-store"})
+        return JSONResponse({"ready": True, "node_trades": _node_trades(), "listings": _doginals_live(doge)},
+                            headers={"Cache-Control": "no-store"})
+
+    @app.get("/account/doginals")
+    def account_doginals(request: Request):
+        """This account's Doginals: the coins at its Dogecoin address that hold one, and whether each can be listed
+        (exactly one inscription, at offset 0). Only small coins are asked about -- Doginal postage
+        (doginals.POSTAGE_MAX) -- so a wallet of big coins costs Doge Soft nothing."""
+        from .. import doginals as doginalslib
+        account = _signed_in_account(request)
+        try:
+            chain = _doge_asked({})
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        address = _account_address(account.pubkey, chain)
+        if not address:
+            return JSONResponse({"detail": "this account has no Dogecoin address yet"}, status_code=400)
+        guard = fundinglib.GUARD
+        if guard is None:
+            return JSONResponse({"detail": "Doginals are not checked on this node"}, status_code=400)
+        listed = {(r["txid"], int(r["vout"])): r["id"] for r in state.doginal_book.open_listings(chain.network)
+                  if r["seller"] == address}
+        out = []
+        with contextlib.closing(state.token_index(chain).open()) as db:
+            coins = [c for c in utxoslib.unspent(db, address) if int(c["value"]) <= doginalslib.POSTAGE_MAX]
+        for c in coins:
+            try:
+                on = guard.held(c["txid"]).get(int(c["vout"])) or []
+            except doginalslib.Unknown:
+                out.append({"txid": c["txid"], "vout": int(c["vout"]), "value": int(c["value"]),
+                            "unknown": True, "listable": False})
+                continue
+            if not on:
+                continue
+            ok = len(on) == 1 and int(on[0].get("offset") or 0) == 0
+            out.append({"txid": c["txid"], "vout": int(c["vout"]), "value": int(c["value"]),
+                        "inscriptions": [i.get("id") for i in on], "listable": ok,
+                        "content": doginalslib.content_url(str(on[0].get("id"))),
+                        "listing": listed.get((c["txid"], int(c["vout"])), "")})
+        return JSONResponse({"chain": chain.network, "address": address, "doginals": out},
+                            headers={"Cache-Control": "no-store"})
+
+    def _doginal_ask(account, said: dict):
+        chain = _doge_asked(said)
+        address = _account_address(account.pubkey, chain)
+        if not address:
+            raise ValueError("this account has no Dogecoin address yet")
+        price = parse_amount(str(said.get("amount", "")), True)
+        _above_dust(price, "price")
+        coin = {"txid": str(said.get("txid") or "").lower(), "vout": int(said.get("vout", -1))}
+        with chain.rpc() as rpc:
+            held = rpc.call("gettxout", coin["txid"], coin["vout"], True)
+        if not held or str((held.get("scriptPubKey") or {}).get("hex") or "") != txbuild.p2pkh_script(address).hex():
+            raise ValueError("that coin is not this account's to list (spent, or somebody else's)")
+        coin["value"] = int(round(float(held.get("value", 0)) * COIN))
+        return chain, address, doginal_marketlib.build_ask(address, coin, str(said.get("inscription") or ""), price)
+
+    @app.post("/account/doginals/list")
+    def account_doginals_list(request: Request, payload: Any = Body(None)):
+        """The digest a seller signs to list one Doginal for a DOGE price. Nothing is spent or filed here."""
+        account = _signed_in_account(request)
+        if not _node_trades():
+            return _node_trades_refused()
+        try:
+            chain, _, ask = _doginal_ask(account, payload if isinstance(payload, dict) else {})
+        except (doginal_marketlib.MarketError, fundinglib.FundingError, AmountError, ValueError) as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        return JSONResponse({"chain": chain.network, **ask.as_json()})
+
+    @app.post("/account/doginals/list/sign")
+    def account_doginals_list_sign(request: Request, payload: Any = Body(None)):
+        """File the seller's signature, rebuilt and checked from the chain, Doge Soft and the digest alone."""
+        account = _signed_in_account(request)
+        if not _node_trades():
+            return _node_trades_refused()
+        said = payload if isinstance(payload, dict) else {}
+        try:
+            chain, address, ask = _doginal_ask(account, said)
+            _quota(account, "list")
+            with chain.rpc() as rpc:
+                row = state.doginal_book.register(
+                    rpc, network=chain.network, seller=address, coin=ask.coin, inscription=ask.inscription,
+                    price=ask.price, signature=str(said.get("signature") or ""),
+                    pubkey=bytes.fromhex(str(said.get("pubkey") or "")))
+        except (doginal_marketlib.MarketError, fundinglib.FundingError, AmountError, ValueError) as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        # The coin is promised from now on: nothing this account sends may spend it from under its own listing.
+        _flights.note_committed(account.pubkey, ((row["txid"], int(row["vout"])),), network=chain.network)
+        state.bump_generation()
+        return JSONResponse({"listed": row["id"], "chain": chain.network, "what": ask.what})
+
+    def _doginal_purchase(account, said: dict):
+        chain = _doge_asked(said)
+        address = _account_address(account.pubkey, chain)
+        if not address:
+            raise ValueError("this account has no Dogecoin address yet")
+        row = state.doginal_book.get(str(said.get("listing") or ""))
+        if row is None or row["network"] != chain.network or row["status"] != "open":
+            raise ValueError("that listing is gone")
+        with chain.rpc() as rpc:
+            held = rpc.call("gettxout", row["txid"], int(row["vout"]), True)
+        if not held or int(round(float(held.get("value", 0)) * COIN)) != int(row["value"]):
+            state.doginal_book.close(row["id"], "gone")
+            raise ValueError("that Doginal has moved since it was listed, so the listing is gone")
+        with contextlib.closing(state.token_index(chain).open()) as db:
+            purchase = doginal_marketlib.build_purchase(
+                db, chain.params, address, row, rate=fees.MIN_FEE_PER_KB,
+                exclude=_flights.spent_by(account.pubkey, chain.network),
+                extra=_flights.change_for(account.pubkey, chain.network))
+        return chain, address, row, purchase
+
+    @app.post("/account/doginals/buy")
+    def account_doginals_buy(request: Request, payload: Any = Body(None)):
+        """Show a buyer the transaction that buys a listed Doginal -- or, when it holds fewer than two small clean
+        coins, the prepare transaction that splits two off (signed and broadcast like any send, through /account/sign)."""
+        account = _signed_in_account(request)
+        if not _node_trades():
+            return _node_trades_refused()
+        said = payload if isinstance(payload, dict) else {}
+        try:
+            chain, _, row, purchase = _doginal_purchase(account, said)
+        except doginal_marketlib.NeedDummies as need:
+            try:
+                chain = _doge_asked(said)
+                address = _account_address(account.pubkey, chain)
+                with contextlib.closing(state.token_index(chain).open()) as db:
+                    unsigned = doginal_marketlib.build_prepare(
+                        db, chain.params, address, rate=fees.MIN_FEE_PER_KB,
+                        exclude=_flights.spent_by(account.pubkey, chain.network),
+                        extra=_flights.change_for(account.pubkey, chain.network))
+                _quota(account, "send")
+            except (doginal_marketlib.MarketError, fundinglib.FundingError, ValueError) as exc:
+                return JSONResponse({"detail": str(exc)}, status_code=400)
+            offer = _offers.add(account.pubkey, chain.network, unsigned, unsigned.what)
+            return JSONResponse({"prepare": True, "why": str(need), "offer": offer.id, "chain": chain.network,
+                                 **unsigned.as_json()})
+        except (doginal_marketlib.MarketError, fundinglib.FundingError, ValueError) as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        return JSONResponse({"prepare": False, "chain": chain.network, "listing": row["id"],
+                             "seller": row["seller"], "inscription": row["inscription"], "price": int(row["price"]),
+                             **purchase.as_json()})
+
+    @app.post("/account/doginals/buy/sign")
+    def account_doginals_buy_sign(request: Request, payload: Any = Body(None)):
+        """Paste the buyer's signatures in beside the seller's, check the bytes are the ones shown, and broadcast."""
+        account = _signed_in_account(request)
+        if not _node_trades():
+            return _node_trades_refused()
+        said = payload if isinstance(payload, dict) else {}
+        lane = f"account {account.pubkey}"
+        if not state.begin_send(lane):
+            return JSONResponse({"detail": "one of your transactions is still going. Wait for it to be broadcast "
+                                           "and try again."}, status_code=409)
+        try:
+            try:
+                chain, address, row, purchase = _doginal_purchase(account, said)
+                if str(said.get("raw") or "") != purchase.raw:
+                    return JSONResponse({"detail": "this node would build you a different transaction now than the "
+                                                   "one you signed -- a block landed, or another of your "
+                                                   "transactions went out. Ask again and sign that one."},
+                                        status_code=409)
+                pubkey = bytes.fromhex(str(said.get("pubkey") or ""))
+                if not pubkey or hash160(pubkey) != b58check_decode(address)[1]:
+                    raise ValueError("that public key is not the key behind this account's Dogecoin address")
+                raw = doginal_marketlib.assemble_purchase(
+                    purchase, row, [str(x) for x in (said.get("signatures") or [])], pubkey)
+                _quota(account, "send")
+                with chain.rpc() as rpc:
+                    txid = rpc.call("sendrawtransaction", raw)
+            except (doginal_marketlib.MarketError, fundinglib.FundingError, AmountError, ValueError) as exc:
+                return JSONResponse({"detail": str(exc)}, status_code=400)
+            except Exception as exc:
+                return JSONResponse({"detail": f"the node refused it: {exc}"}, status_code=409)
+            state.doginal_book.close(row["id"], "filled", spent_by=txid)
+            # Remembered as on its way, with the Doginal's own output left out: it is never somebody's change.
+            mine = [o if n != 1 else (o[0], b"") for n, o in enumerate(purchase.outputs)]
+            _flights.add(account.pubkey, txid, fundinglib.Unsigned(raw="", inputs=purchase.inputs, outputs=mine),
+                         address, network=chain.network)
+            state.bump_generation()
+            return JSONResponse({"txid": txid, "what": purchase.what, "chain": chain.network,
+                                 "inscription": row["inscription"], "price": int(row["price"])})
+        finally:
+            state.end_send(lane)
+
+    @app.post("/account/doginals/cancel")
+    def account_doginals_cancel(request: Request, payload: Any = Body(None)):
+        """Take a Doginal listing back: send the coin to this account's own address (funding.build_doginal_send),
+        which is the only thing that stills a signature that has left the browser. Signed through /account/sign."""
+        account = _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        try:
+            chain = _doge_asked(said)
+            address = _account_address(account.pubkey, chain)
+            row = state.doginal_book.get(str(said.get("listing") or ""))
+            if row is None or row["seller"] != address or row["status"] != "open":
+                raise ValueError("this account has no open listing like that")
+            with contextlib.closing(state.token_index(chain).open()) as db:
+                unsigned = fundinglib.build_doginal_send(
+                    db, chain.params, address, row["coin"], row["inscription"], address, rate=fees.MIN_FEE_PER_KB,
+                    exclude=_flights.spent_by(account.pubkey, chain.network) - {(row["txid"], int(row["vout"]))},
+                    extra=_flights.change_for(account.pubkey, chain.network))
+            unsigned.what = f"take back the listing of Doginal {row['inscription']} (it moves to your own address)"
+            _quota(account, "send")
+        except (fundinglib.FundingError, ValueError) as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        offer = _offers.add(account.pubkey, chain.network, unsigned, unsigned.what,
+                            done=lambda txid: state.doginal_book.close(row["id"], "withdrawn", spent_by=txid))
+        return JSONResponse({"offer": offer.id, "chain": chain.network, **unsigned.as_json()})
+
     def _leg_answered(said: dict, chain, buyer: str = "") -> dict:
         """A leg that arrived by message: checked end to end, left unwritten.
 
@@ -21368,7 +21615,7 @@ def create_app(state: AppState) -> FastAPI:
 
     # --- the exchange ---------------------------------------------------------
 
-    EXCHANGE_TABS = ("offers", "mintpads", "tokens", "market")
+    EXCHANGE_TABS = ("offers", "mintpads", "tokens", "market", "doginals")
 
     def _coins_each(price: Any, divisible: bool) -> float:
         """The book's price ratio as coins per whole token.
@@ -23923,6 +24170,16 @@ def create_app(state: AppState) -> FastAPI:
             except Exception as exc:
                 data["node_error"] = data["node_error"] or \
                     f"the collections could not be read: {exc}"
+        # Doginals for DOGE, on their own tab (2026-10-14); only once Dogecoin's node has synced.
+        data["doginals"], data["doge_ready"], data["doge_version"] = [], False, 30
+        if tab == "doginals" and state.doge is not None:
+            data["doge_version"] = state.doge.params.pubkeyhash_version
+            data["doge_ready"] = state.chain_ready(state.doge)
+            if data["doge_ready"]:
+                data["doginals"] = _doginals_live(state.doge)
+                looking = signed_in(request) if data["viewer"] == "account" else None
+                data["doge_me"] = _account_address(looking.pubkey, state.doge) if looking else ""
+                data["tags"].update(_tags_for([d["seller"] for d in data["doginals"]]))
         if offers_tab:
             try:
                 # The mempool first, then the blocks, so an offer made a minute

@@ -67,6 +67,8 @@ PUBLIC_PAGES = frozenset({
     "/exchange/pairs",            # the "open a pair" box: two token ids to a token/token pair's page
     "/games",                 # every inscribed game (arcade/games.py)
     "/account/escrows",       # an account's own escrows (needs a session)
+    "/account/doginals",      # this account's own Doginals on Dogecoin, to list (needs a session)
+    "/doginals/listings",     # Doginals listed for DOGE (the Exchange's Doginals tab)
     "/launch",
     "/launches",
     "/mintpad/new",
@@ -330,6 +332,10 @@ PUBLIC_POST = ("/auth/challenge", "/auth/login", "/auth/logout",
                # this path, and an account that made the listing is refused at
                # both halves.
                "/account/buy", "/account/buy/sign",
+               # Doginals for DOGE (arcade/doginal_market.py, [Claude 2026-10-15]): the same build-sign
+               # pairs, for a listing whose seller signs one input and a buyer who completes it here.
+               "/account/doginals/list", "/account/doginals/list/sign",
+               "/account/doginals/buy", "/account/doginals/buy/sign", "/account/doginals/cancel",
                "/account/fill", "/account/fill/sign", "/account/fill/check",
                # the pair that answers one of those offers with the piece: the
                # first shows the leg at the buyer's price, the second checks the
