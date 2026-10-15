@@ -20027,7 +20027,7 @@ def create_app(state: AppState) -> FastAPI:
         """The game an inscription on the Games tab's chain is, or None."""
         if not re.fullmatch(r"[0-9a-f]{64}", str(txid or "")):
             return None
-        chain, index = _token_chain()
+        chain, index = _chain_of(txid)   # a game on any chain (2026-10-14)
         try:
             row = index.inscription(txid)
         except Exception:
@@ -20055,21 +20055,33 @@ def create_app(state: AppState) -> FastAPI:
 
     def _games_ranked(request: Request, sort: str) -> list[dict]:
         from .. import launchlist
+        # [Claude 2026-10-14] every chain's games (the operator: "The Games tab should show Games from all three chains"): each
+        # chain's newest card per game, marked with its chain; the viewer's chain first
         chain, index = _token_chain()
-        every = _game_rows(index, newest=False)
+        rows, every = [], []
+        for c, ix in [(chain, index)] + _other_indexes():
+            try:
+                got = _game_rows(ix, newest=False)
+            except Exception:
+                continue
+            for r in got:
+                r["_chain"], r["_ix"] = c, ix
+            every += got
         acts = _game_acts([r["txid"] for r in every])
         makers = {c: _makers(c) for c in {r["creator"] for r in every}}
         for r in every:
             r["removed"] = _game_removed(acts, r["txid"], makers[r["creator"]])
-        # The newest card per game decides: one its maker removed takes the game
+        # The newest card per game decides (per chain): one its maker removed takes the game
         # off the tab rather than bringing an older version back.
-        rows = [r for r in gameslib.newest_per_game(every) if not r["removed"]]
+        for c in {id(r["_chain"]) for r in every}:
+            rows += [r for r in gameslib.newest_per_game([x for x in every if id(x["_chain"]) == c]) if not r["removed"]]
         for r in rows:
-            r["game"]["opens"] = _game_opens(index, r["creator"], r["txid"], r["game"])
+            r["game"]["opens"] = _game_opens(r["_ix"], r["creator"], r["txid"], r["game"])
         items = [{"txid": r["txid"], "number": r["number"], "creator": r["creator"],
                   "name": r["game"]["name"], "game": r["game"],
                   "time": int(r["time"] or 0), "height": r["block_height"],
-                  "trades": 0, "volume": 0.0} for r in rows]
+                  "trades": 0, "volume": 0.0,
+                  "net": r["_chain"].network, "netlabel": r["_chain"].label} for r in rows]
         said = launchlist.tally(acts)
         tips: dict[str, int] = {}
         for a in acts:

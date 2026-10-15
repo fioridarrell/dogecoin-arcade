@@ -80,3 +80,34 @@ def test_a_creator_of_another_chain_is_listed(client, monkeypatch):
     rows = test_client.get("/r/inscriptions?creator=" + CREATOR_DOGE).json()
     assert [r["id"] for r in rows] == [TX_DOGE]
     assert test_client.get("/r/inscriptions/count?creator=" + CREATOR_DOGE).json() == {"count": 1}
+
+
+class _Db:
+    def __init__(self, path):
+        import sqlite3
+        self.conn = sqlite3.connect(path); self.conn.row_factory = sqlite3.Row
+    def close(self):
+        self.conn.close()
+
+
+def _games_db(tmp_path, name, txid, game_name):
+    import json, sqlite3
+    path = str(tmp_path / (name + ".sqlite"))
+    c = sqlite3.connect(path)
+    c.execute("CREATE TABLE inscription(txid TEXT, number INT, creator TEXT, json TEXT, block_height INT, position INT, content_type TEXT)")
+    c.execute("CREATE TABLE block(height INT, time INT)")
+    c.execute("INSERT INTO inscription VALUES(?,?,?,?,?,?,?)", (txid, 1, "c-" + name, json.dumps({"game": {"name": game_name}}), 5, 0, "text/html"))
+    c.execute("INSERT INTO block VALUES(5, 1790000000)"); c.commit(); c.close()
+    return path
+
+
+def test_the_games_tab_shows_every_chains_games(client, monkeypatch, tmp_path):
+    test_client, state = client
+    here, doge = _two_chains(state, monkeypatch)
+    paths = {here.network: _games_db(tmp_path, "here", TX_TEST, "Testnet Quest"), "doge": _games_db(tmp_path, "doge", TX_DOGE, "Doge Dash")}
+    real = state.token_index
+    for net, ix in ((here.network, real(here)), ("doge", real(doge))):
+        ix.open = (lambda p: (lambda: _Db(p)))(paths[net])
+    page = test_client.get("/games").text
+    assert "Testnet Quest" in page and "Doge Dash" in page, "both chains' games are listed"
+    assert "Dogecoin" in page and "on any chain" in page
