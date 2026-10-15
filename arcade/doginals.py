@@ -19,6 +19,11 @@ import urllib.request
 from pathlib import Path
 
 DOGESOFT = os.environ.get("ARCADE_DOGESOFT", "https://explorer.dogesoft.io")
+# 2026-10-14: "We're going to use Doge soft for our doginals API for now. But if we can find a different API or if at
+# some point, we can spin up our own. Wonkyord we will do that." The source is one setting: ARCADE_DOGINALS=dogesoft (default)
+# or ARCADE_DOGINALS=ord with ARCADE_ORD_URL=<a wonky-ord / ord-style server>, asked per output (`GET /output/<txid>:<vout>`).
+SOURCE = os.environ.get("ARCADE_DOGINALS", "dogesoft")
+ORD_URL = os.environ.get("ARCADE_ORD_URL", "")
 POSTAGE_MAX = 1_000_000          # koinu (0.01 DOGE): at or under this, a coin may be carrying a Doginal
 ASK_TIMEOUT = 90                 # Doge Soft can take most of a minute to answer one transaction
 
@@ -42,10 +47,24 @@ class Doginals:
         return db
 
     @staticmethod
-    def _fetch(txid: str) -> dict:
-        req = urllib.request.Request(f"{DOGESOFT}/api/explorer/tx/{txid}", headers={"Accept": "application/json"})
+    def _get(url: str) -> dict:
+        req = urllib.request.Request(url, headers={"Accept": "application/json"})
         with urllib.request.urlopen(req, timeout=ASK_TIMEOUT) as r:
             return json.load(r)
+
+    @classmethod
+    def _fetch(cls, txid: str) -> dict:
+        """Doge Soft's answer for a transaction, or the same shape built from an ord-style server's per-output answers."""
+        if SOURCE == "ord" and ORD_URL:
+            tx = cls._get(f"{ORD_URL.rstrip('/')}/tx/{txid}")
+            outs = tx.get("transaction", tx).get("output") or tx.get("outputs") or []
+            found = []
+            for vout in range(len(outs)):
+                got = cls._get(f"{ORD_URL.rstrip('/')}/output/{txid}:{vout}")
+                for iid in got.get("inscriptions") or []:
+                    found.append({"vout": vout, "inscription_id": iid, "sat_offset": None})
+            return {"txid": txid, "inscriptions": found}
+        return cls._get(f"{DOGESOFT}/api/explorer/tx/{txid}")
 
     def held(self, txid: str) -> dict[int, list[dict]]:
         """{vout: [{"id", "offset"}]} for one transaction; {} when nothing is inscribed on any of its outputs."""
