@@ -22815,19 +22815,24 @@ def create_app(state: AppState) -> FastAPI:
                     at = pieces_at = [a for a in [_account_address(account.pubkey, c)] if a]
                 else:
                     try:
-                        pieces_at = [state.home_address(c)]
                         with c.rpc() as rpc:
                             at = list(_ledger_addresses(rpc))
                     except HTTPException:
                         raise
                     except Exception:
                         log.debug("the node's addresses on %s could not be read", c.network, exc_info=True)
+                    try:
+                        pieces_at = [state.home_address(c)]
+                    except HTTPException:
+                        raise
+                    except Exception:
+                        log.debug("the node's home on %s could not be read", c.network, exc_info=True)
                 held: dict[int, dict] = {}
                 for row in index.balances(at):
                     if row["property_id"] not in held:
                         held[row["property_id"]] = {
                             "key": f"{c.network}-token-{row['property_id']}", "kind": "token", "net": c.network,
-                            "label": f"{wall_plain(row['name'], 'token')} #{row['property_id']} \u00b7 {c.params.coin}"}
+                            "label": f"{wall_plain(row['name'], 'token')} (#{row['property_id']}) \u00b7 {c.params.coin}"}
                 out += sorted(held.values(), key=lambda t: t["label"].lower())
                 for r in index.inscriptions(owners=[a for a in pieces_at if a], limit=50):
                     out.append({"key": f"{c.network}-nft-{r['txid']}", "kind": "nft", "net": c.network,
