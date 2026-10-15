@@ -31,6 +31,21 @@
 .pw-token .pw-name{text-align:left;min-width:0;overflow-wrap:anywhere}
 .pw-token .pw-amt{color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 </style>
+{# Every coin they hold, one row each, the name left and the balance right like the tokens (2026-10-15). #}
+{% if coins %}
+<div class="panel" style="margin-bottom:16px">
+  <h2 style="margin:0">Coins</h2>
+  <div class="pw-tokens">
+    {% for c in coins %}
+    <div class="pw-token">
+      <span class="pw-name">{{ net_badge(c.chain.network) }} {{ c.coin }}</span>
+      <span class="pw-amt">{% if c.balance is not none %}{{ "{:,.2f}".format(c.balance) }}
+        {%- elif not c.address %}no address published{% else %}not readable here yet{% endif %}</span>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
 {% for held in holdings %}
 <div class="panel" style="margin-bottom:16px">
   <div class="row" style="align-items:baseline">
@@ -40,11 +55,7 @@
   </div>
 
   <table style="margin-top:10px">
-    <tr><td class="muted" style="width:120px">Coins</td>
-        <td>{% if held.coins is not none %}{{ "{:,.2f}".format(held.coins) }}
-          {%- else %}<span class="muted">this node cannot see that wallet's
-          coins</span>{% endif %}</td></tr>
-    <tr><td class="muted">Tokens</td>
+    <tr><td class="muted" style="width:120px">Tokens</td>
         <td>{% if not held.tokens %}<span class="muted">none</span>{% endif %}</td></tr>
   </table>
   {# One token per row, down the left, each a link to its own page on its own chain (2026-10-15). #}

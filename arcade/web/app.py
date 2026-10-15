@@ -2804,8 +2804,11 @@ def create_app(state: AppState) -> FastAPI:
         if said is None or "other_address" not in said.keys():
             return ""
         other = str(said["other_address"] or "")
-        # On Dogecoin: the same key as their Pepecoin mainnet address.
-        return _doge_twin(other) if chain.is_doge else other
+        # On Dogecoin: the address they published (2026-10-15), else the same key as their Pepecoin mainnet address.
+        if chain.is_doge:
+            published = str(said["doge_address"] or "") if "doge_address" in said.keys() else ""
+            return published or _doge_twin(other)
+        return other
 
     def _chain_menu(account_side: bool = False) -> list[dict[str, Any]]:
         """Every chain, for a page to SHOW: its coin, its word, and whether it may
@@ -3518,7 +3521,7 @@ def create_app(state: AppState) -> FastAPI:
         by accident is a page showing the profile from before the one this
         account just paid to publish.
         """
-        out = {"bio": "", "url": "", "pfp": "", "tag": "", "mainnet": "", "name": ""}
+        out = {"bio": "", "url": "", "pfp": "", "tag": "", "mainnet": "", "name": "", "doge": ""}
         if not address:
             return out
         if waiting is _POOL:
@@ -3544,6 +3547,14 @@ def create_app(state: AppState) -> FastAPI:
                             "tag": said["tag"] or "",
                             "mainnet": said["other_address"] or "",
                             "name": said["name"] or ""})
+        # Their Dogecoin address: published (2026-10-15), else their mainnet key's twin.
+        try:
+            with state.store() as store:
+                said = store.key_for(address)
+            published = str(said["doge_address"] or "") if said is not None and "doge_address" in said.keys() else ""
+        except Exception:
+            published = ""
+        out["doge"] = published or (_doge_twin(out["mainnet"]) if out["mainnet"] else "")
         return out
 
     @app.get("/u/{tag}/wallet", response_class=HTMLResponse)
@@ -3556,9 +3567,23 @@ def create_app(state: AppState) -> FastAPI:
         address, _claiming = _address_of_tag(wanted)
         profile = _profile_of(address)
         holdings: list[dict[str, Any]] = []
+        coins: list[dict[str, Any]] = []
+        for context in state.all_chains:
+            # Their address on each chain: the tag's own on the messaging chain, the published mainnet one, and their
+            # Dogecoin one (published, or their mainnet key's twin) -- 2026-10-15.
+            where = address if context.network == state.messaging.network \
+                else profile.get("doge", "") if context.is_doge else profile.get("mainnet", "")
+            row = {"chain": context, "coin": context.params.coin, "address": where, "balance": None}
+            if where and context in state.token_chains:
+                try:
+                    with contextlib.closing(state.token_index(context).open()) as db:
+                        row["balance"] = utxoslib.balance(db, where) / 100_000_000
+                except Exception:
+                    row["balance"] = None
+            coins.append(row)
         for context in state.token_chains:
             where = address if context.network == state.messaging.network \
-                else profile.get("mainnet", "")
+                else profile.get("doge", "") if context.is_doge else profile.get("mainnet", "")
             if not where:
                 continue
             entry: dict[str, Any] = {"chain": context, "address": where,
@@ -3581,7 +3606,7 @@ def create_app(state: AppState) -> FastAPI:
                 entry["coins"] = None     # their balance is the node's to know
             holdings.append(entry)
         return render(request, "profile_wallet.html", tag=wanted,
-                      address=address, profile=profile, holdings=holdings)
+                      address=address, profile=profile, holdings=holdings, coins=coins)
 
     @app.post("/profile/about")
     def set_profile_about(request: Request, bio: str = Form(""),
@@ -3866,11 +3891,18 @@ def create_app(state: AppState) -> FastAPI:
             # the piece -- announcing one you have sold would be announcing
             # somebody else's property.
             face = _my_picture()
+            # This node's Dogecoin address too, when it runs Dogecoin (2026-10-15): anybody can pay it DOGE by @tag.
+            doge_hash = b""
+            try:
+                if getattr(state, "doge", None) is not None and state.doge in state.token_chains:
+                    doge_hash = b58check_decode(state.home_address(state.doge))[1]
+            except Exception:
+                doge_hash = b""
             payload = build_key_announcement(
                 state.identity.public_bytes, home_hash, "",
                 other_hash160=other_hash, tag=tag, pfp=face,
                 bio=str(state.setting("bio", "") or ""),
-                url=str(state.setting("url", "") or ""))
+                url=str(state.setting("url", "") or ""), doge_hash160=doge_hash)
             # A long name will not fit one OP_RETURN, so it goes as Class B --
             # a couple of dust outputs rather than none. Better than publishing
             # half a name, permanently, for the cheaper fee.
@@ -9249,6 +9281,27 @@ def create_app(state: AppState) -> FastAPI:
     def _account_address(pubkey: str, chain) -> str:
         return str(state.setting(_address_key(pubkey, chain), "") or "")
 
+    def _account_doge_address(pubkey: str) -> str:
+        """The account's Dogecoin address: the one its browser gave, else its Pepecoin mainnet key's twin (the same
+        key -- coins.js derives both on coin type 3; _doge_twin). "" when this node runs no Dogecoin or knows neither."""
+        if getattr(state, "doge", None) is None:
+            return ""
+        said = _account_address(pubkey, state.doge)
+        if said:
+            return said
+        main = next((c for c in state.all_chains if c.network == "main"), None)
+        return _doge_twin(_account_address(pubkey, main)) if main is not None else ""
+
+    def _account_doge_hash(pubkey: str) -> bytes:
+        """Its 20-byte hash for the announcement (2026-10-15: broadcast the Doge address too), or b""."""
+        address = _account_doge_address(pubkey)
+        if not address:
+            return b""
+        try:
+            return b58check_decode(address)[1]
+        except Exception:
+            return b""
+
     def _words_backed_up(account) -> bool:
         """Whether this account has typed its twelve words back on the Backup page.
 
@@ -9857,13 +9910,29 @@ def create_app(state: AppState) -> FastAPI:
                     # site's word about the chain is worth nothing -- which is
                     # exactly what the row for a new account did on 2026-09-25,
                     # at height 0.
-                    said["announced"] = (
-                        store.confirmed_key_for(address) is not None)
+                    # A profile published before Dogecoin addresses were (2026-10-15) is out of date: said as not
+                    # announced, the page's own check publishes it again, with the Dogecoin address (the operator: "the next
+                    # time anyone logs in that hasn't broadcasted their doge coin address ... it is automatically
+                    # broadcast").
+                    wants_doge = bool(_account_doge_address(account.pubkey))
+
+                    def _complete(row) -> bool:
+                        return row is not None and (not wants_doge or (
+                            "doge_address" in row.keys() and bool(row["doge_address"])))
+                    said["announced"] = _complete(store.confirmed_key_for(address))
                     # Not the same question and not the same answer: the key is
                     # out, the block has not come. Nothing spends on it and no
                     # page calls it published; it is here so a page that wants
                     # to say "on its way" can say that instead of "not yet".
-                    said["announcing"] = store.key_for(address) is not None
+                    # On its way: ANY announcement for this address that is complete, mined or still in the pool (a
+                    # pool row sorts under the older mined one in key_for, so asking only that would publish again
+                    # every ten minutes until the block came).
+                    if wants_doge:
+                        said["announcing"] = store.conn.execute(
+                            "SELECT 1 FROM key_announcement WHERE address=? AND doge_address <> '' LIMIT 1",
+                            (address,)).fetchone() is not None
+                    else:
+                        said["announcing"] = store.key_for(address) is not None
                 profile = _profile_of(address)
                 said["profile"] = {field: profile[field]
                                    for field in ("pfp", "bio", "url")}
@@ -19725,7 +19794,7 @@ def create_app(state: AppState) -> FastAPI:
                     break
             body = envelopelib.build_key_announcement(
                 key, hash160=our_hash, tag=tag, other_hash160=other,
-                pfp=pfp, bio=bio, url=url)
+                pfp=pfp, bio=bio, url=url, doge_hash160=_account_doge_hash(account.pubkey))
             index = state.token_index(chain)
             with contextlib.closing(index.open()) as db:
                 unsigned = fundinglib.build(
@@ -20819,6 +20888,11 @@ def create_app(state: AppState) -> FastAPI:
             said = store.key_for(found)
         other = str((said["other_address"] if said is not None
                      and "other_address" in said.keys() else "") or "")
+        if chain.is_doge:
+            # DOGE to an @tag (2026-10-15): the Dogecoin address they published, else their mainnet key's twin
+            # -- never the Pepecoin address itself, which is not a Dogecoin address.
+            published = str(said["doge_address"] or "") if said is not None and "doge_address" in said.keys() else ""
+            other = published or (_doge_twin(other) if other else "")
         if not other:
             raise ValueError(
                 f"@{tag} has not published a {chain.label.lower()} address, "
