@@ -56,6 +56,10 @@
 <div id="panel-activity" role="tabpanel"></div>
 <div id="panel-tokens" role="tabpanel" hidden></div>
 <div id="panel-nfts" role="tabpanel" hidden></div>
+{# [Claude 2026-10-15] Doginals on this account's Dogecoin coins, asked from THIS browser (2026-10-14: "I want the
+   client side to access Doge soft", "We have to have the wallet check its own utxo to see if they are doginals"). Shown
+   under NFTs while Dogecoin is the network on the card. #}
+<section id="doginals" class="wl-dg" hidden aria-labelledby="dg-title" data-dogesoft="{{ dogesoft }}"></section>
 
 {# Coins in the small outputs this account's messages, posts and files left on
    the chain (2026-09-28): still yours, and one press brings them back. #}
@@ -105,7 +109,14 @@ a.wl-act:hover{text-decoration:none}
 .wl-tabs button{padding:9px 12px;font-weight:650;font-size:.92rem;color:var(--muted);background:none;border:0;
   box-shadow:none;border-radius:0;border-bottom:2px solid transparent;margin-bottom:-1px}
 .wl-tabs button[aria-selected="true"]{color:var(--fg);border-color:var(--accent)}
-#panel-activity,#panel-tokens,#panel-nfts{max-width:620px}
+#panel-activity,#panel-tokens,#panel-nfts,#doginals{max-width:620px}
+.wl-dg{margin-top:22px}
+.wl-dg h2{margin:0 0 4px;font-size:1.05rem}
+.wl-dg .wl-dgpic{display:grid;place-items:center;aspect-ratio:1;border-radius:12px;overflow:hidden;background:var(--code);
+  color:var(--muted);font-size:.7rem}
+.wl-dg .wl-dgpic img{width:100%;height:100%;object-fit:cover;display:block;image-rendering:pixelated}
+.wl-dgid{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.66rem;color:var(--muted);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .wl-day{font-size:.72rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:16px 2px 4px}
 .wl-row{display:flex;align-items:center;gap:12px;width:100%;text-align:left;padding:10px 6px;border-radius:12px;
   background:none;border:0;box-shadow:none;color:var(--fg);font-weight:400}
@@ -408,6 +419,7 @@ function showTab(which) {
   if (which === "activity") loadActivity().catch(showError("panel-activity"));
   if (which === "tokens") drawTokens().catch(showError("panel-tokens"));
   if (which === "nfts") drawNfts().catch(showError("panel-nfts"));
+  drawDoginals().catch((e) => { $("doginals").replaceChildren(el("div", "wl-empty", String(e.message || e))); });
 }
 for (const name of ["activity", "tokens", "nfts"]) $("tab-" + name).onclick = () => showTab(name);
 const showError = (id) => (e) => { $(id).replaceChildren(el("div", "wl-empty", String(e.message || e))); };
@@ -704,7 +716,8 @@ function openSend(prefill = "", piece = null) {
   const c = chainNow();
   if (!c) return;
   const s = sheet();
-  const what = piece ? {kind: "nft", piece, name: piece.name || `#${piece.number}`}
+  const what = piece && piece.doginal ? {kind: "doginal", doginal: piece, name: `Doginal ${short(piece.id)}`}
+    : piece ? {kind: "nft", piece, name: piece.name || `#${piece.number}`}
     : asset ? {kind: "token", ...asset} : {kind: "coin"};
   step1(s, {to: prefill, amount: piece ? "1" : "", what});
 }
@@ -712,6 +725,16 @@ function openSend(prefill = "", piece = null) {
 /** The offer for what is being sent, from the node. */
 async function offerFor(what, to, amount, network) {
   if (what.kind === "coin") return wallet.offerSend(to, amount, network);
+  if (what.kind === "doginal") {
+    // [Claude 2026-10-15] The node builds it (/account/doginal/send) and asks Doge Soft itself that the coin holds exactly
+    // this Doginal before it will: the one time the server asks, because a send needs it.
+    const g = what.doginal;
+    const asked = await fetch("/account/doginal/send", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({txid: g.txid, vout: g.vout, inscription: g.id, to, chain: network})});
+    const offer = await asked.json();
+    if (!asked.ok) throw new Error(offer.detail || "that Doginal cannot be sent");
+    return offer;
+  }
   const [route, body] = what.kind === "token"
     ? ["/account/token/send", {property_id: what.property_id, to, amount, chain: network}]
     : ["/account/nft/send", {piece: what.piece.txid, to, chain: network}];
@@ -723,7 +746,7 @@ async function offerFor(what, to, amount, network) {
 }
 /** What is being sent, said the way a person reads it. */
 function sayWhat(what, raw) {
-  if (what.kind === "nft") return what.name;
+  if (what.kind === "nft" || what.kind === "doginal") return what.name;
   if (what.kind === "token") return `${tokenAmt(raw, what)} ${what.name}`;
   return `${coinsOf(raw)} ${COIN()}`;
 }
@@ -731,11 +754,17 @@ function sayWhat(what, raw) {
 async function step1(s, d) {
   const c = chainNow();
   const what = d.what || {kind: "coin"};
-  const body = s.set(what.kind === "nft" ? `Send ${what.name}` : `Send ${what.kind === "token" ? what.name : COIN()}`);
+  const body = s.set(what.kind === "nft" || what.kind === "doginal" ? `Send ${what.name}` : `Send ${what.kind === "token" ? what.name : COIN()}`);
   if (what.kind === "nft") {
     const card = el("div", "wl-sendpiece");
     const pic = thumb(what.piece); if (!isImage(what.piece.content_type)) pic.className = "wl-kind";
     card.append(pic, el("span", "", `${what.name} goes to whoever you pick. One piece, all of it.`));
+    body.append(card);
+  }
+  if (what.kind === "doginal") {
+    const card = el("div", "wl-sendpiece");
+    card.append(doginalPic(what.doginal), el("span", "", `${what.name} goes to whoever you pick, on the coin it sits on. `
+      + "The fee comes from your other coins, never from another Doginal."));
     body.append(card);
   }
   const all = await people();
@@ -771,7 +800,8 @@ async function step1(s, d) {
   const problem = el("div", "msg err"); problem.hidden = true; problem.style.marginTop = "12px";
   const go = el("button", "wl-go", "Review"); go.type = "button";
   body.append(lt, field, toNote, la, arow, avail, problem, go);
-  if (what.kind === "nft") { la.hidden = true; arow.hidden = true; avail.hidden = true; }
+  const single = what.kind === "nft" || what.kind === "doginal";
+  if (single) { la.hidden = true; arow.hidden = true; avail.hidden = true; }
 
   const spendable = what.kind === "token" ? Number(what.balance || 0) : Number(c.spendable ?? c.balance ?? 0);
   const unitNow = what.kind === "token" ? what.name : COIN();
@@ -797,9 +827,9 @@ async function step1(s, d) {
       toNote.textContent = "Type an @name or paste an address.";
     }
     const n = Number(d.amount);
-    const raw = what.kind === "nft" ? 1 : what.kind === "token" ? rawOf(d.amount, what) : satsOf(d.amount);
+    const raw = single ? 1 : what.kind === "token" ? rawOf(d.amount, what) : satsOf(d.amount);
     let bad = "";
-    if (what.kind === "nft") bad = "";
+    if (single) bad = "";
     else if (d.amount && !(n > 0)) bad = "Type an amount above zero.";
     else if (d.amount && raw == null) bad = what.kind === "token" && !what.divisible
       ? `${what.name} comes in whole units only.` : "Up to 8 decimal places.";
@@ -859,7 +889,7 @@ async function step1(s, d) {
     // what is in the boxes at the moment Review is pressed, and the offer
     // that comes back has to be for exactly that before anything is signed.
     const typedTo = to.value.trim(), typedAmount = amount.value.trim();
-    d.to = typedTo; d.amount = what.kind === "nft" ? "1" : typedAmount;
+    d.to = typedTo; d.amount = single ? "1" : typedAmount;
     go.disabled = true; go.textContent = "Checking…";
     try {
       if (!keys) keys = await arcadeKeys(TAGCHAIN);
@@ -889,6 +919,12 @@ function mismatch(offer, typedTo, typedAmount, what = {kind: "coin"}) {
   if (what.kind === "nft") {
     if (String(offer.number) !== String(what.piece.number)) {
       return `The node built a send of #${offer.number}, not ${what.name}. Nothing was signed.`;
+    }
+  } else if (what.kind === "doginal") {
+    const g = what.doginal;
+    if (offer.inscription !== g.id || offer.txid !== g.txid || Number(offer.vout) !== Number(g.vout)
+        || !offer.inputs || offer.inputs[0].txid !== g.txid || Number(offer.inputs[0].vout) !== Number(g.vout)) {
+      return `The node built a send of another coin, not ${what.name}. Nothing was signed.`;
     }
   } else {
     const want = what.kind === "token" ? rawOf(typedAmount, what) : satsOf(typedAmount);
@@ -980,6 +1016,7 @@ async function step3(s, d, offer, read) {
     done(s, d, record);
     if (what.kind === "token") { tokens = null; if (asset) asset.balance = Math.max(0, Number(asset.balance) - Number(offer.amount || 0)); }
     if (what.kind === "nft") nft.colls = null;
+    if (what.kind === "doginal") dg.coins = null;
     refresh();
   } catch (e) {
     s.lock(false);
@@ -1222,6 +1259,115 @@ async function drawCollection() {
   window.scrollTo({top: Math.max(0, $("panel-nfts").getBoundingClientRect().top + scrollY - 120)});
 }
 
+
+/* --- Doginals --------------------------------------------------------------
+ *
+ * [Claude 2026-10-15] Which of this account's Dogecoin coins carry a Doginal, asked by THIS browser (2026-10-14:
+ * "I want the client side to access Doge soft ... It should identify which UTXOs are doginals"). The node lists the
+ * account's own coins (/account/coins) and asks nobody; the browser asks Doge Soft once per transaction
+ * (/api/explorer/tx/<txid>, matched by vout) and keeps the answer in localStorage for good, since what sits on an unspent
+ * coin never changes. Doge Soft takes most of a minute per question, so a few go at once. When it cannot be reached
+ * (down, or refusing this site's origin) the page says so and guesses nothing.
+ */
+
+const DOGESOFT = String($("doginals").dataset.dogesoft || "https://explorer.dogesoft.io").replace(/\/+$/, "");
+const DG_TX = "arcade.doginals.tx.";            // + txid: Doge Soft's answer, about the chain and not the account
+let dg = {net: null, coins: null, answers: {}, failed: 0, asking: false};
+
+function dgKept(txid) {
+  try { return JSON.parse(localStorage.getItem(DG_TX + txid) || "null"); } catch (e) { return null; }
+}
+/** Doge Soft's answer for one transaction: [{vout, id, offset}], asked once ever per browser. */
+async function dgAsk(txid) {
+  const kept = dgKept(txid);
+  if (kept) return kept;
+  const r = await fetch(`${DOGESOFT}/api/explorer/tx/${txid}`, {headers: {Accept: "application/json"}});
+  if (!r.ok) throw new Error(`Doge Soft answered ${r.status}`);
+  const said = await r.json();
+  if (said.txid && said.txid !== txid) throw new Error("Doge Soft answered about another transaction");
+  const held = (said.inscriptions || []).filter((i) => i && i.inscription_id != null && i.vout != null)
+    .map((i) => ({vout: Number(i.vout), id: String(i.inscription_id), offset: i.sat_offset ?? null}));
+  try { localStorage.setItem(DG_TX + txid, JSON.stringify(held)); } catch (e) { /* asked again next time */ }
+  return held;
+}
+/** A Doginal's picture, from Doge Soft's content URL; anything that is not a picture is named instead. */
+function doginalPic(g) {
+  const box = el("span", "wl-dgpic");
+  const img = el("img"); img.loading = "lazy"; img.alt = "";
+  img.src = `${DOGESOFT}/api/explorer/inscriptions/${encodeURIComponent(g.id)}/content`;
+  img.onerror = () => {
+    const open = el("a", "", "open it"); open.href = img.src; open.target = "_blank"; open.rel = "noopener";
+    box.replaceChildren(open);
+  };
+  box.append(img);
+  return box;
+}
+async function drawDoginals() {
+  const box = $("doginals");
+  const c = chainNow();
+  if (tab !== "nfts" || !c || c.network !== "doge") { box.hidden = true; return; }
+  box.hidden = false;
+  if (dg.net !== c.network) dg = {net: c.network, coins: null, answers: {}, failed: 0, asking: false};
+  const head = el("h2", "", "Doginals"); head.id = "dg-title";
+  if (!dg.coins) {
+    box.replaceChildren(head, el("div", "wl-empty", "Reading your Dogecoin coins…"));
+    const r = await fetch(`/account/coins?chain=${encodeURIComponent(c.network)}`, {cache: "no-store"});
+    const got = await r.json();
+    if (!r.ok) throw new Error(got.detail || "the node would not say");
+    dg.coins = got.coins || []; dg.answers = {}; dg.failed = 0;
+  }
+  const txids = [...new Set(dg.coins.map((x) => x.txid))];
+  for (const t of txids) { const kept = dgKept(t); if (kept) dg.answers[t] = kept; }
+  const left = txids.filter((t) => !dg.answers[t]);
+  const found = [];
+  for (const coin of dg.coins) {
+    for (const i of dg.answers[coin.txid] || []) {
+      if (i.vout === coin.vout) found.push({...i, txid: coin.txid, vout: coin.vout, value: coin.value, doginal: true});
+    }
+  }
+  box.replaceChildren(head);
+  if (dg.failed) {
+    box.append(el("div", "msg err", `Doginals can't be checked right now: Doge Soft did not answer for `
+      + `${dg.failed} transaction${dg.failed === 1 ? "" : "s"}. Those coins are not shown as Doginals or as plain `
+      + "coins until it does."));
+    const again = el("button", "ghost wl-more", "Ask Doge Soft again"); again.type = "button";
+    again.onclick = () => { dg.failed = 0; drawDoginals().catch(() => {}); };
+    box.append(again);
+  } else if (left.length) {
+    box.append(el("p", "wl-note", `Asking Doge Soft about ${left.length} of your ${txids.length} transaction`
+      + `${txids.length === 1 ? "" : "s"}. It can take a minute each; answers are kept in this browser.`));
+  }
+  if (!left.length && !dg.failed && !found.length) {
+    box.append(el("div", "wl-empty", "No Doginals on your Dogecoin coins."));
+  }
+  if (found.length) {
+    const grid = el("div", "wl-pieces");
+    for (const g of found) {
+      const card = el("div", "wl-piececard");
+      card.dataset.doginal = g.id;
+      const id = el("div", "wl-dgid", g.id); id.title = g.id;
+      const send = el("button", "wl-piecesend", "Send"); send.type = "button";
+      send.setAttribute("aria-label", `Send Doginal ${g.id}`);
+      send.onclick = () => openSend("", g);
+      card.append(doginalPic(g), id, send);
+      grid.append(card);
+    }
+    box.append(grid);
+  }
+  if (left.length && !dg.asking && !dg.failed) {
+    dg.asking = true;
+    const queue = left.slice();
+    const worker = async () => {
+      while (queue.length) {
+        const t = queue.shift();
+        try { dg.answers[t] = await dgAsk(t); } catch (e) { dg.failed += 1; }
+        drawDoginals().catch(() => {});
+      }
+    };
+    Promise.all([worker(), worker(), worker(), worker()]).finally(() => { dg.asking = false; });
+  }
+}
+
 /* --- drawing it all ----------------------------------------------------- */
 
 function drawAll() {
@@ -1234,6 +1380,7 @@ async function refresh() {
   if (!chainNow()) net = null;
   drawHead();
   if (tab === "activity") await loadActivity();
+  if (tab === "nfts") drawDoginals().catch(() => {});
 }
 
 keys = await wallet.opened(TAGCHAIN);

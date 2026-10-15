@@ -116,6 +116,7 @@ PUBLIC_PAGES = frozenset({
     "/account/tokens",
     "/account/inscribe/unfinished",
     "/account/dust",                  # coins in this account's own payload outputs
+    "/account/coins",                 # this account's own coins on one chain (the Doginals check)
     "/account/activity",              # this account's own coin history (signed in)
     "/account/standing/fillable",     # this account's buy orders a sell order meets
     "/account/claimpools",            # this account's own prize pools, to withdraw
@@ -286,6 +287,8 @@ PUBLIC_POST = ("/auth/challenge", "/auth/login", "/auth/logout",
                # only one whose word removes them.
                "/account/run/retry", "/account/run/delete",
                "/account/nft/send", "/account/nft/sell",
+               # one Doginal on purpose: the only send that spends a coin carrying one
+               "/account/doginal/send",
                # an offer on somebody else's piece: one OP_RETURN saying what
                # this account would pay, funded from its own address and
                # signed in its own tab. This node broadcasts it and reserves
