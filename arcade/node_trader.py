@@ -392,21 +392,27 @@ class NodeTrader:
 
     def _doginal_seen(self, seen: T.LockSeen | None, leg: T.Leg, redeem: bytes,
                       rpc: Any) -> T.LockSeen | None:
-        """For a Doginal leg, whether the lock holds it at offset 0 of output 0 with its
-        reserve as output 1 (trade.doginal_at). While Doge Soft cannot be asked the lock
-        counts as unconfirmed, never as wrong."""
-        if seen is None or seen.spent_by_script_sig:
-            return seen
-        lock_tx = rpc.call("getrawtransaction", seen.txid, 1)
-        parent = rpc.call("getrawtransaction", lock_tx["vin"][0]["txid"], 1)
-        said = T.doginal_at(self.doginals, leg, redeem, lock_tx, parent) if seen.vout == 0 else False
-        if said is None:
-            seen.confirmations = 0
-        else:
-            seen.asset_ok = said
-        if len(lock_tx["vout"]) > 1:
-            seen.reserve = round(float(lock_tx["vout"][1]["value"]) * COIN)
-        return seen
+        return doginal_seen(seen, leg, redeem, rpc, self.doginals)
+
+
+    def _send_coins(self, rpc: Any, network: str, address: str, amount: int) -> str:
+        """A coin leg into its lock with `sendtoaddress` -- which picks its own coins, and on
+        Dogecoin could pick one carrying a Doginal (2026-10-15). So there, every coin an ordinary
+        send may not use (doginals.spendable: inscribed, or small and not vouched for) is locked
+        in the wallet for the one send and let go after; a coin already locked stays locked."""
+        if network != "doge":
+            return rpc.call("sendtoaddress", address, amount / COIN)
+        coins = [{"txid": u["txid"], "vout": int(u["vout"]), "value": round(float(u["amount"]) * COIN)}
+                 for u in rpc.call("listunspent", 0)]
+        clean = {(c["txid"], c["vout"]) for c in self.doginals.spendable(coins)}
+        keep = [{"txid": c["txid"], "vout": c["vout"]} for c in coins if (c["txid"], c["vout"]) not in clean]
+        if keep:
+            rpc.call("lockunspent", False, keep)
+        try:
+            return rpc.call("sendtoaddress", address, amount / COIN)
+        finally:
+            if keep:
+                rpc.call("lockunspent", True, keep)
 
     def _lock_doginal(self, leg: T.Leg, redeem: bytes, rpc: Any) -> str:
         """The Doginal into its lock from this node's wallet (htlc.doginal_lock_outputs):
@@ -501,7 +507,7 @@ class NodeTrader:
             if step == T.LOCK:
                 lock_address = H.address_of(trade.my_redeem(), give_chain.params)
                 if trade.give.kind == "coin":
-                    txid = grpc.call("sendtoaddress", lock_address, trade.give.amount / COIN)
+                    txid = self._send_coins(grpc, trade.give.network, lock_address, trade.give.amount)
                 elif trade.give.kind == "doginal":
                     txid = self._lock_doginal(trade.give, trade.my_redeem(), grpc)
                 else:
@@ -539,3 +545,23 @@ def _pointer(text: str) -> dict | None:
         return None
     txid, vout = text.split(":")
     return {"txid": txid, "vout": int(vout)}
+
+
+def doginal_seen(seen: T.LockSeen | None, leg: T.Leg, redeem: bytes, rpc: Any,
+                 doginals: Any) -> T.LockSeen | None:
+    """For a Doginal leg, whether the lock holds it at offset 0 of output 0 with its
+    reserve as output 1 (trade.doginal_at). While Doge Soft cannot be asked the lock
+    counts as unconfirmed, never as wrong. Module level: a tab's swaps read it too
+    (/account/trade/facts, 2026-10-15)."""
+    if seen is None or seen.spent_by_script_sig:
+        return seen
+    lock_tx = rpc.call("getrawtransaction", seen.txid, 1)
+    parent = rpc.call("getrawtransaction", lock_tx["vin"][0]["txid"], 1)
+    said = T.doginal_at(doginals, leg, redeem, lock_tx, parent) if seen.vout == 0 else False
+    if said is None:
+        seen.confirmations = 0
+    else:
+        seen.asset_ok = said
+    if len(lock_tx["vout"]) > 1:
+        seen.reserve = round(float(lock_tx["vout"][1]["value"]) * COIN)
+    return seen

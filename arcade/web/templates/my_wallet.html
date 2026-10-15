@@ -1354,7 +1354,11 @@ async function drawDoginals() {
       const send = el("button", "wl-piecesend", "Send"); send.type = "button";
       send.setAttribute("aria-label", `Send Doginal ${g.id}`);
       send.onclick = () => openSend("", g);
-      card.append(doginalPic(g), id, send);
+      // Swap it for a coin on another chain through lock scripts (2026-10-15): its own swap market.
+      const swap = el("a", "wl-piecesend ghost", "Swap");
+      swap.href = `/exchange/swap/doge-doginal-${encodeURIComponent(g.id)}/main-coin`;
+      swap.setAttribute("aria-label", `Swap Doginal ${g.id}`);
+      card.append(doginalPic(g), id, send, swap);
       grid.append(card);
     }
     box.append(grid);

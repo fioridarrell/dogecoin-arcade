@@ -115,6 +115,51 @@ class Doginals:
         return out
 
 
+    def vouch_broadcast(self, raw_hex: str, txid: str) -> bool:
+        """Remember a transaction this arcade just broadcast as carrying no Doginal, when that is
+        certain without asking: every input spends a coin already known clean (its transaction is
+        kept here and that output holds nothing), and no input script carries an inscription
+        envelope ("ord"). Then nothing inscribed went in, so nothing inscribed came out -- above all
+        the small dust outputs a token transaction makes, which would otherwise wait for Doge Soft
+        like any small coin it has not vouched for (2026-10-15: "If creating Omni assets
+        creates a bunch of small dust UTXOs we don't want those to be saved like the rest of the
+        small doginal UTXOs"). True if it was remembered."""
+        try:
+            inputs = _inputs_of(bytes.fromhex(raw_hex))
+        except (ValueError, IndexError):
+            return False
+        if not inputs:
+            return False
+        with self._lock, self._db() as db:
+            for prev, vout, script in inputs:
+                if b"\x03ord" in script:
+                    return False                        # a reveal: this transaction inscribes
+                row = db.execute("SELECT held FROM tx WHERE txid=?", (prev,)).fetchone()
+                if row is None or str(vout) in json.loads(row[0]):
+                    return False                        # not known clean: leave it to Doge Soft
+            db.execute("INSERT OR IGNORE INTO tx VALUES (?,?,?)", (txid, "{}", time.time()))
+        return True
+
+
+def _inputs_of(raw: bytes) -> list[tuple[str, int, bytes]]:
+    """(previous txid, vout, input script) for each input of a serialized (non-segwit) transaction."""
+    def varint(at: int) -> tuple[int, int]:
+        first = raw[at]
+        if first < 0xFD:
+            return first, at + 1
+        size = {0xFD: 2, 0xFE: 4, 0xFF: 8}[first]
+        return int.from_bytes(raw[at + 1:at + 1 + size], "little"), at + 1 + size
+    count, at = varint(4)
+    out = []
+    for _ in range(count):
+        prev = raw[at:at + 32][::-1].hex()
+        vout = int.from_bytes(raw[at + 32:at + 36], "little")
+        length, at = varint(at + 36)
+        out.append((prev, vout, raw[at:at + length]))
+        at += length + 4
+    return out
+
+
 #: An inscription id as ord-dogecoin and Doge Soft write it: the reveal transaction's id, "i", its index.
 INSCRIPTION_ID = re.compile(r"^[0-9a-f]{64}i[0-9]{1,6}$")
 

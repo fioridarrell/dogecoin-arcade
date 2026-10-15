@@ -2,7 +2,7 @@
 {% import "_exui.html" as ex %}
 {% set bname = wall_text(b.name, 'an asset') %}
 {% set qname = wall_text(q.name, 'an asset') %}
-{% set unit = 'for it' if b.kind == 'nft' else 'each' %}
+{% set unit = 'for it' if b.kind in ('nft', 'doginal') else 'each' %}
 {% block title %}{{ bname }}/{{ qname }} · Exchange · DogecoinArcade{% endblock %}
 {% block body %}
 {# Every cross-chain market (2026-10-15: "I want all pairs to be established the same
@@ -27,7 +27,8 @@
     <h1>{{ wall(b.name, 'token name') }}<span class="muted" style="font-weight:600"> / {{ wall(q.name, 'token name') }}</span></h1>
     <div class="muted" style="font-size:.78rem">
       {% if b.kind == 'token' %}#{{ b.asset }} {{ supply_badge(b.prop) }} &middot; <a href="/tokens/{{ b.asset }}">token page</a> &middot;
-      {% elif b.kind == 'nft' %}<a href="/inscriptions/{{ b.asset }}">{{ bname }}</a> &middot;{% endif %}
+      {% elif b.kind == 'nft' %}<a href="/inscriptions/{{ b.asset }}">{{ bname }}</a> &middot;
+      {% elif b.kind == 'doginal' %}<a href="{{ doginal_content(b.asset) }}" target="_blank" rel="noopener">{{ bname }}</a> (Doginal data by <a href="https://dogesoft.io" target="_blank" rel="noopener">Doge Soft</a>) &middot;{% endif %}
       {{ net_badge(b.network) }} {{ bname }} priced in {{ net_badge(q.network) }} {{ qname }}</div>
   </div>
 </div>
@@ -60,7 +61,7 @@
       {% for o in rows %}
       <tr>
         <td><span class="cp-px cp-{{ side_ }}">{{ ex.px(o.price) }}</span><br><small class="muted">{{ qname }} {{ unit }}</small></td>
-        <td>{% if b.kind != 'nft' %}{{ o.base_shown }} {{ bname }}<br>{% endif %}<small class="muted">for {{ o.quote_shown }} {{ qname }} &middot; {{ o.lister|who }}</small></td>
+        <td>{% if b.kind not in ('nft', 'doginal') %}{{ o.base_shown }} {{ bname }}<br>{% endif %}<small class="muted">for {{ o.quote_shown }} {{ qname }} &middot; {{ o.lister|who }}</small></td>
         <td style="text-align:right">
           {% if can_trade_orders %}
           <form method="post" action="/exchange/trade-orders/take" style="margin:0">
@@ -86,7 +87,7 @@
           data-quote-kind="{{ q.kind }}" data-quote-asset="{{ q.asset }}" data-quote-div="{{ '1' if q.divisible else '0' }}"
           data-quote-label="{{ qname }}">
       <span class="muted" style="font-size:.84rem">{{ 'Sell' if side_ == 'ask' else 'Buy' }}</span>
-      {% if b.kind != 'nft' %}
+      {% if b.kind not in ('nft', 'doginal') %}
       <input name="amount" inputmode="decimal" placeholder="{{ bname }}" autocomplete="off">
       <span class="muted" style="font-size:.84rem">at</span>
       <input name="price" inputmode="decimal" placeholder="{{ qname }} each" autocomplete="off">
@@ -105,7 +106,7 @@
       <input type="hidden" name="side" value="{{ 'sell' if side_ == 'ask' else 'buy' }}">
       <input type="hidden" name="base" value="{{ b.key }}"><input type="hidden" name="quote" value="{{ q.key }}">
       <span class="muted" style="font-size:.84rem">{{ 'Sell' if side_ == 'ask' else 'Buy' }}</span>
-      {% if b.kind != 'nft' %}
+      {% if b.kind not in ('nft', 'doginal') %}
       <input name="amount" inputmode="decimal" placeholder="{{ bname }}" autocomplete="off">
       <span class="muted" style="font-size:.84rem">at</span>
       <input name="price" inputmode="decimal" placeholder="{{ qname }} each" autocomplete="off">

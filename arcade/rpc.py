@@ -26,6 +26,9 @@ ADDRESS_EPOCH = 0
 #: Bumped by every broadcast from this process, so a mempool read kept for a few seconds
 #: (web.app._pending_feed) shows what was just sent the moment it is sent.
 BROADCAST_EPOCH = 0
+#: Called with (raw hex, txid) after every broadcast that went through: the Doginal guard vouches
+#: for what the arcade itself sent (doginals.Doginals.vouch_broadcast, 2026-10-15).
+AFTER_BROADCAST = None
 
 class RpcError(Exception):
     """A JSON-RPC level error returned by the node."""
@@ -78,6 +81,11 @@ class RpcClient:
         if data.get("error"):
             err = data["error"]
             raise RpcError(err.get("code", -1), err.get("message", ""), method)
+        if method == "sendrawtransaction" and AFTER_BROADCAST is not None and params:
+            try:
+                AFTER_BROADCAST(str(params[0]), str(data.get("result") or ""))
+            except Exception:                         # noqa: BLE001 -- never fail a send that went
+                pass
         return data.get("result")
 
     def batch(self, calls: list[tuple[str, list[Any]]]) -> list[Any]:

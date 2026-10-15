@@ -256,8 +256,9 @@ def parse_leg_key(key: str) -> dict | None:
     parts = str(key or "").split("-", 2)
     if len(parts) == 2 and parts[1] == "coin" and parts[0] in NETWORKS:
         return {"network": parts[0], "kind": "coin", "asset": ""}
-    if (len(parts) == 3 and parts[0] in NETWORKS and parts[1] in ("token", "nft") and parts[2]
-            and re.fullmatch(r"[0-9]+" if parts[1] == "token" else r"[0-9a-fA-F]{64}(i[0-9]+)?", parts[2])):
+    if (len(parts) == 3 and parts[0] in NETWORKS and parts[1] in ("token", "nft", "doginal") and parts[2]
+            and re.fullmatch(r"[0-9]+" if parts[1] == "token" else r"[0-9a-fA-F]{64}i[0-9]+" if parts[1] == "doginal"
+                             else r"[0-9a-fA-F]{64}(i[0-9]+)?", parts[2])):
         return {"network": parts[0], "kind": parts[1], "asset": parts[2].lower()}
     return None
 
@@ -266,7 +267,7 @@ def base_first(a: dict, b: dict) -> tuple[dict, dict]:
     """(base, quote) for a market between two sides: a token or piece is priced in what it
     is traded for (a coin, or a token on another chain by rank); two coins by RANK."""
     def order(s: dict) -> tuple:
-        return ({"nft": 0, "token": 1, "coin": 2}[s["kind"]], RANK.get(s["network"], 9),
+        return ({"nft": 0, "doginal": 0, "token": 1, "coin": 2}.get(s["kind"], 3), RANK.get(s["network"], 9),
                 int(s["asset"]) if s["kind"] == "token" else 0)
     return (a, b) if order(a) <= order(b) else (b, a)
 

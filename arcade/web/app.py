@@ -702,6 +702,10 @@ def create_app(state: AppState) -> FastAPI:
     if getattr(state, "doge", None) is not None and getattr(state, "home", None) is not None:
         from .. import doginals as _doginals
         fundinglib.GUARD = _doginals.Doginals(Path(state.home) / "doginals.sqlite")
+        # What this arcade itself broadcasts from clean coins is clean too: its token dust is spendable
+        # at once instead of waiting for Doge Soft (2026-10-15).
+        from .. import rpc as _rpclib
+        _rpclib.AFTER_BROADCAST = fundinglib.GUARD.vouch_broadcast
     @contextlib.asynccontextmanager
     async def _lifespan(_app: FastAPI):
         """Hold the shutdown while a send is in flight.
@@ -2832,6 +2836,9 @@ def create_app(state: AppState) -> FastAPI:
         return "PEP" if where else "PEP TEST"
 
     TEMPLATES.env.globals["coin_of"] = _coin_of
+    # A Doginal's picture, from the Doginal source (Doge Soft; arcade/doginals.py), 2026-10-15.
+    TEMPLATES.env.globals["doginal_content"] = lambda inscription: __import__(
+        "arcade.doginals", fromlist=["content_url"]).content_url(str(inscription))
 
     def _tip_chains() -> list[dict[str, Any]]:
         """The chains a tip can be paid on, for the tip form: the tag chain
@@ -14947,15 +14954,55 @@ def create_app(state: AppState) -> FastAPI:
         Only what moving it needs -- the keys are the lock script's own."""
         leg = said if isinstance(said, dict) else {}
         kind = str(leg.get("kind") or "coin")
-        if kind not in ("coin", "token", "nft"):
-            raise ValueError("a lock holds a coin, a token or an NFT")
+        if kind not in ("coin", "token", "nft", "doginal"):
+            raise ValueError("a lock holds a coin, a token, an NFT or a Doginal")
         asset = str(leg.get("asset") or "").lower()
         amount = int(leg.get("amount") or 0)
+        if kind == "doginal":
+            # A tab's own Doginal swaps (2026-10-15: "Build the things that are not built").
+            from ..doginals import INSCRIPTION_ID
+            if not chain.is_doge or not INSCRIPTION_ID.match(asset):
+                raise ValueError("a Doginal leg names its inscription, on Dogecoin")
+            return tradelib.Leg(chain.network, kind, asset, 1, "", "")
         if kind == "token" and (not asset.isdigit() or amount <= 0):
             raise ValueError("a token leg names a token number and an amount")
         if kind == "nft" and (len(asset) != 64 or any(c not in "0123456789abcdef" for c in asset)):
             raise ValueError("an NFT leg names its inscription")
         return tradelib.Leg(chain.network, kind, asset, 1 if kind == "nft" else amount, "", "")
+
+    def _doginal_lock(account, chain, owner: str, leg, redeem: bytes, hint: Any):
+        """The unsigned lock of one Doginal from this account's own coins. `hint` ({txid, vout}) is
+        the coin the tab's wallet already knows carries it; without one, the account's coins are
+        asked about until one does (Doge Soft's answers are kept, so each is asked once)."""
+        from .. import doginals as D, htlc as htlclib
+        guard = fundinglib.GUARD
+        if guard is None:
+            raise ValueError("Doginals are not checked on this node: it locks none")
+        index = state.token_index(chain)
+        spent = _flights.spent_by(account.pubkey, chain.network)
+        with contextlib.closing(index.open()) as db:
+            coins = [c for c in list(utxoslib.unspent(db, owner)) + list(_flights.change_for(account.pubkey, chain.network))
+                     if (c["txid"], int(c["vout"])) not in spent]
+            if isinstance(hint, dict) and hint.get("txid"):
+                want = (str(hint["txid"]).lower(), int(hint.get("vout") or 0))
+                coins = [c for c in coins if (c["txid"], int(c["vout"])) == want] + \
+                        [c for c in coins if (c["txid"], int(c["vout"])) != want]
+            found = None
+            for coin in coins:
+                if int(coin["value"]) > D.POSTAGE_MAX * 100:
+                    continue                    # a Doginal sits on a small coin
+                try:
+                    on = guard.held(coin["txid"]).get(int(coin["vout"]))
+                except D.Unknown:
+                    continue
+                if any(i.get("id") == leg.asset for i in on or []):
+                    found = coin
+                    break
+            if found is None:
+                raise ValueError(f"this account does not hold Doginal {leg.asset} (or Doge Soft cannot say so right now)")
+            return fundinglib.build_doginal_lock(
+                db, chain.params, owner, found, leg.asset, htlclib.p2sh_script(redeem), htlclib.DOGINAL_RESERVE,
+                rate=fees.MIN_FEE_PER_KB, exclude=spent, extra=_flights.change_for(account.pubkey, chain.network))
 
     @app.post("/account/trade/lock")
     def account_trade_lock(request: Request, payload: Any = Body(None)):
@@ -14990,6 +15037,14 @@ def create_app(state: AppState) -> FastAPI:
                 outputs = _class_c_or_b(chain, owner,
                                         inscriptionlib.Transfer(txid=bytes.fromhex(row["txid"])).encode(), mine)
                 what = f"lock inscription #{row['number']} for a swap"
+            elif leg.kind == "doginal":
+                # The coin carrying exactly this Doginal at its first koinu goes in whole as output 0
+                # of the lock, its reserve beside it as output 1 (funding.build_doginal_lock).
+                unsigned = _doginal_lock(account, chain, owner, leg, redeem, said.get("coin"))
+                _quota(account, "send")
+                offer = _offers.add(account.pubkey, chain.network, unsigned, unsigned.what)
+                return JSONResponse({"offer": offer.id, "lock": htlclib.address_of(redeem, chain.params),
+                                     "chain": chain.network, **unsigned.as_json()})
             else:
                 raise ValueError("a coin goes into its lock with an ordinary send")
             address = htlclib.address_of(redeem, chain.params)
@@ -15031,7 +15086,15 @@ def create_app(state: AppState) -> FastAPI:
                 raise ValueError("that coin is not under this lock")
             coin = {"txid": txid, "vout": vout, "value": int(round(float(out["value"]) * COIN))}
             leg = _trade_leg(said.get("leg"), chain, account)
-            if leg.kind == "coin":
+            if leg.kind == "doginal":
+                # Two inputs under the lock: the Doginal (output 0), then its reserve (output 1) as the fee.
+                with chain.rpc() as rpc:
+                    beside = rpc.call("gettxout", txid, 1, True)
+                if vout != 0 or beside is None or beside["scriptPubKey"]["hex"] != out["scriptPubKey"]["hex"]:
+                    raise ValueError("a Doginal's lock is output 0, with its reserve beside it as output 1")
+                inputs, outputs = htlclib.doginal_out(
+                    coin, {"txid": txid, "vout": 1, "value": int(round(float(beside["value"]) * COIN))}, owner)
+            elif leg.kind == "coin":
                 inputs, outputs = htlclib.pay_out(coin, owner)
             else:
                 # The token or NFT moved out by the lock's own reserve, to this account.
@@ -15043,11 +15106,11 @@ def create_app(state: AppState) -> FastAPI:
             else:
                 locktime = 0
             raw = escrowlib.serialize(inputs, outputs, locktime).hex()
-            digest = escrowlib.sighash(inputs, outputs, 0, redeem, locktime).hex()
-        except (ValueError, RpcError) as exc:
+            digests = [escrowlib.sighash(inputs, outputs, n, redeem, locktime).hex() for n in range(len(inputs))]
+        except (ValueError, RpcError) as exc:              # htlc.HtlcError is a ValueError
             return JSONResponse({"detail": str(exc)}, status_code=400)
-        return JSONResponse({"chain": chain.network, "kind": kind, "raw": raw, "sighash": digest,
-                             "value": coin["value"], "to": owner, "locktime": locktime})
+        return JSONResponse({"chain": chain.network, "kind": kind, "raw": raw, "sighash": digests[0],
+                             "sighashes": digests, "value": coin["value"], "to": owner, "locktime": locktime})
 
     @app.post("/account/trade/spend/sign")
     def account_trade_spend_sign(request: Request, payload: Any = Body(None)):
@@ -15058,11 +15121,20 @@ def create_app(state: AppState) -> FastAPI:
         try:
             htlclib, chain, owner, redeem, lock = _lock_for(account, said)
             raw = bytes.fromhex(str(said.get("raw") or ""))
-            sig = bytes.fromhex(str(said.get("signature") or ""))
+            sigs = [bytes.fromhex(str(x)) for x in (said.get("signatures") or [said.get("signature") or ""])]
             with chain.rpc() as rpc:
                 decoded = rpc.call("decoderawtransaction", raw.hex())
-                if len(decoded["vin"]) != 1:
-                    raise ValueError("a lock spend spends one coin")
+                vin = decoded["vin"]
+                # One coin; or a Doginal and its reserve -- outputs 0 and 1 of the same lock transaction.
+                if not (len(vin) == 1 or (len(vin) == 2 and vin[0]["txid"] == vin[1]["txid"]
+                                          and int(vin[0]["vout"]) == 0 and int(vin[1]["vout"]) == 1)):
+                    raise ValueError("a lock spend spends one coin, or a Doginal and its reserve")
+                if len(sigs) != len(vin):
+                    raise ValueError("one signature per input")
+                for v in vin:
+                    under = rpc.call("gettxout", v["txid"], int(v["vout"]), True)
+                    if under is None or under["scriptPubKey"]["hex"] != htlclib.p2sh_script(redeem).hex():
+                        raise ValueError("that spend takes a coin that is not under this lock")
                 # This account, and -- moving a token or NFT out -- what is left of the
                 # lock's coin back into the lock itself; nobody else.
                 ok = {owner, htlclib.address_of(redeem, chain.params)}
@@ -15072,15 +15144,18 @@ def create_app(state: AppState) -> FastAPI:
                 last = decoded["vout"][-1]["scriptPubKey"].get("addresses", [])
                 if last != [owner]:
                     raise ValueError("a lock spend's last output is this account's")
+                from ..trade_watch import put_scripts, WatchError
                 if said.get("kind") == "refund":
-                    script_sig = htlclib.refund_script_sig(sig, redeem)
+                    scripts = [htlclib.refund_script_sig(sig, redeem) for sig in sigs]
                 else:
                     secret = bytes.fromhex(str(said.get("secret") or ""))
                     if htlclib.hash_of(secret) != lock["secret_hash"]:
                         raise ValueError("that secret does not open this lock")
-                    script_sig = htlclib.claim_script_sig(sig, secret, redeem)
-                at = 4 + 1 + 36
-                signed_raw = raw[:at] + txbuild.varint(len(script_sig)) + script_sig + raw[at + 1:]
+                    scripts = [htlclib.claim_script_sig(sig, secret, redeem) for sig in sigs]
+                try:
+                    signed_raw = put_scripts(raw, scripts)
+                except WatchError as exc:
+                    raise ValueError(str(exc))
                 txid = rpc.call("sendrawtransaction", signed_raw.hex())
         except (ValueError, RpcError) as exc:
             return JSONResponse({"detail": str(exc)}, status_code=400)
@@ -15106,14 +15181,19 @@ def create_app(state: AppState) -> FastAPI:
                 raise ValueError("that lock is not this account's to " + kind)
             txid, vout = str(said.get("txid") or "").lower(), int(said.get("vout") or 0)
             raw = bytes.fromhex(str(said.get("raw") or ""))
-            signature = bytes.fromhex(str(said.get("signature") or ""))
+            signatures = [bytes.fromhex(str(x)) for x in (said.get("signatures") or [said.get("signature") or ""])]
             lock_address = htlclib.address_of(redeem, chain.params)
             with chain.rpc() as rpc:
                 decoded = rpc.call("decoderawtransaction", raw.hex())
                 prev = rpc.call("gettxout", txid, vout, True)
             vin = decoded["vin"]
-            if len(vin) != 1 or vin[0].get("txid") != txid or int(vin[0].get("vout", -1)) != vout:
-                raise ValueError("a held spend spends that one lock coin")
+            # That one lock coin; or a Doginal (output 0) and its reserve (output 1), both under the lock.
+            wanted = [(txid, vout)] if len(vin) == 1 else [(txid, 0), (txid, 1)]
+            if len(vin) not in (1, 2) or [(v.get("txid"), int(v.get("vout", -1))) for v in vin] != wanted \
+                    or (len(vin) == 2 and vout != 0):
+                raise ValueError("a held spend spends that one lock coin, or a Doginal and its reserve")
+            if len(signatures) != len(vin):
+                raise ValueError("one signature per input")
             if prev is None or prev["scriptPubKey"]["hex"] != htlclib.p2sh_script(redeem).hex():
                 raise ValueError("that coin is not under this lock, or is already spent")
             if any(a not in (owner, lock_address) for o in decoded["vout"]
@@ -15124,12 +15204,14 @@ def create_app(state: AppState) -> FastAPI:
             locktime = int(decoded.get("locktime", 0))
             if kind == "refund" and locktime != lock["locktime"]:
                 raise ValueError("a refund carries the lock's own time")
-            inputs = [{"txid": txid, "vout": vout, "sequence": int(vin[0].get("sequence", 0xFFFFFFFF))}]
+            inputs = [{"txid": v["txid"], "vout": int(v["vout"]), "sequence": int(v.get("sequence", 0xFFFFFFFF))}
+                      for v in vin]
             outputs = [(round(float(o["value"]) * COIN), bytes.fromhex(o["scriptPubKey"]["hex"]))
                        for o in decoded["vout"]]
-            digest = escrowlib.sighash(inputs, outputs, 0, redeem, locktime)
-            if not _signature_good(mine, digest, signature):
-                raise ValueError("that signature is not this account's over that spend")
+            for n, signature in enumerate(signatures):
+                digest = escrowlib.sighash(inputs, outputs, n, redeem, locktime)
+                if not _signature_good(mine, digest, signature):
+                    raise ValueError("that signature is not this account's over that spend")
             secret = str(said.get("secret") or "").lower()
             where = said.get("secret_lock") if isinstance(said.get("secret_lock"), dict) else None
             if where:
@@ -15145,7 +15227,7 @@ def create_app(state: AppState) -> FastAPI:
             job = state.trade_watch.hold(
                 account=account.pubkey, trade=str(said.get("trade") or "")[:64], network=chain.network,
                 txid=txid, vout=vout, kind=kind, redeem=redeem.hex(), raw=raw.hex(),
-                signature=signature.hex(), secret=secret, secret_lock=where,
+                signature=",".join(x.hex() for x in signatures), secret=secret, secret_lock=where,
                 min_conf=max(0, min(int(said.get("min_conf") or 0), 10)),
                 not_after=int(said.get("not_after") or 0))
         except (ValueError, WatchError, RpcError) as exc:
@@ -15181,7 +15263,14 @@ def create_app(state: AppState) -> FastAPI:
             leg = _trade_leg(said.get("leg"), chain, account)
             with chain.rpc() as rpc:
                 seen = observe(rpc, lock, {owner})
-                if leg.kind != "coin" and seen is not None:
+                if leg.kind == "doginal" and seen is not None:
+                    from ..node_trader import doginal_seen
+                    from .. import htlc as htlclib
+                    redeem = bytes.fromhex(str(said.get("redeem") or ""))
+                    if htlclib.parse(redeem) is None or fundinglib.GUARD is None:
+                        raise ValueError("name the lock script to read a Doginal lock (and this node must check Doginals)")
+                    seen = doginal_seen(seen, leg, redeem, rpc, fundinglib.GUARD)
+                elif leg.kind != "coin" and seen is not None:
                     # The ledger's word on the token or NFT at that lock (node_trader.asset_seen).
                     from ..node_trader import asset_seen
                     from .. import htlc as htlclib
@@ -22033,8 +22122,8 @@ def create_app(state: AppState) -> FastAPI:
                 b, q = _leg_info(key[0]), _leg_info(key[1])
             except ValueError:
                 continue
-            if b["kind"] == "nft":
-                continue        # a piece is not a pair: its swaps are on its own page
+            if b["kind"] in ("nft", "doginal"):
+                continue        # a piece is not a pair: its swaps are on its own page (or the Doginals tab)
             row = by_key.get(key)
             if row is None:
                 face = {"icon": None, "about": ""}
@@ -23187,6 +23276,11 @@ def create_app(state: AppState) -> FastAPI:
                     "key": f"{net}-coin", "ready": chain is not None}
         if chain is None:
             raise ValueError("this node does not run that chain yet")
+        if leg["kind"] == "doginal":
+            if not chain.is_doge:
+                raise ValueError("a Doginal is on Dogecoin")
+            return {**leg, "divisible": False, "name": _doginal_name(leg["asset"]), "prop": None,
+                    "chain": chain, "ready": True, "key": f"{net}-doginal-{leg['asset']}"}
         index = state.token_index(chain)
         if leg["kind"] == "token":
             prop = index.property(int(leg["asset"]))
@@ -23208,6 +23302,8 @@ def create_app(state: AppState) -> FastAPI:
             return leg["network"]
         if leg["kind"] == "token":
             return f"token:{leg['network']}:{leg['asset']}:{1 if leg['divisible'] else 0}"
+        if leg["kind"] == "doginal":
+            return f"doginal:{leg['network']}:{leg['asset']}"
         return f"nft:{leg['network']}:{leg['asset']}"
 
     def _same_chain_market(b: dict, q: dict) -> str:
@@ -23215,6 +23311,8 @@ def create_app(state: AppState) -> FastAPI:
         same picker and page for every pair, same-chain trades stay instant)."""
         if b["kind"] == "nft":
             return f"/inscriptions/{b['asset']}"
+        if b["kind"] == "doginal":
+            return "/exchange?tab=doginals"          # a Doginal for DOGE: the Doginals tab, one transaction
         if q["kind"] == "coin":
             return f"/exchange/pair/{b['asset']}"
         return f"/exchange/pairs/{b['asset']}/{q['asset']}"
@@ -23230,7 +23328,7 @@ def create_app(state: AppState) -> FastAPI:
             b, q = _leg_info(base), _leg_info(quote)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc))
-        if q["kind"] == "nft" or b["key"] == q["key"] or (b["kind"] == q["kind"] == "coin" and b["network"] == q["network"]):
+        if q["kind"] in ("nft", "doginal") or b["key"] == q["key"] or (b["kind"] == q["kind"] == "coin" and b["network"] == q["network"]):
             raise HTTPException(status_code=404, detail="a market prices one thing in another")
         if b["network"] == q["network"]:
             return RedirectResponse(_same_chain_market(b, q), status_code=303)
@@ -23238,7 +23336,7 @@ def create_app(state: AppState) -> FastAPI:
         book = trade_orders.pair_book(view["trade_orders"], b, q)
 
         def shown(leg: dict, units: int) -> str:
-            if leg["kind"] == "nft":
+            if leg["kind"] in ("nft", "doginal"):
                 return "1"
             return format_amount(units, leg["divisible"]) if leg["kind"] == "token" else f"{units / COIN:g}"
         for o in book["asks"] + book["bids"]:
@@ -24223,7 +24321,7 @@ def create_app(state: AppState) -> FastAPI:
             b, q = _leg_info(trade_orders.leg_key(base)), _leg_info(trade_orders.leg_key(quote))
             scale = lambda leg: COIN if leg["kind"] == "coin" or (leg["kind"] == "token" and leg["divisible"]) else 1  # noqa: E731
             each = (int(quote["amount"]) / scale(q)) / (int(base["amount"]) / scale(b))
-            per = "it" if b["kind"] == "nft" else wall_plain(b["name"], "token")
+            per = "it" if b["kind"] in ("nft", "doginal") else wall_plain(b["name"], "token")
             return f"{each:.8g} {wall_plain(q['name'], 'token')} per {per}"
         except Exception:
             return ""
@@ -24232,11 +24330,18 @@ def create_app(state: AppState) -> FastAPI:
         return _side_label({"network": leg.network, "kind": leg.kind, "asset": leg.asset,
                             "amount": leg.amount})
 
+    def _doginal_name(inscription: str) -> str:
+        """A Doginal in words (2026-10-15): "Doginal 1a2b3c4d…i0" -- its inscription id, shortened."""
+        txid, _, n = inscription.partition("i")
+        return f"Doginal {txid[:8]}\u2026i{n}" if n else f"Doginal {inscription[:12]}\u2026"
+
     def _side_label(side: dict) -> str:
         """One side of a swap in words: "3 PEP", "40 Gold", "NFT #12"."""
         net, kind, amount = side["network"], side["kind"], int(side["amount"])
         if kind == "coin":
             return f"{amount / COIN:g} {NETWORKS[net].coin}"
+        if kind == "doginal":
+            return _doginal_name(str(side["asset"]))
         index = None
         try:
             ctx = next((c for c in state.token_chains if c.network == net), None)
@@ -24342,13 +24447,14 @@ def create_app(state: AppState) -> FastAPI:
         from decimal import Decimal, InvalidOperation
         if side not in ("buy", "sell"):
             raise ValueError("say whether you buy or sell")
-        if b["kind"] == "nft":
+        if b["kind"] in ("nft", "doginal"):
             raise ValueError("a price is in a coin or a token, not a piece")
         try:
-            many, each = Decimal(str(amount or "1" if a["kind"] == "nft" else amount).strip()), Decimal(str(price).strip())
+            single = a["kind"] in ("nft", "doginal")
+            many, each = Decimal(str(amount or "1" if single else amount).strip()), Decimal(str(price).strip())
         except InvalidOperation:
             raise ValueError("an amount and a price, both numbers")
-        if a["kind"] == "nft":
+        if a["kind"] in ("nft", "doginal"):
             many = Decimal(1)
         if many <= 0 or each <= 0:
             raise ValueError("an amount and a price, both above zero")

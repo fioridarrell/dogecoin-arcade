@@ -2369,7 +2369,11 @@ async function signLockSpend(wallet, {chain, redeem, txid, vout, kind, secret, l
       if (hashed !== coinsHex(lock.secretHash)) throw new Error("that secret does not open this lock. Nothing was signed.");
     }
     const tx = coins.parseTx(said.raw);
-    if (tx.inputs.length !== 1 || tx.inputs[0].txid !== txid || tx.inputs[0].vout !== Number(vout))
+    // A Doginal comes out with two inputs, both under this lock: the Doginal (output 0 of the lock's
+    // transaction) first and whole, then its reserve (output 1), spent whole as the fee (htlc.doginal_out).
+    const dg = what.kind === "doginal";
+    const wanted = dg ? [[txid, 0], [txid, 1]] : [[txid, Number(vout)]];
+    if (tx.inputs.length !== wanted.length || tx.inputs.some((x, i) => x.txid !== wanted[i][0] || x.vout !== wanted[i][1]))
       throw new Error("the node asked to spend a different coin. Nothing was signed.");
     const mine = coins.p2pkh(await coins.hash160(keys.pubkey));
     const same = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
@@ -2378,25 +2382,33 @@ async function signLockSpend(wallet, {chain, redeem, txid, vout, kind, secret, l
     // ledger's recipient (escrow.move_out).
     const lockScript = await coins.htlcScript(unhex(redeem));
     const fine = (o) => same(o.script, mine)
-      || (what.kind !== "coin" && (o.script[0] === 0x6a || same(o.script, lockScript)));
+      || (what.kind !== "coin" && !dg && (o.script[0] === 0x6a || same(o.script, lockScript)));
     if (!tx.outputs.length || !tx.outputs.every(fine) || !same(tx.outputs[tx.outputs.length - 1].script, mine)
-        || (what.kind !== "coin" && tx.outputs.filter((o) => o.script[0] === 0x6a).length !== 1))
+        || (dg && tx.outputs.length !== 1)
+        || (what.kind !== "coin" && !dg && tx.outputs.filter((o) => o.script[0] === 0x6a).length !== 1))
       throw new Error("that spend pays somebody else. Nothing was signed.");
     if (kind === "refund" && tx.locktime !== lock.locktime)
       throw new Error("a refund must carry the lock's own time. Nothing was signed.");
-    const digest = coinsHex(await coins.sighashAll(tx, 0, unhex(redeem)));
-    if (digest !== String(said.sighash).toLowerCase())
-      throw new Error("the node asked for a signature over different bytes. Nothing was signed.");
-    const signature = coinsHex(await coins.signInput(keys.key, unhex(digest)));
-    return [said, signature];
+    // One signature per input, each over a digest worked out HERE from the lock's own script.
+    const asked2 = said.sighashes || [said.sighash];
+    if (asked2.length !== tx.inputs.length)
+      throw new Error("the node asked for a different number of signatures. Nothing was signed.");
+    const signatures = [];
+    for (let i = 0; i < tx.inputs.length; i++) {
+      const digest = coinsHex(await coins.sighashAll(tx, i, unhex(redeem)));
+      if (digest !== String(asked2[i]).toLowerCase())
+        throw new Error("the node asked for a signature over different bytes. Nothing was signed.");
+      signatures.push(coinsHex(await coins.signInput(keys.key, unhex(digest))));
+    }
+    return [said, signatures];
 }
 
 export async function tradeSpend(wallet, {chain, redeem, txid, vout, kind, secret, leg}) {
   return working(async () => {
-    const [said, signature] = await signLockSpend(wallet, {chain, redeem, txid, vout, kind, secret, leg});
+    const [said, signatures] = await signLockSpend(wallet, {chain, redeem, txid, vout, kind, secret, leg});
     const back = await fetch("/account/trade/spend/sign", {
       method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({chain: said.chain, redeem, raw: said.raw, signature, kind,
+      body: JSON.stringify({chain: said.chain, redeem, raw: said.raw, signature: signatures[0], signatures, kind,
                             secret: kind === "claim" ? secret : ""}),
     });
     const done = await back.json();
@@ -2411,11 +2423,11 @@ export async function tradeSpend(wallet, {chain, redeem, txid, vout, kind, secre
  *  `secret_lock` says where it will show up (this account's own lock, once claimed). */
 export async function tradePresign(wallet, {chain, redeem, txid, vout, kind, secret, leg, secret_lock,
                                             min_conf, not_after, trade}) {
-  const [said, signature] = await signLockSpend(wallet, {chain, redeem, txid, vout, kind,
-                                                          secret: secret || "", leg, presign: true});
+  const [said, signatures] = await signLockSpend(wallet, {chain, redeem, txid, vout, kind,
+                                                           secret: secret || "", leg, presign: true});
   const asked = await fetch("/account/trade/watch", {
     method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({chain: said.chain, redeem, txid, vout, kind, raw: said.raw, signature,
+    body: JSON.stringify({chain: said.chain, redeem, txid, vout, kind, raw: said.raw, signature: signatures[0], signatures,
                           secret: secret || "", secret_lock: secret_lock || null,
                           min_conf: min_conf || 0, not_after: not_after || 0, trade: trade || ""}),
   });
@@ -2474,6 +2486,8 @@ export async function checkLock(trade, seen, theirs) {
   const redeem = theirs ? trade.theirRedeem : trade.myRedeem;
   const script = coinsHex(await coins.htlcScript(redeem));
   if (seen.script_hex !== script) return "that lock's script is not the one agreed (hash, keys or lock time differ)";
+  if (leg.kind === "doginal" && (seen.vout !== 0 || !seen.asset_ok))
+    return "that lock does not hold the agreed Doginal at the start of output 0, with its reserve beside it";
   if (seen.value < lockValue(leg)) {
     if (leg.kind === "coin") return `that lock holds ${seen.value}, less than the ${leg.amount} agreed`;
     return "that lock holds too little coin to move its token or NFT out again";
@@ -2485,6 +2499,8 @@ export async function checkLock(trade, seen, theirs) {
 /** The coin a lock output for `leg` must hold (trade.lock_value): the amount for coin,
  *  else the reserve that pays for moving the token or NFT out again. */
 export function lockValue(leg) {
+  // A Doginal's lock output holds its own coin, whatever that is worth (trade.lock_value).
+  if (leg.kind === "doginal") return 1;
   return leg.kind === "coin" ? leg.amount : TRADE.LOCK_RESERVE;
 }
 
@@ -2766,7 +2782,8 @@ export async function tradeTick(wallet, id) {
     return confirm(wallet, offer, trade.approved ? {reviewed: true} : null);
     });
     const script = coinsHex(await coins.htlcScript(myRedeem));
-    let vout = -1;
+    // A Doginal's lock is output 0 (its reserve output 1, under the same script).
+    let vout = trade.give.kind === "doginal" ? 0 : -1;
     for (let n = 0; n < 4 && vout < 0; n++) {
       const seen = await tradeFacts(trade.give.network, sent.txid, n).catch(() => null);
       if (seen && seen.script_hex === script && seen.value < lockValue(trade.give)) continue;

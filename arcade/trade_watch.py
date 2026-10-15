@@ -65,16 +65,48 @@ class WatchError(ValueError):
     """A job this node will not hold."""
 
 
-def complete(raw: bytes, signature: bytes, redeem: bytes, kind: str, secret: bytes = b"") -> bytes:
-    """The spend with its one input script in place (as /account/trade/spend/sign does)."""
-    if kind == "refund":
-        script_sig = H.refund_script_sig(signature, redeem)
-    else:
-        script_sig = H.claim_script_sig(signature, secret, redeem)
-    at = 4 + 1 + 36                       # version, one input, its outpoint
-    if raw[at] != 0:
-        raise WatchError("the spend already carries an input script")
-    return raw[:at] + txbuild.varint(len(script_sig)) + script_sig + raw[at + 1:]
+def _varint_at(raw: bytes, at: int) -> tuple[int, int]:
+    first = raw[at]
+    if first < 0xFD:
+        return first, at + 1
+    size = {0xFD: 2, 0xFE: 4, 0xFF: 8}[first]
+    return int.from_bytes(raw[at + 1:at + 1 + size], "little"), at + 1 + size
+
+
+def put_scripts(raw: bytes, scripts: list[bytes]) -> bytes:
+    """`raw` with each input's (empty) script replaced by `scripts`, in order -- one per input.
+    A Doginal comes out of its lock with two inputs, the Doginal and its reserve, both under the
+    lock and each with its own signature (htlc.doginal_out, 2026-10-15); everything else, one."""
+    count, at = _varint_at(raw, 4)
+    if count != len(scripts):
+        raise WatchError(f"the spend has {count} inputs, and {len(scripts)} signatures came with it")
+    out = bytearray(raw[:at])
+    for script in scripts:
+        out += raw[at:at + 36]                       # its outpoint
+        length, after = _varint_at(raw, at + 36)
+        if length != 0:
+            raise WatchError("the spend already carries an input script")
+        out += txbuild.varint(len(script)) + script
+        out += raw[after:after + 4]                  # its sequence
+        at = after + 4
+    return bytes(out) + raw[at:]
+
+
+def signatures_of(signature: str | bytes) -> list[bytes]:
+    """A held job's signature(s): one hex string, or several joined by commas (one per input)."""
+    if isinstance(signature, bytes):
+        return [signature]
+    return [bytes.fromhex(part) for part in str(signature).split(",") if part]
+
+
+def complete(raw: bytes, signature: bytes | str, redeem: bytes, kind: str, secret: bytes = b"") -> bytes:
+    """The spend with its input script(s) in place (as /account/trade/spend/sign does): one per
+    input, each the lock's own refund or claim script with that input's signature."""
+    scripts = []
+    for sig in signatures_of(signature):
+        scripts.append(H.refund_script_sig(sig, redeem) if kind == "refund"
+                       else H.claim_script_sig(sig, secret, redeem))
+    return put_scripts(raw, scripts)
 
 
 class Watch:
@@ -171,7 +203,7 @@ class Watch:
                 self._set(job["id"], status="spent", note="the lock is spent")
                 return "spent"
             raw, redeem = bytes.fromhex(job["raw"]), bytes.fromhex(job["redeem"])
-            sig = bytes.fromhex(job["signature"])
+            sig = job["signature"]           # one hex signature, or one per input joined by commas
             if job["kind"] == "refund":
                 lock = H.parse(redeem)
                 median = int(rpc.call("getblockchaininfo").get("mediantime", 0))
