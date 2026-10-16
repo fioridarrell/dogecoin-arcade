@@ -76,7 +76,7 @@ def check_order(said: Any, now: float | None = None) -> dict:
     if not isinstance(said.get("id"), str) or not _ID.match(said["id"]):
         raise OrderError("an order id is 8-64 letters, digits, - or _")
     give, get = _side(said.get("give")), _side(said.get("get"))
-    if give["network"] == get["network"]:
+    if give["network"] == get["network"] and not one_chain_offer(give, get):
         # 2026-10-13: a swap on ONE chain is instant -- one atomic transaction on that
         # chain's own markets (pre-signed legs) -- so lock scripts are for two chains only.
         raise OrderError("a swap on one chain settles in one transaction on its own market")
@@ -242,6 +242,14 @@ def coin_book(orders: list[dict], base: str, quote: str) -> dict:
 #: The order coins go in a coin pair's name: the lower rank is the base (PEP TEST/PEP,
 #: PEP TEST/DOGE, PEP/DOGE), so each pair of chains has one market, not two.
 RANK = {"regtest": 0, "test": 0, "main": 1, "doge": 2}
+
+
+def one_chain_offer(a: dict, b: dict) -> bool:
+    """A swap on ONE chain that lock scripts still settle: a Doginal against a coin on Dogecoin (2026-10-15: offers in
+    DOGE for a Doginal -- Dogecoin's own one-transaction market is listings only, the seller naming the price, so an offer
+    goes through the same two locks a cross-chain swap does, both on Dogecoin)."""
+    kinds = {a.get("kind"), b.get("kind")}
+    return a.get("network") == b.get("network") == "doge" and kinds == {"doginal", "coin"}
 
 
 def leg_key(side: dict) -> str:

@@ -205,5 +205,5 @@ def test_someone_elses_wallet_shows_their_doginals_with_an_offer(client, monkeyp
         store.add_key_announcement("c1" * 32, them, bytes(32), "fp", 100, 1, stated=True, doge_address=ME)
     page = " ".join(app.get("/u/them/wallet").text.split())
     assert f'data-ord="{INS}"' in page and f'src="/content/{INS}"' in page, "their Doginal, its art from the chain"
-    assert f"/exchange/swap/doge-doginal-{INS}/main-coin?side=buy#x-form" in page and "Make an offer" in page
+    assert f"/exchange/swap/doge-doginal-{INS}/doge-coin?side=buy#x-form" in page and "Make an offer" in page
     assert f'data-ord="{T2}i0"' in page, "every one of them"

@@ -181,5 +181,26 @@ def test_a_doginal_can_be_priced_in_any_coin_or_held_token(client, monkeypatch, 
     for coin in ("doge-coin", "main-coin", f"{state.messaging.network}-coin"):
         assert f"quote={coin}" in page, coin
     go = lambda q: app.get(f"/exchange/pairs?base={key}&quote={q}", follow_redirects=False).headers["location"]  # noqa: E731
-    assert go("doge-coin") == "/exchange?tab=doginals", "for DOGE: the Doginals tab, one transaction"
+    assert go("doge-coin") == f"/exchange/swap/{key}/doge-coin", "for DOGE: its market of offers (lock scripts)"
+    offers = app.get(f"/exchange/swap/{key}/doge-coin")
+    assert offers.status_code == 200 and "list it on the Doginals tab" in offers.text, "listings stay on the tab"
     assert go(f"{state.messaging.network}-coin") == f"/exchange/swap/{key}/{state.messaging.network}-coin"
+
+
+def test_an_offer_in_doge_for_a_doginal_is_an_order_lock_scripts_settle():
+    """A swap on one chain is still refused -- except a Doginal against a coin on Dogecoin, which has no other way to make
+    an offer (2026-10-15)."""
+    import secrets as S
+    import time as T
+    base = {"trade_key": "02" + S.token_hex(32), "msg_key": S.token_hex(32), "node": S.token_hex(32),
+            "expires": int(T.time()) + 3600}
+    offer = {"id": "ofr-00000001", "give": {"network": "doge", "kind": "coin", "asset": "", "amount": 5 * COIN},
+             "get": {"network": "doge", "kind": "doginal", "asset": INS, "amount": 1}, **base}
+    O.batch_json([offer])                                      # accepted
+    same = {**offer, "id": "ofr-00000002", "get": {"network": "doge", "kind": "coin", "asset": "", "amount": COIN}}
+    with pytest.raises(O.OrderError):
+        O.batch_json([same])
+    pep = {**offer, "id": "ofr-00000003", "give": {"network": "main", "kind": "coin", "asset": "", "amount": COIN},
+           "get": {"network": "main", "kind": "token", "asset": "5", "amount": 1}}
+    with pytest.raises(O.OrderError):
+        O.batch_json([pep])

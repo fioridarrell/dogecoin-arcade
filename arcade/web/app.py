@@ -3603,7 +3603,7 @@ def create_app(state: AppState) -> FastAPI:
                 kind = "doginal" if chain.is_doge else "ord"
                 out.append({"id": i["id"], "txid": coin["txid"], "vout": int(coin["vout"]), "network": chain.network,
                             "kind": kind, "value": int(coin["value"]),
-                            "market": (f"/exchange/swap/doge-doginal-{i['id']}/main-coin?side=buy#x-form"
+                            "market": (f"/exchange/swap/doge-doginal-{i['id']}/doge-coin?side=buy#x-form"
                                        if chain.is_doge else "")})
         return out
 
@@ -23251,6 +23251,10 @@ def create_app(state: AppState) -> FastAPI:
         if b["kind"] == "nft" and q["kind"] != "coin":
             state.flash("A piece on its own chain is sold for that chain's coin, on its own page.", "err")
             return back
+        if trade_orders.one_chain_offer(b, q):
+            # A Doginal for DOGE: its market of offers (lock scripts on Dogecoin); listings stay on the Doginals tab.
+            x, y = trade_orders.base_first(b, q)
+            return RedirectResponse(f"/exchange/swap/{x['key']}/{y['key']}", status_code=303)
         where = _same_chain_market(b, q)
         if b["network"] == chain.network or b["kind"] == "doginal":     # the Doginals tab is on no chain switch
             return RedirectResponse(where, status_code=303)
@@ -23546,7 +23550,7 @@ def create_app(state: AppState) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc))
         if q["kind"] in ("nft", "doginal") or b["key"] == q["key"] or (b["kind"] == q["kind"] == "coin" and b["network"] == q["network"]):
             raise HTTPException(status_code=404, detail="a market prices one thing in another")
-        if b["network"] == q["network"]:
+        if b["network"] == q["network"] and not trade_orders.one_chain_offer(b, q):
             return RedirectResponse(_same_chain_market(b, q), status_code=303)
         view = _trade_order_view(request)
         book = trade_orders.pair_book(view["trade_orders"], b, q)
@@ -24712,7 +24716,7 @@ def create_app(state: AppState) -> FastAPI:
             return RedirectResponse("/exchange?tab=tokens#trade-orders", status_code=303)
         x, y = trade_orders.base_first(a, b)
         market = f"/exchange/swap/{x['key']}/{y['key']}"
-        if a["network"] == b["network"]:
+        if a["network"] == b["network"] and not trade_orders.one_chain_offer(a, b):
             return _open_pair(request, base, quote, may_switch=True)
         try:
             if not _node_trades():

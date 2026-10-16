@@ -50,6 +50,12 @@
   </div>
 </div>
 {% endif %}
+{% if b.kind == 'doginal' and q.network == 'doge' %}
+{# Offers in DOGE (2026-10-15): bids here settle through two locks on Dogecoin. Selling at a price you name is
+   one transaction on the Doginals tab. #}
+<p class="ex-note" style="margin:0 0 8px">Offers in DOGE live here. To sell it at a price you name, in one transaction,
+  <a href="/exchange?tab=doginals">list it on the Doginals tab</a>.</p>
+{% endif %}
 <p class="ex-note" style="margin:0 0 12px"><span class="ex-pill done">Lock scripts</span>
   Each swap settles on both chains at once: either both sides get paid, or both get their own back.
   Nobody holds anybody's coins, tokens or pieces, and each swap is taken whole.</p>

@@ -202,9 +202,10 @@ class NodeTrader:
         """An order this node answers: it gives `give` for `get`, each
         {network, kind, asset, amount}. Keys come with a proposal, not the order."""
         import json
-        if give["network"] == get["network"]:
+        from .trade_orders import one_chain_offer
+        if give["network"] == get["network"] and not one_chain_offer(give, get):
             raise ValueError("a swap on one chain settles in one transaction on its own market; "
-                             "lock-script swaps are between two chains")
+                             "lock-script swaps are between two chains (and Doginal offers in DOGE)")
         what = lambda d: {k: d.get(k, "") for k in ("network", "kind", "asset")} | {"amount": int(d["amount"])}
         with self._db() as conn:
             conn.execute("INSERT OR REPLACE INTO standing_order(id, give, get) VALUES(?,?,?)",
