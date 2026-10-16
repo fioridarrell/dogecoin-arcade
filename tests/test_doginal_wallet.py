@@ -185,3 +185,25 @@ def test_a_coin_carrying_a_doginal_is_held_not_spendable(client, monkeypatch, tm
     assert row["spendable"] == 300_000_000, "the plain coin is still spendable"
     page = app.get("/me/wallet").text
     assert "held in ${c.network === \"doge\" ? \"Doginals\" : \"inscriptions\"}" in page
+
+
+def test_someone_elses_wallet_shows_their_doginals_with_an_offer(client, monkeypatch, tmp_path):
+    """2026-10-15: "We should be able to see doginals in others wallets. To make offers and all of them." Their
+    Dogecoin address (published with their key), its Doginals read from the chain, each with Make an offer."""
+    from arcade.db import Database
+    from arcade.state import install_schema
+    app, state = client
+    _doge_account(app, state, monkeypatch, tmp_path)           # ME's Dogecoin coins: a Doginal (T1), another (T2), a plain one
+    them = b58check_encode(state.messaging.params.pubkeyhash_version, hash160(_pubkey(int("41" * 32, 16))))
+    db = Database(state.home / f"{state.messaging.network}-ledger.sqlite")
+    install_schema(db)
+    db.conn.execute("INSERT INTO tag(tag,address,claimed_txid,block_height,position) VALUES('them',?,?,100,0)",
+                    (them, "t" * 64))
+    db.conn.commit()
+    db.close()
+    with state.store() as store:
+        store.add_key_announcement("c1" * 32, them, bytes(32), "fp", 100, 1, stated=True, doge_address=ME)
+    page = " ".join(app.get("/u/them/wallet").text.split())
+    assert f'data-ord="{INS}"' in page and f'src="/content/{INS}"' in page, "their Doginal, its art from the chain"
+    assert f"/exchange/swap/doge-doginal-{INS}/main-coin?side=buy#x-form" in page and "Make an offer" in page
+    assert f'data-ord="{T2}i0"' in page, "every one of them"

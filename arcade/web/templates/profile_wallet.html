@@ -29,6 +29,8 @@
 .pw-tokens{display:flex;flex-direction:column;margin-top:6px;border-top:1px solid var(--line)}
 .pw-token{display:flex;justify-content:space-between;gap:12px;padding:9px 2px;border-bottom:1px solid var(--line);text-decoration:none}
 .pw-token .pw-name{text-align:left;min-width:0;overflow-wrap:anywhere}
+.pw-ords{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px}
+.pw-ord{display:flex;flex-direction:column;gap:6px}
 .pw-token .pw-amt{color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 </style>
 {# Every coin they hold, one row each, the name left and the balance right like the tokens (2026-10-15). #}
@@ -66,6 +68,22 @@
       <span class="pw-name">{% if row['name'] %}{{ wall(row['name']) }}{% else %}#{{ row['property_id'] }}{% endif %}</span>
       <span class="pw-amt">{{ row['display'] }}</span>
     </a>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {# Their Doginals (Dogecoin) and ord inscriptions (PEP mainnet), read from the chain by this node, each with a way to
+     make an offer (2026-10-15: "We should be able to see doginals in others wallets. To make offers"). #}
+  {% if held.ords %}
+  <h3 style="margin:14px 0 8px;font-size:.95rem">{{ 'Doginals' if held.chain.is_doge else 'Ord inscriptions' }}</h3>
+  <div class="pw-ords">
+    {% for o in held.ords %}
+    <div class="pw-ord" data-ord="{{ o.id }}">
+      <iframe src="/content/{{ o.id }}" title="{{ o.id }}" loading="lazy" sandbox="allow-scripts"
+              style="border:0;width:100%;aspect-ratio:1;display:block;pointer-events:none;border-radius:8px"></iframe>
+      <div class="mono muted" style="font-size:.72rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{ o.id }}">{{ o.id }}</div>
+      {% if o.market %}<a class="btn small" href="{{ o.market }}">Make an offer</a>{% endif %}
+    </div>
     {% endfor %}
   </div>
   {% endif %}

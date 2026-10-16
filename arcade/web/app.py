@@ -3575,6 +3575,44 @@ def create_app(state: AppState) -> FastAPI:
         out["doge"] = published or (_doge_twin(out["mainnet"]) if out["mainnet"] else "")
         return out
 
+    def _ords_at(address: str, limit: int = 60) -> list[dict]:
+        """The ord inscriptions on an address's small coins -- Doginals on Dogecoin, inscriptions on Pepecoin mainnet --
+        read from the chain by this node (doginals.trace), for somebody else's wallet page (2026-10-15: "We should
+        be able to see doginals in others wallets. To make offers"). [{id, txid, vout, network, kind, market}]."""
+        from .. import doginals as D
+        guard = fundinglib.guard_for(address) if address else None
+        chain = next((c for c in state.token_chains if c.network in ("doge", "main")
+                      and fundinglib.guard_for(address) is not None
+                      and address and _addr_version(address) == c.params.pubkeyhash_version), None)
+        if guard is None or chain is None:
+            return []
+        out: list[dict] = []
+        try:
+            with contextlib.closing(state.token_index(chain).open()) as db:
+                coins = [c for c in utxoslib.unspent(db, address) if int(c["value"]) <= D.TRACE_MAX][:limit]
+        except Exception:
+            return []
+        for coin in coins:
+            try:
+                on = guard.held(coin["txid"]).get(int(coin["vout"])) or []
+            except D.Unknown:
+                continue
+            for i in on:
+                if not i.get("id"):
+                    continue
+                kind = "doginal" if chain.is_doge else "ord"
+                out.append({"id": i["id"], "txid": coin["txid"], "vout": int(coin["vout"]), "network": chain.network,
+                            "kind": kind, "value": int(coin["value"]),
+                            "market": (f"/exchange/swap/doge-doginal-{i['id']}/main-coin?side=buy#x-form"
+                                       if chain.is_doge else "")})
+        return out
+
+    def _addr_version(address: str) -> int | None:
+        try:
+            return b58check_decode(str(address))[0]
+        except Exception:
+            return None
+
     @app.get("/u/{tag}/wallet", response_class=HTMLResponse)
     def profile_wallet(request: Request, tag: str):
         """What somebody holds, read from the chain for the addresses their
@@ -3622,6 +3660,7 @@ def create_app(state: AppState) -> FastAPI:
                     entry["coins"] = utxoslib.balance(db, where) / 100_000_000
             except Exception:
                 entry["coins"] = None     # their balance is the node's to know
+            entry["ords"] = _ords_at(where)
             holdings.append(entry)
         return render(request, "profile_wallet.html", tag=wanted,
                       address=address, profile=profile, holdings=holdings, coins=coins)
