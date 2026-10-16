@@ -9521,6 +9521,27 @@ def create_app(state: AppState) -> FastAPI:
         return sum(coin["value"] for coin in utxoslib.unspent(db, address)
                    if (coin["txid"], coin["vout"]) in spent)
 
+    def _inscribed(db, address: str) -> int:
+        """Satoshis of this address's coins that carry an inscription (a Doginal, or one on Pepecoin mainnet) or could
+        not be read -- held, never spent by an ordinary send (funding.choose keeps them out), so never counted as
+        spendable either (2026-10-15: @apple's wallet said 0.01 DOGE to spend, and that coin was Anti Doginal Dog #1089).
+        Only small coins are read; each is read from the chain once and kept."""
+        from .. import doginals as D
+        guard = fundinglib.guard_for(address)
+        if guard is None:
+            return 0
+        held = 0
+        for coin in utxoslib.unspent(db, address):
+            if int(coin["value"]) > D.TRACE_MAX:
+                continue
+            try:
+                on = guard.held(coin["txid"]).get(int(coin["vout"]))
+            except D.Unknown:
+                on = [{"unknown": True}]
+            if on:
+                held += int(coin["value"])
+        return held
+
     def _spendable(row: dict) -> None:
         """The big number (Order item 4, 2026-09-25): what can be spent now.
 
@@ -9531,6 +9552,7 @@ def create_app(state: AppState) -> FastAPI:
         what is leaving under it."""
         row["spendable"] = max(0, int(row.get("balance") or 0)
                                - int(row.get("leaving") or 0)
+                               - int(row.get("inscribed") or 0)
                                + int(row.get("incoming") or 0))
 
     _topping: set = set()
@@ -9941,6 +9963,7 @@ def create_app(state: AppState) -> FastAPI:
                                                    chain.network, db, address)
                     said["leaving"] = _leaving(account.pubkey, chain.network,
                                                db, address)
+                    said["inscribed"] = _inscribed(db, address)
                     _spendable(said)
                 _top_off_later(account.pubkey, address, int(said.get("spendable") or 0))
                 said["tag"] = index.tag_of(address) or ""
@@ -10008,6 +10031,7 @@ def create_app(state: AppState) -> FastAPI:
                                                       one.network, db, here)
                         row["leaving"] = _leaving(account.pubkey, one.network,
                                                   db, here)
+                        row["inscribed"] = _inscribed(db, here)
                 except Exception:
                     pass                   # a node still catching up says 0
             _spendable(row)

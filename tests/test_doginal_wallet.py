@@ -172,3 +172,16 @@ def test_doge_soft_away_says_so_through_the_node(client, monkeypatch, tmp_path):
     app, state = client
     _doge_account(app, state, monkeypatch, tmp_path, answers={})
     assert app.get(f"/account/doginal-tx/{T1}").status_code == 503
+
+
+def test_a_coin_carrying_a_doginal_is_held_not_spendable(client, monkeypatch, tmp_path):
+    """2026-10-15: @apple's wallet said 0.01 DOGE to spend, and that coin was Anti Doginal Dog #1089. A coin carrying an
+    inscription is held: left out of the big number, and said beside it."""
+    app, state = client
+    _doge_account(app, state, monkeypatch, tmp_path)
+    row = next(c for c in app.get("/account").json()["chains"] if c["network"] == "doge")
+    assert row["inscribed"] == 200_000, "the two Doginals' coins (T1, T2)"
+    assert row["spendable"] == row["balance"] - 200_000 - int(row.get("leaving") or 0) + int(row.get("incoming") or 0)
+    assert row["spendable"] == 300_000_000, "the plain coin is still spendable"
+    page = app.get("/me/wallet").text
+    assert "held in ${c.network === \"doge\" ? \"Doginals\" : \"inscriptions\"}" in page

@@ -382,6 +382,8 @@ function drawHead() {
   const bits = [];
   if (c.incoming) bits.push(["in", `${coinsOf(c.incoming)} arriving`]);
   if (c.leaving) bits.push(["out", `${coinsOf(c.leaving)} leaving`]);
+  // Coins carrying an inscription are held, not spendable (2026-10-15): said beside the number they are left out of.
+  if (c.inscribed) bits.push(["out", `${coinsOf(c.inscribed)} held in ${c.network === "doge" ? "Doginals" : "inscriptions"}`]);
   if (asset) {
     const page = el("a", "", `Token #${asset.property_id}`);
     page.href = `/tokens/${asset.property_id}?chain=${encodeURIComponent(c.network)}`;
