@@ -135,6 +135,20 @@ class Unsigned:
 #: to an ordinary send. GUARD_APPLIES says which addresses it watches (Dogecoin's, version 30: "D...").
 GUARD = None
 GUARD_APPLIES = lambda address: str(address).startswith("D")   # noqa: E731
+#: More guards, each (applies(address), guard): the same chain reading for Pepecoin MAINNET, where ord envelopes sit on small
+#: coins too (2026-10-15: "do the same for small .01 pep txs. Not made by the Arcade" -- the arcade's own coins are
+#: vouched clean when it broadcasts them, doginals.vouch_broadcast).
+GUARDS: list = []
+
+
+def guard_for(address: str):
+    """The inscription guard that watches `address`, or None."""
+    if GUARD is not None and GUARD_APPLIES(address):
+        return GUARD
+    for applies, guard in GUARDS:
+        if applies(address):
+            return guard
+    return None
 
 
 def choose(db, address: str, target: int, exclude=frozenset(),
@@ -157,8 +171,9 @@ def choose(db, address: str, target: int, exclude=frozenset(),
     listed = utxos.unspent(db, address)
     available = [u for u in listed
                  if (u["txid"], u["vout"]) not in exclude]
-    if GUARD is not None and GUARD_APPLIES(address):   # a Dogecoin wallet: coins carrying Doginals stay put (arcade/doginals.py)
-        available = GUARD.spendable(available)
+    guard = guard_for(address)       # coins carrying an inscription stay put (arcade/doginals.py): Dogecoin and PEP mainnet
+    if guard is not None:
+        available = guard.spendable(available)
     # An `extra` coin the index also lists is the same coin twice. Once a block
     # has read a change output it stands in both places at once -- the note this
     # node made of it, and the row the scanner wrote -- and until the note ages
@@ -988,7 +1003,7 @@ def build_doginal_send(db, params: Params, address: str, coin: dict, inscription
     """Send one Doginal on purpose (2026-10-14), the way ord-dogecoin's wallet does it
     (src/subcommand/wallet/transaction_builder.rs): the inscribed coin is input 0 and its WHOLE value goes to the recipient
     as output 0, so the inscription's first koinu is the recipient output's first koinu; the fee comes from other, clean
-    coins (GUARD.spendable) added after it; change last, back to the sender. Refused unless Doge Soft says this coin holds
+    coins (GUARD.spendable) added after it; change last, back to the sender. Refused unless the chain says this coin holds
     exactly this inscription at offset 0 -- a coin with two inscriptions, or one sitting further in, would need an
     alignment output first, and sending it plainly could hand the wrong piece away or burn it to fees."""
     return _doginal_first(db, address, coin, inscription, p2pkh_script(to), [], rate, exclude, extra,

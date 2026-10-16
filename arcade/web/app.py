@@ -698,14 +698,32 @@ def _above_dust(sats: int, what: str) -> None:
 
 def create_app(state: AppState) -> FastAPI:
     TEMPLATES._screen_of = state.screen          # the feed card's screen_text()
-    # [Claude 2026-10-14] Doginals stay put: a Dogecoin wallet's ordinary sends never spend a coin carrying one (arcade/doginals.py)
-    if getattr(state, "doge", None) is not None and getattr(state, "home", None) is not None:
-        from .. import doginals as _doginals
-        fundinglib.GUARD = _doginals.Doginals(Path(state.home) / "doginals.sqlite")
-        # What this arcade itself broadcasts from clean coins is clean too: its token dust is spendable
-        # at once instead of waiting for Doge Soft (2026-10-15).
-        from .. import rpc as _rpclib
-        _rpclib.AFTER_BROADCAST = fundinglib.GUARD.vouch_broadcast
+    # [Claude 2026-10-14] Inscriptions stay put: a wallet's ordinary sends never spend a coin carrying one (arcade/doginals.py).
+    # Read from each chain by its own node (2026-10-15, "Remove Doge Soft API"): Doginals on Dogecoin, and the same ord
+    # envelopes on small Pepecoin MAINNET coins ("do the same for small .01 pep txs. Not made by the Arcade").
+    fundinglib.GUARDS = []
+    if getattr(state, "home", None) is not None:
+        from .. import doginals as _doginals, rpc as _rpclib
+        _guards = []
+        if getattr(state, "doge", None) is not None:
+            fundinglib.GUARD = _doginals.Doginals(Path(state.home) / "doginals.sqlite", rpc_factory=state.doge.rpc)
+            _guards.append(fundinglib.GUARD)
+        _main = next((c for c in state.all_chains if c.network == "main"), None)
+        if _main is not None:
+            _pep = _doginals.Doginals(Path(state.home) / "pep-inscriptions.sqlite", rpc_factory=_main.rpc)
+            _version = NETWORKS["main"].pubkeyhash_version
+
+            def _on_pep_main(address: str, _v=_version) -> bool:
+                try:
+                    return b58check_decode(str(address))[0] == _v
+                except Exception:
+                    return False
+            fundinglib.GUARDS = [(_on_pep_main, _pep)]
+            _guards.append(_pep)
+        # What this arcade itself broadcasts from clean coins is clean too: its token dust is spendable at once instead of
+        # being read like any small coin (2026-10-15).
+        if _guards:
+            _rpclib.AFTER_BROADCAST = lambda raw, txid, _g=tuple(_guards): [g.vouch_broadcast(raw, txid) for g in _g]
     @contextlib.asynccontextmanager
     async def _lifespan(_app: FastAPI):
         """Hold the shutdown while a send is in flight.
@@ -2839,7 +2857,7 @@ def create_app(state: AppState) -> FastAPI:
         return "PEP" if where else "PEP TEST"
 
     TEMPLATES.env.globals["coin_of"] = _coin_of
-    # A Doginal's picture, from the Doginal source (Doge Soft; arcade/doginals.py), 2026-10-15.
+    # An inscription's content: this arcade's own /content/<id>, read from the chain (arcade/doginals.py), 2026-10-15.
     TEMPLATES.env.globals["doginal_content"] = lambda inscription: __import__(
         "arcade.doginals", fromlist=["content_url"]).content_url(str(inscription))
 
@@ -5790,6 +5808,27 @@ def create_app(state: AppState) -> FastAPI:
         return _with_viewer_shim(_inscription_content(key, download, reveal),
                                  "" if download else v)
 
+    def _chain_inscription(key: str):
+        """An ord inscription (a Doginal, or one on Pepecoin mainnet) this arcade's own index does not hold, read from the
+        chain by the node and kept (doginals.Doginals.content), 2026-10-15: so a Doginal shows -- and a recursive one
+        finds the pieces it asks /content/<id> for -- without any outside index. None when it is not one."""
+        from .. import doginals as D
+        if not D.INSCRIPTION_ID.match(str(key or "").lower()):
+            return None
+        for guard in [g for g in [fundinglib.GUARD] if g is not None] + [g for _, g in fundinglib.GUARDS]:
+            try:
+                ctype, body = guard.content(str(key).lower())
+            except Exception:                               # noqa: BLE001 -- not on this chain, or not readable now
+                continue
+            # The same rules as the arcade's own pieces (content.content): a type it renders, else a download.
+            ctype = contentlib.media.standard_type(ctype)
+            safe = ctype if ctype.startswith(contentlib.RENDERABLE) else None
+            headers = {**contentlib.CONTENT_HEADERS, "Cache-Control": "public, max-age=31536000, immutable"}
+            if safe is None:
+                headers["Content-Disposition"] = "attachment"
+            return Response(body, media_type=safe or "application/octet-stream", headers=headers)
+        return None
+
     def _inscription_content(key: str, download: int = 0, reveal: int = 0):
         """An inscription's bytes -- screened first when this arcade screens
         (arcade/moderation.py): a sensitive picture comes back blurred unless the
@@ -5804,7 +5843,12 @@ def create_app(state: AppState) -> FastAPI:
                 answer = _screened(screen, *found, reveal=bool(reveal))
                 if answer is not None:
                     return answer
-        return contentlib.content(index, key, download=bool(download))
+        answer = contentlib.content(index, key, download=bool(download))
+        if getattr(answer, "status_code", 200) == 404:
+            from_chain = _chain_inscription(key)
+            if from_chain is not None:
+                return from_chain
+        return answer
 
     def _screened(screen, content_type: str, body: bytes, reveal: bool):
         """The response a screened piece gets instead of its bytes, or None to serve
@@ -7294,12 +7338,10 @@ def create_app(state: AppState) -> FastAPI:
         """
         return RedirectResponse("/docs/features.md", status_code=307)
 
-    #: The arcade's affiliates (2026-10-15): (name, link, what they do). Doge Soft's
+    #: The arcade's affiliates (2026-10-15): (name, link, what they do). Doge Soft was one until the operator removed it
+    #: the same day ("Remove Doge Soft API and affiliate link").
     #: explorer is where this arcade reads Doginals from (arcade/doginals.py).
     AFFILIATES = (
-        ("Doge Soft", "https://dogesoft.io",
-         "Dogecoin tools and the explorer this arcade reads Doginals from: which coins carry an "
-         "inscription, so a wallet never spends one by accident, and what each Doginal is."),
         ("Anti Doginal Dogs", "https://antidoginaldogs.com",
          "Recursive transformative art on Dogecoin."),
     )
@@ -11628,23 +11670,23 @@ def create_app(state: AppState) -> FastAPI:
                              "doge": bool(one.is_doge), "coins": coins})
 
     @app.get("/account/doginal-tx/{txid}")
-    def account_doginal_tx(request: Request, txid: str):
-        """What Doge Soft says sits on one transaction's outputs, asked BY THIS NODE for the Wallet's Doginals check.
-
-        2026-10-15: the browser asked Doge Soft itself, and every answer was thrown away by the browser -- Doge Soft sends
-        no Access-Control-Allow-Origin for this arcade (asked; not done yet), so "Doginals can't be checked right now"
-        on every wallet. Only a transaction that holds one of this account's own Dogecoin coins, so this node is nobody's
-        free Doge Soft client; the answer is kept for good (doginals.sqlite), so each is asked once. Doge Soft's own shape."""
+    def account_doginal_tx(request: Request, txid: str, chain: str = "doge"):
+        """What sits on one transaction's outputs, read from the chain by this node (doginals.trace), for the Wallet's
+        inscriptions check: Doginals on Dogecoin, ord inscriptions on Pepecoin mainnet (`chain`). Only a transaction that
+        holds one of this account's own coins on that chain; kept for good, so each is read once. 2026-10-15 (the browser
+        could not read the outside index it used; then the operator: "Remove Doge Soft API")."""
         from .. import doginals as D
         account = _signed_in_account(request)
         txid = str(txid or "").lower()
         if len(txid) != 64 or any(c not in "0123456789abcdef" for c in txid):
             return JSONResponse({"detail": "that is not a transaction id"}, status_code=400)
-        guard = fundinglib.GUARD
-        if guard is None or getattr(state, "doge", None) is None:
-            return JSONResponse({"detail": "this node does not check Doginals"}, status_code=404)
+        one = next((c for c in state.token_chains if c.network == chain), None)
+        address = _account_address(account.pubkey, one) if one is not None else ""
+        guard = fundinglib.guard_for(address) if address else None
+        if guard is None:
+            return JSONResponse({"detail": "this node does not check inscriptions on that chain"}, status_code=404)
         try:
-            mine = {c["txid"] for c in _own_coins(account, state.doge)}
+            mine = {c["txid"] for c in _own_coins(account, one)}
         except Exception as exc:                          # noqa: BLE001 -- a node still catching up
             return JSONResponse({"detail": f"this node cannot read your coins yet: {exc}"}, status_code=503)
         if txid not in mine:
@@ -11654,7 +11696,7 @@ def create_app(state: AppState) -> FastAPI:
         except D.Unknown as exc:
             return JSONResponse({"detail": str(exc)}, status_code=503)
         return JSONResponse({"txid": txid, "inscriptions": [
-            {"vout": vout, "inscription_id": i.get("id"), "sat_offset": i.get("offset")}
+            {"vout": vout, "inscription_id": i.get("id"), "sat_offset": i.get("offset"), "unknown": bool(i.get("unknown"))}
             for vout, on in sorted(held.items()) for i in on]})
 
     @app.post("/account/doginal/send")
@@ -11665,8 +11707,8 @@ def create_app(state: AppState) -> FastAPI:
         unless somebody is trying to send a doginal to someone else"). The same handshake as a coin or NFT send: the node
         builds it (funding.build_doginal_send -- the inscribed coin is input 0 and goes whole to the recipient as output 0,
         the fee comes from clean coins, change last), the tab signs, /account/sign checks and broadcasts. The coin's value
-        is read from this node's index, never from the browser, and the builder asks Doge Soft itself whether the coin holds
-        exactly this Doginal -- the server's one use of Doge Soft here, and only because a send needs it.
+        is read from this node's index, never from the browser, and the builder reads from the chain itself whether the coin
+        holds exactly this Doginal.
         """
         account = _signed_in_account(request)
         said = payload if isinstance(payload, dict) else {}
@@ -11710,7 +11752,7 @@ def create_app(state: AppState) -> FastAPI:
             _quota(account, "send")
         except (taglib.TagError, fundinglib.FundingError, ValueError) as exc:
             return JSONResponse({"detail": str(exc)}, status_code=400)
-        except doginalslib.Unknown as exc:              # Doge Soft away: said as it is, never guessed
+        except doginalslib.Unknown as exc:              # the chain unreadable just now: said as it is, never guessed
             return JSONResponse({"detail": f"Doginals can't be checked right now: {exc}"},
                                 status_code=503)
         except Exception as exc:                          # noqa: BLE001
@@ -15081,7 +15123,7 @@ def create_app(state: AppState) -> FastAPI:
     def _doginal_lock(account, chain, owner: str, leg, redeem: bytes, hint: Any):
         """The unsigned lock of one Doginal from this account's own coins. `hint` ({txid, vout}) is
         the coin the tab's wallet already knows carries it; without one, the account's coins are
-        asked about until one does (Doge Soft's answers are kept, so each is asked once)."""
+        read until one does (each reading is kept, so each is read once)."""
         from .. import doginals as D, htlc as htlclib
         guard = fundinglib.GUARD
         if guard is None:
@@ -15107,7 +15149,7 @@ def create_app(state: AppState) -> FastAPI:
                     found = coin
                     break
             if found is None:
-                raise ValueError(f"this account does not hold Doginal {leg.asset} (or Doge Soft cannot say so right now)")
+                raise ValueError(f"this account does not hold Doginal {leg.asset} (or the chain cannot be read right now)")
             return fundinglib.build_doginal_lock(
                 db, chain.params, owner, found, leg.asset, htlclib.p2sh_script(redeem), htlclib.DOGINAL_RESERVE,
                 rate=fees.MIN_FEE_PER_KB, exclude=spent, extra=_flights.change_for(account.pubkey, chain.network))
@@ -17088,7 +17130,7 @@ def create_app(state: AppState) -> FastAPI:
     def account_doginals(request: Request):
         """This account's Doginals: the coins at its Dogecoin address that hold one, and whether each can be listed
         (exactly one inscription, at offset 0). Only small coins are asked about -- Doginal postage
-        (doginals.POSTAGE_MAX) -- so a wallet of big coins costs Doge Soft nothing."""
+        (doginals.POSTAGE_MAX) -- so a wallet of big coins costs no reading."""
         from .. import doginals as doginalslib
         account = _signed_in_account(request)
         try:
@@ -17152,7 +17194,7 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.post("/account/doginals/list/sign")
     def account_doginals_list_sign(request: Request, payload: Any = Body(None)):
-        """File the seller's signature, rebuilt and checked from the chain, Doge Soft and the digest alone."""
+        """File the seller's signature, rebuilt and checked from the chain and the digest alone."""
         account = _signed_in_account(request)
         if not _node_trades():
             return _node_trades_refused()
@@ -19372,9 +19414,7 @@ def create_app(state: AppState) -> FastAPI:
         """
         if signed_in(request) is None:
             return _to_join(request)
-        # [Claude 2026-10-15] Doge Soft's address, said once (arcade/doginals.DOGESOFT): the page's Doginals check asks it
-        # from the browser.
-        return render(request, "my_wallet.html", chain=_account_chain(), dogesoft=doginalslib.DOGESOFT)
+        return render(request, "my_wallet.html", chain=_account_chain())
 
     @app.get("/me/wallet/tokens", response_class=HTMLResponse)
     def my_wallet_tokens(request: Request):

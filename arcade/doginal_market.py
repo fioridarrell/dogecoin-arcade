@@ -50,7 +50,7 @@ SELLER_AT = 2
 #: Dogecoin 1.14's hard dust limit (0.001 DOGE): no output here is smaller.
 MIN_OUT = 100_000
 #: What the prepare transaction splits off for each dummy: over doginals.POSTAGE_MAX, so the guard takes it as clean even
-#: while Doge Soft has not indexed the prepare yet, and at or over the soft dust limit, so it costs no dust fee.
+#: while the chain reading has not seen the prepare yet, and at or over the soft dust limit, so it costs no dust fee.
 DUMMY_VALUE = 2 * fees.DUST_LIMIT
 #: The largest coin used as a dummy: a dummy only travels back to its owner in output 0, but a big one makes a big output 0.
 DUMMY_MAX = 10 * fees.DUST_LIMIT
@@ -77,7 +77,7 @@ def holds_exactly(coin: dict, inscription: str) -> None:
     """Refuse unless the Doginal source says this coin holds exactly `inscription`, at offset 0."""
     on = _guard().held(coin["txid"]).get(int(coin["vout"])) or []
     if [i.get("id") for i in on] != [inscription]:
-        raise MarketError("that coin does not hold exactly that Doginal (Doge Soft says: %s)"
+        raise MarketError("that coin does not hold exactly that Doginal (the chain says: %s)"
                           % (", ".join(str(i.get("id")) for i in on) or "nothing"))
     if int(on[0].get("offset") or 0) != 0:
         raise MarketError("that Doginal does not sit at the start of its coin, so it cannot be sold by koinu order")
@@ -312,7 +312,7 @@ class Book:
     def register(self, rpc: Any, *, network: str, seller: str, coin: dict, inscription: str, price: int,
                  signature: str, pubkey: bytes, seconds: float = LISTED_FOR) -> dict:
         """File a signed listing, or say why not. Nothing from the request is believed that the chain, the Doginal source
-        and the signature do not say: the coin's value and owner come from `gettxout`, the inscription from Doge Soft,
+        and the signature do not say: the coin's value and owner come from `gettxout`, the inscription from the chain,
         and the signature is checked against the digest worked out here."""
         sig = bytes.fromhex(str(signature or ""))
         if not sig or sig[-1] != funding.SINGLE_ANYONECANPAY:

@@ -408,7 +408,7 @@ class NodeTrader:
             return rpc.call("sendtoaddress", address, amount / COIN)
         coins = [{"txid": u["txid"], "vout": int(u["vout"]), "value": round(float(u["amount"]) * COIN)}
                  for u in rpc.call("listunspent", 0)]
-        # From what is already known only: asking Doge Soft about every coin in the wallet took most of a minute EACH and
+        # From what is already known only: reading every coin in the wallet anew, one by one, held
         # held the swap (and the tests) up for good (2026-10-15).
         clean = {(c["txid"], c["vout"]) for c in guard.spendable_known(coins)}
         keep = [{"txid": c["txid"], "vout": c["vout"]} for c in coins if (c["txid"], c["vout"]) not in clean]
@@ -556,7 +556,7 @@ def _pointer(text: str) -> dict | None:
 def doginal_seen(seen: T.LockSeen | None, leg: T.Leg, redeem: bytes, rpc: Any,
                  doginals: Any) -> T.LockSeen | None:
     """For a Doginal leg, whether the lock holds it at offset 0 of output 0 with its
-    reserve as output 1 (trade.doginal_at). While Doge Soft cannot be asked the lock
+    reserve as output 1 (trade.doginal_at). While the chain cannot be read the lock
     counts as unconfirmed, never as wrong. Module level: a tab's swaps read it too
     (/account/trade/facts, 2026-10-15)."""
     if seen is None or seen.spent_by_script_sig:

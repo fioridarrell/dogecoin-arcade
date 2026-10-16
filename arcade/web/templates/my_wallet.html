@@ -56,10 +56,10 @@
 <div id="panel-activity" role="tabpanel"></div>
 <div id="panel-tokens" role="tabpanel" hidden></div>
 <div id="panel-nfts" role="tabpanel" hidden></div>
-{# [Claude 2026-10-15] Doginals on this account's Dogecoin coins, asked from THIS browser (2026-10-14: "I want the
-   client side to access Doge soft", "We have to have the wallet check its own utxo to see if they are doginals"). Shown
-   under NFTs while Dogecoin is the network on the card. #}
-<section id="doginals" class="wl-dg" hidden aria-labelledby="dg-title" data-dogesoft="{{ dogesoft }}"></section>
+{# [Claude 2026-10-15] Inscriptions on this account's own coins -- Doginals on Dogecoin, ord inscriptions on Pepecoin
+   mainnet -- read from the chain by this node (2026-10-14: "We have to have the wallet check its own utxo to see if
+   they are doginals"; 2026-10-15: "Remove Doge Soft API", "do the same for small .01 pep txs"). Shown under NFTs. #}
+<section id="doginals" class="wl-dg" hidden aria-labelledby="dg-title"></section>
 
 {# Coins in the small outputs this account's messages, posts and files left on
    the chain (2026-09-28): still yours, and one press brings them back. #}
@@ -734,7 +734,7 @@ function openSend(prefill = "", piece = null) {
 async function offerFor(what, to, amount, network) {
   if (what.kind === "coin") return wallet.offerSend(to, amount, network);
   if (what.kind === "doginal") {
-    // [Claude 2026-10-15] The node builds it (/account/doginal/send) and asks Doge Soft itself that the coin holds exactly
+    // [Claude 2026-10-15] The node builds it (/account/doginal/send) and reads from the chain itself that the coin holds exactly
     // this Doginal before it will: the one time the server asks, because a send needs it.
     const g = what.doginal;
     const asked = await fetch("/account/doginal/send", {method: "POST", headers: {"Content-Type": "application/json"},
@@ -1268,92 +1268,95 @@ async function drawCollection() {
 }
 
 
-/* --- Doginals --------------------------------------------------------------
+/* --- inscriptions on the account's own coins -------------------------------
  *
- * [Claude 2026-10-15] Which of this account's Dogecoin coins carry a Doginal, asked by THIS browser (2026-10-14:
- * "I want the client side to access Doge soft ... It should identify which UTXOs are doginals"). The node lists the
- * account's own coins (/account/coins) and asks nobody; the browser asks Doge Soft once per transaction
- * (/api/explorer/tx/<txid>, matched by vout) and keeps the answer in localStorage for good, since what sits on an unspent
- * coin never changes. Doge Soft takes most of a minute per question, so a few go at once. When it cannot be reached
- * (down, or refusing this site's origin) the page says so and guesses nothing.
+ * [Claude 2026-10-15] Which of this account's coins carry an inscription: Doginals on Dogecoin, ord inscriptions on
+ * Pepecoin mainnet. The node lists the account's own coins (/account/coins) and reads each transaction from its own chain
+ * (/account/doginal-tx/<txid>, doginals.trace: the coin's koinu followed back to the envelope that inscribed them), once
+ * per transaction for good; this browser keeps the answers too. Nothing outside this arcade is asked (2026-10-15:
+ * "Remove Doge Soft API"). A small coin the node could not read is said so and never shown as a plain coin.
  */
 
-const DOGESOFT = String($("doginals").dataset.dogesoft || "https://explorer.dogesoft.io").replace(/\/+$/, "");
-const DG_TX = "arcade.doginals.tx.";            // + txid: Doge Soft's answer, about the chain and not the account
+const DG_TX = "arcade.inscriptions.v2.";         // + network + "." + txid: the chain's answer (v1 held an outside index's)
 let dg = {net: null, coins: null, answers: {}, failed: 0, asking: false};
 
-function dgKept(txid) {
-  try { return JSON.parse(localStorage.getItem(DG_TX + txid) || "null"); } catch (e) { return null; }
+function dgKept(net, txid) {
+  try { return JSON.parse(localStorage.getItem(DG_TX + net + "." + txid) || "null"); } catch (e) { return null; }
 }
-/** Doge Soft's answer for one transaction: [{vout, id, offset}], asked once ever per browser. */
-async function dgAsk(txid) {
-  const kept = dgKept(txid);
+/** The chain's answer for one transaction: [{vout, id, offset, unknown}], read once by the node, kept here. */
+async function dgAsk(net, txid) {
+  const kept = dgKept(net, txid);
   if (kept) return kept;
-  // Asked through this arcade's node (2026-10-15): Doge Soft sends no Access-Control-Allow-Origin for this site, so a
-  // browser throws its answer away. The node asks it (once per transaction, kept for good) for this account's own coins.
-  const r = await fetch(`/account/doginal-tx/${txid}`, {headers: {Accept: "application/json"}, cache: "no-store"});
-  if (!r.ok) throw new Error(`Doge Soft could not be asked (${r.status})`);
+  const r = await fetch(`/account/doginal-tx/${txid}?chain=${encodeURIComponent(net)}`,
+                        {headers: {Accept: "application/json"}, cache: "no-store"});
+  if (!r.ok) throw new Error(`the node could not read it (${r.status})`);
   const said = await r.json();
-  if (said.txid && said.txid !== txid) throw new Error("Doge Soft answered about another transaction");
-  const held = (said.inscriptions || []).filter((i) => i && i.inscription_id != null && i.vout != null)
-    .map((i) => ({vout: Number(i.vout), id: String(i.inscription_id), offset: i.sat_offset ?? null}));
-  try { localStorage.setItem(DG_TX + txid, JSON.stringify(held)); } catch (e) { /* asked again next time */ }
+  if (said.txid && said.txid !== txid) throw new Error("the node answered about another transaction");
+  const held = (said.inscriptions || []).filter((i) => i && i.vout != null)
+    .map((i) => ({vout: Number(i.vout), id: i.inscription_id == null ? null : String(i.inscription_id),
+                  offset: i.sat_offset ?? null, unknown: !!i.unknown}));
+  if (!held.some((i) => i.unknown)) {
+    try { localStorage.setItem(DG_TX + net + "." + txid, JSON.stringify(held)); } catch (e) { /* read again next time */ }
+  }
   return held;
 }
-/** A Doginal's picture, from Doge Soft's content URL; anything that is not a picture is named instead. */
+/** An inscription's content, from this arcade's own /content/<id> (read off the chain by the node), in a sandboxed
+ *  frame: a picture shows as itself, and a recursive page (HTML that loads other inscriptions) draws itself. */
 function doginalPic(g) {
   const box = el("span", "wl-dgpic");
-  const img = el("img"); img.loading = "lazy"; img.alt = "";
-  img.src = `${DOGESOFT}/api/explorer/inscriptions/${encodeURIComponent(g.id)}/content`;
-  img.onerror = () => {
-    const open = el("a", "", "open it"); open.href = img.src; open.target = "_blank"; open.rel = "noopener";
-    box.replaceChildren(open);
-  };
-  box.append(img);
+  const frame = el("iframe");
+  frame.src = `/content/${encodeURIComponent(g.id)}`;
+  frame.loading = "lazy"; frame.title = g.id;
+  frame.setAttribute("sandbox", "allow-scripts");
+  frame.setAttribute("scrolling", "no");
+  frame.style.cssText = "width:100%;aspect-ratio:1;border:0;display:block;background:transparent;pointer-events:none";
+  box.append(frame);
   return box;
 }
 async function drawDoginals() {
   const box = $("doginals");
   const c = chainNow();
-  if (tab !== "nfts" || !c || c.network !== "doge") { box.hidden = true; return; }
+  if (tab !== "nfts" || !c || (c.network !== "doge" && c.network !== "main")) { box.hidden = true; return; }
   box.hidden = false;
+  const doge = c.network === "doge";
   if (dg.net !== c.network) dg = {net: c.network, coins: null, answers: {}, failed: 0, asking: false};
-  const head = el("h2", "", "Doginals"); head.id = "dg-title";
+  const head = el("h2", "", doge ? "Doginals" : "Inscriptions"); head.id = "dg-title";
+  const coinWord = doge ? "Dogecoin" : "PEP";
   if (!dg.coins) {
-    box.replaceChildren(head, el("div", "wl-empty", "Reading your Dogecoin coins…"));
+    box.replaceChildren(head, el("div", "wl-empty", `Reading your ${coinWord} coins…`));
     const r = await fetch(`/account/coins?chain=${encodeURIComponent(c.network)}`, {cache: "no-store"});
     const got = await r.json();
     if (!r.ok) throw new Error(got.detail || "the node would not say");
     dg.coins = got.coins || []; dg.answers = {}; dg.failed = 0;
   }
   const txids = [...new Set(dg.coins.map((x) => x.txid))];
-  for (const t of txids) { const kept = dgKept(t); if (kept) dg.answers[t] = kept; }
+  for (const t of txids) { const kept = dgKept(c.network, t); if (kept) dg.answers[t] = kept; }
   const left = txids.filter((t) => !dg.answers[t]);
-  const found = [];
+  const found = [], unread = [];
   for (const coin of dg.coins) {
     for (const i of dg.answers[coin.txid] || []) {
-      if (i.vout === coin.vout) found.push({...i, txid: coin.txid, vout: coin.vout, value: coin.value, doginal: true});
+      if (i.vout !== coin.vout) continue;
+      if (i.unknown || !i.id) unread.push(coin);
+      else found.push({...i, txid: coin.txid, vout: coin.vout, value: coin.value, doginal: true});
     }
   }
-  // Credit where the Doginals come from (2026-10-15: "credit Doge soft").
-  const credit = el("p", "wl-note dg-credit", "Doginal data by ");
-  const by = el("a", "", "Doge Soft");
-  by.href = "https://dogesoft.io"; by.target = "_blank"; by.rel = "noopener";
-  credit.append(by);
-  box.replaceChildren(head, credit);
+  box.replaceChildren(head, el("p", "wl-note dg-credit", "Read from the chain by this arcade's node."));
   if (dg.failed) {
-    box.append(el("div", "msg err", `Doginals can't be checked right now: Doge Soft did not answer for `
-      + `${dg.failed} transaction${dg.failed === 1 ? "" : "s"}. Those coins are not shown as Doginals or as plain `
-      + "coins until it does."));
-    const again = el("button", "ghost wl-more", "Ask Doge Soft again"); again.type = "button";
+    box.append(el("div", "msg err", `Inscriptions can't be checked right now: the node could not read `
+      + `${dg.failed} transaction${dg.failed === 1 ? "" : "s"}. Those coins are not shown, and not spent, until it can.`));
+    const again = el("button", "ghost wl-more", "Try again"); again.type = "button";
     again.onclick = () => { dg.failed = 0; drawDoginals().catch(() => {}); };
     box.append(again);
   } else if (left.length) {
-    box.append(el("p", "wl-note", `Asking Doge Soft about ${left.length} of your ${txids.length} transaction`
-      + `${txids.length === 1 ? "" : "s"}. It can take a minute each; answers are kept in this browser.`));
+    box.append(el("p", "wl-note", `Reading ${left.length} of your ${txids.length} transaction`
+      + `${txids.length === 1 ? "" : "s"} from the chain…`));
+  }
+  if (unread.length) {
+    box.append(el("p", "wl-note", `${unread.length} small coin${unread.length === 1 ? "" : "s"} could not be traced all `
+      + "the way back, so they are kept out of ordinary sends in case they carry one."));
   }
   if (!left.length && !dg.failed && !found.length) {
-    box.append(el("div", "wl-empty", "No Doginals on your Dogecoin coins."));
+    box.append(el("div", "wl-empty", doge ? "No Doginals on your Dogecoin coins." : "No inscriptions on your PEP coins."));
   }
   if (found.length) {
     const grid = el("div", "wl-pieces");
@@ -1361,25 +1364,28 @@ async function drawDoginals() {
       const card = el("div", "wl-piececard");
       card.dataset.doginal = g.id;
       const id = el("div", "wl-dgid", g.id); id.title = g.id;
-      const send = el("button", "wl-piecesend", "Send"); send.type = "button";
-      send.setAttribute("aria-label", `Send Doginal ${g.id}`);
-      send.onclick = () => openSend("", g);
-      // Swap it for a coin on another chain through lock scripts (2026-10-15): its own swap market.
-      const swap = el("a", "wl-piecesend ghost", "Swap");
-      swap.href = `/exchange/swap/doge-doginal-${encodeURIComponent(g.id)}/main-coin`;
-      swap.setAttribute("aria-label", `Swap Doginal ${g.id}`);
-      card.append(doginalPic(g), id, send, swap);
+      card.append(doginalPic(g), id);
+      if (doge) {
+        const send = el("button", "wl-piecesend", "Send"); send.type = "button";
+        send.setAttribute("aria-label", `Send Doginal ${g.id}`);
+        send.onclick = () => openSend("", g);
+        // Swap it for a coin on another chain through lock scripts (2026-10-15): its own swap market.
+        const swap = el("a", "wl-piecesend ghost", "Swap");
+        swap.href = `/exchange/swap/doge-doginal-${encodeURIComponent(g.id)}/main-coin`;
+        swap.setAttribute("aria-label", `Swap Doginal ${g.id}`);
+        card.append(send, swap);
+      }
       grid.append(card);
     }
     box.append(grid);
   }
   if (left.length && !dg.asking && !dg.failed) {
     dg.asking = true;
-    const queue = left.slice();
+    const net = c.network, queue = left.slice();
     const worker = async () => {
       while (queue.length) {
         const t = queue.shift();
-        try { dg.answers[t] = await dgAsk(t); } catch (e) { dg.failed += 1; }
+        try { dg.answers[t] = await dgAsk(net, t); } catch (e) { dg.failed += 1; }
         drawDoginals().catch(() => {});
       }
     };

@@ -12,7 +12,8 @@ from test_web import app_state, client                                 # noqa: F
 def test_the_tab_sits_between_the_exchange_and_the_docs(client):
     app, state = client
     page = app.get("/affiliates").text
-    assert 'href="https://dogesoft.io"' in page and 'href="https://antidoginaldogs.com"' in page
+    assert 'href="https://antidoginaldogs.com"' in page
+    assert "dogesoft" not in page.lower(), "removed (2026-10-15: \"Remove Doge Soft API and affiliate link\")"
     assert 'rel="noopener"' in page
     nav = app.get("/").text
     assert nav.index('href="/exchange"') < nav.index('href="/affiliates"') < nav.index('href="/docs"')
@@ -27,8 +28,10 @@ def test_a_stranger_may_read_it():
     assert "/affiliates" in PUBLIC_PAGES
 
 
-def test_doge_soft_is_credited_where_doginals_show():
-    here = pathlib.Path(__file__).resolve().parent.parent / "arcade" / "web" / "templates"
-    for name in ("my_wallet.html", "_doginals_tab.html"):
-        text = (here / name).read_text()
-        assert "dg-credit" in text and "https://dogesoft.io" in text and "Doge Soft" in text, name
+def test_doge_soft_is_gone_everywhere():
+    """2026-10-15: "Remove Doge Soft API and affiliate link." No page, script or module asks it or names it."""
+    root = pathlib.Path(__file__).resolve().parent.parent / "arcade"
+    for f in list(root.rglob("*.py")) + list((root / "web" / "templates").rglob("*")):
+        if f.is_file():
+            text = f.read_text(errors="replace").lower()
+            assert "dogesoft.io" not in text and "explorer.dogesoft" not in text, f

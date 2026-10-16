@@ -41,33 +41,15 @@ def _free_port() -> int:
 
 
 @pytest.fixture(scope="module")
-def dogesoft():
-    """A Doge Soft that answers from ANSWERS and lets any origin read it, counting what it is asked."""
+def reads():
+    """The node's chain reading, faked from ANSWERS, counting each transaction it is asked to read (2026-10-15: no
+    outside index; the node reads its own chain)."""
     asked = []
 
-    class Handler(BaseHTTPRequestHandler):
-        def log_message(self, *a):
-            pass
-
-        def do_GET(self):
-            asked.append(self.path)
-            if self.path.endswith("/content"):
-                body, kind = PNG, "image/png"
-            else:
-                txid = self.path.rsplit("/", 1)[-1]
-                body, kind = json.dumps(ANSWERS.get(txid, {"txid": txid, "inscriptions": []})).encode(), \
-                    "application/json"
-            self.send_response(200)
-            self.send_header("Content-Type", kind)
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(body)
-
-    server = ThreadingHTTPServer(("127.0.0.1", _free_port()), Handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    yield f"http://127.0.0.1:{server.server_address[1]}", asked
-    server.shutdown()
-    server.server_close()
+    def read(txid):
+        asked.append(txid)
+        return ANSWERS.get(txid, {"txid": txid, "inscriptions": []})
+    return read, asked
 
 
 @pytest.fixture(scope="module")
@@ -78,7 +60,7 @@ def browser():
 
 
 @pytest.fixture(scope="module")
-def served(tmp_path_factory, dogesoft):
+def served(tmp_path_factory, reads):
     import uvicorn
     from pathlib import Path
     from arcade.web.app import create_app
@@ -92,12 +74,9 @@ def served(tmp_path_factory, dogesoft):
     )
     state._sync["doge"] = (time.time() + 86400, {"ready": True, "progress": 1.0, "online": True,
                                                  "blocks": 100, "headers": 100})
-    real_base, real_guard = doginals.DOGESOFT, funding.GUARD
-    doginals.DOGESOFT = dogesoft[0]
+    real_guard = funding.GUARD
     app = create_app(state)
-    # The node asks the fake Doge Soft the real way (2026-10-15: the Wallet's check goes through this node, since
-    # Doge Soft sends no CORS header for the arcade), so `asked` counts the node's questions.
-    funding.GUARD = doginals.Doginals(state.home / "dg.sqlite")
+    funding.GUARD = doginals.Doginals(state.home / "dg.sqlite", fetch=reads[0])
     port = _free_port()
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error",
                                            timeout_graceful_shutdown=1.0))
@@ -112,7 +91,7 @@ def served(tmp_path_factory, dogesoft):
     yield f"http://127.0.0.1:{port}", state
     server.should_exit = True
     thread.join(timeout=5)
-    doginals.DOGESOFT, funding.GUARD = real_base, real_guard
+    funding.GUARD = real_guard
 
 
 @pytest.fixture(scope="module")
@@ -161,23 +140,23 @@ def _wait(browser, script, seconds=20):
     raise AssertionError(f"never: {script}\n{browser.find_element(By.ID, 'doginals').text}")
 
 
-def test_the_wallet_finds_its_doginal_asks_once_and_sends_it_to_review(browser, served, signed_in, dogesoft):
+def test_the_wallet_finds_its_doginal_asks_once_and_sends_it_to_review(browser, served, signed_in, reads):
     base, _ = served
-    url, asked = dogesoft
+    _, asked = reads
     browser.execute_script("localStorage.clear()")
     _open_doginals(browser, base)
     _wait(browser, f'return document.querySelector("#doginals [data-doginal=\\"{INS}\\"]")')
     text = browser.execute_script('return document.getElementById("doginals").textContent')
-    assert "Doginals" in text and INS in text
-    src = browser.execute_script(f'return document.querySelector("#doginals [data-doginal=\\"{INS}\\"] img").src')
-    assert src == f"{url}/api/explorer/inscriptions/{INS}/content"
+    assert "Doginals" in text and INS in text and "Read from the chain" in text
+    src = browser.execute_script(f'return document.querySelector("#doginals [data-doginal=\\"{INS}\\"] iframe").src')
+    assert src == f"{base}/content/{INS}", "this arcade's own /content, read off the chain"
     assert len(browser.find_elements(By.CSS_SELECTOR, "#doginals [data-doginal]")) == 1, "the clean coin is not one"
-    tx_asks = [p for p in asked if "/api/explorer/tx/" in p]
-    assert sorted(tx_asks) == sorted([f"/api/explorer/tx/{T1}", f"/api/explorer/tx/{T3}"])
+    assert sorted(set(asked)) == sorted([T1, T3])
+    count = len(asked)
 
-    _open_doginals(browser, base)            # again: answered from this browser (and the node), Doge Soft not asked
+    _open_doginals(browser, base)            # again: answered from this browser (and the node), nothing read again
     _wait(browser, f'return document.querySelector("#doginals [data-doginal=\\"{INS}\\"]")')
-    assert [p for p in asked if "/api/explorer/tx/" in p] == tx_asks
+    assert len(asked) == count
 
     browser.find_element(By.CSS_SELECTOR, f'#doginals [data-doginal="{INS}"] button').click()
     to = _wait(browser, 'return document.getElementById("send-to")')
@@ -189,18 +168,19 @@ def test_the_wallet_finds_its_doginal_asks_once_and_sends_it_to_review(browser, 
     assert THEM in sheet and "Doginal" in sheet, sheet
 
 
-def test_an_unreachable_doge_soft_is_said_plainly(browser, served, signed_in):
+def test_a_chain_that_cannot_be_read_is_said_plainly(browser, served, signed_in):
     base, _ = served
     browser.execute_script("localStorage.clear()")
-    dead = f"http://127.0.0.1:{_free_port()}"
-    real, real_guard = doginals.DOGESOFT, funding.GUARD
-    doginals.DOGESOFT = dead
-    # A node that has kept no answers yet: it asks, and Doge Soft is not there.
-    funding.GUARD = doginals.Doginals(served[1].home / "dg-empty.sqlite")
+    real_guard = funding.GUARD
+
+    def down(txid):
+        raise OSError("the node is not answering")
+    # A node that has kept no answers yet, and cannot read its chain just now.
+    funding.GUARD = doginals.Doginals(served[1].home / "dg-empty.sqlite", fetch=down)
     try:
         _open_doginals(browser, base)
         _wait(browser, 'return document.getElementById("doginals").textContent'
-                       '.includes("Doginals can\'t be checked right now")')
+                       '.includes("Inscriptions can\'t be checked right now")')
         assert not browser.find_elements(By.CSS_SELECTOR, "#doginals [data-doginal]"), "nothing guessed"
     finally:
-        doginals.DOGESOFT, funding.GUARD = real, real_guard
+        funding.GUARD = real_guard

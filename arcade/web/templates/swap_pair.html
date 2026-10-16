@@ -28,7 +28,7 @@
     <div class="muted" style="font-size:.78rem">
       {% if b.kind == 'token' %}#{{ b.asset }} {{ supply_badge(b.prop) }} &middot; <a href="/tokens/{{ b.asset }}">token page</a> &middot;
       {% elif b.kind == 'nft' %}<a href="/inscriptions/{{ b.asset }}">{{ bname }}</a> &middot;
-      {% elif b.kind == 'doginal' %}<a href="{{ doginal_content(b.asset) }}" target="_blank" rel="noopener">{{ bname }}</a> (Doginal data by <a href="https://dogesoft.io" target="_blank" rel="noopener">Doge Soft</a>) &middot;{% endif %}
+      {% elif b.kind == 'doginal' %}<a href="{{ doginal_content(b.asset) }}" target="_blank" rel="noopener">{{ bname }}</a> &middot;{% endif %}
       {{ net_badge(b.network) }} {{ bname }} priced in {{ net_badge(q.network) }} {{ qname }}</div>
   </div>
 </div>

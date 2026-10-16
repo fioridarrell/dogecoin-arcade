@@ -64,10 +64,11 @@ def test_the_wallet_page_has_the_doginals_section_and_the_configured_base(client
     app, state = client
     _doge_account(app, state, monkeypatch, tmp_path)
     page = app.get("/me/wallet").text
-    assert 'id="doginals"' in page and f'data-dogesoft="{doginals.DOGESOFT}"' in page
+    # Read from the chain by this node; nothing outside the arcade is asked (2026-10-15: "Remove Doge Soft API").
+    assert 'id="doginals"' in page and "dogesoft" not in page.lower()
     # Through this node (2026-10-15): Doge Soft sends no CORS header for this site, so the browser cannot ask it.
-    assert "/account/doginal-tx/${txid}" in page and "localStorage.setItem(DG_TX + txid" in page
-    assert "Doginals can't be checked right now" in page
+    assert "/account/doginal-tx/${txid}?chain=" in page and "localStorage.setItem(DG_TX + net" in page
+    assert "Inscriptions can't be checked right now" in page and "/content/${encodeURIComponent(g.id)}" in page
     assert '"/account/doginal/send"' in page and "/account/coins?chain=" in page
 
 
@@ -158,7 +159,8 @@ def test_the_node_asks_doge_soft_for_the_accounts_own_coins_only(client, monkeyp
     _, calls = _doge_account(app, state, monkeypatch, tmp_path)
     got = app.get(f"/account/doginal-tx/{T1}")
     assert got.status_code == 200, got.text
-    assert got.json() == {"txid": T1, "inscriptions": [{"vout": 0, "inscription_id": INS, "sat_offset": 0}]}
+    assert got.json() == {"txid": T1, "inscriptions": [{"vout": 0, "inscription_id": INS, "sat_offset": 0,
+                                                        "unknown": False}]}
     assert app.get(f"/account/doginal-tx/{T3}").json()["inscriptions"] == []
     app.get(f"/account/doginal-tx/{T1}")
     assert calls.count(T1) == 1, "asked once, kept for good"

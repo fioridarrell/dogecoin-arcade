@@ -157,12 +157,12 @@ def asset_at(index: Any, leg: Leg, address: str, lock_height: int | None) -> boo
 
 def doginal_at(doginals: Any, leg: Leg, redeem: bytes, lock_tx: dict, parent_tx: dict) -> bool | None:
     """Is `leg`'s Doginal at offset 0 of output 0 of `lock_tx` (verbose, as getrawtransaction
-    gives it), with its reserve beside it? None while Doge Soft cannot be asked.
+    gives it), with its reserve beside it? None while the chain cannot be read.
 
-    [Claude 2026-10-15] Read from the coin the lock SPENT, not from the lock itself: Doge Soft
+    [Claude 2026-10-15] Read from the coin the lock SPENT, not from the lock itself: the reading
     may not have indexed a minutes-old lock, but koinu order settles it -- when input 0 is a
     coin holding exactly this inscription at its first koinu (`parent_tx`'s output, which
-    Doge Soft has long seen) and output 0 takes that coin's whole value, the inscription is
+    the reading has long seen) and output 0 takes that coin's whole value, the inscription is
     output 0's first koinu, whatever the other inputs carry (they fill output 1 and change)."""
     from . import doginals as D
     script = H.p2sh_script(redeem).hex()
