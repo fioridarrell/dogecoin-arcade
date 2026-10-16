@@ -157,6 +157,16 @@
       if (!r.ok) throw new Error(said.detail || "could not ask");
       box.textContent = "";
       if (!said.doginals.length) { box.textContent = "No Doginals on your Dogecoin address."; return; }
+      // A swap needs Dogecoin besides the Doginal (its lock's fee and reserve); a DOGE listing here costs the seller nothing.
+      let swapShort = false, needText = "";
+      try {
+        const acct = await (await fetch("/account", {cache: "no-store"})).json();
+        const d = (acct.chains || []).find((c) => c.network === "doge");
+        if (d && Number(d.spendable || 0) < Number(d.doginal_lock_need || 0)) {
+          swapShort = true;
+          needText = `Needs about ${(d.doginal_lock_need / 1e8).toFixed(8).replace(/\.?0+$/, "")} DOGE besides the Doginal for the network fee`;
+        }
+      } catch (e) { /* left enabled; the swap itself says why if it cannot pay */ }
       for (const d of said.doginals) {
         const card = document.createElement("div");
         card.className = "dg-card";
@@ -187,6 +197,10 @@
           const other = Object.assign(document.createElement("a"), {className: "small",
             href: `/exchange/swap/doge-doginal-${encodeURIComponent(id)}/main-coin`,
             textContent: "Price in another coin or token"});
+          if (swapShort) {
+            other.removeAttribute("href"); other.setAttribute("aria-disabled", "true");
+            other.style.cssText = "opacity:.45"; other.title = needText;
+          }
           card.append(input, go, other);
         } else if (!d.unknown) {
           card.append(Object.assign(document.createElement("div"), {className: "muted dg-note",

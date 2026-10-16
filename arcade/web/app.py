@@ -9581,6 +9581,18 @@ def create_app(state: AppState) -> FastAPI:
                 held += int(coin["value"])
         return held
 
+    def _doginal_needs() -> dict:
+        """What Dogecoin a wallet needs ON TOP of its Doginals to move one (2026-10-15: "If the user doesn't have any
+        Dogecoin in their wallet, and their only Doge coin is a Doginal they can't make a swap. Those buttons should be
+        grayed out unless they have a balance of Dogecoin on top of their asset. To pay the miner fee"): a send pays its fee
+        (the Doginal's own coin goes whole to the recipient), a swap's lock pays its fee and the reserve that later moves the
+        Doginal out (htlc.DOGINAL_RESERVE). Listing on the Doginals tab costs the seller nothing: the buyer pays."""
+        from .. import htlc as htlclib
+        send = fundinglib.price(2, [(100_000, b"\x00" * 25)], fees.MIN_FEE_PER_KB, change=True)
+        lock = htlclib.DOGINAL_RESERVE + fundinglib.price(
+            2, [(100_000, b"\x00" * 23), (htlclib.DOGINAL_RESERVE, b"\x00" * 23)], fees.MIN_FEE_PER_KB, change=True)
+        return {"doginal_send_need": send, "doginal_lock_need": lock}
+
     def _spendable(row: dict) -> None:
         """The big number (Order item 4, 2026-09-25): what can be spent now.
 
@@ -10071,6 +10083,8 @@ def create_app(state: AppState) -> FastAPI:
                         row["leaving"] = _leaving(account.pubkey, one.network,
                                                   db, here)
                         row["inscribed"] = _inscribed(db, here)
+                    if one.is_doge:
+                        row.update(_doginal_needs())
                 except Exception:
                     pass                   # a node still catching up says 0
             _spendable(row)

@@ -1360,6 +1360,19 @@ async function drawDoginals() {
   if (!left.length && !dg.failed && !found.length) {
     box.append(el("div", "wl-empty", doge ? "No Doginals on your Dogecoin coins." : "No inscriptions on your PEP coins."));
   }
+  // Moving a Doginal costs Dogecoin on top of it (2026-10-15: "grayed out unless they have a balance of Dogecoin on
+  // top of their asset"): the send's fee, or the swap lock's fee and reserve. `spendable` already leaves the Doginals out.
+  const free = Number(c.spendable || 0);
+  const sendShort = doge && free < Number(c.doginal_send_need || 0);
+  const swapShort = doge && free < Number(c.doginal_lock_need || 0);
+  if (found.length && (sendShort || swapShort)) {
+    const need = sendShort ? c.doginal_send_need : c.doginal_lock_need;
+    box.append(el("p", "wl-note dg-need", sendShort
+      ? `To send or swap a Doginal you need some Dogecoin besides it for the network fee: about ${coinsOf(c.doginal_lock_need)} DOGE `
+        + `(${coinsOf(c.doginal_send_need)} to send). This wallet has ${coinsOf(free)} DOGE to spend.`
+      : `To swap a Doginal you need about ${coinsOf(need)} DOGE besides it (the network fee and the coin that moves it out of `
+        + `the swap's lock). This wallet has ${coinsOf(free)} DOGE to spend.`));
+  }
   if (found.length) {
     const grid = el("div", "wl-pieces");
     for (const g of found) {
@@ -1371,10 +1384,14 @@ async function drawDoginals() {
         const send = el("button", "wl-piecesend", "Send"); send.type = "button";
         send.setAttribute("aria-label", `Send Doginal ${g.id}`);
         send.onclick = () => openSend("", g);
+        if (sendShort) { send.disabled = true; send.title = "Needs Dogecoin besides the Doginal for the network fee"; }
         // Swap it for a coin on another chain through lock scripts (2026-10-15): its own swap market.
         const swap = el("a", "wl-piecesend ghost", "Swap");
-        swap.href = `/exchange/swap/doge-doginal-${encodeURIComponent(g.id)}/main-coin`;
         swap.setAttribute("aria-label", `Swap Doginal ${g.id}`);
+        if (swapShort) {
+          swap.setAttribute("aria-disabled", "true"); swap.style.cssText = "opacity:.45;pointer-events:none";
+          swap.title = "Needs Dogecoin besides the Doginal for the network fee";
+        } else swap.href = `/exchange/swap/doge-doginal-${encodeURIComponent(g.id)}/doge-coin`;
         card.append(send, swap);
       }
       grid.append(card);

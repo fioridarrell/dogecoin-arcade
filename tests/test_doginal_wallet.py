@@ -207,3 +207,20 @@ def test_someone_elses_wallet_shows_their_doginals_with_an_offer(client, monkeyp
     assert f'data-ord="{INS}"' in page and f'src="/content/{INS}"' in page, "their Doginal, its art from the chain"
     assert f"/exchange/swap/doge-doginal-{INS}/doge-coin?side=buy#x-form" in page and "Make an offer" in page
     assert f'data-ord="{T2}i0"' in page, "every one of them"
+
+
+def test_moving_a_doginal_needs_dogecoin_besides_it(client, monkeypatch, tmp_path):
+    """2026-10-15: "If the user doesn't have any Dogecoin in their wallet, and their only Doge coin is a Doginal
+    they can't make a swap. Those buttons should be grayed out unless they have a balance of Dogecoin on top of their
+    asset. To pay the miner fee." The node says what a send and a swap's lock need; the pages compare it with what is
+    spendable (the Doginals left out)."""
+    from arcade import htlc
+    app, state = client
+    _doge_account(app, state, monkeypatch, tmp_path)
+    row = next(c for c in app.get("/account").json()["chains"] if c["network"] == "doge")
+    assert 1_000_000 < row["doginal_send_need"] < row["doginal_lock_need"]
+    assert row["doginal_lock_need"] > htlc.DOGINAL_RESERVE, "the reserve and the lock's own fee"
+    wallet = app.get("/me/wallet").text
+    assert "sendShort" in wallet and "swapShort" in wallet and 'swap.setAttribute("aria-disabled", "true")' in wallet
+    market = (pathlib.Path(__file__).resolve().parent.parent / "arcade/web/templates/swap_pair.html").read_text()
+    assert 'id="dg-need"' in market and "doginal_lock_need" in market, "a visitor's Sell and List sale wait for DOGE too"

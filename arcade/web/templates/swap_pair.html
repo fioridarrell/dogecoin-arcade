@@ -157,6 +157,33 @@
 </div>
 {% endif %}
 
+{% if viewer == 'account' and b.kind == 'doginal' %}
+{# Giving a Doginal needs Dogecoin besides it: the lock's fee and the reserve that moves it out again (2026-10-15:
+   "Those buttons should be grayed out unless they have a balance of Dogecoin on top of their asset"). #}
+<p class="ex-note dg-need" id="dg-need" hidden></p>
+<script>
+(async () => {
+  try {
+    const said = await (await fetch("/account", {cache: "no-store"})).json();
+    const d = (said.chains || []).find((c) => c.network === "doge");
+    if (!d) return;
+    const free = Number(d.spendable || 0), need = Number(d.doginal_lock_need || 0);
+    if (free >= need) return;
+    const coins = (k) => (k / 1e8).toFixed(8).replace(/\.?0+$/, "");
+    const note = document.getElementById("dg-need");
+    note.hidden = false;
+    note.textContent = `To sell this Doginal through a swap you need about ${coins(need)} DOGE besides it, for the network `
+      + `fee and the coin that moves it out of the lock. Your wallet has ${coins(free)} DOGE to spend.`;
+    document.querySelectorAll('form[data-pair-side="sell"] button, .cp-bid ~ * [data-take-order], [data-take-order]').forEach((b) => {
+      const row = b.closest("tr");
+      if (b.closest('form[data-pair-side="sell"]') || (row && row.querySelector(".cp-bid"))) {
+        b.disabled = true; b.title = "Needs Dogecoin besides the Doginal for the network fee";
+      }
+    });
+  } catch (e) { /* the buttons stay as they were; the send itself says why if it cannot pay */ }
+})();
+</script>
+{% endif %}
 {% if viewer == 'account' %}
 <div class="ex-card">{% include "_tab_swaps.html" %}
   <p class="muted" style="font-size:.8rem;margin:8px 0 0">A swap takes a few minutes. Once your side is
