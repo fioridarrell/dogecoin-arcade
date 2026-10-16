@@ -38,6 +38,18 @@
   {%- elif last is not none %}<b>{{ ex.px(last) }}</b><span class="unit">{{ qname }}, last trade</span>
   {%- else %}<b>&mdash;</b><span class="unit">nobody is offering a swap yet</span>{% endif %}
 </div>
+{% if quotes and b.kind in ('nft', 'doginal', 'token') %}
+{# Price it in anything (2026-10-15): every coin, and every token this reader holds. #}
+<div class="ex-card" style="padding:10px 12px">
+  <div class="muted" style="font-size:.82rem;margin-bottom:6px">Price {{ 'it' if b.kind != 'token' else bname }} in</div>
+  <div class="row" style="gap:6px;flex-wrap:wrap">
+    {% for o in quotes %}
+    <a class="btn small {{ '' if o.on else 'ghost' }}" href="/exchange/pairs?base={{ b.key|urlencode }}&amp;quote={{ o.key|urlencode }}"
+       {% if o.on %}aria-current="true"{% endif %}>{{ o.label }}</a>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
 <p class="ex-note" style="margin:0 0 12px"><span class="ex-pill done">Lock scripts</span>
   Each swap settles on both chains at once: either both sides get paid, or both get their own back.
   Nobody holds anybody's coins, tokens or pieces, and each swap is taken whole.</p>

@@ -167,3 +167,19 @@ def test_a_doginal_says_what_it_is_and_has_a_market_key(client):
     assert b["kind"] == "doginal", "a Doginal is priced in what it is traded for"
     page_js = (pathlib.Path(__file__).resolve().parent.parent / "arcade/web/templates/_tab_swaps.html").read_text()
     assert 'leg.kind === "doginal" ? `Doginal' in page_js
+
+
+def test_a_doginal_can_be_priced_in_any_coin_or_held_token(client, monkeypatch, tmp_path):
+    """2026-10-15: "It says I can only list for PEP. On doginals. The user should be able to list for any of the
+    coins and any of the tokens that they possess." A Doginal's market page offers every chain's coin (and the reader's
+    tokens); DOGE -- its own chain -- opens the Doginals tab (one transaction), any other its swap market."""
+    app, state = client
+    _doge_account(app, state, monkeypatch, tmp_path)
+    key = f"doge-doginal-{INS}"
+    page = app.get(f"/exchange/swap/{key}/main-coin").text
+    assert "Price it in" in page
+    for coin in ("doge-coin", "main-coin", f"{state.messaging.network}-coin"):
+        assert f"quote={coin}" in page, coin
+    go = lambda q: app.get(f"/exchange/pairs?base={key}&quote={q}", follow_redirects=False).headers["location"]  # noqa: E731
+    assert go("doge-coin") == "/exchange?tab=doginals", "for DOGE: the Doginals tab, one transaction"
+    assert go(f"{state.messaging.network}-coin") == f"/exchange/swap/{key}/{state.messaging.network}-coin"

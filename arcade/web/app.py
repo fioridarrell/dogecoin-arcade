@@ -23213,7 +23213,7 @@ def create_app(state: AppState) -> FastAPI:
             state.flash("A piece on its own chain is sold for that chain's coin, on its own page.", "err")
             return back
         where = _same_chain_market(b, q)
-        if b["network"] == chain.network:
+        if b["network"] == chain.network or b["kind"] == "doginal":     # the Doginals tab is on no chain switch
             return RedirectResponse(where, status_code=303)
         # The pair is on the other chain: a pair page reads the browser's chain, so switch first.
         if _account_view(request):
@@ -23544,7 +23544,13 @@ def create_app(state: AppState) -> FastAPI:
             except Exception:
                 log.debug("the held book could not be read", exc_info=True)
         here = f"/exchange/swap/{b['key']}/{q['key']}"
-        return render(request, "swap_pair.html", b=b, q=q, here=here,
+        # What else it can be priced in (2026-10-15: "The user should be able to list for any of the coins and any of
+        # the tokens that they possess"): every chain's coin and every token this reader holds, each its own market --
+        # the same chain's coin opens that chain's own one (a Doginal for DOGE: the Doginals tab, one transaction).
+        quotes = [{"key": c["key"], "label": c["label"], "on": c["key"] == q["key"]}
+                  for c in _pair_choices(request, "account" if viewer == "account" else viewer)
+                  if c["kind"] in ("coin", "token") and c["key"] != b["key"]]
+        return render(request, "swap_pair.html", b=b, q=q, here=here, quotes=quotes,
                       held_url=f"/exchange/x/{b['kind']}/{b['asset']}?held=1",
                       b_form=_leg_form(b), q_form=_leg_form(q),
                       asks=book["asks"], bids=book["bids"], spread=book["spread"],

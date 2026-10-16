@@ -25,8 +25,9 @@
   <div class="dg-grid" id="dg-listings">
     {% for d in doginals %}
     <div class="dg-card" data-listing="{{ d.id }}">
-      <img class="dg-art" src="{{ d.content }}" alt="Doginal {{ d.inscription[:12] }}" loading="lazy"
-           referrerpolicy="no-referrer" onerror="this.replaceWith(Object.assign(document.createElement('a'),{href:this.src,textContent:'Open its content',className:'dg-art',target:'_blank',rel:'noopener'}))">
+      {# A sandboxed frame: a Doginal is often a page drawing itself from other inscriptions (read off the chain, 2026-10-15). #}
+      <iframe class="dg-art" src="{{ d.content }}" title="Doginal {{ d.inscription[:12] }}" loading="lazy"
+              sandbox="allow-scripts" style="border:0;aspect-ratio:1;width:100%;pointer-events:none"></iframe>
       <div class="dg-id mono" title="{{ d.inscription }}">{{ d.inscription[:16] }}…{{ d.inscription[-4:] }}</div>
       <div class="dg-px">{{ d.price_text }}</div>
       <div class="muted" style="font-size:.78rem">from {% if doge_me and d.seller == doge_me %}<strong>you</strong>{% else %}{{ d.seller|who }}{% endif %}</div>
@@ -161,10 +162,13 @@
         card.className = "dg-card";
         const id = (d.inscriptions || [])[0] || "";
         if (d.content) {
-          const img = Object.assign(document.createElement("img"), {className: "dg-art", src: d.content,
-                                                                     alt: "Doginal", loading: "lazy"});
-          img.referrerPolicy = "no-referrer";
-          card.append(img);
+          // A sandboxed frame, not an <img>: a Doginal is often a page that draws itself from other inscriptions
+          // (2026-10-15: Anti Doginal Dogs), read from the chain by this node at /content/<id>.
+          const art = Object.assign(document.createElement("iframe"), {className: "dg-art", src: d.content,
+                                                                        title: "Doginal", loading: "lazy"});
+          art.setAttribute("sandbox", "allow-scripts");
+          art.style.cssText = "border:0;aspect-ratio:1;width:100%;pointer-events:none";
+          card.append(art);
         }
         const label = Object.assign(document.createElement("div"), {className: "dg-id mono",
           textContent: d.unknown ? `${d.txid.slice(0, 16)}…:${d.vout} (could not be read from the chain yet)` : id});
@@ -178,7 +182,12 @@
           const go = Object.assign(document.createElement("button"), {type: "button", className: "small",
                                                                       textContent: "List"});
           Object.assign(go.dataset, {dgList: id, txid: d.txid, vout: String(d.vout)});
-          card.append(input, go);
+          // Or for any other coin or token, through lock scripts (2026-10-15: "list for any of the coins and any
+          // of the tokens that they possess"): its swap market, where the price is picked.
+          const other = Object.assign(document.createElement("a"), {className: "small",
+            href: `/exchange/swap/doge-doginal-${encodeURIComponent(id)}/main-coin`,
+            textContent: "Price in another coin or token"});
+          card.append(input, go, other);
         } else if (!d.unknown) {
           card.append(Object.assign(document.createElement("div"), {className: "muted dg-note",
             textContent: "Not listable here: this coin carries more than one Doginal, or one away from its start."}));
