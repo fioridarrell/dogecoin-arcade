@@ -171,10 +171,22 @@ export async function tellTheNode(wallet) {
 }
 
 /** What chains this node runs for accounts, whether or not anybody is in. */
+//: The chain list, kept a minute (2026-10-17: every `opened()` asked /account for it, and the
+//: swap runner opens the wallet every 1.5 s -- 160 /account a minute, a quarter of the node's time).
+let chainsKept = null, chainsAt = 0, chainsAsking = null;
 export async function chains() {
-  try {
-    return (await (await fetch("/account")).json()).chains || [];
-  } catch (e) { return []; }
+  if (chainsKept && Date.now() - chainsAt < 60000) return chainsKept;
+  if (!chainsAsking) {
+    chainsAsking = (async () => {
+      try {
+        const got = (await (await fetch("/account")).json()).chains || [];
+        if (got.length) { chainsKept = got; chainsAt = Date.now(); }
+        return got;
+      } catch (e) { return chainsKept || []; }
+      finally { chainsAsking = null; }
+    })();
+  }
+  return chainsAsking;
 }
 
 /** The keys for one chain, by network name. Throws rather than guessing:
@@ -1141,6 +1153,11 @@ export async function autoSweep() {
   try { last = JSON.parse(localStorage.getItem(SWEEP_KEY) || "{}") || {}; } catch (e) { last = {}; }
   const due = (net) => Date.now() - Number(last[net] || 0) >= SWEEP_GAP;
   const done = [];
+  // Asking what there is to sweep costs the node seconds (each payload transaction read): asked
+  // once per SWEEP_GAP per browser, not on every page that opens.
+  if (Date.now() - Number(last._asked || 0) < SWEEP_GAP) return done;
+  last._asked = Date.now();
+  try { localStorage.setItem(SWEEP_KEY, JSON.stringify(last)); } catch (e) {}
   sweeping = true;
   try {
     let said = null;
