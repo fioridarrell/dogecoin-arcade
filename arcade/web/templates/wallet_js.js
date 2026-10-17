@@ -2728,8 +2728,7 @@ async function _tradeSay(wallet, toKey, body, options = {}) {
       await new Promise((r) => setTimeout(r, 1500));
       if (await meshSay(wallet, toKey, body)) return {mesh: true};
     }
-    throw new Error("the seller's arcade page is not open right now, so nobody can answer. Nothing was locked; "
-      + "try again when their swap shows on the book");
+    throw new Error("the seller's arcade is not answering right now, so nothing was locked. Try again in a moment");
   }
   if (!options.meshOnly) {
     const box = outbox().filter((m) => !(m.to === toKey && m.body.id === body.id && m.body.step === body.step));

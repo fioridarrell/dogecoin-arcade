@@ -75,6 +75,46 @@
       {{ chart.candles(slots, qname ~ ' ' ~ unit, period=periods[tf]) }}
     </div>
 
+    {#- The order book above the Buy/Sell card (2026-10-17). #}
+    <div class="panel" id="swap-pair" data-base="{{ b.key }}" data-quote="{{ q.key }}"
+         data-base-div="{{ '1' if b.divisible else '0' }}" data-quote-div="{{ '1' if q.divisible else '0' }}"
+         data-whole="{{ '1' if whole else '0' }}" data-quote-name="{{ qname }}" data-base-name="{{ bname }}">
+      <h3 style="margin:0 0 2px">Order book</h3>
+      <p class="muted" style="font-size:.78rem;margin:0 0 4px">Prices in {{ qname }} {{ net_badge(q.network) }}</p>
+      {% if asks or bids %}<p class="muted" style="font-size:.78rem;margin:0 0 8px">Press Buy or Sell on a row to take it.</p>
+      {% else %}<p class="muted" style="margin:0" id="book-empty">Nothing on either side yet.</p>{% endif %}
+      {% for side_, rows, word in (('ask', asks, 'Selling ' ~ bname), ('bid', bids, 'Buying ' ~ bname)) %}
+      {% if rows %}
+      <div class="obhead">{{ word }}</div>
+      {% for o in rows %}
+      <div class="obrow {{ side_ }}{{ ' mine' if o.mine }}" style="--depth:{{ o.depth }}%">
+        <span class="obprice mono">{{ ex.px(o.price) }}</span>
+        <span class="obamt"><span class="mono">{% if whole %}1{% else %}{{ o.base_shown }}{% endif %}</span>
+          <small class="muted">{% if o.mine %}yours{% else %}{{ o.lister|who }}{% endif %}</small></span>
+        <span class="obdo">
+          {%- if o.mine %}<span class="muted" style="font-size:.74rem">yours</span>
+          {%- elif can_trade_orders %}
+          <form method="post" action="/exchange/trade-orders/take" style="margin:0">
+            <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="back" value="{{ here }}">
+            <input type="hidden" name="order" value="{{ o.id }}"><input type="hidden" name="lister" value="{{ o.lister }}">
+            <button type="submit" class="small{{ '' if side_ == 'ask' else ' ghost' }}">{{ 'Buy' if side_ == 'ask' else 'Sell' }}</button></form>
+          {%- elif viewer == 'account' and open_here %}
+          <button type="button" class="small{{ '' if side_ == 'ask' else ' ghost' }}" data-take-id="{{ o.id }}"
+                  data-take-side="{{ side_ }}" data-take-order="{{ o|tojson|forceescape }}">{{ 'Buy' if side_ == 'ask' else 'Sell' }}</button>
+          {%- endif %}</span>
+      </div>
+      {% endfor %}
+      {% endif %}
+      {% if side_ == 'ask' %}
+      <div class="obmid">
+        {%- if asks and bids %}Best ask <strong class="mono">{{ ex.px(asks[0].price) }}</strong> &middot;
+          best bid <strong class="mono">{{ ex.px(bids[0].price) }}</strong>
+        {%- elif last is not none %}Last traded at <strong class="mono">{{ ex.px(last) }}</strong>
+        {%- elif asks or bids %}<span class="muted">Only one side has orders so far.</span>{% endif %}</div>
+      {% endif %}
+      {% endfor %}
+    </div>
+
     <div class="panel">
       {% if open_here and viewer == 'account' and can_list_orders %}
       <div class="ex-trade" id="ex-trade">
@@ -94,38 +134,6 @@
         <button type="button" id="swap-go" class="ex-cta">Enter an amount</button>
       </div>
       <p class="msg err" id="swap-trouble" hidden></p>
-      {# 2026-10-17: the stay-open rule "needs to be more in the user['s] face. but they also need to
-         know that they can play one of the games while they wait for their swap to fill." Every arcade page
-         runs the swaps (base.html startTradeRunner), a full-screen game included. #}
-      <div class="stay-open" id="stay-open" role="note">
-        <b class="stay-head" data-idle="Your arcade fills your swaps for you"
-           data-listed="Your swap is listed: your arcade fills it">Your arcade fills your swaps for you</b>
-        <span>When you list, your side moves to that order's own address and your arcade's node answers whoever takes
-          it -- you can close every page. Cancel sends it straight back.</span>
-        <span><b>Go play a game while you wait.</b> When somebody takes it, it settles by itself and you get a
-          notification.</span>
-        <a class="btn small" href="/games">Play a game while you wait</a>
-      </div>
-      <style>
-        .stay-open{display:grid;gap:6px;margin:12px 0 4px;padding:12px 14px;border-radius:12px;font-size:.9rem;
-          border:2px solid var(--accent);background:color-mix(in srgb, var(--accent) 12%, var(--panel))}
-        .stay-open .stay-head{font-size:1rem}
-        .stay-open .btn{justify-self:start;margin-top:4px}
-        .stay-open.listed{animation:stay-pulse 1.6s ease-in-out 3}
-        @keyframes stay-pulse{50%{box-shadow:0 0 0 5px color-mix(in srgb, var(--accent) 35%, transparent)}}
-      </style>
-      <script>
-      (function () {
-        // Says "Your swap is listed" while one of yours is on this book, and pulses once when it appears.
-        var box = document.getElementById('stay-open'), head = box && box.querySelector('.stay-head'), was = false;
-        function look() {
-          var mine = !!document.querySelector('#swap-pair .obrow.mine');
-          if (mine !== was) { was = mine; box.classList.toggle('listed', mine);
-            head.textContent = head.dataset[mine ? 'listed' : 'idle']; }
-        }
-        if (box) { look(); setInterval(look, 1000); }
-      })();
-      </script>
       <a class="btn small ghost" style="margin:10px 0 0;display:inline-block"
          href="/exchange/history?base={{ b.key|urlencode }}&amp;quote={{ q.key|urlencode }}">Trade history</a>
       <p class="ex-note">A swap settles on both chains at once: either both sides get paid, or both get their own back.
@@ -262,45 +270,6 @@
       {% endfor %}
     </div>
     {% endif %}
-
-    <div class="panel" id="swap-pair" data-base="{{ b.key }}" data-quote="{{ q.key }}"
-         data-base-div="{{ '1' if b.divisible else '0' }}" data-quote-div="{{ '1' if q.divisible else '0' }}"
-         data-whole="{{ '1' if whole else '0' }}" data-quote-name="{{ qname }}" data-base-name="{{ bname }}">
-      <h3 style="margin:0 0 2px">Order book</h3>
-      <p class="muted" style="font-size:.78rem;margin:0 0 4px">Prices in {{ qname }} {{ net_badge(q.network) }}</p>
-      {% if asks or bids %}<p class="muted" style="font-size:.78rem;margin:0 0 8px">Press Buy or Sell on a row to take it.</p>
-      {% else %}<p class="muted" style="margin:0" id="book-empty">Nothing on either side yet.</p>{% endif %}
-      {% for side_, rows, word in (('ask', asks, 'Selling ' ~ bname), ('bid', bids, 'Buying ' ~ bname)) %}
-      {% if rows %}
-      <div class="obhead">{{ word }}</div>
-      {% for o in rows %}
-      <div class="obrow {{ side_ }}{{ ' mine' if o.mine }}" style="--depth:{{ o.depth }}%">
-        <span class="obprice mono">{{ ex.px(o.price) }}</span>
-        <span class="obamt"><span class="mono">{% if whole %}1{% else %}{{ o.base_shown }}{% endif %}</span>
-          <small class="muted">{% if o.mine %}yours{% else %}{{ o.lister|who }}{% endif %}</small></span>
-        <span class="obdo">
-          {%- if o.mine %}<span class="muted" style="font-size:.74rem">yours</span>
-          {%- elif can_trade_orders %}
-          <form method="post" action="/exchange/trade-orders/take" style="margin:0">
-            <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="back" value="{{ here }}">
-            <input type="hidden" name="order" value="{{ o.id }}"><input type="hidden" name="lister" value="{{ o.lister }}">
-            <button type="submit" class="small{{ '' if side_ == 'ask' else ' ghost' }}">{{ 'Buy' if side_ == 'ask' else 'Sell' }}</button></form>
-          {%- elif viewer == 'account' and open_here %}
-          <button type="button" class="small{{ '' if side_ == 'ask' else ' ghost' }}" data-take-id="{{ o.id }}"
-                  data-take-side="{{ side_ }}" data-take-order="{{ o|tojson|forceescape }}">{{ 'Buy' if side_ == 'ask' else 'Sell' }}</button>
-          {%- endif %}</span>
-      </div>
-      {% endfor %}
-      {% endif %}
-      {% if side_ == 'ask' %}
-      <div class="obmid">
-        {%- if asks and bids %}Best ask <strong class="mono">{{ ex.px(asks[0].price) }}</strong> &middot;
-          best bid <strong class="mono">{{ ex.px(bids[0].price) }}</strong>
-        {%- elif last is not none %}Last traded at <strong class="mono">{{ ex.px(last) }}</strong>
-        {%- elif asks or bids %}<span class="muted">Only one side has orders so far.</span>{% endif %}</div>
-      {% endif %}
-      {% endfor %}
-    </div>
 
     <div class="panel">
       <h3 style="margin:0 0 2px">Recent trades</h3>
