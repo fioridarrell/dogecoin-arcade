@@ -10192,7 +10192,7 @@ def create_app(state: AppState) -> FastAPI:
                         row["leaving"] = _leaving(account.pubkey, one.network,
                                                   db, here)
                         row["inscribed"] = _inscribed(db, here)
-                    if one.is_doge:
+                    if _ord_chain(one):
                         row.update(_doginal_needs())
                 except Exception:
                     pass                   # a node still catching up says 0
@@ -11902,12 +11902,12 @@ def create_app(state: AppState) -> FastAPI:
             chain = _chain_asked(said)
         except ValueError as exc:
             return JSONResponse({"detail": str(exc)}, status_code=400)
-        if not chain.is_doge:
-            return JSONResponse({"detail": "Doginals live on Dogecoin: this is a "
+        if not _ord_chain(chain):
+            return JSONResponse({"detail": "Doginals live on Dogecoin and Pepinals on Pepecoin mainnet: this is a "
                                            f"{chain.label} send"}, status_code=400)
         address = _account_address(account.pubkey, chain)
         if not address:
-            return JSONResponse({"detail": "this account has no dogecoin address yet"}, status_code=400)
+            return JSONResponse({"detail": f"this account has no {chain.label} address yet"}, status_code=400)
         try:
             txid = str(said.get("txid", "")).lower()
             if not re.fullmatch(r"[0-9a-f]{64}", txid):
@@ -11918,7 +11918,7 @@ def create_app(state: AppState) -> FastAPI:
                 raise ValueError("which output of that transaction?") from None
             inscription = str(said.get("inscription", "")).strip().lower()
             if not re.fullmatch(r"[0-9a-f]{64}i\d+", inscription):
-                raise ValueError("that is not a Doginal's id")
+                raise ValueError(f"that is not a {_ord_word(chain)}'s id")
             coin = next((c for c in _own_coins(account, chain)
                          if (c["txid"], c["vout"]) == (txid, vout)), None)
             if coin is None:
@@ -17281,17 +17281,25 @@ def create_app(state: AppState) -> FastAPI:
     # listing waits for a buyer with its seller gone, so it is a node-facilitated trade like every other listing
     # (`node_trades`, 2026-10-13): off, the tab shows what is listed and nobody lists or buys.
 
+    def _ord_chain(chain) -> bool:
+        """Whether this node reads ord inscriptions on `chain`: Doginals on Dogecoin, Pepinals on Pepecoin mainnet
+        (2026-10-17: "Add pepinals support"; the same envelopes, read by the same code, doginals.py)."""
+        return bool(chain is not None and (chain.is_doge or chain.network == "main"))
+
+    def _ord_word(chain) -> str:
+        return "Doginal" if chain.is_doge else "Pepinal"
+
     def _doge_asked(said: dict):
-        """The Dogecoin chain a Doginal route is about: only Dogecoin, and only once its node has synced."""
+        """The chain an inscription route is about: Dogecoin (Doginals, the default) or Pepecoin mainnet (Pepinals)."""
         chain = _chain_asked({"chain": str((said or {}).get("chain") or "doge")})
-        if not chain.is_doge:
-            raise ValueError("Doginals are on Dogecoin")
+        if not _ord_chain(chain):
+            raise ValueError("Doginals are on Dogecoin and Pepinals on Pepecoin mainnet")
         return chain
 
     def _doginal_row(chain, row: dict) -> dict:
         from .. import doginals as doginalslib
         return {**doginal_marketlib.public(row), "content": doginalslib.content_url(row["inscription"]),
-                "price_text": f"{int(row['price']) / COIN:g} DOGE",
+                "price_text": f"{int(row['price']) / COIN:g} {NETWORKS[chain.network].coin}",
                 "seller_tag": _tags_for([row["seller"]]).get(row["seller"], "")}
 
     def _doginals_live(chain) -> list[dict]:
@@ -17304,31 +17312,34 @@ def create_app(state: AppState) -> FastAPI:
             return []
 
     @app.get("/doginals/listings")
-    def doginals_listings():
-        """Every Doginal listed for DOGE on this node, while its coin is unspent."""
-        doge = state.doge
+    def doginals_listings(chain: str = "doge"):
+        """Every Doginal listed for DOGE (or Pepinal for PEP, ?chain=main) on this node, while its coin is unspent."""
+        try:
+            doge = _doge_asked({"chain": chain})
+        except ValueError:
+            doge = None
         if doge is None or not state.chain_ready(doge):
             return JSONResponse({"ready": False, "listings": []}, headers={"Cache-Control": "no-store"})
         return JSONResponse({"ready": True, "node_trades": _node_trades(), "listings": _doginals_live(doge)},
                             headers={"Cache-Control": "no-store"})
 
     @app.get("/account/doginals")
-    def account_doginals(request: Request):
+    def account_doginals(request: Request, chain: str = "doge"):
         """This account's Doginals: the coins at its Dogecoin address that hold one, and whether each can be listed
         (exactly one inscription, at offset 0). Only small coins are asked about -- Doginal postage
         (doginals.POSTAGE_MAX) -- so a wallet of big coins costs no reading."""
         from .. import doginals as doginalslib
         account = _signed_in_account(request)
         try:
-            chain = _doge_asked({})
+            chain = _doge_asked({"chain": chain})
         except ValueError as exc:
             return JSONResponse({"detail": str(exc)}, status_code=400)
         address = _account_address(account.pubkey, chain)
         if not address:
-            return JSONResponse({"detail": "this account has no Dogecoin address yet"}, status_code=400)
-        guard = fundinglib.GUARD
+            return JSONResponse({"detail": f"this account has no {chain.label} address yet"}, status_code=400)
+        guard = fundinglib.guard_for(address) or (fundinglib.GUARD if chain.is_doge else None)
         if guard is None:
-            return JSONResponse({"detail": "Doginals are not checked on this node"}, status_code=400)
+            return JSONResponse({"detail": f"{_ord_word(chain)}s are not checked on this node"}, status_code=400)
         listed = {(r["txid"], int(r["vout"])): r["id"] for r in state.doginal_book.open_listings(chain.network)
                   if r["seller"] == address}
         out = []
@@ -17355,7 +17366,7 @@ def create_app(state: AppState) -> FastAPI:
         chain = _doge_asked(said)
         address = _account_address(account.pubkey, chain)
         if not address:
-            raise ValueError("this account has no Dogecoin address yet")
+            raise ValueError(f"this account has no {chain.label} address yet")
         price = parse_amount(str(said.get("amount", "")), True)
         _above_dust(price, "price")
         coin = {"txid": str(said.get("txid") or "").lower(), "vout": int(said.get("vout", -1))}
@@ -17404,7 +17415,7 @@ def create_app(state: AppState) -> FastAPI:
         chain = _doge_asked(said)
         address = _account_address(account.pubkey, chain)
         if not address:
-            raise ValueError("this account has no Dogecoin address yet")
+            raise ValueError(f"this account has no {chain.label} address yet")
         row = state.doginal_book.get(str(said.get("listing") or ""))
         if row is None or row["network"] != chain.network or row["status"] != "open":
             raise ValueError("that listing is gone")
@@ -17412,7 +17423,7 @@ def create_app(state: AppState) -> FastAPI:
             held = rpc.call("gettxout", row["txid"], int(row["vout"]), True)
         if not held or int(round(float(held.get("value", 0)) * COIN)) != int(row["value"]):
             state.doginal_book.close(row["id"], "gone")
-            raise ValueError("that Doginal has moved since it was listed, so the listing is gone")
+            raise ValueError(f"that {_ord_word(chain)} has moved since it was listed, so the listing is gone")
         with contextlib.closing(state.token_index(chain).open()) as db:
             purchase = doginal_marketlib.build_purchase(
                 db, chain.params, address, row, rate=fees.MIN_FEE_PER_KB,
@@ -17510,7 +17521,8 @@ def create_app(state: AppState) -> FastAPI:
                     db, chain.params, address, row["coin"], row["inscription"], address, rate=fees.MIN_FEE_PER_KB,
                     exclude=_flights.spent_by(account.pubkey, chain.network) - {(row["txid"], int(row["vout"]))},
                     extra=_flights.change_for(account.pubkey, chain.network))
-            unsigned.what = f"take back the listing of Doginal {row['inscription']} (it moves to your own address)"
+            unsigned.what = (f"take back the listing of {_ord_word(chain)} {row['inscription']} "
+                             "(it moves to your own address)")
             _quota(account, "send")
         except (fundinglib.FundingError, ValueError) as exc:
             return JSONResponse({"detail": str(exc)}, status_code=400)
@@ -22223,7 +22235,7 @@ def create_app(state: AppState) -> FastAPI:
 
     # --- the exchange ---------------------------------------------------------
 
-    EXCHANGE_TABS = ("offers", "mintpads", "tokens", "market", "doginals")
+    EXCHANGE_TABS = ("offers", "mintpads", "tokens", "market", "doginals", "pepinals")
 
     def _coins_each(price: Any, divisible: bool) -> float:
         """The book's price ratio as coins per whole token.
@@ -25583,15 +25595,21 @@ def create_app(state: AppState) -> FastAPI:
             except Exception as exc:
                 data["node_error"] = data["node_error"] or \
                     f"the collections could not be read: {exc}"
-        # Doginals for DOGE, on their own tab (2026-10-14); only once Dogecoin's node has synced.
+        # Doginals for DOGE, on their own tab (2026-10-14); only once Dogecoin's node has synced. Pepinals for PEP
+        # the same way on Pepecoin mainnet (2026-10-17: "Add pepinals support").
         data["doginals"], data["doge_ready"], data["doge_version"] = [], False, 30
-        if tab == "doginals" and state.doge is not None:
-            data["doge_version"] = state.doge.params.pubkeyhash_version
-            data["doge_ready"] = state.chain_ready(state.doge)
+        ord_chain = (state.doge if tab == "doginals" else
+                     next((c for c in state.all_chains if c.network == "main"), None) if tab == "pepinals" else None)
+        if ord_chain is not None:
+            data["ord_net"], data["ord_word"] = ord_chain.network, _ord_word(ord_chain)
+            data["ord_coin"] = NETWORKS[ord_chain.network].coin
+            data["ord_chain_name"] = "Dogecoin" if ord_chain.is_doge else "Pepecoin"
+            data["doge_version"] = ord_chain.params.pubkeyhash_version
+            data["doge_ready"] = state.chain_ready(ord_chain)
             if data["doge_ready"]:
-                data["doginals"] = _doginals_live(state.doge)
+                data["doginals"] = _doginals_live(ord_chain)
                 looking = signed_in(request) if data["viewer"] == "account" else None
-                data["doge_me"] = _account_address(looking.pubkey, state.doge) if looking else ""
+                data["doge_me"] = _account_address(looking.pubkey, ord_chain) if looking else ""
                 data["tags"].update(_tags_for([d["seller"] for d in data["doginals"]]))
         if offers_tab:
             try:

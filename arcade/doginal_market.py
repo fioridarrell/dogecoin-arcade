@@ -67,20 +67,31 @@ class NeedDummies(MarketError):
     """The buyer holds fewer than two small clean coins: a prepare transaction comes first."""
 
 
-def _guard():
-    if funding.GUARD is None:
-        raise MarketError("Doginals are not checked on this node, so none is listed or bought here")
-    return funding.GUARD
+def _guard(address: str = ""):
+    """The inscription guard for `address`'s chain (funding.guard_for): Doginals on Dogecoin, Pepinals on Pepecoin
+    mainnet (2026-10-17: "Add pepinals support")."""
+    guard = (funding.guard_for(address) if address else None) or funding.GUARD
+    if guard is None:
+        raise MarketError("inscriptions are not checked on this chain here, so none is listed or bought")
+    return guard
 
 
-def holds_exactly(coin: dict, inscription: str) -> None:
-    """Refuse unless the Doginal source says this coin holds exactly `inscription`, at offset 0."""
-    on = _guard().held(coin["txid"]).get(int(coin["vout"])) or []
+def names(address: str) -> tuple[str, str]:
+    """("Doginal", "DOGE") on Dogecoin, ("Pepinal", "PEP") on Pepecoin: what the words say for `address`'s chain."""
+    if any(applies(address) for applies, _ in funding.GUARDS):
+        return "Pepinal", "PEP"
+    return "Doginal", "DOGE"
+
+
+def holds_exactly(coin: dict, inscription: str, address: str = "") -> None:
+    """Refuse unless the chain says this coin holds exactly `inscription`, at offset 0."""
+    word = names(address)[0] if address else "Doginal"
+    on = _guard(address).held(coin["txid"]).get(int(coin["vout"])) or []
     if [i.get("id") for i in on] != [inscription]:
-        raise MarketError("that coin does not hold exactly that Doginal (the chain says: %s)"
-                          % (", ".join(str(i.get("id")) for i in on) or "nothing"))
+        raise MarketError("that coin does not hold exactly that %s (the chain says: %s)"
+                          % (word, ", ".join(str(i.get("id")) for i in on) or "nothing"))
     if int(on[0].get("offset") or 0) != 0:
-        raise MarketError("that Doginal does not sit at the start of its coin, so it cannot be sold by koinu order")
+        raise MarketError(f"that {word} does not sit at the start of its coin, so it cannot be sold by koinu order")
 
 
 def listing_digest(seller: str, coin: dict, price: int) -> bytes:
@@ -117,12 +128,13 @@ def build_ask(seller: str, coin: dict, inscription: str, price: int) -> Ask:
         raise MarketError("a coin is a 32-byte txid and an index")
     if coin["value"] < MIN_OUT:
         raise MarketError(f"that coin is {coin['value']} koinu, under the {MIN_OUT} the network carries as an output")
+    word, ticker = names(seller)
     if int(price) < fees.DUST_LIMIT:
-        raise MarketError(f"the smallest price is {fees.DUST_LIMIT / COIN:g} DOGE -- less is dust")
-    holds_exactly(coin, inscription)
+        raise MarketError(f"the smallest price is {fees.DUST_LIMIT / COIN:g} {ticker} -- less is dust")
+    holds_exactly(coin, inscription, seller)
     digest = listing_digest(seller, coin, int(price))
     return Ask(seller=seller, coin=coin, inscription=inscription, price=int(price), digest=digest.hex(),
-               what=f"list Doginal {inscription} for {int(price) / COIN:g} DOGE")
+               what=f"list {word} {inscription} for {int(price) / COIN:g} {ticker}")
 
 
 def verify_signature(digest: bytes, signature: bytes, pubkey: bytes) -> bool:
@@ -145,7 +157,7 @@ def verify_signature(digest: bytes, signature: bytes, pubkey: bytes) -> bool:
 
 def _clean(db, address: str, exclude=frozenset(), extra: list | None = None) -> tuple[list[dict], set]:
     """(the coins at `address` the guard calls clean, the outpoints it does not): a Doginal is never a dummy or a fee."""
-    guard = _guard()
+    guard = _guard(address)
     listed = [u for u in utxos.unspent(db, address) if (u["txid"], u["vout"]) not in exclude]
     seen = {(u["txid"], u["vout"]) for u in listed}
     listed += [dict(c) for c in (extra or []) if (c["txid"], c["vout"]) not in exclude
@@ -160,7 +172,8 @@ def dummies(db, address: str, exclude=frozenset(), extra: list | None = None) ->
     clean, _ = _clean(db, address, exclude, extra)
     small = sorted((c for c in clean if MIN_OUT <= int(c["value"]) <= DUMMY_MAX), key=lambda c: int(c["value"]))
     if len(small) < 2:
-        raise NeedDummies(f"buying a Doginal takes two small coins of your own (up to {DUMMY_MAX / COIN:g} DOGE each) "
+        word, ticker = names(address)
+        raise NeedDummies(f"buying a {word} takes two small coins of your own (up to {DUMMY_MAX / COIN:g} {ticker} each) "
                           f"in front of the seller's, and this address has {len(small)}: split two off first")
     return small[:2]
 
@@ -170,7 +183,7 @@ def build_prepare(db, params, buyer: str, rate: int, exclude=frozenset(), extra:
     clean, unclean = _clean(db, buyer, exclude, extra)
     script = p2pkh_script(buyer)
     return funding.build(db, params, buyer, [(DUMMY_VALUE, script), (DUMMY_VALUE, script)], rate,
-                         what="split two small coins off, to buy a Doginal with",
+                         what=f"split two small coins off, to buy a {names(buyer)[0]} with",
                          exclude=set(exclude) | unclean, extra=_fresh(db, buyer, clean))
 
 
@@ -241,7 +254,8 @@ def build_purchase(db, params, buyer: str, listing: dict, rate: int, exclude=fro
     signs = [n for n in range(len(inputs)) if n != SELLER_AT]
     hashes = [funding.sighash(inputs, outputs, n, mine).hex() for n in signs]
     return Purchase(raw=raw, inputs=inputs, outputs=outputs, buyer_inputs=signs, sighashes=hashes, fee=fee,
-                    change=change, what=f"buy Doginal {listing['inscription']} for {price / COIN:g} DOGE")
+                    change=change, what="buy %s %s for %g %s" % (names(buyer)[0], listing['inscription'], price / COIN,
+                                                                  names(buyer)[1]))
 
 
 def assemble_purchase(purchase: Purchase, listing: dict, signatures: list[str], pubkey: bytes) -> str:

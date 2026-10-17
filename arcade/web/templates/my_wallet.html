@@ -402,7 +402,7 @@ function drawHead() {
   if (c.incoming) bits.push(["in", `${coinsOf(c.incoming)} arriving`]);
   if (c.leaving) bits.push(["out", `${coinsOf(c.leaving)} leaving`]);
   // Coins carrying an inscription are held, not spendable (2026-10-15): said beside the number they are left out of.
-  if (c.inscribed) bits.push(["out", `${coinsOf(c.inscribed)} held in ${c.network === "doge" ? "Doginals" : "inscriptions"}`]);
+  if (c.inscribed) bits.push(["out", `${coinsOf(c.inscribed)} held in ${c.network === "doge" ? "Doginals" : c.network === "main" ? "Pepinals" : "inscriptions"}`]);
   if (asset) {
     const page = el("a", "", `Token #${asset.property_id}`);
     page.href = `/tokens/${asset.property_id}?chain=${encodeURIComponent(c.network)}`;
@@ -758,7 +758,8 @@ function openSend(prefill = "", piece = null) {
   const c = chainNow();
   if (!c) return;
   const s = sheet();
-  const what = piece && piece.doginal ? {kind: "doginal", doginal: piece, name: `Doginal ${short(piece.id)}`}
+  const what = piece && piece.doginal ? {kind: "doginal", doginal: piece,
+                                         name: `${(chainNow() || {}).network === "doge" ? "Doginal" : "Pepinal"} ${short(piece.id)}`}
     : piece ? {kind: "nft", piece, name: piece.name || `#${piece.number}`}
     : asset ? {kind: "token", ...asset} : {kind: "coin"};
   step1(s, {to: prefill, amount: piece ? "1" : "", what});
@@ -774,7 +775,7 @@ async function offerFor(what, to, amount, network) {
     const asked = await fetch("/account/doginal/send", {method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({txid: g.txid, vout: g.vout, inscription: g.id, to, chain: network})});
     const offer = await asked.json();
-    if (!asked.ok) throw new Error(offer.detail || "that Doginal cannot be sent");
+    if (!asked.ok) throw new Error(offer.detail || "that inscription cannot be sent");
     return offer;
   }
   const [route, body] = what.kind === "token"
@@ -806,7 +807,7 @@ async function step1(s, d) {
   if (what.kind === "doginal") {
     const card = el("div", "wl-sendpiece");
     card.append(doginalPic(what.doginal), el("span", "", `${what.name} goes to whoever you pick, on the coin it sits on. `
-      + "The fee comes from your other coins, never from another Doginal."));
+      + "The fee comes from your other coins, never from another inscription."));
     body.append(card);
   }
   const all = await people();
@@ -1384,7 +1385,9 @@ async function drawDoginals() {
   box.hidden = false;
   const doge = c.network === "doge";
   if (dg.net !== c.network) dg = {net: c.network, coins: null, answers: {}, failed: 0, asking: false};
-  const head = el("h2", "", doge ? "Doginals" : "Inscriptions"); head.id = "dg-title";
+  // Pepinals (2026-10-17: "Add pepinals support"): the same ord inscriptions on Pepecoin mainnet.
+  const W = doge ? "Doginal" : "Pepinal", C = doge ? "DOGE" : "PEP";
+  const head = el("h2", "", `${W}s`); head.id = "dg-title";
   const coinWord = doge ? "Dogecoin" : "PEP";
   if (!dg.coins) {
     box.replaceChildren(head, el("div", "wl-empty", `Reading your ${coinWord} coins…`));
@@ -1420,18 +1423,19 @@ async function drawDoginals() {
       + "the way back, so they are kept out of ordinary sends in case they carry one."));
   }
   if (!left.length && !dg.failed && !found.length) {
-    box.append(el("div", "wl-empty", doge ? "No Doginals on your Dogecoin coins." : "No inscriptions on your PEP coins."));
+    box.append(el("div", "wl-empty", `No ${W}s on your ${doge ? "Dogecoin" : "PEP"} coins.`));
   }
   // Moving a Doginal costs Dogecoin on top of it (2026-10-15: "grayed out unless they have a balance of Dogecoin on
   // top of their asset"): the send's fee, or the swap lock's fee and reserve. `spendable` already leaves the Doginals out.
   const free = Number(c.spendable || 0);
-  const sendShort = doge && free < Number(c.doginal_send_need || 0);
+  const sendShort = free < Number(c.doginal_send_need || 0);
   const swapShort = doge && free < Number(c.doginal_lock_need || 0);
   if (found.length && (sendShort || swapShort)) {
     const need = sendShort ? c.doginal_send_need : c.doginal_lock_need;
     box.append(el("p", "wl-note dg-need", sendShort
-      ? `To send or swap a Doginal you need some Dogecoin besides it for the network fee: about ${coinsOf(c.doginal_lock_need)} DOGE `
-        + `(${coinsOf(c.doginal_send_need)} to send). This wallet has ${coinsOf(free)} DOGE to spend.`
+      ? `To send ${doge ? "or swap " : ""}a ${W} you need some ${C} besides it for the network fee: about `
+        + `${coinsOf(doge ? c.doginal_lock_need : c.doginal_send_need)} ${C}${doge ? ` (${coinsOf(c.doginal_send_need)} to send)` : ""}. `
+        + `This wallet has ${coinsOf(free)} ${C} to spend.`
       : `To swap a Doginal you need about ${coinsOf(need)} DOGE besides it (the network fee and the coin that moves it out of `
         + `the swap's lock). This wallet has ${coinsOf(free)} DOGE to spend.`));
   }
@@ -1442,11 +1446,18 @@ async function drawDoginals() {
       card.dataset.doginal = g.id;
       const id = el("div", "wl-dgid", g.id); id.title = g.id;
       card.append(doginalPic(g), id);
+      const send = el("button", "wl-piecesend", "Send"); send.type = "button";
+      send.setAttribute("aria-label", `Send ${W} ${g.id}`);
+      send.onclick = () => openSend("", g);
+      if (sendShort) { send.disabled = true; send.title = `Needs ${C} besides the ${W} for the network fee`; }
+      card.append(send);
+      if (!doge) {
+        // Sold for PEP on the Exchange's Pepinals tab (the seller signs once; the buyer completes it).
+        const list = el("a", "wl-piecesend ghost", "List");
+        list.href = "/exchange?tab=pepinals"; list.setAttribute("aria-label", `List Pepinal ${g.id}`);
+        card.append(list);
+      }
       if (doge) {
-        const send = el("button", "wl-piecesend", "Send"); send.type = "button";
-        send.setAttribute("aria-label", `Send Doginal ${g.id}`);
-        send.onclick = () => openSend("", g);
-        if (sendShort) { send.disabled = true; send.title = "Needs Dogecoin besides the Doginal for the network fee"; }
         // Swap it for a coin on another chain through lock scripts (2026-10-15): its own swap market.
         const swap = el("a", "wl-piecesend ghost", "Swap");
         swap.setAttribute("aria-label", `Swap Doginal ${g.id}`);
@@ -1454,7 +1465,7 @@ async function drawDoginals() {
           swap.setAttribute("aria-disabled", "true"); swap.style.cssText = "opacity:.45;pointer-events:none";
           swap.title = "Needs Dogecoin besides the Doginal for the network fee";
         } else swap.href = `/exchange/swap/doge-doginal-${encodeURIComponent(g.id)}/doge-coin`;
-        card.append(send, swap);
+        card.append(swap);
       }
       grid.append(card);
     }

@@ -1024,10 +1024,11 @@ def _doginal_first(db, address: str, coin: dict, inscription: str, first: bytes,
                    exclude, extra, what: str) -> Unsigned:
     """The inscribed coin as input 0, whole to `first` as output 0; `more` outputs after it; clean coins pay for them and
     the fee; change last."""
-    if GUARD is None:
-        raise FundingError("Doginals are not checked on this node: nothing that carries one is sent")
+    guard = guard_for(address) or GUARD          # Doginals on Dogecoin, Pepinals on Pepecoin mainnet
+    if guard is None:
+        raise FundingError("inscriptions are not checked on this chain here: nothing that carries one is sent")
     from .doginals import exactly
-    bad = exactly(GUARD.held(coin["txid"]).get(int(coin["vout"])), inscription)
+    bad = exactly(guard.held(coin["txid"]).get(int(coin["vout"])), inscription)
     if bad:
         raise FundingError(bad)
     if not any((u["txid"], u["vout"]) == (coin["txid"], int(coin["vout"])) for u in utxos.unspent(db, address)) \
