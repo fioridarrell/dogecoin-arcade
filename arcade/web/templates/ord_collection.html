@@ -41,7 +41,7 @@
 <div class="ex-h" style="display:flex;justify-content:space-between;align-items:center;gap:10px">
   <span>Every piece</span>
   <form method="get" style="display:flex;gap:6px">
-    <input name="number" type="number" min="1" max="{{ coll.supply }}" placeholder="#" value="{{ number or '' }}"
+    <input autocomplete="off" name="number" type="number" min="1" max="{{ coll.supply }}" placeholder="#" value="{{ number or '' }}"
            style="width:90px" aria-label="Find a number">
     <button class="small ghost" type="submit">Find</button>
   </form>

@@ -975,7 +975,7 @@ document.addEventListener('click', function (ev) {
   </table></div>
   {% endif %}
 
-  {% if not collections and not ord_rows %}
+  {% if not collections %}
   <div class="panel empty"><p>No collections
     {%- if show == 'cross' %} have a piece on the cross-chain book{% else %} are indexed on {{ show if show != 'mix' else 'any chain' }}{% endif %} yet.</p>
     <p class="muted" style="font-size:.86rem">A collection appears here because it
