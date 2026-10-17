@@ -25045,6 +25045,10 @@ def create_app(state: AppState) -> FastAPI:
         if not re.fullmatch(r"[0-9a-f]{64}", key):
             return JSONResponse({"detail": "a key"}, status_code=400)
         from ..messaging.envelope import Header, TYPE_API
+        try:
+            state.talk_relay().hold(key)             # a page reading its inbox is here to hear
+        except Exception:                            # noqa: BLE001 -- no mesh: nothing to keep
+            pass
         got, cursor = state.talk_relay().read(key, int(after))
         # The same bytes a chain row carries: the cleartext program header the node adds when it
         # builds a carrier (api.seal), so the page opens both with one openProgram.

@@ -13,6 +13,7 @@ the trade state machine checks every one against the chains (arcade/trade.py).
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from . import trade_messages as M
@@ -21,27 +22,86 @@ from .messaging.keys import fingerprint_of
 from .messaging.sender import MessageSender, SendError, funded_address
 
 
+#: Steps the mesh could not deliver yet, per node: tried again on every inbox read (each tick),
+#: for OUTBOX_FOR seconds. Swap talk never goes on the chain (2026-10-17: "I don't think
+#: we should be using the chain at all").
+OUTBOX_FOR = 30 * 60
+
+
+def _relay(state: Any):
+    try:
+        return state.talk_relay()
+    except Exception:                                      # noqa: BLE001 -- no mesh here
+        return None
+
+
+def _mesh_send(state: Any, to_pub: bytes, payload: bytes) -> bool:
+    from .messaging.envelope import Header
+    relay = _relay(state)
+    if relay is None:
+        return False
+    sealed = payload[Header.decode(payload).length:]       # the relay carries it without the header
+    try:
+        return bool(relay.send(to_pub.hex(), sealed))
+    except Exception:                                      # noqa: BLE001 -- kept in the outbox
+        return False
+
+
 def send(state: Any, chain: Any, to_pub: bytes, body: bytes) -> str:
-    """One trade step to another trader's messaging key, as this node. Returns the txid.
-    `body` is a `trade_messages.build(...)`: parsed again here, so nothing malformed
-    ever leaves."""
-    M.parse(body)
+    """One trade step to another trader's messaging key, as this node, over the mesh. Returns
+    "mesh" when it was delivered, "queued" when the other side is not on the mesh yet (tried
+    again on every `inbox` read). `body` is a `trade_messages.build(...)`: parsed again here,
+    so nothing malformed ever leaves. A proposal is not queued: it raises, nothing locked."""
+    said = M.parse(body)
     identity = state.ensure_identity()
     payload = apilib.seal(identity, to_pub, body)
-    with chain.rpc() as rpc:
-        sender = MessageSender(rpc, chain.params)
-        address = funded_address(rpc, prefer=state.derived_address)
+    if _mesh_send(state, to_pub, payload):
+        return "mesh"
+    if said.get("step") == "propose":
+        raise SendError("the other side is not on the mesh right now, so nobody can answer")
+    box = getattr(state, "_trade_outbox", None)
+    if box is None:
+        box = state._trade_outbox = []
+    box.append((to_pub, payload, time.time()))
+    return "queued"
+
+
+def _flush(state: Any) -> None:
+    box = getattr(state, "_trade_outbox", None) or []
+    left = []
+    for to_pub, payload, at in box:
+        if time.time() - at > OUTBOX_FOR:
+            continue
+        if not _mesh_send(state, to_pub, payload):
+            left.append((to_pub, payload, at))
+    state._trade_outbox = left
+
+
+def mesh_inbox(state: Any, after: int = 0) -> tuple[list[dict], int]:
+    """Trade steps the mesh brought this node since `after`: ([{sender, step}], cursor). Keeps
+    this node's talk rooms (talk_relay.hold) while it is asked, and sends what waits."""
+    from .messaging.envelope import Header, TYPE_API
+    relay = _relay(state)
+    if relay is None:
+        return [], after
+    identity = state.ensure_identity()
+    key = identity.public_bytes.hex()
+    try:
+        relay.hold(key)
+        _flush(state)
+        got, cursor = relay.read(key, int(after))
+    except Exception:                                      # noqa: BLE001 -- the next tick asks again
+        return [], after
+    out = []
+    for _seq, hexed in got:
+        sealed = bytes.fromhex(hexed)
         try:
-            prepared = sender.prepare(address, payload)
-        except SendError:
-            # A message is funded from ordinary pay-to-pubkey-hash coins only (a reader
-            # works the sender out of them); fall back to the address holding the most of
-            # THOSE -- not the most coins, which on a node that mines is mined coins.
-            other = _message_address(rpc)
-            if not other or other == address:
-                raise
-            prepared = sender.prepare(other, payload)
-        return sender.broadcast(prepared)
+            sender, body = apilib.open_payload(identity, Header(type=TYPE_API, clen=len(sealed)).encode() + sealed)
+            step = M.parse(body)
+        except Exception:                                  # noqa: BLE001 -- not a trade step for us
+            continue
+        out.append({"sender": bytes(sender).hex(), "step": step})
+    return out, cursor
 
 
 def _message_address(rpc: Any) -> str:

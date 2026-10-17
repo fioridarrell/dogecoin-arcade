@@ -62,6 +62,14 @@ def market(tmp_path, regtest, doge):
         with state.store() as store:
             store.set_meta(f"identity_address:{pep.network}", home)
         traders.append(NodeTrader(state, {"regtest": pep, "doge": _ctx(doge, "doge")}, pep))
+    # Trade talk goes over the mesh only (2026-10-17): both nodes on one, in-process here, each
+    # holding its rooms as a running node does on every tick.
+    from test_trade_tab_browser import SharedRelay
+    from arcade import trade_courier
+    relay = SharedRelay()
+    for t in traders:
+        t.state._talk_relay = relay
+        trade_courier.mesh_inbox(t.state)
     regtest.rpc.call("generate", 1)
     return traders[0], traders[1], regtest.rpc, doge.rpc
 

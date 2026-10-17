@@ -210,6 +210,7 @@ class NodeTrader:
         with self._db() as conn:
             conn.execute("INSERT OR REPLACE INTO standing_order(id, give, get) VALUES(?,?,?)",
                          (order_id, json.dumps(what(give)), json.dumps(what(get))))
+        courier.mesh_inbox(self.state)                    # reachable on the mesh for whoever takes it
 
     def propose(self, peer_pub: bytes, order_id: str, give: T.Leg, get: T.Leg,
                 now: int | None = None) -> T.Trade:
@@ -221,6 +222,7 @@ class NodeTrader:
                         secret_hash=h.hex(), secret=secret.hex(),
                         initiator_locktime=t1, responder_locktime=t2, need=self.need(give, get))
         self.book.save(trade)
+        courier.mesh_inbox(self.state)                    # on the mesh before asking, to hear the answer
         with self._db() as conn:
             conn.execute("INSERT INTO link(id, peer) VALUES(?,?)", (trade.id, peer_pub.hex()))
         courier.send(self.state, self.messaging, peer_pub, M.build(
@@ -324,6 +326,20 @@ class NodeTrader:
                 self._note(said)
         with self._db() as conn:
             conn.execute("INSERT OR REPLACE INTO meta(k, v) VALUES('cursor', ?)", (str(cursor),))
+            row = conn.execute("SELECT v FROM meta WHERE k='mesh_cursor'").fetchone()
+        # Swap talk over the mesh (trade_courier.mesh_inbox); the chain read above stays for steps
+        # sent before 2026-10-17, when talk still went on the chain.
+        heard, mesh_cursor = courier.mesh_inbox(self.state, int(row["v"]) if row else 0)
+        for msg in heard:
+            said, peer = msg["step"], msg["sender"]
+            with self._db() as conn:
+                link = conn.execute("SELECT * FROM link WHERE id=?", (said["id"],)).fetchone()
+            if said["step"] == "propose" and link is None:
+                self._consider(said, peer)
+            elif link is not None and link["peer"] == peer:
+                self._note(said)
+        with self._db() as conn:
+            conn.execute("INSERT OR REPLACE INTO meta(k, v) VALUES('mesh_cursor', ?)", (str(mesh_cursor),))
 
     def _consider(self, said: dict, peer: str) -> None:
         """A proposal against one of this node's orders: accept exactly-matching terms."""

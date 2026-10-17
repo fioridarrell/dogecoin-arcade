@@ -33,6 +33,37 @@ def _mine(*rpcs):
         rpc.call("generatetoaddress", 1, _AWAY)
 
 
+class SharedRelay:
+    """A mesh both test nodes are on (talk_relay.TalkRelay's surface): a page or node is
+    reachable once it has held its rooms, and what is sent to it waits until it reads."""
+
+    def __init__(self):
+        self.held, self.boxes, self.seq = set(), {}, 0
+
+    def hold(self, key):
+        self.held.add(key)
+
+    def live(self, key):
+        return key in self.held
+
+    def send(self, to_key, payload):
+        if to_key not in self.held:
+            return False
+        self.seq += 1
+        self.boxes.setdefault(to_key, []).append((self.seq, bytes(payload).hex()))
+        return True
+
+    def read(self, key, after=0):
+        out = [(s, p) for s, p in self.boxes.get(key, []) if s > after]
+        return out, max([after] + [s for s, _ in out])
+
+    def drain(self):
+        pass
+
+    def expire(self, now=None):
+        pass
+
+
 @pytest.fixture
 def world(tmp_path, regtest, doge, monkeypatch):
     import uvicorn
@@ -69,6 +100,8 @@ def world(tmp_path, regtest, doge, monkeypatch):
     with b_state.store() as store:
         store.set_meta(f"identity_address:{pep_b.network}", home)
     b = NodeTrader(b_state, {"regtest": pep_b, "doge": _ctx(doge, "doge")}, pep_b)
+    # Swap talk goes over the mesh only (2026-10-17): both nodes share one, in-process here.
+    a._talk_relay = b_state._talk_relay = SharedRelay()
     _mine(regtest.rpc)
 
     port = _free_port()
