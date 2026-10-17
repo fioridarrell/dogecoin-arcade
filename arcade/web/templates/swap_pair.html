@@ -3,7 +3,7 @@
 {% set bname = wall_text(b.name, 'an asset') %}
 {% set qname = wall_text(q.name, 'an asset') %}
 {% set unit = 'for it' if b.kind in ('nft', 'doginal') else 'each' %}
-{% block title %}{{ bname }}/{{ qname }} · Exchange · DogecoinArcade{% endblock %}
+{% block title %}{{ bname }}/{{ qname }} · Exchange · {{ brand.name }}{% endblock %}
 {% block body %}
 {# Every cross-chain market (2026-10-15: "I want all pairs to be established the same
    way ... Every doge/pep and doge/test pep and pep/test and tokens"): a coin, token or piece on

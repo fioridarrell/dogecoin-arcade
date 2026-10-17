@@ -2,7 +2,7 @@
 {% import "_chains.html" as chains %}
 {% import "_token_confirm.html" as tk %}
 {% import "_exui.html" as ex %}
-{% block title %}Exchange · DogecoinArcade{% endblock %}
+{% block title %}Exchange · {{ brand.name }}{% endblock %}
 {% block body %}
 {% macro tabs(current) %}
 <div id="live" data-generation="{{ state.generation }}" class="live"></div>

@@ -40,6 +40,8 @@ from fastapi.responses import (
 )
 from fastapi.templating import Jinja2Templates
 
+from . import brand as brandlib
+
 from .. import backup, media, tokens as tokenlib, wallet as walletlib
 from ..ledger import COIN, AmountError, format_amount, parse_amount
 from ..config import NETWORKS, MainnetRefused, WrongChain
@@ -112,6 +114,7 @@ from .state import AppState
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 TEMPLATES = Jinja2Templates(directory=str(TEMPLATE_DIR))
+TEMPLATES.env.globals["brand"] = brandlib.current()   # create_app reads it again
 
 
 def _fromjson(text: str):
@@ -461,11 +464,11 @@ ACCOUNT_NAV = [
 
 LOCKED_PAGE = """<!doctype html><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>%(title)s · DogecoinArcade</title>
+<title>%(title)s · %(brand)s</title>
 <style>body{font:16px/1.5 system-ui,sans-serif;margin:0;display:grid;
 place-items:center;min-height:100vh;background:#12131a;color:#e8e8ea}
 div{max-width:26rem;padding:2rem;text-align:center}
-h1{font-size:1.2rem}p{color:#a0a0ab}a{color:#f0c040}</style>
+h1{font-size:1.2rem}p{color:#a0a0ab}a{color:%(accent)s}</style>
 <div><h1>%(title)s</h1><p>%(detail)s</p>
 <p><a href="/">Home</a> &middot; <a href="/feed">Feed</a> &middot; <a href="/me">Your arcade</a></p></div>
 """
@@ -559,7 +562,9 @@ def secure_context(request: Request) -> bool:
 def locked(title: str, detail: str, status: int = 403) -> HTMLResponse:
     """What a stranger sees. Deliberately plain: it names nothing about this
     wallet, because whoever is reading it has not shown they may see it."""
-    return HTMLResponse(LOCKED_PAGE % {"title": title, "detail": detail},
+    return HTMLResponse(LOCKED_PAGE % {"title": title, "detail": detail,
+                                      "brand": brandlib.current().name,
+                                      "accent": brandlib.current().dark_accent},
                         status_code=status)
 
 
@@ -698,6 +703,7 @@ def _above_dust(sats: int, what: str) -> None:
 
 def create_app(state: AppState) -> FastAPI:
     TEMPLATES._screen_of = state.screen          # the feed card's screen_text()
+    TEMPLATES.env.globals["brand"] = brandlib.current()   # this node's name, colours, icons (brand.py)
     # [Claude 2026-10-14] Inscriptions stay put: a wallet's ordinary sends never spend a coin carrying one (arcade/doginals.py).
     # Read from each chain by its own node (2026-10-15, "Remove Doge Soft API"): Doginals on Dogecoin, and the same ord
     # envelopes on small Pepecoin MAINNET coins ("do the same for small .01 pep txs. Not made by the Arcade").
@@ -764,7 +770,7 @@ def create_app(state: AppState) -> FastAPI:
                   "offer to finish the rest when it starts again.",
                   file=sys.stderr, flush=True)
 
-    app = FastAPI(title="DogecoinArcade", docs_url=None, redoc_url=None,
+    app = FastAPI(title=brandlib.current().name, docs_url=None, redoc_url=None,
                   lifespan=_lifespan)
     app.middleware("http")(the_door(state))
     app.middleware("http")(_sandbox_names_its_host)
@@ -971,7 +977,9 @@ def create_app(state: AppState) -> FastAPI:
         wants_html = "text/html" in (request.headers.get("accept") or "")
         if not wants_html:
             return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
-        return HTMLResponse(REFUSED_PAGE.format(detail=html.escape(str(exc.detail))),
+        return HTMLResponse(REFUSED_PAGE.format(detail=html.escape(str(exc.detail)),
+                                                 brand=brandlib.current().name,
+                                                 accent=brandlib.current().dark_accent),
                             status_code=exc.status_code)
 
     def _approvals_waiting() -> int:
@@ -6803,7 +6811,7 @@ def create_app(state: AppState) -> FastAPI:
     def _ask_the_reader(request: Request, chain, body: dict):
         address = _viewer_of(request, chain)
         if not address:
-            return contentlib._json({"error": "sign in to DogecoinArcade and open this "
+            return contentlib._json({"error": f"sign in to {brandlib.current().name} and open this "
                                      "page there to be asked"}, status=403)
         kind = str(body.get("kind") or "")
         if kind not in ("token", "coins", "inscription"):
@@ -8614,8 +8622,9 @@ def create_app(state: AppState) -> FastAPI:
         name = ICONS.get(request.url.path)
         if name is None:
             raise HTTPException(404, "no such icon")
+        own = brandlib.current().icon(name)   # this node's face's copy, if it has one
         return Response(
-            (TEMPLATE_DIR / name).read_bytes(), media_type="image/png",
+            (own or TEMPLATE_DIR / name).read_bytes(), media_type="image/png",
             # A year. The picture is the application's identity; when it
             # changes, its name changes with it.
             headers={"Cache-Control": "public, max-age=31536000, immutable"})
@@ -8631,10 +8640,11 @@ def create_app(state: AppState) -> FastAPI:
     @app.get("/manifest.webmanifest")
     def web_manifest():
         return JSONResponse({
-            "name": "DogecoinArcade", "short_name": "Arcade",
+            "name": brandlib.current().name, "short_name": "Arcade",
             "description": "Messages, a feed, tokens and art on Pepecoin.",
             "id": "/", "start_url": "/", "scope": "/", "display": "standalone",
-            "background_color": "#faf8f4", "theme_color": "#1b1a17",
+            "background_color": brandlib.current().light_bg,
+            "theme_color": brandlib.current().light_fg,
             "icons": [
                 {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png",
                  "purpose": "any"},
@@ -25620,18 +25630,18 @@ def _check_address(address: str, *, mainnet: bool) -> str | None:
 #: something has already gone wrong, so it should not depend on page state.
 REFUSED_PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<title>Not accepted \u00b7 DogecoinArcade</title>
+<title>Not accepted \u00b7 {brand}</title>
 <style>
 body{{margin:0;background:#141310;color:#ece8e0;
   font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}}
 main{{max-width:520px;margin:14vh auto;padding:0 24px}}
 h1{{font-size:1.3rem;margin:0 0 10px}}
 p{{color:#9b948a}}
-a{{color:#d9a520}}
+a{{color:{accent}}}
 </style></head><body><main>
 <h1>That was not accepted</h1>
 <p>{detail}</p>
-<p><a href="/">Back to DogecoinArcade</a></p>
+<p><a href="/">Back to {brand}</a></p>
 </main></body></html>"""
 
 
