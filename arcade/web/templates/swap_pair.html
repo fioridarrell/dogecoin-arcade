@@ -92,15 +92,44 @@
         <button type="button" id="swap-go" class="ex-cta">Enter an amount</button>
       </div>
       <p class="msg err" id="swap-trouble" hidden></p>
+      {# 2026-10-17: the stay-open rule "needs to be more in the user['s] face. but they also need to
+         know that they can play one of the games while they wait for their swap to fill." Every arcade page
+         runs the swaps (base.html startTradeRunner), a full-screen game included. #}
+      <div class="stay-open" id="stay-open" role="note">
+        <b class="stay-head" data-idle="Keep the arcade open while your swap is listed"
+           data-listed="Your swap is listed: keep the arcade open">Keep the arcade open while your swap is listed</b>
+        <span>Your swap stays on the book only while an arcade page is open with your wallet unlocked -- that page is
+          what answers whoever takes it. Close every arcade tab and it comes off the book within seconds.</span>
+        <span><b>Go play a game while you wait.</b> Any arcade page keeps it live, a game included: when somebody
+          takes it, it settles by itself and you get a notification.</span>
+        <a class="btn small" href="/games">Play a game while you wait</a>
+      </div>
+      <style>
+        .stay-open{display:grid;gap:6px;margin:12px 0 4px;padding:12px 14px;border-radius:12px;font-size:.9rem;
+          border:2px solid var(--accent);background:color-mix(in srgb, var(--accent) 12%, var(--panel))}
+        .stay-open .stay-head{font-size:1rem}
+        .stay-open .btn{justify-self:start;margin-top:4px}
+        .stay-open.listed{animation:stay-pulse 1.6s ease-in-out 3}
+        @keyframes stay-pulse{50%{box-shadow:0 0 0 5px color-mix(in srgb, var(--accent) 35%, transparent)}}
+      </style>
+      <script>
+      (function () {
+        // Says "Your swap is listed" while one of yours is on this book, and pulses once when it appears.
+        var box = document.getElementById('stay-open'), head = box && box.querySelector('.stay-head'), was = false;
+        function look() {
+          var mine = !!document.querySelector('#swap-pair .obrow.mine');
+          if (mine !== was) { was = mine; box.classList.toggle('listed', mine);
+            head.textContent = head.dataset[mine ? 'listed' : 'idle']; }
+        }
+        if (box) { look(); setInterval(look, 1000); }
+      })();
+      </script>
       <a class="btn small ghost" style="margin:10px 0 0;display:inline-block"
          href="/exchange/history?base={{ b.key|urlencode }}&amp;quote={{ q.key|urlencode }}">Trade history</a>
       <p class="ex-note">A swap settles on both chains at once: either both sides get paid, or both get their own back.
         Nobody holds anybody's coins, and each swap is taken whole: <b>Best price now</b> takes the best one as it stands;
         <b>Set my price</b> lists yours for anyone to take. You confirm once, when you buy or list; every step
         after that happens by itself and pops up as it does. Network fees are about 0.01 of each chain's coin per lock.</p>
-      <p class="ex-note" style="margin-top:0"><b>A swap you list stays on the book only while an arcade page is open here
-        with your wallet unlocked</b>: your page is what answers whoever takes it. Close them all and it comes off every
-        arcade's book within seconds; open one again and it is back.</p>
       {# What the box sends: the same swap forms as before (_tab_swaps.html binds them), out of sight. #}
       {% for side_ in ('sell', 'buy') %}
       <form class="cp-form" hidden data-pair-side="{{ side_ }}" data-base="{{ b.network }}" data-quote="{{ q.network }}"
