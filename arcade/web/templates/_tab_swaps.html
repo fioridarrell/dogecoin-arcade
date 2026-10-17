@@ -62,6 +62,7 @@
       const fmt = (n) => Number(n).toLocaleString(undefined, {maximumFractionDigits: 8});
       const row = document.createElement("div");
       row.className = `obrow ${sell ? "ask" : "bid"} mine`; row.style.setProperty("--depth", "100%");
+      row.dataset.local = o.id;               // this page's own copy, until the node's row for it arrives
       const px = document.createElement("span"); px.className = "obprice mono"; px.textContent = fmt(units ? paid / units : 0);
       const amt = document.createElement("span"); amt.className = "obamt";
       const n = document.createElement("span"); n.className = "mono"; n.textContent = book.dataset.whole === "1" ? "1" : fmt(units);
@@ -76,6 +77,10 @@
       return markBook(w, o);
     }
     function drawOrders(w) {
+      // The node's own row for an order replaces this page's copy of it (2026-10-17: shown twice until a refresh).
+      document.querySelectorAll(".obrow[data-local]").forEach((r) => {
+        if (document.querySelector(`[data-cancel-order="${CSS.escape(r.dataset.local)}"]`)) r.remove();
+      });
       // A swap the reader withdrew stays off the page, though a node still lists it until it hears.
       for (const id of wallet.myCancelled(w)) {
         document.querySelectorAll(`[data-take-id="${CSS.escape(id)}"], [data-mine-id="${CSS.escape(id)}"]`)

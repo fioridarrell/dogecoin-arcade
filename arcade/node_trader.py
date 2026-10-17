@@ -376,6 +376,16 @@ class NodeTrader:
             return [{"id": r["order_id"], "state": r["state"]}
                     for r in conn.execute("SELECT order_id, state FROM delegated WHERE owner=?", (owner,))]
 
+    #: How long an accepted swap waits for the taker's lock before it is called off and its order stands again.
+    TAKER_WAIT = 30 * 60
+
+    def _taking(self, order_id: str, taking: bool) -> None:
+        try:
+            self.state.trade_orders.set_taking(order_id, taking)
+            self.state.bump_generation()                   # every page of this arcade redraws its book now
+        except Exception:                                  # noqa: BLE001 -- a node without the order book
+            pass
+
     def _order_of(self, trade_id: str) -> dict | None:
         with self._db() as conn:
             row = conn.execute("SELECT order_id FROM link WHERE id=?", (trade_id,)).fetchone()
@@ -558,6 +568,9 @@ class NodeTrader:
         with self._db() as conn:
             conn.execute("INSERT INTO link(id, peer, agreed, order_id) VALUES(?,?,1,?)",
                          (trade.id, peer, said["order"] if held else ""))
+            conn.execute("INSERT OR REPLACE INTO meta(k, v) VALUES(?, ?)", (f"accepted:{trade.id}", str(time.time())))
+        if held:
+            self._taking(said["order"], True)
         courier.send(self.state, self.messaging, bytes.fromhex(peer), M.build("accept", trade.id))
 
     def _note(self, said: dict) -> None:
@@ -731,6 +744,14 @@ class NodeTrader:
         give_chain, get_chain = self.chains[trade.give.network], self.chains[trade.get.network]
         held = self._order_of(trade.id)
         key = held["held"] if held else self.key
+        if held and not mine and not theirs:
+            with self._db() as conn:
+                row = conn.execute("SELECT v FROM meta WHERE k=?", (f"accepted:{trade.id}",)).fetchone()
+            if row and now - float(row["v"]) > self.TAKER_WAIT:
+                trade.state, trade.note = "aborted", "the taker never locked their side, so nothing was locked"
+                self.book.save(trade)
+                self._taking(held["order_id"], False)          # the order stands again
+                return T.ABORT, trade.note
         home_give = held["deposit"][trade.give.network] if held else self._address(trade.give.network)
         home_get = held["payout"][trade.get.network] if held else self._address(trade.get.network)
         with give_chain.rpc() as grpc, get_chain.rpc() as trpc:
@@ -774,6 +795,8 @@ class NodeTrader:
                     "refunded", trade.id, network=trade.give.network, txid=txid))
             elif step in (T.DONE, T.ABORT):
                 trade.state = "done" if step == T.DONE else "aborted"
+                if held and step == T.ABORT:
+                    self._taking(held["order_id"], False)
                 if held and step == T.DONE:
                     # Taken whole: the order is filled, off this node's book, and answers no one else.
                     with self._db() as conn:

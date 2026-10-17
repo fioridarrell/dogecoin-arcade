@@ -178,6 +178,16 @@ class OrderBook:
                                  (lister, oid))
         return filed
 
+    def set_taking(self, order_id: str, taking: bool) -> None:
+        """Off the book while somebody's swap on it is under way (cancelled=2), back on if it falls through
+        (2026-10-17: "when somebody clicks buy it needs to be instantly updated ... so that nobody else clicks
+        buy on the same order")."""
+        with self._open() as conn:
+            if taking:
+                conn.execute("UPDATE trade_order SET cancelled=2 WHERE id=? AND cancelled=0", (order_id,))
+            else:
+                conn.execute("UPDATE trade_order SET cancelled=0 WHERE id=? AND cancelled=2", (order_id,))
+
     def cancel_id(self, order_id: str) -> None:
         """Off this node's book: an order its node finished for the seller (node_trader delegated orders)."""
         with self._open() as conn:

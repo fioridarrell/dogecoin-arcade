@@ -60,7 +60,9 @@ class TalkRelay:
         self._speaking: dict[str, list] = {}                # key -> [token, last]
         self._parts: dict[bytes, dict] = {}                 # message id -> {n: bytes, total, at}
         self._heard: dict[str, OrderedDict] = {}            # key -> seq -> (payload, at)
-        self._seq = 0
+        # Numbered from the clock, so a number never comes round again after a restart (2026-10-17: the node trader
+        # kept its cursor, 5, across a restart while this counted from 1 again, and skipped a taker's proposal).
+        self._seq = int(time.time() * 1000)
 
     # --- the receiving page's side ------------------------------------------------------
 

@@ -23,7 +23,7 @@ def test_a_message_goes_in_pieces_the_mesh_carries_and_comes_back_whole():
     for f in reversed(frames):                                  # any order
         relay._piece(KEY, f, time.time())
     got, cursor = relay.read(KEY)
-    assert [bytes.fromhex(p) for _s, p in got] == [payload] and cursor == 1
+    assert [bytes.fromhex(p) for _s, p in got] == [payload] and cursor == got[0][0]
     assert relay.read(KEY, after=cursor) == ([], cursor), "read from the cursor on"
     relay._piece(KEY, b"junk", time.time())
     assert relay.read(KEY, after=cursor)[0] == []
@@ -67,3 +67,10 @@ def test_two_nodes_carry_a_sealed_message_from_one_page_to_the_other():
         assert ra.send(KEY, b"later") is False
     finally:
         a.stop(); b.stop()
+
+
+def test_message_numbers_never_come_round_again_after_a_restart():
+    """A reader keeps its cursor across a node restart (node_trader's mesh_cursor, a page's meshCursor); the relay's
+    numbers must start above any it gave before, or the first messages after a restart are skipped (2026-10-17)."""
+    from arcade.talk_relay import TalkRelay
+    assert TalkRelay(lambda: None)._seq > 1_700_000_000_000, "counted from the clock, not from zero"
