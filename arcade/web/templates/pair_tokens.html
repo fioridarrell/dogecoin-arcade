@@ -38,7 +38,6 @@
   <span>24h volume <b>{{ "%.4f"|format(day.coins) }}</b> {{ qname }}</span>
   {% if viewer == 'wallet' or account_address %}<span>You hold <b>{{ held_base }}</b></span>{% endif %}
 </div>
-{% if viewer != 'nobody' %}<p style="margin:-6px 0 12px;font-size:.84rem"><a href="/exchange/history?base={{ (chain.network ~ '-token-' ~ base.property_id)|urlencode }}&amp;quote={{ (chain.network ~ '-token-' ~ quote.property_id)|urlencode }}">Trade history &rarr;</a></p>{% endif %}
 
 {% if not live %}
 <div class="panel"><p class="msg err" style="margin:0">Token-for-token pairs are
@@ -59,6 +58,37 @@
   </div>
   {{ chart.candles(slots, qname ~ ' each', period=periods[tf]) }}
 </div>
+
+{#- Same layout as a swap market (2026-10-17): order book above Buy/Sell. #}
+  <div class="panel">
+    <h3 style="margin:0 0 2px">Order book</h3>
+    <p class="muted" style="font-size:.78rem;margin:0 0 4px">Prices in {{ qname }} {{ net_badge(chain) }}</p>
+    {% set takes = live and viewer != 'nobody' %}
+    {% if takes and (book.asks or book.bids) %}<p class="muted" style="font-size:.78rem;margin:0 0 8px">Press Buy or Sell on a row to take it.</p>{% endif %}
+    {% if not book.asks and not book.bids %}<p class="muted" style="margin:0">Nothing on either side yet.</p>{% endif %}
+    {% for side_, rows, word in (('ask', book.asks, 'Selling'), ('bid', book.bids, 'Buying')) %}
+    {% if rows %}
+    <div class="obhead">{{ word }}</div>
+    {% for o in rows %}
+    <div class="obrow {{ side_ }}{{ ' mine' if o.mine }}" style="--depth:{{ o.depth }}%">
+      <span class="obprice mono">{{ "%.8f"|format(o.each)|trim('0')|trim('.') }}</span>
+      <span class="obamt"><span class="mono">{{ o.base_shown }}</span>
+        <small class="muted">{% if o.mine %}yours{% else %}{{ o.address|who }}{% endif %}
+          {%- if o.pending %} &middot; {{ 'trades when its block lands' if o.crosses else 'waiting for its block' }}{% endif %}</small></span>
+      <span class="obdo">{% if takes and not o.mine and not o.pending %}<button type="button" class="small{{ '' if side_ == 'ask' else ' ghost' }}" data-ex-take
+          data-side="{{ 'buy' if side_ == 'ask' else 'sell' }}" data-amount="{{ o.base_shown }}" data-price="{{ ex.px(o.each) }}">{{ 'Buy' if side_ == 'ask' else 'Sell' }}</button>{% endif %}</span>
+    </div>
+    {% endfor %}
+    {% endif %}
+    {% if side_ == 'ask' %}
+    <div class="obmid">
+      {%- if book.asks and book.bids %}Best ask <strong class="mono">{{ ex.px(book.asks[0].each) }}</strong> &middot;
+        best bid <strong class="mono">{{ ex.px(book.bids[0].each) }}</strong>
+      {%- elif day.last is not none %}Last traded at <strong class="mono">{{ ex.px(day.last) }}</strong>
+      {%- elif book.asks or book.bids %}<span class="muted">Only one side has orders so far.</span>{% endif %}</div>
+    {% endif %}
+    {% endfor %}
+  </div>
 
 <div class="panel">
   {% if viewer == 'nobody' %}
@@ -156,39 +186,10 @@
   {% endif %}
 </div>
 
+  {% if viewer != 'nobody' %}<a class="btn small ghost" style="margin:0 0 12px;display:inline-block" href="/exchange/history?base={{ (chain.network ~ '-token-' ~ base.property_id)|urlencode }}&amp;quote={{ (chain.network ~ '-token-' ~ quote.property_id)|urlencode }}">Trade history</a>{% endif %}
   </div>
 
   <div>
-  <div class="panel">
-    <h3 style="margin:0 0 2px">Order book</h3>
-    <p class="muted" style="font-size:.78rem;margin:0 0 4px">Prices in {{ qname }} {{ net_badge(chain) }}</p>
-    {% set takes = live and viewer != 'nobody' %}
-    {% if takes and (book.asks or book.bids) %}<p class="muted" style="font-size:.78rem;margin:0 0 8px">Press Buy or Sell on a row to take it.</p>{% endif %}
-    {% if not book.asks and not book.bids %}<p class="muted" style="margin:0">Nothing on either side yet.</p>{% endif %}
-    {% for side_, rows, word in (('ask', book.asks, 'Selling'), ('bid', book.bids, 'Buying')) %}
-    {% if rows %}
-    <div class="obhead">{{ word }}</div>
-    {% for o in rows %}
-    <div class="obrow {{ side_ }}{{ ' mine' if o.mine }}" style="--depth:{{ o.depth }}%">
-      <span class="obprice mono">{{ "%.8f"|format(o.each)|trim('0')|trim('.') }}</span>
-      <span class="obamt"><span class="mono">{{ o.base_shown }}</span>
-        <small class="muted">{% if o.mine %}yours{% else %}{{ o.address|who }}{% endif %}
-          {%- if o.pending %} &middot; {{ 'trades when its block lands' if o.crosses else 'waiting for its block' }}{% endif %}</small></span>
-      <span class="obdo">{% if takes and not o.mine and not o.pending %}<button type="button" class="small{{ '' if side_ == 'ask' else ' ghost' }}" data-ex-take
-          data-side="{{ 'buy' if side_ == 'ask' else 'sell' }}" data-amount="{{ o.base_shown }}" data-price="{{ ex.px(o.each) }}">{{ 'Buy' if side_ == 'ask' else 'Sell' }}</button>{% endif %}</span>
-    </div>
-    {% endfor %}
-    {% endif %}
-    {% if side_ == 'ask' %}
-    <div class="obmid">
-      {%- if book.asks and book.bids %}Best ask <strong class="mono">{{ ex.px(book.asks[0].each) }}</strong> &middot;
-        best bid <strong class="mono">{{ ex.px(book.bids[0].each) }}</strong>
-      {%- elif day.last is not none %}Last traded at <strong class="mono">{{ ex.px(day.last) }}</strong>
-      {%- elif book.asks or book.bids %}<span class="muted">Only one side has orders so far.</span>{% endif %}</div>
-    {% endif %}
-    {% endfor %}
-  </div>
-
   <div class="panel">
     <h3 style="margin:0 0 2px">Recent trades</h3>
     <p class="muted" style="font-size:.78rem;margin:0 0 6px">In {{ qname }}</p>
