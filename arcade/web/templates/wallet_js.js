@@ -3056,6 +3056,11 @@ async function tradePass() {
   try {
     const w = await opened(runnerChain);
     if (!w) return;                       // locked: nothing can be signed, nothing to do
+    // Every 1.5 s while a swap is running or listed; otherwise at the old, gentler pace.
+    if (!swapsBusy(w)) {
+      if (Date.now() - lastIdlePass < TRADE_BEAT) return;
+      lastIdlePass = Date.now();
+    }
     if (myOrders(w).length) await answerProposals(w).catch(() => {});
     // A finished swap goes into its market's history (swap_history): Recent trades, the chart.
     for (const t of myTrades(w)) {
@@ -3135,6 +3140,16 @@ export async function sayAlive() {
 }
 
 /** Start the runner in this tab (it waits its turn behind any other arcade tab running it). */
+//: How often a page works on its swaps while one is running or listed (2026-10-17: "now it is not
+//: fast enough"): each swap step waited up to TRADE_BEAT for the next pass, five or six times over.
+export const TRADE_BEAT_BUSY = 1500;
+let lastIdlePass = 0;
+
+/** Whether this wallet has a swap running or listed: then passes run every TRADE_BEAT_BUSY. */
+function swapsBusy(w) {
+  return myOrders(w).length > 0 || myTrades(w).some((t) => t.state !== "done" && t.state !== "aborted");
+}
+
 export function startTradeRunner(chain, beat = TRADE_BEAT) {
   if (runnerStarted) return;
   runnerStarted = true;
@@ -3142,10 +3157,10 @@ export function startTradeRunner(chain, beat = TRADE_BEAT) {
   const run = async () => {
     let worker = null;
     try {
-      const src = `setInterval(() => postMessage(0), ${Number(beat)});`;
+      const src = `setInterval(() => postMessage(0), ${Number(Math.min(beat, TRADE_BEAT_BUSY))});`;
       worker = new Worker(URL.createObjectURL(new Blob([src], {type: "text/javascript"})));
       worker.onmessage = () => { tradePass(); };
-    } catch (e) { setInterval(tradePass, beat); }
+    } catch (e) { setInterval(tradePass, Math.min(beat, TRADE_BEAT_BUSY)); }
     if (kicks) kicks.onmessage = () => { tradePass(); };
     // This page answers its listed swaps, so it tells its node it is here (order_presence):
     // every arcade shows them only while it does (2026-10-17).

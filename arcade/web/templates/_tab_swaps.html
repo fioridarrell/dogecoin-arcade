@@ -309,7 +309,13 @@
         location.href = `/exchange/pairs?base=${encodeURIComponent(box2.base.value)}&quote=${encodeURIComponent(box2.quote.value)}`;
       } catch (e) { go.disabled = false; alert(String(e.message || e)); }
     });
-    document.querySelectorAll("[data-take-order]").forEach((b) => b.addEventListener("click", async () => {
+    // One listener for the whole page (2026-10-17: pressed Buy "and nothing happened. He had
+    // to refresh"): a market's book is redrawn every couple of seconds by the live update, and a row
+    // drawn after this page loaded carried a button nobody was listening to.
+    document.addEventListener("click", async (ev) => {
+      const b = ev.target.closest && ev.target.closest("[data-take-order]");
+      if (!b || b.disabled) return;
+      ev.preventDefault();
       const order = JSON.parse(b.dataset.takeOrder);
       const ok = await arcadeAsk("Take this swap?",
         `You give ${order.get_label || amt(order.get)} and get ${order.give_label || amt(order.give)}. It settles through lock scripts on both `
@@ -329,6 +335,6 @@
         draw(w);
         wallet.kickTrades();
       } catch (e) { b.disabled = false; b.textContent = was; step("failed", e); alert(String(e.message || e)); }
-    }));
+    });
     redraw();
     </script>
