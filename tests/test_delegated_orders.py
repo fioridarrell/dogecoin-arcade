@@ -178,3 +178,35 @@ def test_a_withdrawn_delegated_order_goes_back_to_the_seller(world):
     assert float(tx["vout"][0]["value"]) > 2.19, "all of it, less one small fee"
     assert seller_node.delegated("order-back")["state"] == "returned"
     assert seller_node.delegated("order-back") and not seller_node.has_delegated()
+
+
+def test_a_filled_delegated_order_leaves_its_sellers_page(world, monkeypatch):
+    """2026-10-17: the buyer filled his orders, "but I'm still shown the order and the cancel button on my side".
+    The page keeps its own list; it asks the node (GET /account/orders/delegated) and drops what is no longer open."""
+    from playwright.sync_api import sync_playwright
+    from test_trade_tab_browser import _scan_a
+    from test_trade_tab_lists import _Mesh
+    base, a, b, pep, dg = world
+    monkeypatch.setattr(a, "mesh", _Mesh(), raising=False)
+    net = {"network": "regtest", "version": 111}
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        tab = browser.new_page()
+        tab.goto(f"{base}/join")
+        tab.evaluate("async () => { window.w = await import('/wallet.js'); }")
+        made = tab.evaluate("""async (net) => {
+            const r = await w.signUp('filled' + Math.floor(Math.random() * 1e6), 'a long enough password', net);
+            return {regtest: r.wallet.on.regtest.address, doge: r.wallet.on.doge.address}; }""", net)
+        pep.call("sendtoaddress", made["regtest"], 5)
+        dg.call("sendtoaddress", made["doge"], 5)
+        _mine(pep, dg)
+        _scan_a(a)
+        order = tab.evaluate("""async ([net, give, get]) => w.listOrder(await w.opened(net), give, get,
+                                {approved: true, delegated: true})""",
+                             [net, {"network": "doge", "amount": 2 * COIN}, {"network": "regtest", "amount": 3 * COIN}])
+        assert tab.evaluate("async (net) => w.myOrders(await w.opened(net)).length", net) == 1
+        with a.node_trader._db() as conn:
+            conn.execute("UPDATE delegated SET state='filled' WHERE order_id=?", (order["id"],))
+        assert tab.evaluate("async (net) => w.syncDelegated(await w.opened(net))", net) is True
+        assert tab.evaluate("async (net) => w.myOrders(await w.opened(net)).length", net) == 0, "gone from the page"
+        browser.close()

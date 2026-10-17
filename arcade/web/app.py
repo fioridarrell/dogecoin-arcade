@@ -25331,6 +25331,17 @@ def create_app(state: AppState) -> FastAPI:
         return JSONResponse({"msg_key": state.ensure_identity().public_bytes.hex(), "node": mesh.node_id,
                              "deposit": deposit})
 
+    @app.get("/account/orders/delegated")
+    def orders_delegated(request: Request):
+        """Where this account's node-filled orders stand (2026-10-17: a filled order still showed with Cancel on its
+        seller's page, which keeps its own list): wallet.js drops every one that is no longer open."""
+        account = _signed_in_account(request)
+        try:
+            got = state.node_trader.delegated_of(account.pubkey)
+        except Exception:                                  # noqa: BLE001
+            got = []
+        return JSONResponse({"orders": got}, headers={"Cache-Control": "no-store"})
+
     @app.post("/account/orders/cancel")
     def orders_cancel(request: Request, payload: Any = Body(None)):
         """This account withdrew these swaps: off this node's book now (the cancel batch it inscribes

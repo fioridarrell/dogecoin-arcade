@@ -299,7 +299,12 @@
     }
     // The trades themselves run on every page (wallet.js startTradeRunner, base.html);
     // this only shows them, whenever a pass ends here or another tab changes them.
-    async function redraw() { const w = await wallet.opened(CHAIN); if (w) draw(w); }
+    async function redraw() {
+      const w = await wallet.opened(CHAIN);
+      if (!w) return;
+      await wallet.syncDelegated(w).catch(() => {});   // node-filled orders off this page's own list
+      draw(w);
+    }
     globalThis.addEventListener("arcade:trades", redraw);
     document.addEventListener("arcade:changed", redraw);   // a live update redrew the book: mark it again
     globalThis.addEventListener("storage", (e) => { if (!e.key || e.key.startsWith("arcade-trades") || e.key.startsWith("arcade-my-orders")) redraw(); });

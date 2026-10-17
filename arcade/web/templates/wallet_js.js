@@ -3131,6 +3131,33 @@ export async function withdrawOrder(wallet, id) {
   await postMyOrders(wallet);
 }
 
+/** Drop this browser's copies of delegated orders its node no longer holds open (filled, or sent back), so the
+ *  seller's page stops showing them with Cancel. Asked at most every few seconds. */
+let delegatedAsked = 0;
+export async function syncDelegated(wallet) {
+  const book = myOrdersOf(wallet);
+  const mine = Object.values(book.orders || {}).filter((o) => o.delegated);
+  if (!mine.length || Date.now() - delegatedAsked < 4000) return false;
+  delegatedAsked = Date.now();
+  let said = null;
+  try { said = await (await fetch("/account/orders/delegated", {cache: "no-store"})).json(); } catch (e) { return false; }
+  const states = Object.fromEntries((said.orders || []).map((o) => [o.id, o.state]));
+  let changed = false;
+  for (const o of mine) {
+    const st = states[o.id];
+    if (st && st !== "open") {
+      delete book.orders[o.id];
+      book.withdrawn = [...new Set([...(book.withdrawn || []), o.id])].slice(-200);
+      changed = true;
+    }
+  }
+  if (changed) {
+    keepMyOrders(wallet, book);
+    try { globalThis.dispatchEvent(new CustomEvent("arcade:trades")); } catch (e) {}
+  }
+  return changed;
+}
+
 /** The ids this browser has withdrawn: never drawn as a book row again, whatever a page still shows. */
 export function myCancelled(wallet) {
   return myOrdersOf(wallet).withdrawn || [];
@@ -3242,6 +3269,7 @@ async function tradePass() {
       lastIdlePass = Date.now();
     }
     await flushOutbox(w).catch(() => {});
+    await syncDelegated(w).catch(() => {});
     if (myOrders(w).length) await answerProposals(w).catch(() => {});
     // A finished swap goes into its market's history (swap_history): Recent trades, the chart.
     for (const t of myTrades(w)) {

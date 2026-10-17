@@ -370,6 +370,12 @@ class NodeTrader:
         with chain.rpc() as rpc:
             return rpc.call("sendrawtransaction", raw)
 
+    def delegated_of(self, owner: str) -> list[dict]:
+        """An account's delegated orders and where each stands: open, filled, releasing, returned."""
+        with self._db() as conn:
+            return [{"id": r["order_id"], "state": r["state"]}
+                    for r in conn.execute("SELECT order_id, state FROM delegated WHERE owner=?", (owner,))]
+
     def _order_of(self, trade_id: str) -> dict | None:
         with self._db() as conn:
             row = conn.execute("SELECT order_id FROM link WHERE id=?", (trade_id,)).fetchone()
