@@ -644,7 +644,7 @@ document.addEventListener('click', function (ev) {
       {%- if p.icon %}<img class="ex-tic" src="/content/{{ p.icon }}" alt="" loading="lazy">
       {%- else %}<span class="ex-tic" style="background:hsl({{ ((p.property_id|string|length * 97 + (p.name|length) * 31) % 360) }} 45% 42%)">{{ (wall_text(p.name, '?') or '?')[:1]|upper }}</span>{% endif %}
       {# Each row still says which chain and what supply (2026-10-06): the badges, small. #}
-      <span class="ex-mid"><b>{{ wall(p.name, 'token name') }}<span class="muted" style="font-weight:500">/{% if p.quote_label %}{{ wall(p.quote_label, 'token name') }}{% else %}{{ coin_name }}{% endif %}</span></b>
+      <span class="ex-mid"><b class="ex-name"><span class="ex-name-in">{{ wall(p.name, 'token name') }}<span class="muted" style="font-weight:500">/{% if p.quote_label %}{{ wall(p.quote_label, 'token name') }}{% else %}{{ coin_name }}{% endif %}</span></span></b>
         <small>{{ net_badge(p.chain_net or p.mainnet) }}{% if p.quote_net %}<span class="muted">/</span>{{ net_badge(p.quote_net) }}{% elif p.quote_main %}<span class="muted">/</span>{{ net_badge(true) }}{% endif %}{% if p.property_id %}{{ supply_badge(p) }}{% endif %}
           {#- The whole description, behind its wall (a verdict is kept per text): CSS cuts it short. -#}
           {%- if p.coins %} {{ p.trades }} trade{{ '' if p.trades == 1 else 's' }} today{% elif p.bid or p.ask %} {{ p.orders }} order{{ '' if p.orders == 1 else 's' }}{% endif %}
@@ -663,6 +663,43 @@ document.addEventListener('click', function (ev) {
     {% endfor %}
   </div>
   <p class="muted" id="marketcount" style="font-size:.8rem;margin:6px 2px 0"></p>
+  {# The pair's whole name on a line of its own, the rest below it (2026-10-17: "The pair name is cut off ...
+     If the name is still too long for the display, it should scroll across"). #}
+  <style>
+  #markets .ex-mrow{display:grid;grid-template-columns:38px minmax(0,1fr) auto auto;column-gap:12px;row-gap:2px;align-items:center}
+  #markets .ex-mrow > .ex-tic{grid-column:1;grid-row:1 / span 2}
+  #markets .ex-mrow > .ex-mid{display:contents}
+  #markets .ex-mrow .ex-name{grid-column:2 / 4;grid-row:1;overflow:hidden;white-space:nowrap;text-overflow:clip}
+  #markets .ex-mrow .ex-mid small{grid-column:2;grid-row:2;min-width:0}
+  #markets .ex-mrow > .ex-px{grid-column:3;grid-row:2;align-self:start;max-width:34vw;min-width:0}
+  #markets .ex-mrow > .ex-px > div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #markets .ex-mrow > .ex-star{grid-column:4;grid-row:1 / span 2}
+  #markets .ex-name-in{display:inline-block}
+  #markets .ex-name.scroll .ex-name-in{animation:exmarq var(--dur,8s) ease-in-out 1s infinite alternate}
+  @keyframes exmarq{0%,15%{transform:translateX(0)}85%,100%{transform:translateX(var(--shift,0))}}
+  @media (prefers-reduced-motion:reduce){#markets .ex-name.scroll .ex-name-in{animation:none}
+    #markets .ex-mrow .ex-name{text-overflow:ellipsis}}
+  </style>
+  <script>
+  (function () {
+    // A name wider than its line scrolls across to its end and back.
+    function fit() {
+      document.querySelectorAll('#markets .ex-name').forEach(function (b) {
+        var inner = b.firstElementChild; if (!inner || b.offsetParent === null) return;
+        var over = inner.scrollWidth - b.clientWidth;
+        b.classList.toggle('scroll', over > 2);
+        if (over > 2) { b.style.setProperty('--shift', (-over - 4) + 'px');
+                        b.style.setProperty('--dur', Math.max(4, over / 25) + 's'); }
+      });
+    }
+    fit();
+    window.addEventListener('resize', fit);
+    document.addEventListener('arcade:changed', fit);
+    if (window.arcadeFavs) window.arcadeFavs.onChange(function () { setTimeout(fit, 0); });
+    document.querySelectorAll('#mktmode [data-mode]').forEach(function (b) { b.addEventListener('click', function () { setTimeout(fit, 0); }); });
+    var find = document.getElementById('marketfind'); if (find) find.addEventListener('input', function () { setTimeout(fit, 0); });
+  })();
+  </script>
   <script>
   (function () {
     var list = document.getElementById('markets'), find = document.getElementById('marketfind');
