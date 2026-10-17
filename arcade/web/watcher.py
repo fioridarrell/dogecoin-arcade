@@ -110,6 +110,13 @@ class BlockWatcher:
                 relay.drain()
             except Exception:
                 log.debug("talk relay failed", exc_info=True)
+            try:
+                # The node's own messaging key stays reachable on the mesh while it holds delegated orders (2026-10-17:
+                # a taker was told "the seller's page is not open" between two slow trader passes).
+                if self.state.node_trader.has_delegated():
+                    self.state.talk_relay().hold(self.state.ensure_identity().public_bytes.hex())
+            except Exception:
+                log.debug("holding the node's own talk rooms failed", exc_info=True)
             self._run_trader()                       # delegated orders: every couple of seconds, not every pass of the slow loop
             self._stop.wait(POOL_SECONDS)
 

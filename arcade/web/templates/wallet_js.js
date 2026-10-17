@@ -2723,6 +2723,11 @@ async function meshSay(wallet, toKey, body) {
 async function _tradeSay(wallet, toKey, body, options = {}) {
   if (await meshSay(wallet, toKey, body)) return {mesh: true};
   if (body && body.step === "propose") {
+    // A node answering for an order may be between two passes: a few more tries before saying nobody is there.
+    for (let i = 0; i < 4; i++) {
+      await new Promise((r) => setTimeout(r, 1500));
+      if (await meshSay(wallet, toKey, body)) return {mesh: true};
+    }
     throw new Error("the seller's arcade page is not open right now, so nobody can answer. Nothing was locked; "
       + "try again when their swap shows on the book");
   }

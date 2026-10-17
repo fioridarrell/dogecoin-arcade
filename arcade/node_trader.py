@@ -418,7 +418,9 @@ class NodeTrader:
 
     def withdraw(self, order_id: str) -> None:
         with self._db() as conn:
-            conn.execute("DELETE FROM standing_order WHERE id=?", (order_id,))
+            gone = conn.execute("DELETE FROM standing_order WHERE id=?", (order_id,)).rowcount
+            if not gone:
+                return                                     # already withdrawn: nothing to say again
             conn.execute("INSERT OR REPLACE INTO meta(k, v) VALUES('posted', '0')")
             row = conn.execute("SELECT v FROM meta WHERE k='cancels'").fetchone()
             cancels = (row["v"].split(",") if row and row["v"] else []) + [order_id]
