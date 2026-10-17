@@ -131,16 +131,23 @@ def _read(state, rpc):
 
 
 def test_two_nodes_say_hello_and_here_over_the_messenger(two_nodes):
+    """Over the mesh only (2026-10-17: "I don't think we should be using the chain at all"):
+    authenticated as the node that sealed it, and nothing in the pool."""
+    import sys
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+    from test_trade_tab_browser import SharedRelay
     from arcade import trade_courier as C
     a, b, rpc = two_nodes
-    C.send(a, a.messaging, b.identity.public_bytes, M.build("hello", "trade-0001", order="order-0001"))
-    _read(b, rpc)
-    got = C.inbox(b, b.messaging)
+    relay = SharedRelay()
+    for node in (a, b):
+        node._talk_relay = relay
+        C.mesh_inbox(node)                                   # each node holds its rooms, as a running one does
+    pool = set(rpc.call("getrawmempool"))
+    assert C.send(a, a.messaging, b.identity.public_bytes, M.build("hello", "trade-0001", order="order-0001")) == "mesh"
+    got, _ = C.mesh_inbox(b)
     assert [m["step"]["step"] for m in got] == ["hello"], got
     assert got[0]["sender"] == a.identity.public_bytes.hex(), "authenticated as node A"
-    C.send(b, b.messaging, bytes.fromhex(got[0]["sender"]),
-           M.build("here", "trade-0001", order="order-0001"))
-    _read(a, rpc)
-    back = C.inbox(a, a.messaging)
+    C.send(b, b.messaging, bytes.fromhex(got[0]["sender"]), M.build("here", "trade-0001", order="order-0001"))
+    back, _ = C.mesh_inbox(a)
     assert [m["step"]["step"] for m in back] == ["here"]
-    assert C.inbox(b, b.messaging, after_id=got[-1]["id"]) == [], "a cursor resumes exactly"
+    assert set(rpc.call("getrawmempool")) == pool, "no transaction for any of it"

@@ -41,6 +41,12 @@ def launch(*arguments: str) -> webdriver.Firefox:
     if binary:
         options.binary_location = binary
     driver_path = os.environ.get("ARCADE_GECKODRIVER")
+    if not driver_path:
+        # A plain Firefox and geckodriver unpacked beside the snap one (2026-10-01: a snap AppArmor update stopped the
+        # snap's geckodriver, and every browser test here skipped with "Can not connect to the Service").
+        unpacked = os.path.expanduser("~/opt/firefox/geckodriver-wrap")
+        if os.access(unpacked, os.X_OK):
+            driver_path = unpacked
     service = FirefoxService(executable_path=driver_path) if driver_path else None
     try:
         return webdriver.Firefox(options=options, service=service)

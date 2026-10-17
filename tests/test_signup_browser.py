@@ -327,8 +327,11 @@ def test_a_taken_name_is_refused_on_the_page(loaded):
     from selenium.webdriver.common.by import By
 
     browser, base, state, home = loaded
+    # Taken here, whether or not the test that signs @paperwork up ran first in this worker.
+    if not state.vault().taken("takenname"):
+        state.vault().put("takenname", "ab" * 32, "nTakenAddressForTheTest", "x")
     _ready(browser, base)
-    browser.find_element(By.ID, "tag").send_keys("paperwork")
+    browser.find_element(By.ID, "tag").send_keys("takenname")
     said = browser.find_element(By.ID, "tag-said")
     for _ in range(40):
         if "signed up" in said.text:

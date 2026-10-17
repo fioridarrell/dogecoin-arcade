@@ -701,6 +701,33 @@ def _above_dust(sats: int, what: str) -> None:
                          f"and nobody would relay it")
 
 
+def _request_timer():
+    """What the node spends its time answering (2026-10-17: 150 % CPU after the 1.5 s swap pace): per path, how many
+    requests and how many seconds, logged once a minute when anything was asked. Outside create_app, like the door: the
+    routes in there never await (test_web)."""
+    _req_stats: dict = {}
+    _req_lock = threading.Lock()
+    _req_last = [time.time()]
+
+    async def _req_timer(request: Request, call_next):
+        started = time.perf_counter()
+        try:
+            return await call_next(request)
+        finally:
+            parts = request.url.path.split("/")[:4]
+            key = "/".join(p if len(p) < 24 else "*" for p in parts)
+            with _req_lock:
+                n, t = _req_stats.get(key, (0, 0.0))
+                _req_stats[key] = (n + 1, t + time.perf_counter() - started)
+                if time.time() - _req_last[0] > 60 and _req_stats:
+                    top = sorted(_req_stats.items(), key=lambda kv: -kv[1][1])[:12]
+                    log.info("requests last %ds: %s", int(time.time() - _req_last[0]),
+                             "; ".join(f"{k} {n}x {t:.1f}s" for k, (n, t) in top))
+                    _req_stats.clear()
+                    _req_last[0] = time.time()
+    return _req_timer
+
+
 def create_app(state: AppState) -> FastAPI:
     TEMPLATES._screen_of = state.screen          # the feed card's screen_text()
     TEMPLATES.env.globals["brand"] = brandlib.current()   # this node's name, colours, icons (brand.py)
@@ -772,29 +799,7 @@ def create_app(state: AppState) -> FastAPI:
 
     app = FastAPI(title=brandlib.current().name, docs_url=None, redoc_url=None,
                   lifespan=_lifespan)
-    # What the node spends its time answering (2026-10-17: 150 % CPU after the 1.5 s swap pace):
-    # per path, how many requests and how many seconds, logged once a minute when anything was asked.
-    _req_stats: dict = {}
-    _req_lock = threading.Lock()
-    _req_last = [time.time()]
-
-    async def _req_timer(request: Request, call_next):
-        started = time.perf_counter()
-        try:
-            return await call_next(request)
-        finally:
-            parts = request.url.path.split("/")[:4]
-            key = "/".join(p if len(p) < 24 else "*" for p in parts)
-            with _req_lock:
-                n, t = _req_stats.get(key, (0, 0.0))
-                _req_stats[key] = (n + 1, t + time.perf_counter() - started)
-                if time.time() - _req_last[0] > 60 and _req_stats:
-                    top = sorted(_req_stats.items(), key=lambda kv: -kv[1][1])[:12]
-                    log.info("requests last %ds: %s", int(time.time() - _req_last[0]),
-                             "; ".join(f"{k} {n}x {t:.1f}s" for k, (n, t) in top))
-                    _req_stats.clear()
-                    _req_last[0] = time.time()
-    app.middleware("http")(_req_timer)
+    app.middleware("http")(_request_timer())
     app.middleware("http")(the_door(state))
     app.middleware("http")(_sandbox_names_its_host)
 
