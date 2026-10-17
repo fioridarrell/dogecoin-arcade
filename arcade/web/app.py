@@ -25320,8 +25320,10 @@ def create_app(state: AppState) -> FastAPI:
             mesh = getattr(state, "mesh", None)
             if mesh is None:
                 raise ValueError("this node is not on the mesh, so nobody could take the order")
+            back = _account_address(account.pubkey, give_chain)   # where a withdrawn order's side goes back to
             state.node_trader.delegate(oid, legs["give"], legs["get"], str(said["key"]),
-                                       {give_chain.network: deposit}, {get_chain.network: payout}, owner=account.pubkey)
+                                       {give_chain.network: deposit},
+                                       {get_chain.network: payout, give_chain.network: back}, owner=account.pubkey)
         except StopIteration:
             return JSONResponse({"detail": "this node does not run that chain"}, status_code=400)
         except (ValueError, KeyError, TypeError) as exc:
@@ -25338,6 +25340,15 @@ def create_app(state: AppState) -> FastAPI:
         ids = [str(i) for i in (said.get("ids") or []) if isinstance(i, str) and re.fullmatch(r"ord-[0-9a-f]{16}", i)][:50]
         mine = [a for a in (_account_address(account.pubkey, c) for c in _account_chains()) if a]
         gone = state.trade_orders.cancel_local(mine, ids) if ids and mine else 0
+        # A delegated order: its node sends the side back to this account (node_trader.release).
+        for oid in ids:
+            try:
+                held = state.node_trader.delegated(oid)
+                if held is not None and held["owner"] == account.pubkey:
+                    state.node_trader.release(oid)
+                    gone += 1
+            except Exception as exc:                       # noqa: BLE001 -- retried by the node's own ticks
+                log.info("delegated order %s not returned yet: %s", oid, exc)
         if gone:
             state.bump_generation()
         return JSONResponse({"cancelled": gone})

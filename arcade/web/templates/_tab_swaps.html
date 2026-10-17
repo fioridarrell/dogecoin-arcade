@@ -136,18 +136,16 @@
         return alert("A swap is one coin for another, on two different chains.");
       }
       const ok = await arcadeAsk("List this swap?",
-        `${amt(give)} for ${amt(get)}. It is written on the chain (about 0.01 in fees) and other arcades `
-        + "see it while an arcade page is open here. Whoever takes it locks first; yours then go into a "
-        + "lock only they can claim, and come back to you if they never finish. "
-        + wallet.swapFees(give, get) + " Saying yes approves locking yours when somebody takes it.", "List it");
+        `${amt(give)} for ${amt(get)}. ` + listWords(give) + wallet.swapFees(give, get), "List it");
       if (!ok) { step("cancelled"); return; }
       button.disabled = true;
       step("listing");
       try {
         const w = await keys();
         if (!w) throw new Error("Unlock your wallet to trade.");
-        await wallet.listOrder(w, give, get, {approved: true});
-        track("Listed", -1, "Keep the arcade open with your wallet unlocked (any page, a game too). When it sells you get a notification.");
+        await wallet.listOrder(w, give, get, {approved: true, delegated: delegates(give)});
+        track("Listed", -1, delegates(give) ? "Your arcade's node fills it now, with every page closed. When it sells you get a notification."
+          : "Keep the arcade open with your wallet unlocked (any page, a game too). When it sells you get a notification.");
         step("listed");
         f.reset(); drawOrders(w);
       } catch (e) { step("failed", e); alert(String(e.message || e)); }
@@ -210,6 +208,16 @@
         setTimeout(() => card.remove(), 400); }, bad ? 9000 : 5000);
     }
     globalThis.arcadeSwapTrack = track;
+    // Every swap fills with the seller away (2026-10-17: "I want pre-signed ... for all orders. So that orders
+    // can be filled without the counterparty being on Arcade"): its side waits at the order's own key and this
+    // account's node finishes it (wallet.js delegateOrder). A Doginal still settles from a page.
+    function delegates(give) { return (give.kind || "coin") !== "doginal"; }
+    function listWords(give) {
+      return delegates(give)
+        ? "Yours moves to this order's own address now, and your arcade's node fills the order for you -- you can close "
+          + "every page. Cancel sends it straight back. "
+        : "It stands while an arcade page is open here; it settles through lock scripts on both chains. ";
+    }
     function step(what, error) {
       const SAY = {asking: ["Taking the swap", 0, "Asking the seller's page\u2026"], asked: ["Taking the swap", 0, ""],
                    listing: ["Listing your swap", -1, "Writing it to the book\u2026"],
@@ -324,17 +332,16 @@
       const [give, get] = f.dataset.pairSide === "sell" ? [base, quote] : [quote, base];
       const ok = await arcadeAsk(f.dataset.pairSide === "sell" ? "List this sale?" : "List this bid?",
         `${amt(give)} for ${amt(get)} (${price} ${Q.label} ${kind === "nft" || kind === "doginal" ? "for it" : "per " + label}). `
-        + "It is written on the chain (about 0.01 in fees) and other arcades see it while an arcade page "
-        + "is open here; it settles through lock scripts on both chains. " + wallet.swapFees(give, get)
-        + " Saying yes approves locking yours when somebody takes it.", "List it");
+        + listWords(give) + wallet.swapFees(give, get), "List it");
       if (!ok) { step("cancelled"); return; }
       button.disabled = true;
       step("listing");
       try {
         const w = await keys();
         if (!w) throw new Error("Unlock your wallet to trade.");
-        await wallet.listOrder(w, give, get, {approved: true});
-        track("Listed", -1, "Keep the arcade open with your wallet unlocked (any page, a game too). When it sells you get a notification.");
+        await wallet.listOrder(w, give, get, {approved: true, delegated: delegates(give)});
+        track("Listed", -1, delegates(give) ? "Your arcade's node fills it now, with every page closed. When it sells you get a notification."
+          : "Keep the arcade open with your wallet unlocked (any page, a game too). When it sells you get a notification.");
         step("listed");
         f.reset(); drawOrders(w);
       } catch (e) { step("failed", e); alert(String(e.message || e)); }
@@ -362,16 +369,14 @@
       const [give, get] = selling ? [a, b] : [b, a];
       const ok = await arcadeAsk(selling ? "List this ask?" : "List this bid?",
         `${amt(give)} for ${amt(get)} (${price} ${B.name} per ${A.kind === "nft" ? "it" : A.name}). `
-        + "It is written on the chain (about 0.01 in fees) and other arcades see it while an arcade page "
-        + "is open here; it settles through lock scripts on both chains. " + wallet.swapFees(give, get)
-        + " Saying yes approves locking yours when somebody takes it.", "List it");
+        + listWords(give) + wallet.swapFees(give, get), "List it");
       if (!ok) return;
       const go = box2.querySelector("button[type=submit]");
       go.disabled = true;
       try {
         const w = await keys();
         if (!w) throw new Error("Unlock your wallet to trade.");
-        await wallet.listOrder(w, give, get, {approved: true});
+        await wallet.listOrder(w, give, get, {approved: true, delegated: delegates(give)});
         // No toast here (2026-10-17, of the "Listed!" toast: "The OK button does not work"): the page was
         // already on its way to the market, and a leaving page takes no taps. The button says it; the market page's
         // callout says the rest (swap_pair.html #stay-open, "Your swap is listed: keep the arcade open").

@@ -55,7 +55,7 @@ def test_a_delegated_order_fills_with_the_seller_away(world):
     assert seller_node.book.get(trade.id).state == "done", log[-6:]
     got = sum(u["amount"] for u in pep.call("listunspent", 0, 9999999, [payout]))
     assert got >= 2.98, f"the seller's 3 PEP (less the claim fee) at its own address: {got}"
-    assert seller_node.delegated("order-away")["state"] == "filled", "taken whole, off the book"
+    assert seller_node.delegated("order-away")["state"] in ("releasing", "returned"), "taken whole, off the book"
 
 
 def test_a_delegated_token_order_fills_with_the_seller_away(world):
@@ -152,3 +152,29 @@ def test_a_page_lists_a_delegated_order_and_closes_and_it_still_fills(world, mon
     with contextlib.closing(a.token_index(a.messaging).open()) as db:
         got = utxos.balance(db, made["regtest"]) / COIN
     assert got >= 7.9, f"the seller's own address: its 5 PEP and the 3 PEP it sold for (less a fee): {got}"
+
+
+
+def test_a_withdrawn_delegated_order_goes_back_to_the_seller(world):
+    """Cancel: everything at the order key's address goes back to the seller's own address, signed by the node."""
+    import contextlib
+    from arcade import utxos
+    base, a, b, pep, dg = world
+    seller_node = a.node_trader
+    secret = f"{secrets.randbelow(2 ** 250) + 1:064x}"
+    held = HeldKey(secret)
+    deposit = b58check_encode(a.doge.params.pubkeyhash_version, hash160(held.pubkey))
+    home = dg.call("getnewaddress")
+    dg.call("sendtoaddress", deposit, 2.2)
+    _mine(dg)
+    _catch_up(a)
+    seller_node.delegate("order-back", {"network": "doge", "kind": "coin", "amount": 2 * COIN},
+                         {"network": "regtest", "kind": "coin", "amount": 3 * COIN},
+                         secret, {"doge": deposit}, {"regtest": pep.call("getnewaddress"), "doge": home})
+    txid = seller_node.release("order-back")
+    assert txid, "sent back at once: nobody was taking it"
+    tx = dg.call("getrawtransaction", txid, 1)
+    assert [o["scriptPubKey"]["addresses"] for o in tx["vout"]] == [[home]]
+    assert float(tx["vout"][0]["value"]) > 2.19, "all of it, less one small fee"
+    assert seller_node.delegated("order-back")["state"] == "returned"
+    assert seller_node.delegated("order-back") and not seller_node.has_delegated()

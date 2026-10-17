@@ -215,6 +215,11 @@ class NodeTrader:
         self._db_path = self.home / "trades.sqlite"
         with self._db() as conn:
             conn.executescript(SCHEMA)
+        try:                                           # delegated orders' keys live in here: the node's user only
+            os.chmod(self._db_path, 0o600)
+        except OSError:
+            pass
+        with self._db() as conn:
             try:                                       # which order a trade answers (delegated orders' keys)
                 conn.execute("ALTER TABLE link ADD COLUMN order_id TEXT NOT NULL DEFAULT ''")
             except sqlite3.OperationalError:
@@ -287,7 +292,83 @@ class NodeTrader:
 
     def has_delegated(self) -> bool:
         with self._db() as conn:
-            return conn.execute("SELECT 1 FROM delegated WHERE state='open' LIMIT 1").fetchone() is not None
+            return conn.execute("SELECT 1 FROM delegated WHERE state IN ('open', 'releasing') LIMIT 1").fetchone() \
+                is not None
+
+    def release(self, order_id: str) -> str:
+        """The seller withdrew a delegated order: everything at its deposit address goes back to the seller's own
+        address on that chain, in one transaction signed with the order's key. While a taker's swap on it is under way
+        it waits (state 'releasing', tried again every tick) -- that swap settles first. Returns the txid, "" while
+        waiting, or raises."""
+        import json
+        held = self.delegated(order_id)
+        if held is None or held["state"] == "returned":
+            return ""
+        with self._db() as conn:
+            conn.execute("UPDATE delegated SET state='releasing' WHERE order_id=? AND state IN ('open', 'filled')",
+                         (order_id,))
+            conn.execute("INSERT OR IGNORE INTO meta(k, v) VALUES(?, ?)", (f"since:{order_id}", str(time.time())))
+            order = conn.execute("SELECT give FROM standing_order WHERE id=?", (order_id,)).fetchone()
+            busy = [r["id"] for r in conn.execute("SELECT id FROM link WHERE order_id=? AND agreed=1", (order_id,))]
+            give = json.loads(order["give"]) if order else json.loads(conn.execute(
+                "SELECT v FROM meta WHERE k=?", (f"give:{order_id}",)).fetchone()["v"])
+            conn.execute("INSERT OR REPLACE INTO meta(k, v) VALUES(?, ?)", (f"give:{order_id}", json.dumps(give)))
+        self.withdraw(order_id)                            # nobody new takes it while it goes back
+        for tid in busy:
+            trade = self.book.get(tid)
+            if trade is not None and trade.state not in ("done", "aborted"):
+                return ""                                  # a swap on it is under way: back once it settles
+        txid = self._return_deposit(held, give)
+        with self._db() as conn:
+            since = float((conn.execute("SELECT v FROM meta WHERE k=?", (f"since:{order_id}",)).fetchone()
+                           or {"v": time.time()})["v"])
+            # Nothing there yet may be change still on its way: only an hour of nothing closes it.
+            if txid or time.time() - since > 3600:
+                conn.execute("UPDATE delegated SET state='returned' WHERE order_id=?", (order_id,))
+        try:
+            self.state.trade_orders.cancel_id(order_id)
+        except Exception:                                  # noqa: BLE001
+            pass
+        return txid
+
+    def _return_deposit(self, held: dict, give: dict) -> str:
+        """Every coin at the deposit address to the seller -- carrying the token or NFT with it when that is the side."""
+        import contextlib
+        from . import encoding, fees, funding, inscriptions as I, payload as P, tokens as tokenlib, txbuild, utxos
+        net = give["network"]
+        chain = self.chains[net]
+        deposit, home = held["deposit"][net], held["payout"].get(net, "")
+        if not home:
+            raise ValueError("this order has no return address on its giving chain")
+        index = self.state.token_index(chain)
+        with contextlib.closing(index.open()) as db:
+            coins = [dict(c) for c in utxos.unspent(db, deposit)]
+        if not coins:
+            return ""                                      # nothing there (never deposited, or already back)
+        outputs: list = []
+        if give.get("kind") == "token":
+            amount = index.balance(deposit, int(give["asset"]))
+            if amount > 0:
+                outputs.append((0, txbuild.op_return_script(encoding.encode_class_c(
+                    tokenlib.send_payload(int(give["asset"]), amount)))))
+        elif give.get("kind") == "nft":
+            outputs.append((0, txbuild.op_return_script(encoding.encode_class_c(
+                P.AnyData(data=I.Transfer(txid=bytes.fromhex(give["asset"])).encode()).encode()))))
+        total = sum(int(c["value"]) for c in coins)
+        fee = funding.price(len(coins), outputs + [(total, txbuild.p2pkh_script(home))], fees.MIN_FEE_PER_KB)
+        if total - fee < fees.DUST_LIMIT:
+            raise ValueError("the deposit is too small to send back")
+        outputs.append((total - fee, txbuild.p2pkh_script(home)))   # last: the token's recipient too
+        inputs = [{"txid": c["txid"], "vout": int(c["vout"]), "value": int(c["value"]), "address": deposit}
+                  for c in coins]
+        script = txbuild.p2pkh_script(deposit)
+        key = held["held"]
+        sighashes = [funding.sighash(inputs, outputs, n, script).hex() for n in range(len(inputs))]
+        unsigned = funding.Unsigned(raw="", inputs=inputs, outputs=outputs, sighashes=sighashes, fee=fee,
+                                    change=0, what=f"return order {held['order_id']}")
+        raw = funding.assemble(unsigned, [key.sign(bytes.fromhex(h)).hex() for h in sighashes], key.pubkey)
+        with chain.rpc() as rpc:
+            return rpc.call("sendrawtransaction", raw)
 
     def _order_of(self, trade_id: str) -> dict | None:
         with self._db() as conn:
@@ -388,6 +469,13 @@ class NodeTrader:
             return []
         done: list[tuple[str, str, str]] = []
         self._read_inbox()
+        with self._db() as conn:
+            waiting = [r["order_id"] for r in conn.execute("SELECT order_id FROM delegated WHERE state='releasing'")]
+        for oid in waiting:
+            try:
+                self.release(oid)
+            except Exception:                              # noqa: BLE001 -- tried again next tick
+                pass
         for trade in self.book.open_trades():
             # The operator's switch covers the node's own trading; a seller's delegated order is the seller's.
             if not on and self._order_of(trade.id) is None:
@@ -682,6 +770,15 @@ class NodeTrader:
                     # Taken whole: the order is filled, off this node's book, and answers no one else.
                     with self._db() as conn:
                         conn.execute("UPDATE delegated SET state='filled' WHERE order_id=?", (held["order_id"],))
+                        order = conn.execute("SELECT give FROM standing_order WHERE id=?",
+                                             (held["order_id"],)).fetchone()
+                        if order:
+                            conn.execute("INSERT OR REPLACE INTO meta(k, v) VALUES(?, ?)",
+                                         (f"give:{held['order_id']}", order["give"]))
+                        # What its lock left at the deposit (the fee coins' change) goes back too, once indexed.
+                        conn.execute("UPDATE delegated SET state='releasing' WHERE order_id=?", (held["order_id"],))
+                        conn.execute("INSERT OR IGNORE INTO meta(k, v) VALUES(?, ?)",
+                                     (f"since:{held['order_id']}", str(time.time())))
                     self.withdraw(held["order_id"])
                     try:
                         self.state.trade_orders.cancel_id(held["order_id"])
