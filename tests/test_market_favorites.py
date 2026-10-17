@@ -82,3 +82,20 @@ def test_a_lock_script_market_with_trades_is_listed_with_its_price(client, monke
     row = row[:row.index("</a>")]
     assert "LOGS" in row and "0.00114" in row, "named, and priced at its last swap"
     assert "1 trade today" in row
+
+
+def test_the_list_and_the_market_page_say_the_same_last_price(client, monkeypatch):
+    """2026-10-17: "Why the pair listing doesn't show the same market price as the pair page?" -- one list of
+    trades (app._market_points) prices both, newest first."""
+    app, state = client
+    _gold(monkeypatch)
+    net = state.messaging.network
+    h = state.swap_history()
+    h.record("tr-0000000000000002", f"{net}-token-59", "doge-coin", 1000 * COIN, 120_000_000, at=1_000)
+    h.record("tr-0000000000000003", f"{net}-token-59", "doge-coin", 1000 * COIN, 114_000_000, at=2_000)
+    listing = app.get("/exchange?tab=tokens").text
+    row = listing[listing.index(f'href="/exchange/swap/{net}-token-59/doge-coin"') - 400:]
+    row = row[:row.index("</a>")]
+    page = app.get(f"/exchange/swap/{net}-token-59/doge-coin").text
+    assert "0.00114" in row and "0.00114" in page, "the newest trade, in both"
+    assert "0.0012" not in row.replace("0.00120", "")

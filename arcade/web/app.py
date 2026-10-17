@@ -22424,13 +22424,7 @@ def create_app(state: AppState) -> FastAPI:
                 continue
             if b["kind"] in ("nft", "doginal") or q["kind"] in ("nft", "doginal"):
                 continue                                   # pieces are sold from their own pages
-            def units(leg: dict, n: int) -> float:
-                return n / COIN if leg["divisible"] else float(n)
-            points = []
-            for r in state.swap_history().for_pair(bk, qk):
-                size, paid = units(b, r["base_amount"]), units(q, r["quote_amount"])
-                if size > 0:
-                    points.append({"when": r["at"], "height": 0, "txid": r["id"], "price": paid / size, "size": size})
+            points = _market_points(b, q)
             book = trade_orders.pair_book(orders, b, q)
             stats = chartlib.day(points)
             change, new = chartlib.table_move(points, stats["change"]) if points else (None, False)
@@ -22613,6 +22607,40 @@ def create_app(state: AppState) -> FastAPI:
     #: Launchpads have no cross-chain kind: each pad sells on its own chain.
     PAD_SHOWS = ("mix", "testnet", "mainnet", "dogecoin")
 
+    def _market_points(b: dict, q: dict) -> list[dict[str, Any]]:
+        """Every trade a market has had, newest first, from both places they are kept (2026-10-17: "Why the pair
+        listing doesn't show the same market price as the pair page?" -- the list read the node-held book's fills and the
+        page the lock-script swaps): swap_history, and for a testnet asset against mainnet PEP the held book's fills.
+        The list, the page and its chart all price a market from this."""
+        def units(leg: dict, n: int) -> float:
+            return 1.0 if leg["kind"] in ("nft", "doginal") else (n / COIN if leg["divisible"] else float(n))
+        points = []
+        for r in state.swap_history().for_pair(b["key"], q["key"]):
+            size, paid = units(b, r["base_amount"]), units(q, r["quote_amount"])
+            if size > 0:
+                points.append({"when": r["at"], "height": 0, "txid": r["id"], "price": paid / size, "size": size})
+        if (b["kind"] in ("token", "nft") and b["network"] == state.messaging.network
+                and q["kind"] == "coin" and q["network"] == state.ledger.network):
+            try:
+                for f in state.xchain.book.fills(b["kind"], b["asset"], limit=5000):
+                    size = units(b, f["amount"])
+                    if size > 0:
+                        points.append({"when": f["created"], "height": 0, "txid": str(f["id"]),
+                                       "price": (f["pepe"] / COIN) / size, "size": size})
+            except Exception:                              # noqa: BLE001 -- the held book is optional
+                log.debug("the held book's fills could not be read", exc_info=True)
+        points.sort(key=lambda p: -float(p["when"] or 0))
+        return points
+
+    def _priced(row: dict[str, Any], points: list[dict[str, Any]]) -> None:
+        """A list row's price fields from a market's trades (_market_points)."""
+        stats = chartlib.day(points)
+        change, new = chartlib.table_move(points, stats["change"]) if points else (None, False)
+        day_ago = time.time() - 86400
+        row.update(last=stats["last"] if points else None, change=change, new=new, high=stats["high"], low=stats["low"],
+                   trades=sum(1 for p in points if float(p["when"] or 0) >= day_ago), volume=stats["volume"],
+                   coins=stats["coins"], all_trades=len(points), spark=_spark(points))
+
     def _xchain_markets(index, faces_for) -> list[dict[str, Any]]:
         """Every cross-chain market with an order standing or a trade done, as a
         row of the same table: the asset here, priced in mainnet PEPE."""
@@ -22701,6 +22729,7 @@ def create_app(state: AppState) -> FastAPI:
                 rows.append(row)
                 by_key[key] = row
             row["href"] = f"/exchange/swap/{key[0]}/{key[1]}"
+            _priced(row, _market_points(b, q))
             book = trade_orders.pair_book(orders, b, q)
             row["orders"] = standing.get(key, 0)
             row["ask"] = book["asks"][0]["price"] if book["asks"] else None
@@ -24190,12 +24219,12 @@ def create_app(state: AppState) -> FastAPI:
         # chart"): every finished swap on this market, as the token/coin page draws its trades.
         def units(leg: dict, n: int) -> float:
             return 1.0 if leg["kind"] in ("nft", "doginal") else (n / COIN if leg["divisible"] else float(n))
-        points, recent = [], []
+        recent = []
         for r in state.swap_history().for_pair(b["key"], q["key"]):
             size, paid = units(b, r["base_amount"]), units(q, r["quote_amount"])
             if size > 0:
-                points.append({"when": r["at"], "height": 0, "txid": r["id"], "price": paid / size, "size": size})
                 recent.append({"id": r["id"], "price": paid / size, "size": size, "total": paid, "when": r["at"]})
+        points = _market_points(b, q)                    # the same trades the list prices it from
         day = chartlib.day(points)
         if points:
             last = points[0]["price"]
