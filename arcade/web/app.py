@@ -9050,6 +9050,13 @@ def create_app(state: AppState) -> FastAPI:
                         media_type="application/javascript",
                         headers={"Cache-Control": "no-store"})
 
+    @app.get("/qrscan.js")
+    def qrscan_js():
+        """Scanning a QR code with the camera (templates/qrscan.js; the reader is vendor/jsQR.js)."""
+        return Response((TEMPLATE_DIR / "qrscan.js").read_text(),
+                        media_type="application/javascript",
+                        headers={"Cache-Control": "no-store"})
+
     @app.get("/coins.js")
     def coins_js():
         """The browser's coin half (templates/coins.js)."""

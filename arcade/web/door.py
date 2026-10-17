@@ -92,6 +92,7 @@ PUBLIC_PAGES = frozenset({
     "/coins.js",
     "/wallet.js",
     "/messaging.js",
+    "/qrscan.js",
     "/bip39-english.txt",
     # The door itself. Named one by one rather than as a `/auth/` tree: an
     # allowlist that opens a whole subtree opens whatever is put in it
