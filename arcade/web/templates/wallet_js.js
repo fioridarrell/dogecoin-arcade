@@ -1125,6 +1125,49 @@ export async function offerDustSweep(chain) {
   return offer;
 }
 
+/** Sweep this account's payload outputs back by itself (2026-10-17, of the Wallet's
+ *  "Sweep back 400 of 2412" button: "Can this be automatically swept back?"). Runs from every
+ *  arcade page while the wallet is open; never asks for it. Signed only when every output of the
+ *  transaction comes back to this wallet -- nothing paid to anybody, the fee aside -- and the fee
+ *  is under half of what comes back; anything else waits for the Wallet's own button. One sweep
+ *  (up to 400 outputs) per chain per SWEEP_GAP: a sweep drops its outputs at once, so the next
+ *  takes the next 400. */
+const SWEEP_GAP = 120000, SWEEP_KEY = "arcade-autosweep";
+const SWEEP_MIN = () => Number(globalThis.ARCADE_SWEEP_MIN || 10);   // a test lowers it
+let sweeping = false;
+export async function autoSweep() {
+  if (sweeping) return [];
+  let last = {};
+  try { last = JSON.parse(localStorage.getItem(SWEEP_KEY) || "{}") || {}; } catch (e) { last = {}; }
+  const due = (net) => Date.now() - Number(last[net] || 0) >= SWEEP_GAP;
+  const done = [];
+  sweeping = true;
+  try {
+    let said = null;
+    try { said = await (await fetch("/account/dust", {cache: "no-store"})).json(); } catch (e) { return done; }
+    for (const c of (said && said.chains) || []) {
+      if (c.count < SWEEP_MIN() || !due(c.chain)) continue;
+      const held = await opened({network: c.chain, version: c.version});
+      if (!held) continue;                           // a locked wallet: nothing happens
+      last[c.chain] = Date.now();
+      try { localStorage.setItem(SWEEP_KEY, JSON.stringify(last)); } catch (e) {}
+      try {
+        const offer = await offerDustSweep(c.chain);
+        const shown = await checked(offer, held);
+        const back = Number(shown.change || 0), fee = Number(shown.fee || 0);
+        if ((shown.pays || []).some((p) => !p.mine) || !(back > 0) || fee * 2 > back) continue;
+        await confirm(held, offer, {reviewed: true});
+        done.push({chain: c.chain, label: c.label, count: offer.count, coins: back});
+      } catch (e) { /* tried again after SWEEP_GAP */ }
+    }
+  } finally { sweeping = false; }
+  if (done.length && globalThis.arcadeToast) {
+    arcadeToast(done.map((d) => `Swept ${(d.coins / 1e8).toLocaleString(undefined, {maximumFractionDigits: 8})} `
+      + `${d.label} coins back from ${d.count} message outputs.`).join(" "));
+  }
+  return done;
+}
+
 export async function withdrawOffer(wallet, txid) {
   const asked = await fetch("/account/offer/withdraw", {
     method: "POST", headers: {"Content-Type": "application/json"},

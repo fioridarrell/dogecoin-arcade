@@ -260,7 +260,8 @@ async function drawDust() {
     go.textContent = c.count > c.per_sweep ? `Sweep back ${c.per_sweep} of ${c.count}` : "Sweep them back";
     const note = document.createElement("p");
     note.className = "muted"; note.style.cssText = "font-size:.8rem;margin:6px 0 0";
-    note.textContent = "One small transaction, signed here. The fee comes out of what comes back.";
+    note.textContent = "They come back by themselves, up to 400 every couple of minutes, while an arcade page is open "
+      + "with your wallet unlocked. Or now: one small transaction, signed here; the fee comes out of what comes back.";
     go.onclick = async () => {
       go.disabled = true;
       try {
