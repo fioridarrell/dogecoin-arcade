@@ -650,6 +650,15 @@ class AppState:
             self._swap_history = held
         return held
 
+    def collection_registry(self):
+        """Collections described by an inscription -- Doginals first (arcade/collection_registry.py), made once."""
+        from ..collection_registry import Registry
+        held = getattr(self, "_collection_registry", None)
+        if held is None:
+            held = Registry(Path(self.home) / "collections-ext.sqlite")
+            self._collection_registry = held
+        return held
+
     def talk_relay(self):
         """Swap messages over the mesh (arcade/talk_relay.py), made once."""
         from .. import talk_relay as relaylib

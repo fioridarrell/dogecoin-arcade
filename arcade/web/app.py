@@ -17366,6 +17366,80 @@ def create_app(state: AppState) -> FastAPI:
         return JSONResponse({"ready": True, "node_trades": _node_trades(), "listings": _doginals_live(doge)},
                             headers={"Cache-Control": "no-store"})
 
+    def _ord_chain_of(network: str):
+        """The chain a collection JSON's items live on, as this node holds it: Dogecoin or Pepecoin mainnet."""
+        return state.doge if network == "doge" else next((c for c in state.all_chains if c.network == network), None)
+
+    def _ord_collection_rows(show: str) -> list[dict]:
+        """Collections that described themselves in an inscription (arcade/collection_registry.py, 2026-10-17):
+        a row each on the NFTs tab, its floor the cheapest of its items listed."""
+        rows = []
+        try:
+            active = state.collection_registry().active()
+        except Exception:
+            log.debug("the collection registry could not be read", exc_info=True)
+            return rows
+        live_by_chain: dict[str, list] = {}
+        for coll in active:
+            oc = _ord_chain_of(coll["chain"])
+            if oc is None or (show == "dogecoin" and not oc.is_doge) or (show == "pepecoin" and oc.is_doge):
+                continue
+            if coll["chain"] not in live_by_chain:
+                live_by_chain[coll["chain"]] = _doginals_live(oc) if state.chain_ready(oc) else []
+            mine = state.collection_registry().items(coll["txid"], ids={r["inscription"] for r in
+                                                                         live_by_chain[coll["chain"]]})
+            ids = {i["id"] for i in mine}
+            prices = [int(r["price"]) for r in live_by_chain[coll["chain"]] if r["inscription"] in ids and r.get("price")]
+            rows.append({"name": coll["name"], "href": f"/exchange/ord/{coll['txid']}", "net": oc.network,
+                         "floor": min(prices) if prices else 0, "for_sale": len(prices), "count": coll["count"],
+                         "cover": coll["cover"], "word": _ord_word(oc), "coin": NETWORKS[oc.network].coin})
+        return rows
+
+    @app.get("/exchange/ord/{root}", response_class=HTMLResponse)
+    def ord_collection(request: Request, root: str, page: int = 1, number: int = 0):
+        """A Doginals (or Pepinals) collection that described itself in an inscription: what is for sale, then every
+        piece by number, each opening its own offer page where it is priced in any coin or token."""
+        from .. import doginals as doginalslib
+        reg = state.collection_registry()
+        coll = reg.root(root) if re.fullmatch(r"[0-9a-f]{64}", root or "") else None
+        if coll is None or coll["status"] != "active":
+            raise HTTPException(404, "no such collection on this arcade")
+        oc = _ord_chain_of(coll["chain"])
+        ready = oc is not None and state.chain_ready(oc)
+        live = _doginals_live(oc) if ready else []
+        mine = {i["id"]: i for i in reg.items(root, ids={r["inscription"] for r in live})}
+        listed = sorted((r for r in live if r["inscription"] in mine), key=lambda r: int(r["price"]))
+        for r in listed:
+            r["number"] = mine[r["inscription"]]["number"]
+        per = 24
+        total = sum(1 for _ in reg.items(root, limit=10**7))
+        page = max(1, min(int(page), max(1, -(-total // per))))
+        if number > 0:
+            pieces = [i for i in reg.items(root, offset=max(0, number - 1), limit=1) if i["number"] == number] or \
+                     [i for i in reg.items(root, limit=10**7) if i["number"] == number]
+        else:
+            pieces = reg.items(root, offset=(page - 1) * per, limit=per)
+        price_of = {r["inscription"]: r for r in listed}
+        net = coll["chain"]
+        other = "main" if net == "doge" else "doge"
+        for p in pieces:
+            p["content"] = doginalslib.content_url(p["id"])
+            p["offer"] = f"/exchange/swap/{net}-doginal-{quote(p['id'])}/{other}-coin"
+            p["listing"] = price_of.get(p["id"])
+        looking = signed_in(request) if _account_view(request) else None
+        data = {"coll": coll, "listed": listed, "pieces": pieces, "page": page, "pages": max(1, -(-total // per)),
+                "total": total, "number": number, "floor": int(listed[0]["price"]) if listed else 0,
+                "coin": NETWORKS[net].coin if net in NETWORKS else "", "net": net,
+                "word": _ord_word(oc) if oc is not None else "Inscription", "ready": ready,
+                # The Doginals tab's own For-sale grid and Buy, drawn for this collection's listings only.
+                "doginals": listed, "doge_ready": ready, "viewer": "account" if looking else "wallet",
+                "doge_me": _account_address(looking.pubkey, oc) if looking and oc is not None else "",
+                "ord_net": net, "ord_word": _ord_word(oc) if oc is not None else "Doginal",
+                "ord_coin": NETWORKS[net].coin if net in NETWORKS else "",
+                "ord_chain_name": "Dogecoin" if net == "doge" else "Pepecoin",
+                "doge_version": oc.params.pubkeyhash_version if oc is not None else 30, "in_collection": True}
+        return render(request, "ord_collection.html", **data)
+
     @app.get("/account/doginals")
     def account_doginals(request: Request, chain: str = "doge"):
         """This account's Doginals: the coins at its Dogecoin address that hold one, and whether each can be listed
@@ -25962,6 +26036,8 @@ def create_app(state: AppState) -> FastAPI:
                         data["ord_rows"].append({"name": word, "href": f"/exchange?tab={tab_}", "net": oc.network,
                                                  "floor": min(prices) if prices else 0, "for_sale": len(live),
                                                  "coin": NETWORKS[oc.network].coin})
+                # Collections described by an inscription, each its own row (2026-10-17).
+                data["ord_rows"] += _ord_collection_rows(data["show"])
             except Exception as exc:
                 data["node_error"] = data["node_error"] or \
                     f"the collections could not be read: {exc}"

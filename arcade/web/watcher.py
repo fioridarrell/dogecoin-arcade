@@ -168,6 +168,7 @@ class BlockWatcher:
                       self._import_listings,
                       self._import_orders,
                       self._run_trader,
+                      self._scan_collections,
                       self._run_watch,
                       self._walk_home):
             try:
@@ -246,6 +247,20 @@ class BlockWatcher:
         self._watch_at = time.time()
         for job, said in self.state.trade_watch.tick(self.state.chain_rpc_for):
             log.info("swap watch: %s %s", job, said)
+
+    def _scan_collections(self) -> None:
+        """Collections described by an inscription (2026-10-17: they appear "with no manual step"): every
+        indexed chain read for new roots, and roots waiting for their parts tried again; every 30 s."""
+        if time.time() - getattr(self, "_collections_at", 0.0) < 30:
+            return
+        self._collections_at = time.time()
+        reg = self.state.collection_registry()
+        for chain in self.state.token_chains:
+            try:
+                if reg.scan(self.state.token_index(chain), chain.network):
+                    self.state.bump_generation()
+            except Exception:
+                log.debug("collections on %s not read", chain.network, exc_info=True)
 
     def _run_trader(self) -> None:
         """This node's own lock-script trades, every 15 s -- only while the operator has

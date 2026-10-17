@@ -147,3 +147,45 @@ def test_listing_and_buying_wait_for_node_trades(doge):
     assert app.post("/account/doginals/list", json={"txid": INS_TX, "vout": 0, "inscription": INSCRIPTION,
                                                     "amount": "5"}).status_code == 403
     assert "Listing and buying Doginals is off on this arcade" in app.get("/exchange?tab=doginals").text
+
+
+def _collection(state, ids, name="Anti Doginal Dogs"):
+    """A collection the registry has already settled (tests/test_collection_registry.py reads one off a chain)."""
+    import json
+    import sqlite3
+    root = "ab" * 32
+    reg = state.collection_registry()
+    with sqlite3.connect(reg.path) as c:
+        c.execute("INSERT INTO ext_root(txid, number, publisher, network, status, name, chain, supply, traits, cover) "
+                  "VALUES(?, 1, 'nPublisher', 'test', 'active', ?, 'doge', ?, '[\"Fur\"]', ?)",
+                  (root, name, len(ids), ids[0]))
+        c.executemany("INSERT INTO ext_item(chain, id, root, number, traits) VALUES('doge', ?, ?, ?, ?)",
+                      [(i, root, n + 1, json.dumps({"Fur": "Red"})) for n, i in enumerate(ids)])
+    return root
+
+
+def test_a_collection_json_gets_a_row_and_a_page_with_its_listings(doge):
+    """2026-10-17: a Doginals collection JSON makes its collection appear with no manual step."""
+    app, state, chain, node = doge
+    _seat(app, state, SELLER)
+    ask = app.post("/account/doginals/list", json={"txid": INS_TX, "vout": 0, "inscription": INSCRIPTION,
+                                                   "amount": "5"}).json()
+    sig = _sign(SELLER_KEY, bytes.fromhex(ask["digest"]), funding.SINGLE_ANYONECANPAY).hex()
+    listing = app.post("/account/doginals/list/sign", json={"txid": INS_TX, "vout": 0, "inscription": INSCRIPTION,
+                                                            "amount": "5", "signature": sig,
+                                                            "pubkey": _pubkey(SELLER_KEY).hex()}).json()["listed"]
+    others = [f"{k:064x}i0" for k in range(1, 70)]
+    root = _collection(state, others[:2] + [INSCRIPTION] + others[2:])
+
+    market = app.get("/exchange?tab=market").text
+    assert f'href="/exchange/ord/{root}"' in market and "Anti Doginal Dogs" in market and "1 for sale" in market
+
+    _seat(app, state, BUYER)
+    page = app.get(f"/exchange/ord/{root}")
+    assert page.status_code == 200, page.text
+    page = page.text
+    assert f'data-dg-buy="{listing}"' in page, "its listing, with the Doginals tab's own Buy"
+    assert ">#3 <span" in page and f"/exchange/swap/doge-doginal-{INSCRIPTION}/main-coin" in page
+    assert "Page 1 of 3" in page and ">#25<" not in page and ">#25<" in app.get(f"/exchange/ord/{root}?page=2").text
+    assert ">#40<" in app.get(f"/exchange/ord/{root}?number=40").text
+    assert app.get("/exchange/ord/" + "cd" * 32).status_code == 404

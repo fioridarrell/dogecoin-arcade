@@ -161,6 +161,7 @@ PUBLIC_TREES = (
     "/exchange/history",      # the reader's own trades (2026-10-17)
     "/exchange/swap-trade/",  # one finished lock-script swap (2026-10-17)
     "/exchange/coins/",       # a coin pair: redirects to its swap market
+    "/exchange/ord/",         # a Doginals/Pepinals collection described by an inscription (2026-10-17)
 )
 
 #: Whole paths with something variable in the middle of them, where a tree

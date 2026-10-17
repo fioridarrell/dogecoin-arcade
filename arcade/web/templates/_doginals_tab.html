@@ -48,7 +48,7 @@
   <div class="panel empty"><p>No {{ W }}s are listed yet.</p></div>
   {% endif %}
 
-  {% if viewer == 'account' and node_trades() %}
+  {% if viewer == 'account' and node_trades() and not in_collection %}
   <div class="ex-h">Your {{ W }}s</div>
   <p class="muted" style="font-size:.86rem">The {{ W }}s on your {{ CN }} address. A coin carrying exactly one, at its
     start, can be listed.</p>

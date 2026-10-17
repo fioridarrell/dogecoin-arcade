@@ -356,6 +356,8 @@ window.arcadeFavs = window.arcadeFavs || (function () {
 {%- if side and side.coin -%}
 {{ coin_img(side.coin, cls ~ ' coin') }}
 {%- elif side and side.icon -%}<img class="{{ cls }}" src="/content/{{ side.icon }}" alt="" loading="lazy">
+{#- An ord inscription is often a page drawing itself (Anti Doginal Dogs are HTML), so a sandboxed frame, not an img. -#}
+{%- elif side and side.src -%}<iframe class="{{ cls }}" src="{{ side.src }}" title="" loading="lazy" sandbox="allow-scripts" scrolling="no" tabindex="-1" style="border:0;pointer-events:none;background:var(--code)"></iframe>
 {%- else -%}<span class="{{ cls }}" style="background:#8a7a4a">{{ (side.letter if side else '?') or '?' }}</span>
 {%- endif -%}
 {%- endmacro %}

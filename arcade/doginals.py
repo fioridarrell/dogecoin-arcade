@@ -140,8 +140,15 @@ class Doginals:
         name = home / inscription
         if name.exists() and (home / (inscription + ".type")).exists():
             return (home / (inscription + ".type")).read_text(), name.read_bytes()
-        with self.rpc_factory() as rpc:
-            ctype, body = content(rpc, inscription)
+        # Two at a time (2026-10-17): a page of 60 uncached Doginals asked all at once, each walking blocks, filled
+        # dogecoind's RPC work queue ("Work queue depth exceeded") and every Dogecoin call on the node failed with it.
+        if not _READING.acquire(timeout=25):
+            raise Unknown("the chain is busy reading other inscriptions; try again")
+        try:
+            with self.rpc_factory() as rpc:
+                ctype, body = content(rpc, inscription)
+        finally:
+            _READING.release()
         home.mkdir(parents=True, exist_ok=True)
         (home / (inscription + ".type")).write_text(ctype)
         name.write_bytes(body)
@@ -317,6 +324,10 @@ def _pushes(raw: bytes) -> list:
         out.append(raw[at:at + n])
         at += n
     return out
+
+
+#: Chain reads of inscription content at once, across every page (see Doginals.content).
+_READING = threading.BoundedSemaphore(2)
 
 
 def content(rpc, inscription: str, look: int = 30) -> tuple[str, bytes]:
