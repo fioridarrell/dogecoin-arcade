@@ -23374,7 +23374,18 @@ def create_app(state: AppState) -> FastAPI:
         held_base = sum(index.balance(a, base) for a in owned)
         held_quote = sum(index.balance(a, quote) for a in owned)
         since = getattr(chain.params, "token_pairs_from", None)
+        # The token/coin page's face, day line and book rows (2026-10-17: every pairing
+        # looks like it): the base's icon and words, the day's range and volume, and each row's
+        # depth against the biggest on the book.
+        try:
+            face = _faces_for(index, [base_prop]).get(base, {})
+        except Exception:
+            face = {}
+        most = max([r["base"] for r in book["asks"] + book["bids"]] or [1]) or 1
+        for row in book["asks"] + book["bids"]:
+            row["depth"] = round(100 * row["base"] / most)
         return render(request, "pair_tokens.html", chain=chain, base=base_prop, quote=quote_prop,
+                      face=face, day=chartlib.day(points),
                       book=book, trades=[dict(t, base_shown=format_amount(t["base"], base_prop["divisible"]),
                                               quote_shown=format_amount(t["quote"], quote_prop["divisible"]),
                                               each=(t["quote"] / t["base"]) * scale if t["base"] else None)
@@ -23654,7 +23665,38 @@ def create_app(state: AppState) -> FastAPI:
         quotes = [{"key": c["key"], "label": c["label"], "on": c["key"] == q["key"]}
                   for c in _pair_choices(request, "account" if viewer == "account" else viewer)
                   if c["kind"] in ("coin", "token") and c["key"] != b["key"]]
+        # The token/coin page's face, numbers and chart (2026-10-17: every pairing looks like
+        # it "from top to bottom"): the base's icon and words, what the reader holds of it, and the
+        # chart frame. Swaps keep no trade history yet, so the chart says so and the day is empty.
+        face: dict = {}
+        if b["kind"] == "token":
+            try:
+                face = _faces_for(state.token_index(b["chain"]), [b["prop"]]).get(int(b["asset"]), {})
+            except Exception:
+                face = {}
+        elif b["kind"] == "nft":
+            face = {"icon": b["asset"]}
+        held_shown = None
+        if viewer == "account" and b["kind"] in ("token", "coin") and b.get("chain") is not None and b["ready"]:
+            try:
+                address = _account_address(signed_in(request).pubkey, b["chain"])
+                if address:
+                    index = state.token_index(b["chain"])
+                    if b["kind"] == "token":
+                        held_shown = format_amount(index.balance(address, int(b["asset"])), b["divisible"])
+                    else:
+                        with contextlib.closing(index.open()) as db:
+                            held_shown = f"{utxoslib.balance(db, address) / COIN:,.8f}".rstrip("0").rstrip(".")
+            except Exception:
+                held_shown = None
+        frame = chartlib.timeframe(request.query_params.get("tf", "1d"))
+        best = asks[0]["price"] if (asks := book["asks"]) else (book["bids"][0]["price"] if book["bids"] else None)
+        most = max([o["base_amount"] for o in book["asks"] + book["bids"]] or [1]) or 1
+        for o in book["asks"] + book["bids"]:
+            o["depth"] = round(100 * o["base_amount"] / most)
         return render(request, "swap_pair.html", b=b, q=q, here=here, quotes=quotes,
+                      face=face, held=held_shown, best=best, slots=[],
+                      tf=frame[0], timeframes=[t[0] for t in chartlib.TIMEFRAMES],
                       held_url=f"/exchange/x/{b['kind']}/{b['asset']}?held=1",
                       b_form=_leg_form(b), q_form=_leg_form(q),
                       asks=book["asks"], bids=book["bids"], spread=book["spread"],
