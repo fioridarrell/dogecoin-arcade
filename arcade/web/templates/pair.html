@@ -71,7 +71,7 @@
       {% if book.asks %}
       <div class="obhead">Selling</div>
       {% for o in book.asks %}
-      <div class="obrow ask{{ ' mine' if o.mine }}" style="--depth:{{ o.depth }}%"
+      <div class="obrow ask{{ ' mine' if o.mine }}" data-key="ob-{{ o.id or o.txid or ((o.address or o.owner or '') ~ '-' ~ loop.index) }}" style="--depth:{{ o.depth }}%"
            title="{{ o.tokens_shown }} for {{ o.coins_shown }} coins">
         <span class="obprice mono">{{ o.price_shown }}</span>
         <span class="obamt"><span class="mono">{{ o.free_shown }}</span>
@@ -121,7 +121,7 @@
       {% if book.bids %}
       <div class="obhead">Buying</div>
       {% for o in book.bids %}
-      <div class="obrow bid{{ ' mine' if o.mine }}" style="--depth:{{ o.depth }}%"
+      <div class="obrow bid{{ ' mine' if o.mine }}" data-key="ob-{{ o.id or o.txid or ((o.address or o.owner or '') ~ '-' ~ loop.index) }}" style="--depth:{{ o.depth }}%"
            title="{{ o.tokens_shown }} for {{ o.coins_shown }} coins">
         <span class="obprice mono">{{ o.price_shown }}</span>
         <span class="obamt"><span class="mono">{{ o.tokens_shown }}</span>

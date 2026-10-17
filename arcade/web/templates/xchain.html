@@ -109,7 +109,7 @@
 <div class="ex-card" style="padding:10px">
   {% if not book.sells and not book.buys %}<p class="muted" style="margin:4px">No orders yet. Be the first: set your price above.</p>{% endif %}
   {% for o in book.sells|reverse %}
-  <div class="obrow ask{{ ' mine' if o.owner == owner }}" style="--depth:{{ (o.left_amount / biggest * 100)|round(1) }}%">
+  <div class="obrow ask{{ ' mine' if o.owner == owner }}" data-key="ob-{{ o.id or o.txid or ((o.address or o.owner or '') ~ '-' ~ loop.index) }}" style="--depth:{{ (o.left_amount / biggest * 100)|round(1) }}%">
     <span class="obprice mono">{{ ex.px(o.each) }}</span>
     <span class="obamt"><span class="mono">{{ o.units_shown }}</span> <small class="muted">{{ aname }}{% if o.owner == owner %} &middot; yours{% endif %}</small></span>
     <span class="obdo">{% if takes and o.owner != owner %}<button type="button" class="small x-take" data-side="buy"
@@ -120,7 +120,7 @@
   <div class="obmid muted">{% if takes %}Press Buy or Sell on a row to take it{% else %}Sells above, buys below{% endif %}</div>
   {% endif %}
   {% for o in book.buys %}
-  <div class="obrow bid{{ ' mine' if o.owner == owner }}" style="--depth:{{ (o.left_amount / biggest * 100)|round(1) }}%">
+  <div class="obrow bid{{ ' mine' if o.owner == owner }}" data-key="ob-{{ o.id or o.txid or ((o.address or o.owner or '') ~ '-' ~ loop.index) }}" style="--depth:{{ (o.left_amount / biggest * 100)|round(1) }}%">
     <span class="obprice mono">{{ ex.px(o.each) }}</span>
     <span class="obamt"><span class="mono">{{ o.units_shown }}</span> <small class="muted">{{ aname }}{% if o.owner == owner %} &middot; yours{% endif %}</small></span>
     <span class="obdo">{% if takes and o.owner != owner %}<button type="button" class="small x-take" data-side="sell"

@@ -87,7 +87,7 @@
       {% if rows %}
       <div class="obhead">{{ word }}</div>
       {% for o in rows %}
-      <div class="obrow {{ side_ }}{{ ' mine' if o.mine }}" style="--depth:{{ o.depth }}%">
+      <div class="obrow {{ side_ }}{{ ' mine' if o.mine }}" data-key="ob-{{ o.id or o.txid or ((o.address or o.owner or '') ~ '-' ~ loop.index) }}" style="--depth:{{ o.depth }}%">
         <span class="obprice mono">{{ ex.px(o.price) }}</span>
         <span class="obamt"><span class="mono">{% if whole %}1{% else %}{{ o.base_shown }}{% endif %}</span>
           <small class="muted">{% if o.mine %}yours{% else %}{{ o.lister|who }}{% endif %}</small></span>
