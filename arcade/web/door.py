@@ -80,6 +80,7 @@ PUBLIC_PAGES = frozenset({
     "/favicon.ico",
     "/icon-32.png",
     "/coin-pep.png",
+    "/coin-pep-test.png",
     "/coin-doge.png",
     "/icon-180.png",
     "/icon-192.png",

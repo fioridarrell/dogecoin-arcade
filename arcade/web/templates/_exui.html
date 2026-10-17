@@ -329,21 +329,30 @@ window.arcadeFavs = window.arcadeFavs || (function () {
 
 {#- Both sides of a market, one icon each (2026-10-17: "Each pair listing and pair page should have both icons"):
     the base big, the quote small on its corner. A side is {"coin": network} or {"icon", "letter"} (app._side_face). -#}
+{#- A coin's own face (2026-10-17: "the test net icon I think should differ from the main net icon"): the green
+    frog on Pepecoin mainnet, the purple one on testnet, the Dogecoin D. -#}
+{% macro coin_img(net, cls) -%}
+<img class="{{ cls }}" src="/coin-{{ 'doge' if net == 'doge' else ('pep' if net == 'main' else 'pep-test') }}.png" alt="{{ 'DOGE' if net == 'doge' else ('PEP' if net == 'main' else 'PEP TEST') }}" loading="lazy">
+{%- endmacro %}
 {% macro side_disc(side, cls) -%}
 {%- if side and side.coin -%}
-<img class="{{ cls }} coin" src="/coin-{{ 'doge' if side.coin == 'doge' else 'pep' }}.png" alt="{{ 'DOGE' if side.coin == 'doge' else 'PEP' }}" loading="lazy">
+{{ coin_img(side.coin, cls ~ ' coin') }}
 {%- elif side and side.icon -%}<img class="{{ cls }}" src="/content/{{ side.icon }}" alt="" loading="lazy">
 {%- else -%}<span class="{{ cls }}" style="background:#8a7a4a">{{ (side.letter if side else '?') or '?' }}</span>
 {%- endif -%}
 {%- endmacro %}
 {% macro pair_icon(base, quote, size=38) -%}
-<span class="ex-pic" style="width:{{ size }}px;height:{{ size }}px">{{ side_disc(base, 'ex-pic-b') }}{% if quote %}{{ side_disc(quote, 'ex-pic-q') }}{% endif %}</span>
+<span class="ex-pic" style="width:{{ size }}px;height:{{ size }}px">{{ side_disc(base, 'ex-pic-b') }}
+{%- if base and not base.coin and base.net %}{{ coin_img(base.net, 'ex-pic-c') }}{% endif %}
+{%- if quote %}{{ side_disc(quote, 'ex-pic-q') }}{% endif %}</span>
 {%- endmacro %}
 {% macro pair_icon_css() %}
 <style>
 .ex-pic{position:relative;display:inline-block;flex:none}
 .ex-pic-b{width:100%;height:100%;border-radius:50%;display:grid;place-items:center;object-fit:cover;color:#fff;font-weight:800}
-.ex-pic-q{position:absolute;right:-5px;bottom:-5px;width:46%;height:46%;border-radius:50%;display:grid;place-items:center;
+.ex-pic-q,.ex-pic-c{position:absolute;right:-5px;bottom:-5px;width:46%;height:46%;border-radius:50%;display:grid;place-items:center;
   object-fit:cover;color:#fff;font-weight:800;font-size:.6em;border:2px solid var(--panel,var(--bg));background:var(--code)}
+/* The chain the base lives on, top right; what it is priced in, bottom right (2026-10-17). */
+.ex-pic-c{bottom:auto;top:-5px}
 </style>
 {% endmacro %}

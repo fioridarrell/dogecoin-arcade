@@ -8656,6 +8656,7 @@ def create_app(state: AppState) -> FastAPI:
     # The coins' own faces on market icons (2026-10-17: "We have both the Pepecoin and Dogecoin icons in the race
     # condition game"): the racer's art, served as files so a page of fifty markets fetches each once.
     @app.get("/coin-pep.png")
+    @app.get("/coin-pep-test.png")
     @app.get("/coin-doge.png")
     def coin_icon(request: Request):
         return Response((TEMPLATE_DIR / request.url.path.lstrip("/")).read_bytes(), media_type="image/png",
@@ -22359,6 +22360,7 @@ def create_app(state: AppState) -> FastAPI:
                 c = next(c for c in state.token_chains if c.network == net)
                 idx = state.token_index(c)
                 if kind == "token":
+                    got["net"] = net
                     prop = idx.property(int(asset))
                     if prop:
                         got["letter"] = (wall_plain(prop["name"], "?") or "?")[:1].upper()
