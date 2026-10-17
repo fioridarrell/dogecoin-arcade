@@ -3043,18 +3043,14 @@ async function postNow(wallet) {
     : {id: o.id, give: o.give, get: o.get, trade_key: o.trade_key, take_key: o.take_key,
        msg_key: coinsHex(me.publicKey || me.public || me.pub), node: acct.mesh_node, tab: true,
        expires: now + TAB_ORDER_LIFE});
-  const body = new TextEncoder().encode(JSON.stringify({arcade: "orders", v: 1, orders, cancels: book.cancels || []}));
-  let b64 = "";
-  for (let i = 0; i < body.length; i += 0x8000) b64 += String.fromCharCode(...body.subarray(i, i + 0x8000));
-  const asked = await fetch("/account/inscribe", {
+  // To this account's node, not the chain (2026-10-17: "there's no reason why my browser should be posting
+  // orders to the chain"): free, on the book at once; other arcades hear of it over the mesh.
+  const asked = await fetch("/account/orders/post", {
     method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({content: btoa(b64), content_type: "application/vnd.arcade.orders+json",
-                          json: "", chain: tags.network || ""}),
+    body: JSON.stringify({orders, cancels: book.cancels || []}),
   });
-  const offer = await asked.json();
-  if (!asked.ok) throw new Error(offer.detail || "the swap could not be posted");
-  if (offer.part) throw new Error("too many swaps for one inscription; withdraw some");
-  const sent = await confirm(wallet, offer);
+  const sent = await asked.json().catch(() => ({}));
+  if (!asked.ok) throw new Error(sent.detail || "the swap could not be posted");
   // Read again: the cursor, or another listing, may have moved while this was posting.
   const now2 = myOrdersOf(wallet);
   now2.posted = Date.now();

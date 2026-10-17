@@ -164,8 +164,11 @@ class OrderBook:
                     order = check_order(raw, now)
                 except OrderError:
                     continue
-                conn.execute("INSERT OR IGNORE INTO trade_order(id, lister, network, inscription, "
-                             "body, node, expires) VALUES(?,?,?,?,?,?,?)",
+                # Posted again by its own lister (a page's repost, 2026-10-17): its life is extended, not ignored.
+                conn.execute("INSERT INTO trade_order(id, lister, network, inscription, "
+                             "body, node, expires) VALUES(?,?,?,?,?,?,?) "
+                             "ON CONFLICT(lister, id) DO UPDATE SET expires=excluded.expires, body=excluded.body "
+                             "WHERE trade_order.cancelled=0",
                              (order["id"], lister, network, inscription, json.dumps(order),
                               order["node"], order["expires"]))
                 filed += 1

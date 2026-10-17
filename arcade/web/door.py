@@ -427,6 +427,7 @@ PUBLIC_POST = ("/auth/challenge", "/auth/login", "/auth/logout",
                "/account/orders/alive",
                "/account/orders/cancel",
                "/account/orders/delegate",
+               "/account/orders/post",
                # swap messages over the mesh (talk_relay): sealed to another page's key
                "/account/talk/relay",
                # a finished lock-script swap, for its market's history (swap_history)

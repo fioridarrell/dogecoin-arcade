@@ -25343,6 +25343,27 @@ def create_app(state: AppState) -> FastAPI:
         return JSONResponse({"msg_key": state.ensure_identity().public_bytes.hex(), "node": mesh.node_id,
                              "deposit": deposit})
 
+    @app.post("/account/orders/post")
+    def orders_post(request: Request, payload: Any = Body(None)):
+        """This account's listed swaps, handed to its node -- not inscribed (2026-10-17: "Since we're using the
+        mesh server for orders, there's no reason why my browser should be posting orders to the chain"; a page had
+        re-posted its batch several times a minute, each a transaction). Filed on this node's book at once, checked
+        order by order as a chain batch is, the lister being this account."""
+        account = _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        chain = _account_chain()
+        lister = _account_address(account.pubkey, chain)
+        if not lister:
+            return JSONResponse({"detail": "this account has no address yet"}, status_code=400)
+        orders = [o for o in (said.get("orders") or []) if isinstance(o, dict)][:trade_orders.MAX_ORDERS]
+        cancels = [str(c) for c in (said.get("cancels") or []) if isinstance(c, str)][:100]
+        body = json.dumps({"arcade": "orders", "v": trade_orders.VERSION, "orders": orders, "cancels": cancels})
+        filed = state.trade_orders.file_batch(lister, chain.network, f"node-{secrets.token_hex(8)}", body.encode())
+        if cancels:
+            state.trade_orders.cancel_local([lister], cancels)
+        state.bump_generation()
+        return JSONResponse({"filed": filed, "cancelled": len(cancels)})
+
     @app.get("/account/orders/delegated")
     def orders_delegated(request: Request):
         """Where this account's node-filled orders stand (2026-10-17: a filled order still showed with Cancel on its
