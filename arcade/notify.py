@@ -191,6 +191,27 @@ def swap_events(rows: Iterable[dict], owners: set[str],
     return out
 
 
+def lockswap_events(rows: Iterable[dict], owners: set[str], describe) -> list[Event]:
+    """Lock-script swaps that finished (swap_history.of), sold or bought.
+
+    2026-10-17: "Once you have listed something, you should be able to go play
+    your game. If it is sold while you're playing your game, it should just happen and
+    the notification should go into your notifications." `describe(row)` is
+    ("1,000 GOLD", "1.14 DOGE"): what the base and the quote were, as a market says them.
+    """
+    out = []
+    for r in rows:
+        try:
+            what, paid = describe(r)
+        except Exception:                                 # noqa: BLE001 -- an asset this node cannot name
+            continue
+        sold = r["seller"] in owners
+        out.append(Event(source="lockswap", seq=int(r["seq"]), kind="sold" if sold else "bought",
+                         actor=r["buyer"] if sold else r["seller"], target=r["id"],
+                         text=f"{what} for {paid}", at=int(r["at"] or 0)))
+    return out
+
+
 def merge(events: Iterable[Event], seen: dict[str, int]) -> list[Event]:
     """Newest first (anything still in the pool on top), marked read or unread."""
     out = []

@@ -8888,6 +8888,7 @@ def create_app(state: AppState) -> FastAPI:
                 events += notify.sale_events(conn, owners)
         except Exception as exc:                          # noqa: BLE001
             log.info("notifications: sales: %s", exc)
+        mine_there: set = set()
         try:
             tchain, index = _token_chain()
             mine_there = {a for a in (_account_address(account.pubkey, tchain),) if a}
@@ -8912,7 +8913,22 @@ def create_app(state: AppState) -> FastAPI:
             events += swaps
         except Exception as exc:                          # noqa: BLE001
             log.info("notifications: swaps: %s", exc)
+        try:
+            # Lock-script swaps that finished: a listing sold while its lister played.
+            def _said(r):
+                b, q = _leg_info(r["base"]), _leg_info(r["quote"])
+                return _swap_amount(b, r["base_amount"]), _swap_amount(q, r["quote_amount"])
+            events += notify.lockswap_events(state.swap_history().of(mine_there | owners),
+                                             mine_there | owners, _said)
+        except Exception as exc:                          # noqa: BLE001
+            log.info("notifications: lock swaps: %s", exc)
         return notify.merge(events, _notif_seen(account.pubkey))
+
+    def _swap_amount(leg: dict, n: int) -> str:
+        """'1,000 GOLD', '1.14 DOGE', '1 Skull #7': a lock-script swap leg as people say it."""
+        amount = ("1" if leg["kind"] in ("nft", "doginal") else format_amount(n, leg["divisible"])
+                  if leg["kind"] == "token" else f"{n / COIN:,.8f}".rstrip("0").rstrip("."))
+        return f"{amount} {leg['name']}"
 
     def _account_counts(request: Request) -> dict:
         """The red counts for an account's tabs; nothing for anybody else."""

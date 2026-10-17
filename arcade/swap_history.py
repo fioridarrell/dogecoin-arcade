@@ -79,6 +79,6 @@ class SwapHistory:
             return []
         marks = ",".join("?" * len(addresses))
         with self._open() as conn:
-            rows = conn.execute(f"SELECT * FROM swap_trade WHERE seller IN ({marks}) OR buyer IN ({marks})"
+            rows = conn.execute(f"SELECT rowid AS seq, * FROM swap_trade WHERE seller IN ({marks}) OR buyer IN ({marks})"
                                 " ORDER BY at DESC LIMIT ?", (*addresses, *addresses, int(limit))).fetchall()
         return [dict(r) for r in rows]
