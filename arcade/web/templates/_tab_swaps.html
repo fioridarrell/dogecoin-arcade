@@ -117,13 +117,13 @@
       if (give.network === get.network) {
         // One chain: instant, one transaction, on that chain's own market (2026-10-13).
         if (give.kind === "nft") {
-          if (await arcadeAsk("Sell it on its own page?", "Both sides are on one chain, so this trade settles "
+          if (await approve("Sell it on its own page?", "Both sides are on one chain, so this trade settles "
               + "instantly in a single transaction: list the piece for a price on its own page.", "Open the piece"))
             location.href = `/inscriptions/${give.asset}`;
           return;
         }
         if (give.kind === "token") {
-          if (await arcadeAsk("Trade it on its own market?", "Both sides are on one chain, so this trade "
+          if (await approve("Trade it on its own market?", "Both sides are on one chain, so this trade "
               + "settles instantly in a single transaction on the token's own market -- no locks, no waiting.",
               "Open the market")) location.href = `/exchange/pair/${give.asset}`;
           return;
@@ -161,6 +161,14 @@
     function step(what, error) {
       if (PRESS[what] && globalThis.arcadeToast) arcadeToast(PRESS[what]);
       try { document.dispatchEvent(new CustomEvent("arcade:swap-step", {detail: {what, error: error ? String(error.message || error) : ""}})); } catch (e) {}
+    }
+    // One OK, and only for listing or buying (2026-10-17: "The only time you should confirm
+    // anything is when you're listing it or buying it" -- "only ... once"): the Take and List dialogs
+    // stay, and approve every lock, claim and refund after them. Anything else (sending you to a
+    // one-chain trade's own page) just happens, said in a toast.
+    async function approve(title, body) {
+      if (globalThis.arcadeToast) arcadeToast(`${String(title).replace(/\?$/, "")}: ${String(body).split(". ")[0]}.`);
+      return true;
     }
     const SAID = {proposed: "Swap asked: waiting for the seller's page to accept",
                   accepted: "Swap accepted: locking your side", locked: "Your side is locked: waiting for theirs, then it settles",
