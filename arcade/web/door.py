@@ -79,6 +79,8 @@ PUBLIC_PAGES = frozenset({
     "/events",                # what an open page polls to know to refresh
     "/favicon.ico",
     "/icon-32.png",
+    "/coin-pep.png",
+    "/coin-doge.png",
     "/icon-180.png",
     "/icon-192.png",
     "/icon-512.png",

@@ -8653,6 +8653,14 @@ def create_app(state: AppState) -> FastAPI:
              # reads by its content type rather than its extension.
              "/favicon.ico": "icon-32.png"}
 
+    # The coins' own faces on market icons (2026-10-17: "We have both the Pepecoin and Dogecoin icons in the race
+    # condition game"): the racer's art, served as files so a page of fifty markets fetches each once.
+    @app.get("/coin-pep.png")
+    @app.get("/coin-doge.png")
+    def coin_icon(request: Request):
+        return Response((TEMPLATE_DIR / request.url.path.lstrip("/")).read_bytes(), media_type="image/png",
+                        headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
     @app.get("/icon-32.png")
     @app.get("/icon-180.png")
     @app.get("/icon-192.png")
@@ -22340,6 +22348,53 @@ def create_app(state: AppState) -> FastAPI:
     #: mainnet only, and cross chain only Sort buttons to the token exchange").
     PAIR_SHOWS = ("mix", "testnet", "mainnet", "dogecoin", "cross")
 
+    def _side_face(net: str, kind: str, asset: str, cache: dict) -> dict:
+        """One side of a market as its icon says it: {"coin": network} for a coin, {"icon", "letter"} for a token."""
+        if kind == "coin":
+            return {"coin": net}
+        key = (net, kind, asset)
+        if key not in cache:
+            got = {"icon": "", "letter": "?"}
+            try:
+                c = next(c for c in state.token_chains if c.network == net)
+                idx = state.token_index(c)
+                if kind == "token":
+                    prop = idx.property(int(asset))
+                    if prop:
+                        got["letter"] = (wall_plain(prop["name"], "?") or "?")[:1].upper()
+                        got["icon"] = _faces_for(idx, [prop]).get(int(asset), {}).get("icon", "")
+            except Exception:                              # noqa: BLE001 -- a letter instead
+                pass
+            cache[key] = got
+        return cache[key]
+
+    def _pair_faces(rows: list[dict[str, Any]]) -> None:
+        """Both sides' faces on every market row (2026-10-17: "Each pair listing and pair page should have both
+        icons. One for each of the assets in the pair"), worked out from the row's own link, whatever built the row."""
+        cache: dict = {}
+        for r in rows:
+            href, net = str(r.get("href") or ""), str(r.get("chain_net") or "")
+            sides = None
+            if m := re.fullmatch(r"/exchange/pair/(\d+)", href):
+                sides = ((net, "token", m[1]), (net, "coin", ""))
+            elif m := re.fullmatch(r"/exchange/pairs/(\d+)/(\d+)", href):
+                sides = ((net, "token", m[1]), (net, "token", m[2]))
+            elif m := re.fullmatch(r"/exchange/swap/([\w.-]+)/([\w.-]+)", href):
+                legs = [trade_orders.parse_leg_key(k) for k in (m[1], m[2])]
+                if all(legs):
+                    sides = tuple((l["network"], l["kind"], l["asset"]) for l in legs)
+            if not sides:
+                continue
+            r["face_base"] = _side_face(*sides[0], cache)
+            r["face_quote"] = _side_face(*sides[1], cache)
+
+    def _pair_faces_for(href: str, net: str = "") -> tuple:
+        """(base face, quote face) for a market page's own link: its header shows both icons."""
+        row = {"href": href, "chain_net": net}
+        _pair_faces([row])
+        return row.get("face_base"), row.get("face_quote")
+    TEMPLATES.env.globals["pair_faces"] = _pair_faces_for
+
     def _swap_market_rows(request: Request, rows: list[dict[str, Any]], show: str) -> list[dict[str, Any]]:
         """Lock-script markets in the list like any other (2026-10-17: "The pair has activity, but it is not
         showing on the pair listing. Also, the listing is missing the token icon"): every pair with a finished swap
@@ -25657,6 +25712,7 @@ def create_app(state: AppState) -> FastAPI:
             data["pairs"] += _swap_market_rows(request, data["pairs"], data["show"])
             data["pairs"].sort(key=_by_popularity)
             data["pairs"] += _favorite_rows(request, chain, data["pairs"])
+            _pair_faces(data["pairs"])
             # The open-a-pair box (2026-10-06: "When creating a pair the
             # drop-down should only list assets that you have in your wallet"):
             # what this reader holds on one side, any token on the other.

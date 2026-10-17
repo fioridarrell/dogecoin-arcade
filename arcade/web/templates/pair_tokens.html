@@ -14,7 +14,9 @@
    it looks ... from top to bottom"). #}
 {{ ex.style() }}{{ ex.fav_script() }}{{ ex.market_css() }}
 <div class="ex-hero">
-  {% if face.icon %}<img class="ex-tic" src="/content/{{ face.icon }}" alt="" loading="lazy" style="width:46px;height:46px">
+  {%- set pf = pair_faces('/exchange/pairs/' ~ base.property_id ~ '/' ~ quote.property_id, chain.network if chain is defined and chain else "") %}
+  {%- if pf[0] %}{{ ex.pair_icon_css() }}{{ ex.pair_icon(pf[0], pf[1], 46) }}
+  {%- elif face.icon %}<img class="ex-tic" src="/content/{{ face.icon }}" alt="" loading="lazy" style="width:46px;height:46px">
   {% else %}<span class="ex-tic" style="width:46px;height:46px">{{ (bname or '?')[:1]|upper }}</span>{% endif %}
   <div style="min-width:0">
     <h1>{{ wall(base.name, 'token name') }}<span class="muted" style="font-weight:600"> / {{ wall(quote.name, 'token name') }}</span>

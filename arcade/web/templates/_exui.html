@@ -326,3 +326,24 @@ window.arcadeFavs = window.arcadeFavs || (function () {
 {%- set t = "%.8f"|format(v|float) -%}{%- set t = t.rstrip('0') -%}
 {{- t ~ '0' if t.endswith('.') else t -}}
 {%- endmacro %}
+
+{#- Both sides of a market, one icon each (2026-10-17: "Each pair listing and pair page should have both icons"):
+    the base big, the quote small on its corner. A side is {"coin": network} or {"icon", "letter"} (app._side_face). -#}
+{% macro side_disc(side, cls) -%}
+{%- if side and side.coin -%}
+<img class="{{ cls }} coin" src="/coin-{{ 'doge' if side.coin == 'doge' else 'pep' }}.png" alt="{{ 'DOGE' if side.coin == 'doge' else 'PEP' }}" loading="lazy">
+{%- elif side and side.icon -%}<img class="{{ cls }}" src="/content/{{ side.icon }}" alt="" loading="lazy">
+{%- else -%}<span class="{{ cls }}" style="background:#8a7a4a">{{ (side.letter if side else '?') or '?' }}</span>
+{%- endif -%}
+{%- endmacro %}
+{% macro pair_icon(base, quote, size=38) -%}
+<span class="ex-pic" style="width:{{ size }}px;height:{{ size }}px">{{ side_disc(base, 'ex-pic-b') }}{% if quote %}{{ side_disc(quote, 'ex-pic-q') }}{% endif %}</span>
+{%- endmacro %}
+{% macro pair_icon_css() %}
+<style>
+.ex-pic{position:relative;display:inline-block;flex:none}
+.ex-pic-b{width:100%;height:100%;border-radius:50%;display:grid;place-items:center;object-fit:cover;color:#fff;font-weight:800}
+.ex-pic-q{position:absolute;right:-5px;bottom:-5px;width:46%;height:46%;border-radius:50%;display:grid;place-items:center;
+  object-fit:cover;color:#fff;font-weight:800;font-size:.6em;border:2px solid var(--panel,var(--bg));background:var(--code)}
+</style>
+{% endmacro %}

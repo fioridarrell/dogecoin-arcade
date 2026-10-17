@@ -11,7 +11,9 @@
 {# The market's face, its price big, and the day's move (the Exchange redesign,
    2026-10-09); the rest of the day's numbers in one quiet line under it. #}
 <div class="ex-hero">
-  {% if face.icon %}<img class="ex-tic" src="/content/{{ face.icon }}" alt="" loading="lazy" style="width:46px;height:46px">
+  {%- set pf = pair_faces('/exchange/pair/' ~ prop.property_id, chain.network if chain is defined and chain else "") %}
+  {%- if pf[0] %}{{ ex.pair_icon_css() }}{{ ex.pair_icon(pf[0], pf[1], 46) }}
+  {%- elif face.icon %}<img class="ex-tic" src="/content/{{ face.icon }}" alt="" loading="lazy" style="width:46px;height:46px">
   {% else %}<span class="ex-tic" style="width:46px;height:46px">{{ (wall_text(prop.name, '?') or '?')[:1]|upper }}</span>{% endif %}
   <div style="min-width:0">
     <h1>{{ wall(prop.name, 'token name') }}<span class="muted" style="font-weight:600"> / {{ coin_name }}</span>

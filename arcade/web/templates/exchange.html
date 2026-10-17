@@ -620,7 +620,7 @@ document.addEventListener('click', function (ev) {
   {# Favorites first (2026-10-17, layout A): the page opens on the markets this reader
      starred, with All markets and + New pair beside it; search always looks through every
      market. Stars are kept per account (/account/favorites, _exui.fav_script). #}
-  {{ ex.fav_script() }}
+  {{ ex.fav_script() }}{{ ex.pair_icon_css() }}
   <div class="row" style="justify-content:flex-end;margin:-4px 0 8px"><a class="btn small ghost" href="/exchange/history">Trade history</a></div>
   <div class="ex-seg" id="mktmode" role="group" aria-label="Which markets">
     <button type="button" data-mode="fav" aria-pressed="false">&#9733; Favorites</button>
@@ -641,7 +641,8 @@ document.addEventListener('click', function (ev) {
        name is exactly what the cover hides; such a token is found by its number. #}
     <a class="ex-mrow" {{ go(p.href, p.switch) }} data-net="{{ p.net }}" data-market="{{ wall_text(p.name, '')|lower }}/{{ quote_text|lower }} #{{ p.property_id }}"
        data-fav-key="{{ fav_key(p.href, p.chain_net) }}" data-vol="{{ p.coins or 0 }}" data-orders="{{ p.orders or 0 }}">
-      {%- if p.icon %}<img class="ex-tic" src="/content/{{ p.icon }}" alt="" loading="lazy">
+      {%- if p.face_base %}{{ ex.pair_icon(p.face_base, p.face_quote) }}
+      {%- elif p.icon %}<img class="ex-tic" src="/content/{{ p.icon }}" alt="" loading="lazy">
       {%- else %}<span class="ex-tic" style="background:hsl({{ ((p.property_id|string|length * 97 + (p.name|length) * 31) % 360) }} 45% 42%)">{{ (wall_text(p.name, '?') or '?')[:1]|upper }}</span>{% endif %}
       {# Each row still says which chain and what supply (2026-10-06): the badges, small. #}
       <span class="ex-mid"><b class="ex-name"><span class="ex-name-in">{{ wall(p.name, 'token name') }}<span class="muted" style="font-weight:500">/{% if p.quote_label %}{{ wall(p.quote_label, 'token name') }}{% else %}{{ coin_name }}{% endif %}</span></span></b>
@@ -667,7 +668,7 @@ document.addEventListener('click', function (ev) {
      If the name is still too long for the display, it should scroll across"). #}
   <style>
   #markets .ex-mrow{display:grid;grid-template-columns:38px minmax(0,1fr) auto auto;column-gap:12px;row-gap:2px;align-items:center}
-  #markets .ex-mrow > .ex-tic{grid-column:1;grid-row:1 / span 2}
+  #markets .ex-mrow > .ex-tic, #markets .ex-mrow > .ex-pic{grid-column:1;grid-row:1 / span 2}
   #markets .ex-mrow > .ex-mid{display:contents}
   #markets .ex-mrow .ex-name{grid-column:2 / 4;grid-row:1;overflow:hidden;white-space:nowrap;text-overflow:clip}
   #markets .ex-mrow .ex-mid small{grid-column:2;grid-row:2;min-width:0}
