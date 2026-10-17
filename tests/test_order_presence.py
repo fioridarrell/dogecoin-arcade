@@ -86,3 +86,17 @@ def test_a_mesh_node_knows_a_room_live_here_or_elsewhere():
 def test_the_door_lets_a_page_say_it_is_here():
     from arcade.web import door
     assert door.public_path("/account/orders/alive", "POST")
+
+
+def test_a_delegated_order_stands_with_its_page_closed(tmp_path):
+    """A delegated order (node_trader.delegate) is shown while its node is online, page or no page -- even from one
+    of this node's own accounts, whose other orders count as a page's (2026-10-17: a delegated bid missing)."""
+    from arcade import trade_orders as O
+    book = O.OrderBook(tmp_path / "o.sqlite")
+    order = {"id": "ord-00000000000000aa", "give": {"network": "doge", "kind": "coin", "asset": "", "amount": 10 ** 8},
+             "get": {"network": "test", "kind": "token", "asset": "26", "amount": 1000},
+             "trade_key": "02" + "11" * 32, "take_key": "02" + "11" * 32, "msg_key": "aa" * 32, "node": "bb" * 32,
+             "expires": int(__import__("time").time()) + 86400, "delegated": True}
+    book.file_batch("nLister", "test", "cc" * 32, O.batch_json([order]))
+    shown = book.visible(lambda n: True, tab_live=lambda lister: False, browser=lambda lister: True)
+    assert [o["id"] for o in shown] == [order["id"]]

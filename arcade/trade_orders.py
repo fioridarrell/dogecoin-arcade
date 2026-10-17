@@ -204,7 +204,8 @@ class OrderBook:
             body = json.loads(row["body"])
             # `browser`: a lister known to list from a browser though its order predates the flag
             # (this node's own accounts).
-            tab = body.get("tab") or (browser is not None and browser(row["lister"]))
+            # A delegated order is answered by its node, not a page: it stands while that node is online.
+            tab = not body.get("delegated") and (body.get("tab") or (browser is not None and browser(row["lister"])))
             if online(row["node"]) and not (tab and tab_live is not None
                                             and not tab_live(row["lister"])):
                 out.append({**json.loads(row["body"]), "lister": row["lister"],
