@@ -147,7 +147,7 @@
         const w = await keys();
         if (!w) throw new Error("Unlock your wallet to trade.");
         await wallet.listOrder(w, give, get, {approved: true});
-        if (globalThis.arcadeToast) arcadeToast("Listed! Keep the arcade open with your wallet unlocked -- any page, a game too. Go play while you wait: when it sells you get a notification.");
+        track("Listed", -1, "Keep the arcade open with your wallet unlocked (any page, a game too). When it sells you get a notification.");
         step("listed");
         f.reset(); drawOrders(w);
       } catch (e) { step("failed", e); alert(String(e.message || e)); }
@@ -163,8 +163,60 @@
                    asked: "Asked. The seller's page answers in seconds; each step pops up here.",
                    listing: "Listing your swap\u2026", withdrawing: "Taking your swap off the book\u2026",
                    withdrawn: "Your swap is off the book."};
+    // One live card instead of a toast per step (2026-10-17: taking an order is "very confusing and there's a lot
+    // of ok to click. It needs to be smooth, seamless, and instant"): the swap's steps tick by in place, nothing to press,
+    // and it goes away by itself a few seconds after the swap ends.
+    const STEPS = [["asked", "Asked the seller"], ["accepted", "Accepted"], ["locked", "Your side locked"],
+                   ["theirs", "Their side locked"], ["done", "Done"]];
+    let trackHide = null;
+    function track(head, at, sub, bad) {
+      let card = document.getElementById("swap-tracker");
+      if (!card) {
+        card = document.createElement("div"); card.id = "swap-tracker"; card.setAttribute("role", "status");
+        card.setAttribute("aria-live", "polite");
+        card.style.cssText = "position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:58;width:min(92vw,420px);"
+          + "background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:12px 14px;"
+          + "box-shadow:0 8px 28px rgba(0,0,0,.35);font-size:.9rem;transition:opacity .4s";
+        card.addEventListener("click", () => { card.style.opacity = "0"; setTimeout(() => card.remove(), 400); });
+        document.body.append(card);
+      }
+      card.style.opacity = "1";
+      const h = document.createElement("div"); h.style.cssText = "font-weight:700;margin-bottom:6px"; h.textContent = head;
+      card.replaceChildren(h);
+      if (at >= 0) {
+        const row = document.createElement("div"); row.style.cssText = "display:flex;gap:6px;align-items:center";
+        STEPS.forEach(([, label], i) => {
+          const dot = document.createElement("span");
+          const done = i < at || (i === at && at === STEPS.length - 1), now = i === at && !done;
+          dot.title = label;
+          dot.style.cssText = "flex:1;height:6px;border-radius:3px;background:" + (bad ? "var(--bad)" : done ? "var(--ok)"
+            : now ? "var(--accent)" : "var(--line)") + (now && !bad ? ";animation:swpulse 1s ease-in-out infinite alternate" : "");
+          row.append(dot);
+        });
+        card.append(row);
+        const lab = document.createElement("div"); lab.className = "muted"; lab.style.cssText = "font-size:.8rem;margin-top:5px";
+        lab.textContent = sub || (STEPS[Math.max(0, Math.min(at, STEPS.length - 1))][1] + (at < STEPS.length - 1 ? "\u2026" : ""));
+        card.append(lab);
+      } else if (sub) {
+        const lab = document.createElement("div"); lab.className = "muted"; lab.style.fontSize = ".84rem"; lab.textContent = sub;
+        card.append(lab);
+      }
+      if (!document.getElementById("swpulse-css")) {
+        const st = document.createElement("style"); st.id = "swpulse-css";
+        st.textContent = "@keyframes swpulse{from{opacity:.45}to{opacity:1}}"; document.head.append(st);
+      }
+      clearTimeout(trackHide);
+      if (at === STEPS.length - 1 || bad || at < 0) trackHide = setTimeout(() => { card.style.opacity = "0";
+        setTimeout(() => card.remove(), 400); }, bad ? 9000 : 5000);
+    }
+    globalThis.arcadeSwapTrack = track;
     function step(what, error) {
-      if (PRESS[what] && globalThis.arcadeToast) arcadeToast(PRESS[what]);
+      const SAY = {asking: ["Taking the swap", 0, "Asking the seller's page\u2026"], asked: ["Taking the swap", 0, ""],
+                   listing: ["Listing your swap", -1, "Writing it to the book\u2026"],
+                   withdrawing: ["Taking your swap off the book", -1, "\u2026"],
+                   withdrawn: ["Your swap is off the book", -1, ""]};
+      if (what === "failed" && error) track("That did not work", -1, String(error.message || error), true);
+      else if (SAY[what]) track(SAY[what][0], SAY[what][1], SAY[what][2]);
       try { document.dispatchEvent(new CustomEvent("arcade:swap-step", {detail: {what, error: error ? String(error.message || error) : ""}})); } catch (e) {}
     }
     // One OK, and only for listing or buying (2026-10-17: "The only time you should confirm
@@ -172,7 +224,7 @@
     // stay, and approve every lock, claim and refund after them. Anything else (sending you to a
     // one-chain trade's own page) just happens, said in a toast.
     async function approve(title, body) {
-      if (globalThis.arcadeToast) arcadeToast(`${String(title).replace(/\?$/, "")}: ${String(body).split(". ")[0]}.`);
+      track(String(title).replace(/\?$/, ""), -1, `${String(body).split(". ")[0]}.`);
       return true;
     }
     const SAID = {proposed: "Swap asked: waiting for the seller's page to accept",
@@ -187,8 +239,10 @@
         seenStates[t.id] = t.state; changed = true;
         // A swap already finished before this page opened is history, not news.
         if (first && (t.state === "done" || t.state === "aborted") && Date.now() - (t.created || 0) > 10 * 60 * 1000) continue;
-        if (globalThis.arcadeToast) arcadeToast(`${SAID[t.state] || t.state}: ${amt(t.give)} for ${amt(t.get)}`
-                                                + (t.state === "aborted" && t.note ? ` (${t.note})` : ""));
+        const at = {proposed: 0, accepted: 1, locked: t.theirLock ? 3 : 2, done: 4}[t.state];
+        const head = `${amt(t.give)} for ${amt(t.get)}`;
+        if (t.state === "aborted") track(`Called off: ${head}`, -1, t.note || "Nothing was locked.", true);
+        else track(t.state === "done" ? `Swap done: ${head}` : head, at ?? 0, t.state === "done" ? "Done. It's in your wallet." : "");
       }
       if (changed) try { sessionStorage.setItem("arcade-swap-states", JSON.stringify(seenStates)); } catch (e) {}
     }
@@ -280,7 +334,7 @@
         const w = await keys();
         if (!w) throw new Error("Unlock your wallet to trade.");
         await wallet.listOrder(w, give, get, {approved: true});
-        if (globalThis.arcadeToast) arcadeToast("Listed! Keep the arcade open with your wallet unlocked -- any page, a game too. Go play while you wait: when it sells you get a notification.");
+        track("Listed", -1, "Keep the arcade open with your wallet unlocked (any page, a game too). When it sells you get a notification.");
         step("listed");
         f.reset(); drawOrders(w);
       } catch (e) { step("failed", e); alert(String(e.message || e)); }
@@ -334,10 +388,9 @@
       ev.preventDefault();
       const order = JSON.parse(b.dataset.takeOrder);
       const ok = await arcadeAsk("Take this swap?",
-        `You give ${order.get_label || amt(order.get)} and get ${order.give_label || amt(order.give)}. It settles through lock scripts on both `
-        + "chains in a few minutes: either both sides get paid, or both get their own coins back. "
-        + wallet.swapFees(order.get, order.give) + " Saying yes approves locking yours; you are not asked "
-        + "again. Your node finishes it even if you close this tab.", "Take it");
+        `You give ${order.get_label || amt(order.get)} and get ${order.give_label || amt(order.give)}. `
+        + "Either both sides get paid or both get their own back. " + wallet.swapFees(order.get, order.give)
+        + " This is the only question: the rest happens by itself.", "Take it");
       if (!ok) { step("cancelled"); return; }
       b.disabled = true;
       const was = b.textContent; b.textContent = "Asking\u2026";
