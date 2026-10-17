@@ -2772,10 +2772,12 @@ export async function tradeTick(wallet, id) {
     if (a.json.id !== trade.id || a.sender !== trade.peer) continue;
     if (a.json.step === "accept") trade.agreed = true;
     else if (a.json.step === "locked") trade.theirLock = {txid: a.json.txid, vout: a.json.vout};
-    else if (a.json.step === "cancel") trade.cancelled = true;
+    else if (a.json.step === "cancel") { trade.cancelled = true; trade.cancelReason = String(a.json.reason || "").slice(0, 200); }
   }
   if (trade.cancelled && !trade.myLock) {
-    trade.state = "aborted"; trade.note = "the other side walked away; nothing was locked";
+    trade.state = "aborted";
+    trade.note = trade.cancelReason ? `the other side said no: ${trade.cancelReason}; nothing was locked`
+                                    : "the other side walked away; nothing was locked";
     keepTrade(wallet, trade); return trade;
   }
   // Nobody answered: the lister's page is closed (or its wallet locked), and only it can accept.
@@ -2952,6 +2954,8 @@ async function postNow(wallet) {
 
 /** List a swap from this tab: give `give` {network, kind?, asset?, amount}, get `get` (coin, token or NFT). */
 export async function listOrder(wallet, give, get, options = {}) {
+  const short = await canFund({network: give.network, kind: give.kind || "coin", amount: Number(give.amount)});
+  if (short) throw new Error(`You can't list this swap yet: ${short}.`);
   const book = myOrdersOf(wallet);
   const id = "ord-" + coinsHex(crypto.getRandomValues(new Uint8Array(8)));
   const side = (s) => ({network: s.network, kind: s.kind || "coin", asset: String(s.asset || ""),
@@ -3000,6 +3004,13 @@ export async function answerProposals(wallet) {
     if (!fits) {
       await tradeSay(wallet, a.sender, {t: "trade", v: 1, id: p.id, step: "cancel",
                                         reason: mine ? "those are not this swap's terms" : "no such swap here"});
+      continue;
+    }
+    // Able to lock its side? If not, say so now, before the taker locks anything.
+    const short = await canFund(mine.give);
+    if (short) {
+      await tradeSay(wallet, a.sender, {t: "trade", v: 1, id: p.id, step: "cancel",
+                                        reason: `the lister cannot fund its side (${short})`});
       continue;
     }
     const trade = {id: p.id, role: "responder", order: p.order, peer: a.sender, give: p.get, get: p.give,
@@ -3061,6 +3072,28 @@ async function tradePass() {
     }
     try { globalThis.dispatchEvent(new CustomEvent("arcade:trades")); } catch (e) {}
   } finally { runnerBusy = false; }
+}
+
+/** "" when this wallet can fund the lock for `give` right now, else why not, in words
+ *  (2026-10-17: a GOLD/DOGE swap stuck because the bid could not pay its own lock).
+ *  Asked before a listing is posted and before a take is accepted, so nobody locks against a
+ *  side that was never going to lock. "" too when the node cannot say: the lock itself will. */
+export async function canFund(give) {
+  try {
+    const acct = await (await fetch("/account", {cache: "no-store"})).json();
+    const c = (acct.chains || []).find((x) => x.network === give.network);
+    if (!c) return "";
+    const kind = give.kind || "coin";
+    const fee = 1_000_000;                                    // about 0.01 to send the lock
+    const need = kind === "coin" ? Number(give.amount) + fee
+      : kind === "doginal" ? Number(c.doginal_lock_need || TRADE.LOCK_RESERVE + fee)
+      : TRADE.LOCK_RESERVE + fee;
+    const have = Number(c.spendable ?? c.balance ?? 0);
+    if (have >= need) return "";
+    const coin = give.network === "doge" ? "DOGE" : give.network === "main" ? "PEP" : "PEP TEST";
+    const show = (n) => (n / 1e8).toFixed(4).replace(/\.?0+$/, "");
+    return `not enough ${coin} to lock it: about ${show(need)} ${coin} is needed and this wallet has ${show(have)}`;
+  } catch (e) { return ""; }
 }
 
 /** Tell this node a swap finished, for its market's Recent trades and chart (swap_history). */
