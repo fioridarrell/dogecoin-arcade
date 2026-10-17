@@ -253,7 +253,7 @@ def test_a_collection_with_something_for_sale_is_listed_first(client):
     body = app.get("/exchange?tab=market").text
     # The table says how many of the set can be bought right now; the number
     # is what a marketplace is for.
-    assert "For sale" in body and ">1<" in body
+    assert "1 for sale" in body
 
 
 def test_the_market_survives_a_shop_that_is_nonsense(client):
@@ -272,9 +272,11 @@ def test_the_marketplace_leads_with_what_is_being_traded(client):
     sold(state.home, PIECES[0], sats=250000000, when=int(time.time()) - 600)
 
     body = app.get("/exchange?tab=market").text
-    assert "Popular collections" in body
-    top = body[body.index("Popular collections"):body.index("All collections")]
-    assert "Doge Punks" in top and "Floor" in top and "24h" in top
+    assert 'id="mktmode"' in body and "Favorites" in body, "favorites first, like the Tokens tab"
+    top = body[body.index('id="markets"'):]
+    import re as _re
+    row = next(r for r in _re.findall(r'<a class="ex-mrow"[^>]*>', top) if "doge punks" in r)
+    assert float(_re.search(r'data-vol="([0-9.]+)"', row).group(1)) > 0, "traded today: what Suggested ranks by"
 
 
 def test_recent_sales_say_what_went_for_what_and_when(client):
@@ -296,7 +298,7 @@ def test_a_chain_with_no_sales_still_has_a_marketplace(client):
     app, state = client
     index_with_a_collection(state.home)
     body = app.get("/exchange?tab=market").text
-    assert "Popular collections" in body, "ranked by what is for sale instead"
+    assert 'id="markets"' in body, "the list of collections"
     assert "Recently sold" not in body, "and no empty feed pretending to be one"
 
 
@@ -439,7 +441,7 @@ def test_the_market_table_says_the_floor(client):
     sell(state.home, PIECES[2], price="4")
 
     body = app.get("/exchange?tab=market").text
-    assert "Floor" in body and "4.0000" in body
+    assert "floor" in body and "4.0" in body
 
 
 def test_owners_are_counted_not_guessed_from_the_size(tmp_path):
@@ -566,10 +568,9 @@ def test_the_marketplace_sends_a_buyer_to_the_collection(client):
     body = app.get("/exchange?tab=market").text
     assert "For sale now" not in body and "Shops selling single NFTs" not in body
     assert 'action="/exchange/offer"' not in body and "data-buy-listing=" not in body
-    assert (body.index("Popular collections") < body.index("Recently sold")
-            < body.index("All collections")), "popular, then sold, then all"
-    row = body[body.index("All collections"):]
-    assert "/exchange/collection/nMe/Doge%20Punks" in row and "1.2500" in row, \
+    assert body.index('id="markets"') < body.index("Recently sold"), "the collections, then what sold"
+    row = body[body.index('id="markets"'):body.index("Recently sold")]
+    assert "/exchange/collection/nMe/Doge%20Punks" in row and "1.25" in row and "floor" in row, \
         "the collection's row carries the floor, and the way to it"
 
     page = app.get("/exchange/collection/nMe/Doge%20Punks").text
@@ -583,7 +584,8 @@ def test_the_last_eight_sales_and_no_more(client):
         sold(state.home, PIECES[n % len(PIECES)], sats=100000000 + n, height=400 + n,
              when=int(time.time()) - 60 * (n + 1), txid=f"{0xa0 + n:064x}")
     body = app.get("/exchange?tab=market").text
-    feed = body[body.index("Recently sold"):body.index("All collections")]
+    feed = body[body.index("Recently sold"):]
+    feed = feed[:feed.index("</table>")]
     assert feed.count("<tr>") == 8
 
 
@@ -591,8 +593,7 @@ def test_all_collections_load_as_you_scroll(client):
     app, state = client
     index_with_a_collection(state.home)
     body = app.get("/exchange?tab=market").text
-    assert 'class="collrow"' in body
-    assert 'id="collmore"' not in body, "one collection needs no Show more"
+    assert 'class="ex-mrow"' in body, "every collection a row of the one list"
 
 
 def test_only_the_holder_can_put_a_price_on_a_piece(client, monkeypatch):

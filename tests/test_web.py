@@ -3225,8 +3225,9 @@ def test_a_market_table_always_says_the_day_s_move():
 def test_the_pair_page_puts_yours_then_the_book_then_the_trades():
     body = (pathlib.Path(__file__).resolve().parents[1]
             / "arcade/web/templates/pair.html").read_text()
-    assert (body.index(">Your orders<") < body.index(">Order book<")
-            < body.index(">Recent trades<")), "2026-09-28"
+    # 2026-10-17 (the operator): the order book above Buy/Sell, then yours, then what traded.
+    assert (body.index(">Order book<") < body.index(">Your orders<")
+            < body.index(">Recent trades<")), "the book, then yours, then the trades"
 
 
 def test_tokens_are_paged_newest_first(client, monkeypatch):

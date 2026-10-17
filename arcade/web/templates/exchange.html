@@ -666,90 +666,7 @@ document.addEventListener('click', function (ev) {
   <p class="muted" id="marketcount" style="font-size:.8rem;margin:6px 2px 0"></p>
   {# The pair's whole name on a line of its own, the rest below it (2026-10-17: "The pair name is cut off ...
      If the name is still too long for the display, it should scroll across"). #}
-  <style>
-  #markets .ex-mrow{display:grid;grid-template-columns:38px minmax(0,1fr) auto auto;column-gap:12px;row-gap:2px;align-items:center}
-  #markets .ex-mrow > .ex-tic, #markets .ex-mrow > .ex-pic{grid-column:1;grid-row:1 / span 2}
-  #markets .ex-mrow > .ex-mid{display:contents}
-  #markets .ex-mrow .ex-name{grid-column:2 / 4;grid-row:1;overflow:hidden;white-space:nowrap;text-overflow:clip}
-  #markets .ex-mrow .ex-mid small{grid-column:2;grid-row:2;min-width:0}
-  #markets .ex-mrow > .ex-px{grid-column:3;grid-row:2;align-self:start;max-width:34vw;min-width:0}
-  #markets .ex-mrow > .ex-px > div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  #markets .ex-mrow > .ex-star{grid-column:4;grid-row:1 / span 2}
-  #markets .ex-name-in{display:inline-block}
-  #markets .ex-name.scroll .ex-name-in{animation:exmarq var(--dur,8s) ease-in-out 1s infinite alternate}
-  @keyframes exmarq{0%,15%{transform:translateX(0)}85%,100%{transform:translateX(var(--shift,0))}}
-  @media (prefers-reduced-motion:reduce){ #markets .ex-name.scroll .ex-name-in{animation:none}
-    #markets .ex-mrow .ex-name{text-overflow:ellipsis}}
-  </style>
-  <script>
-  (function () {
-    // A name wider than its line scrolls across to its end and back.
-    function fit() {
-      document.querySelectorAll('#markets .ex-name').forEach(function (b) {
-        var inner = b.firstElementChild; if (!inner || b.offsetParent === null) return;
-        var over = inner.scrollWidth - b.clientWidth;
-        b.classList.toggle('scroll', over > 2);
-        if (over > 2) { b.style.setProperty('--shift', (-over - 4) + 'px');
-                        b.style.setProperty('--dur', Math.max(4, over / 25) + 's'); }
-      });
-    }
-    fit();
-    window.addEventListener('resize', fit);
-    document.addEventListener('arcade:changed', fit);
-    if (window.arcadeFavs) window.arcadeFavs.onChange(function () { setTimeout(fit, 0); });
-    document.querySelectorAll('#mktmode [data-mode]').forEach(function (b) { b.addEventListener('click', function () { setTimeout(fit, 0); }); });
-    var find = document.getElementById('marketfind'); if (find) find.addEventListener('input', function () { setTimeout(fit, 0); });
-  })();
-  </script>
-  <script>
-  (function () {
-    var list = document.getElementById('markets'), find = document.getElementById('marketfind');
-    var rows = Array.prototype.slice.call(list.querySelectorAll('[data-market]'));
-    var head = document.getElementById('sugg-head'), empty = document.getElementById('fav-empty');
-    var count = document.getElementById('marketcount'), mode = 'all';
-    var fav = function (r) { return window.arcadeFavs.has(r.dataset.favKey); };
-    function apply() {
-      var wanted = (find.value || '').trim().toLowerCase(), shown = 0;
-      rows.forEach(function (r) { r.style.order = ''; });
-      head.hidden = true; empty.hidden = true;
-      if (wanted) {                                   // search: every market, whatever the tab
-        rows.forEach(function (r) { var hit = r.dataset.market.indexOf(wanted) >= 0; r.hidden = !hit; if (hit) shown++; });
-        count.textContent = shown ? shown + (shown === 1 ? ' market matches' : ' markets match') : 'No market matches.';
-        return;
-      }
-      count.textContent = '';
-      if (mode !== 'fav') { rows.forEach(function (r) { r.hidden = false; }); return; }
-      var mine = rows.filter(fav);
-      var rest = rows.filter(function (r) { return !fav(r); }).sort(function (a, b) {
-        return (Number(b.dataset.vol) - Number(a.dataset.vol)) || (Number(b.dataset.orders) - Number(a.dataset.orders));
-      }).slice(0, mine.length ? 3 : 5);
-      rows.forEach(function (r) { r.hidden = true; });
-      mine.forEach(function (r, i) { r.hidden = false; r.style.order = i; });
-      empty.hidden = mine.length > 0; empty.style.order = 900;
-      head.hidden = !rest.length; head.style.order = 1000;
-      rest.forEach(function (r, i) { r.hidden = false; r.style.order = 1001 + i; });
-    }
-    function setMode(m) {
-      mode = m;
-      document.querySelectorAll('#mktmode [data-mode]').forEach(function (b) {
-        b.setAttribute('aria-pressed', b.dataset.mode === m ? 'true' : 'false');
-      });
-      apply();
-    }
-    document.querySelectorAll('#mktmode [data-mode]').forEach(function (b) {
-      b.addEventListener('click', function () {
-        if (b.dataset.mode !== 'new') return setMode(b.dataset.mode);
-        var box = document.getElementById('trade-orders');
-        if (box) { box.scrollIntoView({behavior: 'smooth', block: 'start'});
-                   var first = box.querySelector('input:not([type=hidden]), select'); if (first) setTimeout(function () { first.focus(); }, 400); }
-      });
-    });
-    window.findMarket = apply;
-    // Opens on the favorites when there are any here, else on every market.
-    window.arcadeFavs.ready.then(function () { setMode(rows.some(fav) ? 'fav' : 'all'); });
-    window.arcadeFavs.onChange(function () { apply(); });
-  })();
-  </script>
+  {{ ex.market_list_assets() }}
   {% else %}
   <div class="panel empty"><p>No market has an order or a trade yet
     {%- if show == 'cross' %} on the cross-chain book{% elif show == 'mainnet' %} on mainnet{% elif show == 'testnet' %} on testnet{% endif %}.</p>
@@ -985,24 +902,57 @@ document.addEventListener('click', function (ev) {
     </a>
   {%- endmacro %}
 
-  {% if collections %}
-  <input autocomplete="off" id="collfind" class="ex-find" type="search" placeholder="Search {{ collections|length }} collection{{ '' if collections|length == 1 else 's' }}"
-         aria-label="Search collections" oninput="findColl(this.value)">
-  <script>
-  // Search every collection by name; the sections above the grid step aside meanwhile.
-  function findColl(text) {
-    var q = (text || "").trim().toLowerCase();
-    document.querySelectorAll(".collrow").forEach(function (c) {
-      c.hidden = q ? c.textContent.toLowerCase().indexOf(q) < 0 : c.dataset.page === "later";
-    });
-    document.querySelectorAll("[data-browse]").forEach(function (x) { x.hidden = !!q; });
-    var more = document.getElementById("collmore"); if (more) more.hidden = !!q;
-  }
-  </script>
-  {% endif %}
-  {% if popular %}
-  <div data-browse><div class="ex-h">Popular collections</div>
-  <div class="ex-strip">{% for c in popular %}{{ collcard(c) }}{% endfor %}</div></div>
+  {% if collections or ord_rows %}
+  {#- Every collection a row of one list, the way the Tokens tab draws its markets (2026-10-17: the NFT part
+      "needs to look as good as the tokens look"): its cover with the chain it lives on (top right) and the coin it is
+      priced in (bottom right), the whole name, its floor and the day's move, a star; Favorites first. -#}
+  {{ ex.fav_script() }}{{ ex.pair_icon_css() }}
+  <div class="row" style="justify-content:flex-end;margin:-4px 0 8px"><a class="btn small ghost" href="/exchange/history">Trade history</a></div>
+  <div class="ex-seg" id="mktmode" role="group" aria-label="Which collections">
+    <button type="button" data-mode="fav" aria-pressed="false">&#9733; Favorites</button>
+    <button type="button" data-mode="all" aria-pressed="true">All collections</button>
+    <button type="button" data-mode="new" data-href="/me/nfts" aria-pressed="false">+ List yours</button>
+  </div>
+  <input autocomplete="off" id="marketfind" class="ex-find" type="search" placeholder="Search {{ collections|length }} collection{{ '' if collections|length == 1 else 's' }}"
+         oninput="findMarket(this.value)" aria-label="Search collections">
+  <div class="ex-list" id="markets">
+    <p class="ex-note" id="fav-empty" hidden style="margin:6px 4px 10px">Tap &#9734; on any collection to keep it here.</p>
+    <div id="sugg-head" hidden style="display:flex;justify-content:space-between;font-size:.72rem;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin:14px 4px 4px">
+      <span>Suggested</span><span>most traded today</span></div>
+    {% for o in ord_rows or [] %}
+    <a class="ex-mrow" href="{{ o.href }}" data-net="mainnet" data-market="{{ o.name|lower }}"
+       data-fav-key="{{ o.href }}" data-vol="0" data-orders="{{ o.for_sale }}">
+      {{ ex.pair_icon({'coin': o.net}, {'coin': o.net}) }}
+      <span class="ex-mid"><b class="ex-name"><span class="ex-name-in">{{ o.name }}</span></b>
+        <small>{{ net_badge(o.net) }} {{ o.for_sale }} for sale &middot; ord inscriptions on {{ 'Dogecoin' if o.net == 'doge' else 'Pepecoin' }}</small></span>
+      <span class="ex-px">
+        {%- if o.floor %}{{ ex.px(o.floor / 100000000) }}<div class="muted" style="font-size:.7rem;font-weight:500">floor</div>
+        {%- else %}<span class="muted">&mdash;</span>{% endif %}
+        <div class="muted" style="font-size:.66rem;font-weight:600">{{ o.coin }}</div></span>
+      {{ ex.fav_button(o.href, small=true) }}
+    </a>
+    {% endfor %}
+    {% for c in collections %}
+    {% set where = '/exchange/collection/' ~ c.creator ~ '/' ~ c.name|urlencode %}
+    {% set cnet = c.chain_net or ('main' if c.mainnet else 'test') %}
+    {% set coin_name = coin_of(c.chain_net or c.mainnet) %}
+    <a class="ex-mrow" {{ go(where, c.switch) }} data-net="{{ c.net }}" data-market="{{ wall_text(c.name, '')|lower }} {{ c.creator }}"
+       data-fav-key="{{ where }}" data-vol="{{ c.day_coins or 0 }}" data-orders="{{ c.for_sale or 0 }}">
+      {{ ex.pair_icon({'icon': c.cover, 'net': cnet, 'letter': (wall_text(c.name, '?') or '?')[:1]|upper}, {'coin': cnet}) }}
+      <span class="ex-mid"><b class="ex-name"><span class="ex-name-in">{{ wall(c.name, 'collection name') }}</span></b>
+        <small>{{ net_badge(c.chain_net or c.mainnet) }} {{ "{:,}".format(c.count) }} pieces
+          {%- if c.for_sale %} &middot; {{ c.for_sale }} for sale{% endif %} &middot; {{ c.creator|who_text }}</small></span>
+      <span class="ex-px">
+        {%- if c.floor %}{{ ex.px(c.floor / 100000000) }}<div class="muted" style="font-size:.7rem;font-weight:500">floor</div>
+        {%- else %}<span class="muted">&mdash;</span>{% endif %}
+        <div class="muted" style="font-size:.66rem;font-weight:600">{{ coin_name }}</div>
+        {%- if c.change is defined and c.change is not none %}<div>{{ ex.chg(c.change) }}</div>{% endif %}</span>
+      {{ ex.fav_button(where, small=true) }}
+    </a>
+    {% endfor %}
+  </div>
+  <p class="muted" id="marketcount" style="font-size:.8rem;margin:6px 2px 0"></p>
+  {{ ex.market_list_assets() }}
   {% endif %}
 
   {% if sales %}
@@ -1020,33 +970,6 @@ document.addEventListener('click', function (ev) {
       <td class="ex-px">{{ t.price|replace(' coins', ' ' ~ coin_of(t.chain_net or t.mainnet)) }}<div>{{ net_badge(t.chain_net or t.mainnet) }}</div></td></tr>
     {% endfor %}
   </table></div>
-  {% endif %}
-
-  {% if collections %}
-  <div class="ex-h">All collections</div>
-  <div class="ex-colls" id="colls">
-    {% for c in collections %}<div class="collrow"{% if loop.index > 24 %} hidden data-page="later"{% endif %}>{{ collcard(c) }}</div>{% endfor %}
-  </div>
-  {% if collections|length > 24 %}
-  <div id="collmore" style="text-align:center;padding:12px">
-    <button type="button" class="ghost small">Show more</button></div>
-  <script>
-  // Two dozen at a time as the grid scrolls into view (2026-09-28).
-  (function () {
-    var more = document.getElementById('collmore');
-    function next() {
-      var cards = document.querySelectorAll('.collrow[hidden]');
-      for (var i = 0; i < cards.length && i < 24; i++) { cards[i].hidden = false; cards[i].dataset.page = ""; }
-      if (cards.length <= 24) more.remove();
-    }
-    more.querySelector('button').addEventListener('click', next);
-    if ('IntersectionObserver' in window) {
-      new IntersectionObserver(function (seen) { if (seen[0].isIntersecting) next(); },
-                               {rootMargin: '300px'}).observe(more);
-    }
-  })();
-  </script>
-  {% endif %}
   {% endif %}
 
   {% if not collections %}

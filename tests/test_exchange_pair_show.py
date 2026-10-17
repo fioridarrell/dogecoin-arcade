@@ -99,18 +99,18 @@ def test_the_nfts_tab_has_the_same_chips(client, monkeypatch):
     page = app.get("/exchange?tab=market").text
     for label in ("Mix", "</b> test", "</b> main", "Cross chain only"):
         assert f"{label}</a>" in page, label
-    nets = re.findall(r'class="ex-coll"[^>]*data-net="(\w+)"', page)
+    nets = re.findall(r'class="ex-mrow"[^>]*data-net="(\w+)"', page)
     assert {"testnet", "mainnet"} <= set(nets), nets
     for show in ("testnet", "mainnet"):
         shown = app.get(f"/exchange?tab=market&show={show}").text
-        assert set(re.findall(r'class="ex-coll"[^>]*data-net="(\w+)"', shown)) == {show}, show
+        assert set(re.findall(r'class="ex-mrow"[^>]*data-net="(\w+)"', shown)) == {show}, show
         assert f'tab=market&amp;show={show}" aria-current="true"' in shown
     cross = app.get("/exchange?tab=market&show=cross").text
-    assert not re.findall(r'class="ex-coll"', cross), "no collection has a piece on the cross-chain book"
+    assert not re.findall(r'class="ex-mrow"', cross), "no collection has a piece on the cross-chain book"
     here = state.token_chain
     other = next(c for c in state.token_chains if c is not here)
-    theirs = [r for r in re.findall(r'<a class="ex-coll"[^>]*>', page)
-              if f'data-net="{"mainnet" if other.is_mainnet else "testnet"}"' in r]
+    theirs = [r for r in re.findall(r'<a class="ex-mrow"[^>]*>', page)
+              if f'data-net="{"mainnet" if other.is_mainnet else "testnet"}"' in r and "/exchange/collection/" in r]
     assert theirs and all(f'data-switch="{other.network}"' in r for r in theirs), theirs
 
 

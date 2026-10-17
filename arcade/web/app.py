@@ -8758,7 +8758,7 @@ def create_app(state: AppState) -> FastAPI:
             raise HTTPException(403, "sign in first")
         said = payload if isinstance(payload, dict) else {}
         key = str(said.get("key", "")).strip()
-        if not re.fullmatch(r"/exchange/[A-Za-z0-9/_.@?=&-]{1,200}", key):
+        if not re.fullmatch(r"/exchange[/?][A-Za-z0-9/_.@?=&%+-]{1,200}", key):     # a collection name is %-encoded; a tab
             return JSONResponse({"detail": "that is not a market"}, status_code=400)
         now = [k for k in _favorites(owner) if k != key]
         if said.get("on", True):
@@ -25928,6 +25928,20 @@ def create_app(state: AppState) -> FastAPI:
                 # sale: a piece is bought on its collection's own page, which
                 # is where its price, its neighbours and its Buy button are.
                 data["tags"].update(named)
+                # Doginals and Pepinals in the same list (2026-10-17: "Include Doginals and pepinals in the NFTs
+                # exchange"): a row each, its floor the cheapest listed, opening its own market.
+                data["ord_rows"] = []
+                if data["show"] in ("mix", "mainnet", "dogecoin"):
+                    for oc, word, tab_ in ((state.doge, "Doginals", "doginals"),
+                                           (next((c for c in state.all_chains if c.network == "main"), None),
+                                            "Pepinals", "pepinals")):
+                        if oc is None or not state.chain_ready(oc) or (data["show"] == "dogecoin" and not oc.is_doge):
+                            continue
+                        live = _doginals_live(oc)
+                        prices = [int(r["price"]) for r in live if r.get("price")]
+                        data["ord_rows"].append({"name": word, "href": f"/exchange?tab={tab_}", "net": oc.network,
+                                                 "floor": min(prices) if prices else 0, "for_sale": len(live),
+                                                 "coin": NETWORKS[oc.network].coin})
             except Exception as exc:
                 data["node_error"] = data["node_error"] or \
                     f"the collections could not be read: {exc}"

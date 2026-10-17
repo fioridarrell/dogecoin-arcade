@@ -374,3 +374,93 @@ window.arcadeFavs = window.arcadeFavs || (function () {
 .ex-pic-c{bottom:auto;top:-5px}
 </style>
 {% endmacro %}
+
+{#- The market list's look and behaviour, one copy for the Tokens and NFTs tabs (2026-10-17: the NFT part "needs
+    to look as good as the tokens look"): full-width names that scroll when too long, Favorites / All / + New. -#}
+{% macro market_list_assets() %}
+  <style>
+  #markets .ex-mrow{display:grid;grid-template-columns:38px minmax(0,1fr) auto auto;column-gap:12px;row-gap:2px;align-items:center}
+  #markets .ex-mrow > .ex-tic, #markets .ex-mrow > .ex-pic{grid-column:1;grid-row:1 / span 2}
+  #markets .ex-mrow > .ex-mid{display:contents}
+  #markets .ex-mrow .ex-name{grid-column:2 / 4;grid-row:1;overflow:hidden;white-space:nowrap;text-overflow:clip}
+  #markets .ex-mrow .ex-mid small{grid-column:2;grid-row:2;min-width:0}
+  #markets .ex-mrow > .ex-px{grid-column:3;grid-row:2;align-self:start;max-width:34vw;min-width:0}
+  #markets .ex-mrow > .ex-px > div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #markets .ex-mrow > .ex-star{grid-column:4;grid-row:1 / span 2}
+  #markets .ex-name-in{display:inline-block}
+  #markets .ex-name.scroll .ex-name-in{animation:exmarq var(--dur,8s) ease-in-out 1s infinite alternate}
+  @keyframes exmarq{0%,15%{transform:translateX(0)}85%,100%{transform:translateX(var(--shift,0))}}
+  @media (prefers-reduced-motion:reduce){ #markets .ex-name.scroll .ex-name-in{animation:none}
+    #markets .ex-mrow .ex-name{text-overflow:ellipsis}}
+  </style>
+  <script>
+  (function () {
+    // A name wider than its line scrolls across to its end and back.
+    function fit() {
+      document.querySelectorAll('#markets .ex-name').forEach(function (b) {
+        var inner = b.firstElementChild; if (!inner || b.offsetParent === null) return;
+        var over = inner.scrollWidth - b.clientWidth;
+        b.classList.toggle('scroll', over > 2);
+        if (over > 2) { b.style.setProperty('--shift', (-over - 4) + 'px');
+                        b.style.setProperty('--dur', Math.max(4, over / 25) + 's'); }
+      });
+    }
+    fit();
+    window.addEventListener('resize', fit);
+    document.addEventListener('arcade:changed', fit);
+    if (window.arcadeFavs) window.arcadeFavs.onChange(function () { setTimeout(fit, 0); });
+    document.querySelectorAll('#mktmode [data-mode]').forEach(function (b) { b.addEventListener('click', function () { setTimeout(fit, 0); }); });
+    var find = document.getElementById('marketfind'); if (find) find.addEventListener('input', function () { setTimeout(fit, 0); });
+  })();
+  </script>
+  <script>
+  (function () {
+    var list = document.getElementById('markets'), find = document.getElementById('marketfind');
+    var rows = Array.prototype.slice.call(list.querySelectorAll('[data-market]'));
+    var head = document.getElementById('sugg-head'), empty = document.getElementById('fav-empty');
+    var count = document.getElementById('marketcount'), mode = 'all';
+    var fav = function (r) { return window.arcadeFavs.has(r.dataset.favKey); };
+    function apply() {
+      var wanted = (find.value || '').trim().toLowerCase(), shown = 0;
+      rows.forEach(function (r) { r.style.order = ''; });
+      head.hidden = true; empty.hidden = true;
+      if (wanted) {                                   // search: every market, whatever the tab
+        rows.forEach(function (r) { var hit = r.dataset.market.indexOf(wanted) >= 0; r.hidden = !hit; if (hit) shown++; });
+        count.textContent = shown ? shown + (shown === 1 ? ' market matches' : ' markets match') : 'No market matches.';
+        return;
+      }
+      count.textContent = '';
+      if (mode !== 'fav') { rows.forEach(function (r) { r.hidden = false; }); return; }
+      var mine = rows.filter(fav);
+      var rest = rows.filter(function (r) { return !fav(r); }).sort(function (a, b) {
+        return (Number(b.dataset.vol) - Number(a.dataset.vol)) || (Number(b.dataset.orders) - Number(a.dataset.orders));
+      }).slice(0, mine.length ? 3 : 5);
+      rows.forEach(function (r) { r.hidden = true; });
+      mine.forEach(function (r, i) { r.hidden = false; r.style.order = i; });
+      empty.hidden = mine.length > 0; empty.style.order = 900;
+      head.hidden = !rest.length; head.style.order = 1000;
+      rest.forEach(function (r, i) { r.hidden = false; r.style.order = 1001 + i; });
+    }
+    function setMode(m) {
+      mode = m;
+      document.querySelectorAll('#mktmode [data-mode]').forEach(function (b) {
+        b.setAttribute('aria-pressed', b.dataset.mode === m ? 'true' : 'false');
+      });
+      apply();
+    }
+    document.querySelectorAll('#mktmode [data-mode]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        if (b.dataset.mode !== 'new') return setMode(b.dataset.mode);
+        if (b.dataset.href) { location.href = b.dataset.href; return; }   // the NFT tab's "+ List yours" 
+        var box = document.getElementById('trade-orders');
+        if (box) { box.scrollIntoView({behavior: 'smooth', block: 'start'});
+                   var first = box.querySelector('input:not([type=hidden]), select'); if (first) setTimeout(function () { first.focus(); }, 400); }
+      });
+    });
+    window.findMarket = apply;
+    // Opens on the favorites when there are any here, else on every market.
+    window.arcadeFavs.ready.then(function () { setMode(rows.some(fav) ? 'fav' : 'all'); });
+    window.arcadeFavs.onChange(function () { apply(); });
+  })();
+  </script>
+{% endmacro %}
