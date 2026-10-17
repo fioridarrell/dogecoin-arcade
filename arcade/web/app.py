@@ -24815,8 +24815,39 @@ def create_app(state: AppState) -> FastAPI:
         """A browser's listing stands only while its lister's page is open (order_presence)."""
         return state.order_presence().live(lister)
 
+    @app.post("/account/talk/relay")
+    def talk_relay_send(request: Request, payload: Any = Body(None)):
+        """A sealed swap message for another page, over the mesh when that page is reachable
+        there (arcade/talk_relay.py). {"mesh": false} tells the page to use the chain instead."""
+        _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        to, sealed = str(said.get("to", "")).lower(), str(said.get("sealed", ""))
+        if not re.fullmatch(r"[0-9a-f]{64}", to) or not re.fullmatch(r"(?:[0-9a-f]{2}){8,4000}", sealed):
+            return JSONResponse({"detail": "a key and a sealed message"}, status_code=400)
+        try:
+            sent = state.talk_relay().send(to, bytes.fromhex(sealed))
+        except Exception:                                  # noqa: BLE001 -- the chain carries it
+            sent = False
+        return JSONResponse({"mesh": bool(sent)})
+
+    @app.get("/account/talk/inbox")
+    def talk_relay_inbox(request: Request, key: str = "", after: int = 0):
+        """Sealed messages the mesh brought for this page's key since `after` (only that page can
+        open them)."""
+        _signed_in_account(request)
+        key = key.lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", key):
+            return JSONResponse({"detail": "a key"}, status_code=400)
+        from ..messaging.envelope import Header, TYPE_API
+        got, cursor = state.talk_relay().read(key, int(after))
+        # The same bytes a chain row carries: the cleartext program header the node adds when it
+        # builds a carrier (api.seal), so the page opens both with one openProgram.
+        wrap = lambda h: (Header(type=TYPE_API, clen=len(bytes.fromhex(h))).encode() + bytes.fromhex(h)).hex()  # noqa: E731
+        return JSONResponse({"messages": [{"seq": s, "payload": wrap(p)} for s, p in got], "cursor": cursor},
+                            headers={"Cache-Control": "no-store"})
+
     @app.post("/account/orders/alive")
-    def orders_alive(request: Request):
+    def orders_alive(request: Request, payload: Any = Body(None)):
         """The page holding this account's listed swaps is open, its wallet unlocked: keep them
         on every arcade's book (order_presence). Said every few seconds by wallet.js."""
         account = _signed_in_account(request)
@@ -24828,8 +24859,13 @@ def create_app(state: AppState) -> FastAPI:
                 a = None
             if a:
                 addresses.append(a)
+        said = payload if isinstance(payload, dict) else {}
+        key = str(said.get("talk", "")).lower()
         try:
-            state.order_presence().alive(addresses)
+            if re.fullmatch(r"[0-9a-f]{64}", key):
+                state.talk_relay().hold(key)         # this page hears swap messages over the mesh
+            if said.get("orders", True):
+                state.order_presence().alive(addresses)
         except Exception as exc:                     # noqa: BLE001 -- no mesh: nothing to keep
             return JSONResponse({"ok": False, "detail": str(exc)[:200]})
         return JSONResponse({"ok": True})

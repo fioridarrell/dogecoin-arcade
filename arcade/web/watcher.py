@@ -104,6 +104,12 @@ class BlockWatcher:
                 self._check_listers()
             except Exception:
                 log.debug("lister watch failed", exc_info=True)
+            try:
+                relay = self.state.talk_relay()
+                relay.expire()
+                relay.drain()
+            except Exception:
+                log.debug("talk relay failed", exc_info=True)
             self._stop.wait(POOL_SECONDS)
 
     def stop(self) -> None:

@@ -602,6 +602,18 @@ class MeshService:
         if s is not None and self.loop is not None:
             self.loop.call_soon_threadsafe(self.node.touch, s.room, s.member)
 
+    def take(self, token: str) -> list:
+        """Every event waiting for this session, now, without waiting (talk_relay drains its
+        inboxes this way from the pool-watch thread)."""
+        s = self.session(token)
+
+        async def pull():
+            out = []
+            while not s.queue.empty():
+                out.append(s.queue.get_nowait())
+            return out
+        return self._call(pull())
+
     def members(self, room: str) -> list[dict]:
         async def read():
             return self.node.members(room)

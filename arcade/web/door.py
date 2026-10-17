@@ -121,6 +121,7 @@ PUBLIC_PAGES = frozenset({
     "/account/dust",                  # coins in this account's own payload outputs
     "/account/coins",                 # this account's own coins on one chain (the Doginals check)
     "/account/favorites",             # the markets this account starred (Exchange, 2026-10-17)
+    "/account/talk/inbox",            # sealed swap messages the mesh brought this page (talk_relay)
     "/account/activity",              # this account's own coin history (signed in)
     "/account/standing/fillable",     # this account's buy orders a sell order meets
     "/account/claimpools",            # this account's own prize pools, to withdraw
@@ -418,6 +419,8 @@ PUBLIC_POST = ("/auth/challenge", "/auth/login", "/auth/logout",
                "/account/favorites",
                # the page holding this account's listed swaps is open (order_presence)
                "/account/orders/alive",
+               # swap messages over the mesh (talk_relay): sealed to another page's key
+               "/account/talk/relay",
                "/signup")
 
 #: What an inscribed page's own hostname may reach, and nothing else. A page

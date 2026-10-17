@@ -641,6 +641,15 @@ class AppState:
 
     # --- whose browser-listed swaps are answerable now (arcade/order_presence.py) ----
 
+    def talk_relay(self):
+        """Swap messages over the mesh (arcade/talk_relay.py), made once."""
+        from .. import talk_relay as relaylib
+        held = getattr(self, "_talk_relay", None)
+        if held is None:
+            held = relaylib.TalkRelay(lambda: getattr(self, "mesh", None))
+            self._talk_relay = held
+        return held
+
     def order_presence(self):
         from .. import order_presence as presencelib
         held = getattr(self, "_presence", None)
