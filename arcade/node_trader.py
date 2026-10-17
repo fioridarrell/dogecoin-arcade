@@ -621,7 +621,9 @@ class NodeTrader:
 
     def _doginal_seen(self, seen: T.LockSeen | None, leg: T.Leg, redeem: bytes,
                       rpc: Any) -> T.LockSeen | None:
-        return doginal_seen(seen, leg, redeem, rpc, self.doginals)
+        from . import funding
+        guard = funding.guard_on(leg.network) if leg.network != "doge" else None
+        return doginal_seen(seen, leg, redeem, rpc, guard or self.doginals)
 
 
     def _send_coins(self, rpc: Any, network: str, address: str, amount: int) -> str:

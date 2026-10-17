@@ -64,8 +64,10 @@ def _side(said: Any) -> dict:
         raise OrderError("that asset does not fit that kind")
     # [Claude 2026-10-15] A Doginal (the operator: "use the atomic swap feature we have to trade doginals"): `asset` names its
     # inscription id, as ord-dogecoin writes it; one, on Dogecoin, locked by koinu order (htlc.doginal_out).
-    if kind == "doginal" and (network != "doge" or not INSCRIPTION_ID.match(asset) or amount != 1):
-        raise OrderError("a doginal is on Dogecoin, named by its inscription id, and moves exactly one")
+    # Pepinals too (2026-10-17: "Do the same for pepinals"): the same ord inscriptions on Pepecoin mainnet.
+    if kind == "doginal" and (network not in ("doge", "main") or not INSCRIPTION_ID.match(asset) or amount != 1):
+        raise OrderError("a doginal (or pepinal) is on Dogecoin or Pepecoin mainnet, named by its inscription id, "
+                         "and moves exactly one")
     return {"network": network, "kind": kind, "asset": asset, "amount": amount}
 
 
@@ -311,7 +313,7 @@ def one_chain_offer(a: dict, b: dict) -> bool:
     DOGE for a Doginal -- Dogecoin's own one-transaction market is listings only, the seller naming the price, so an offer
     goes through the same two locks a cross-chain swap does, both on Dogecoin)."""
     kinds = {a.get("kind"), b.get("kind")}
-    return a.get("network") == b.get("network") == "doge" and kinds == {"doginal", "coin"}
+    return a.get("network") == b.get("network") and a.get("network") in ("doge", "main") and kinds == {"doginal", "coin"}
 
 
 def leg_key(side: dict) -> str:

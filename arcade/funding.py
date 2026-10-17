@@ -139,6 +139,13 @@ GUARD_APPLIES = lambda address: str(address).startswith("D")   # noqa: E731
 #: coins too (2026-10-15: "do the same for small .01 pep txs. Not made by the Arcade" -- the arcade's own coins are
 #: vouched clean when it broadcasts them, doginals.vouch_broadcast).
 GUARDS: list = []
+#: The guard by chain: "doge" (Doginals), "main" (Pepinals) -- for a lock that holds one (2026-10-17).
+GUARD_BY_NET: dict = {}
+
+
+def guard_on(network: str):
+    """The inscription guard for a chain, by name: Dogecoin's falls back on GUARD."""
+    return GUARD_BY_NET.get(network) or (GUARD if network == "doge" else None)
 
 
 def guard_for(address: str):

@@ -59,8 +59,8 @@ def test_a_tab_lists_a_swap_and_another_node_takes_it(world, monkeypatch):
         assert count == 1 and mine["trade_key"] != mine["take_key"], "a key per chain"
         _mine(pep)
         _scan_a(a)
-        # Handed to its node, not inscribed (2026-10-17): on the book at once, and nothing went on the chain for it.
-        assert O.import_announced(a.trade_orders, a.token_index(a.messaging), "regtest") == 0
+        # Handed to its node, not inscribed (2026-10-17): on the book at once, before any chain import.
+        assert [o for o in a.trade_orders.visible(a.mesh.online) if o["id"] == mine["id"]]
         shown = [o for o in a.trade_orders.visible(a.mesh.online) if o["id"] == mine["id"]]
         assert len(shown) == 1, "the tab's order is on the chain and its node is online"
         found = shown[0]

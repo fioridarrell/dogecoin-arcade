@@ -739,11 +739,13 @@ def create_app(state: AppState) -> FastAPI:
     # Read from each chain by its own node (2026-10-15, "Remove Doge Soft API"): Doginals on Dogecoin, and the same ord
     # envelopes on small Pepecoin MAINNET coins ("do the same for small .01 pep txs. Not made by the Arcade").
     fundinglib.GUARDS = []
+    fundinglib.GUARD_BY_NET = {}
     if getattr(state, "home", None) is not None:
         from .. import doginals as _doginals, rpc as _rpclib
         _guards = []
         if getattr(state, "doge", None) is not None:
             fundinglib.GUARD = _doginals.Doginals(Path(state.home) / "doginals.sqlite", rpc_factory=state.doge.rpc)
+            fundinglib.GUARD_BY_NET["doge"] = fundinglib.GUARD
             _guards.append(fundinglib.GUARD)
         _main = next((c for c in state.all_chains if c.network == "main"), None)
         if _main is not None:
@@ -756,6 +758,7 @@ def create_app(state: AppState) -> FastAPI:
                 except Exception:
                     return False
             fundinglib.GUARDS = [(_on_pep_main, _pep)]
+            fundinglib.GUARD_BY_NET["main"] = _pep
             _guards.append(_pep)
         # What this arcade itself broadcasts from clean coins is clean too: its token dust is spendable at once instead of
         # being read like any small coin (2026-10-15).
@@ -15350,9 +15353,9 @@ def create_app(state: AppState) -> FastAPI:
         the coin the tab's wallet already knows carries it; without one, the account's coins are
         read until one does (each reading is kept, so each is read once)."""
         from .. import doginals as D, htlc as htlclib
-        guard = fundinglib.GUARD
+        guard = fundinglib.guard_on(chain.network)
         if guard is None:
-            raise ValueError("Doginals are not checked on this node: it locks none")
+            raise ValueError("inscriptions are not checked on this chain here: it locks none")
         index = state.token_index(chain)
         spent = _flights.spent_by(account.pubkey, chain.network)
         with contextlib.closing(index.open()) as db:
@@ -15642,9 +15645,10 @@ def create_app(state: AppState) -> FastAPI:
                     from ..node_trader import doginal_seen
                     from .. import htlc as htlclib
                     redeem = bytes.fromhex(str(said.get("redeem") or ""))
-                    if htlclib.parse(redeem) is None or fundinglib.GUARD is None:
-                        raise ValueError("name the lock script to read a Doginal lock (and this node must check Doginals)")
-                    seen = doginal_seen(seen, leg, redeem, rpc, fundinglib.GUARD)
+                    guard = fundinglib.guard_on(chain.network)
+                    if htlclib.parse(redeem) is None or guard is None:
+                        raise ValueError("name the lock script to read a Doginal lock (and this node must check them)")
+                    seen = doginal_seen(seen, leg, redeem, rpc, guard)
                 elif leg.kind != "coin" and seen is not None:
                     # The ledger's word on the token or NFT at that lock (node_trader.asset_seen).
                     from ..node_trader import asset_seen
@@ -24135,8 +24139,8 @@ def create_app(state: AppState) -> FastAPI:
         if chain is None:
             raise ValueError("this node does not run that chain yet")
         if leg["kind"] == "doginal":
-            if not chain.is_doge:
-                raise ValueError("a Doginal is on Dogecoin")
+            if not (chain.is_doge or chain.network == "main"):
+                raise ValueError("a Doginal is on Dogecoin, a Pepinal on Pepecoin mainnet")
             return {**leg, "divisible": False, "name": _doginal_name(leg["asset"]), "prop": None,
                     "chain": chain, "ready": True, "key": f"{net}-doginal-{leg['asset']}"}
         index = state.token_index(chain)
