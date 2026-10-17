@@ -947,7 +947,7 @@ def test_the_pair_page_says_one_price_for_an_indivisible_trade(web, monkeypatch)
     # The sale itself, in the trade table: two tokens, not 0.00000002 of one.
     # (Each trade opens its own page since 2026-10-17: the price is a link.)
     sold_row = _r.findall(r'<td class="mono"><a [^>]*>2\.00000000</a></td>\s*'
-                          r'<td class="mono"[^>]*>([^<]*)</td>', body)
+                          r'<td class="mono"[^>]*><a [^>]*>([^<]*)</a></td>', body)
     assert sold_row == ["2"], f"what traded was two tokens, the page said {sold_row}"
     shown_text = _without_scripts(body)
     assert "200000000" not in shown_text and "0.00000002" not in shown_text

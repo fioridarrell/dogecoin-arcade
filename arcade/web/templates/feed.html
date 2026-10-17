@@ -955,7 +955,7 @@ document.body.dataset.profileReady = "yes";
       {% else %}<span class="thumb">{{ (g.name or '?')[:1]|upper }}</span>{% endif %}
       <div style="flex:1;min-width:0"><strong style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ wall(g.name, 'name') }}</strong>
         <span class="muted" style="font-size:.84rem">{% if g.version %}v{{ g.version }}{% endif %}</span></div>
-      <a class="btn small" href="/inscriptions/{{ g.opens or g.txid }}/full">Play</a>
+      <a class="btn small" target="_blank" rel="noopener" href="/inscriptions/{{ g.opens or g.txid }}/full">Play</a>
     </div>
     {% endfor %}
   </div>

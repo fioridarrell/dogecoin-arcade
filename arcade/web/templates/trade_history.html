@@ -22,10 +22,10 @@
     {% for r in rows %}
     {% set href = r.href or ('/exchange/trade/' ~ r.txid ~ '?chain=' ~ r.net) %}
     <tr class="tradelink" data-href="{{ href }}">
-      <td class="muted" style="font-size:.8rem;white-space:nowrap"><span data-when="{{ r.when }}"></span><br>{{ net_badge(r.chain) }}</td>
-      <td><a href="{{ href }}" style="color:inherit"><b>{{ r.side }}</b> {{ r.what }}</a>
+      <td class="muted" style="font-size:.8rem;white-space:nowrap"><a class="tl" href="{{ href }}"><span data-when="{{ r.when }}"></span></a><br>{{ net_badge(r.chain) }}</td>
+      <td><a class="tl" href="{{ href }}"><b>{{ r.side }}</b> {{ r.what }}</a>
         {% if r.who %}<br><small class="muted">with {{ r.who|who }}</small>{% endif %}</td>
-      <td class="mono" style="text-align:right">{{ r.for }}</td></tr>
+      <td class="mono" style="text-align:right"><a class="tl" href="{{ href }}">{{ r.for }}</a></td></tr>
     {% endfor %}
   </table>
   {% else %}<p class="muted" style="margin:0">No trades yet.</p>{% endif %}

@@ -235,6 +235,9 @@ window.exTrade = window.exTrade || function (root, o) {
   border-bottom:1px solid var(--line);font-size:.86rem}
 .obmid:empty{display:none}
 tr.tradelink{cursor:pointer}tr.tradelink:hover td{background:var(--code)}
+/* Every cell a real link (2026-10-17: "These recent trades are supposed to be clickable"):
+   a phone sends no click for a tap on a plain table row, so the row script alone never fired there. */
+a.tl{color:inherit;text-decoration:none;display:block}
 </style>
 <script>
 // A recent trade opens its own page (who sold, who bought) wherever the row is pressed.

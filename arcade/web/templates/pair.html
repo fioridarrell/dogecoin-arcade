@@ -698,10 +698,10 @@
           <td>Price</td><td style="text-align:right">Amount</td>
           <td style="text-align:right">{{ coin_name }}</td><td style="text-align:right">Block</td></tr>
         {% for t in recent %}
-        <tr class="tradelink" data-href="/exchange/trade/{{ t.txid }}?chain={{ chain.network }}" title="Who traded"><td class="mono"><a href="/exchange/trade/{{ t.txid }}?chain={{ chain.network }}" style="color:inherit">{{ "%.8f"|format(t.price) }}</a></td>
-            <td class="mono" style="text-align:right">{{ "{:,.8f}".format(t.size).rstrip('0').rstrip('.') }}</td>
-            <td class="mono muted" style="text-align:right">{{ "%.4f"|format(t.price * t.size) }}</td>
-            <td class="muted" style="text-align:right">{{ "{:,}".format(t.height) }}</td></tr>
+        <tr class="tradelink" data-href="/exchange/trade/{{ t.txid }}?chain={{ chain.network }}" title="Who traded"><td class="mono"><a class="tl" href="/exchange/trade/{{ t.txid }}?chain={{ chain.network }}">{{ "%.8f"|format(t.price) }}</a></td>
+            <td class="mono" style="text-align:right"><a class="tl" href="/exchange/trade/{{ t.txid }}?chain={{ chain.network }}">{{ "{:,.8f}".format(t.size).rstrip('0').rstrip('.') }}</a></td>
+            <td class="mono muted" style="text-align:right"><a class="tl" href="/exchange/trade/{{ t.txid }}?chain={{ chain.network }}">{{ "%.4f"|format(t.price * t.size) }}</a></td>
+            <td class="muted" style="text-align:right"><a class="tl" href="/exchange/trade/{{ t.txid }}?chain={{ chain.network }}">{{ "{:,}".format(t.height) }}</a></td></tr>
         {% endfor %}
       </table>
     </div>
