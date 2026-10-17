@@ -141,6 +141,7 @@
         const w = await keys();
         if (!w) throw new Error("Unlock your wallet to trade.");
         await wallet.listOrder(w, give, get, {approved: true});
+        if (globalThis.arcadeToast) arcadeToast("Listed. Keep an arcade page open with your wallet unlocked: every arcade shows your swap only while one is.");
         f.reset(); drawOrders(w);
       } catch (e) { alert(String(e.message || e)); }
       finally { button.disabled = false; }
@@ -200,6 +201,7 @@
         const w = await keys();
         if (!w) throw new Error("Unlock your wallet to trade.");
         await wallet.listOrder(w, give, get, {approved: true});
+        if (globalThis.arcadeToast) arcadeToast("Listed. Keep an arcade page open with your wallet unlocked: every arcade shows your swap only while one is.");
         f.reset(); drawOrders(w);
       } catch (e) { alert(String(e.message || e)); }
       finally { button.disabled = false; }
@@ -236,6 +238,7 @@
         const w = await keys();
         if (!w) throw new Error("Unlock your wallet to trade.");
         await wallet.listOrder(w, give, get, {approved: true});
+        if (globalThis.arcadeToast) arcadeToast("Listed. Keep an arcade page open with your wallet unlocked: every arcade shows your swap only while one is.");
         location.href = `/exchange/pairs?base=${encodeURIComponent(box2.base.value)}&quote=${encodeURIComponent(box2.quote.value)}`;
       } catch (e) { go.disabled = false; alert(String(e.message || e)); }
     });

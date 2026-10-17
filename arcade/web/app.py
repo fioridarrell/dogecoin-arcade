@@ -22431,7 +22431,7 @@ def create_app(state: AppState) -> FastAPI:
         Asks, bids and orders are the swaps every arcade lists; `rows` are the node-held book's
         markets (a testnet asset for mainnet PEP), whose past trades still draw the history."""
         try:
-            orders = state.trade_orders.visible(_online)
+            orders = state.trade_orders.visible(_online, tab_live=_tab_live)
             standing = trade_orders.swap_markets(orders)
         except Exception:
             log.debug("the swap markets could not be read", exc_info=True)
@@ -24791,6 +24791,29 @@ def create_app(state: AppState) -> FastAPI:
         mesh = getattr(state, "mesh", None)
         return bool(mesh is not None and mesh.online(node_id))
 
+    def _tab_live(lister: str) -> bool:
+        """A browser's listing stands only while its lister's page is open (order_presence)."""
+        return state.order_presence().live(lister)
+
+    @app.post("/account/orders/alive")
+    def orders_alive(request: Request):
+        """The page holding this account's listed swaps is open, its wallet unlocked: keep them
+        on every arcade's book (order_presence). Said every few seconds by wallet.js."""
+        account = _signed_in_account(request)
+        addresses = []
+        for chain in _account_chains():
+            try:
+                a = _account_address(account.pubkey, chain)
+            except Exception:
+                a = None
+            if a:
+                addresses.append(a)
+        try:
+            state.order_presence().alive(addresses)
+        except Exception as exc:                     # noqa: BLE001 -- no mesh: nothing to keep
+            return JSONResponse({"ok": False, "detail": str(exc)[:200]})
+        return JSONResponse({"ok": True})
+
     def _trade_order_view(request: Request) -> dict:
         """Orders inscribed by every arcade, shown while their node is online; and, for the
         operator, this node's own standing orders and trades."""
@@ -24805,10 +24828,10 @@ def create_app(state: AppState) -> FastAPI:
                 # order but their own -- other accounts' on this very arcade included.
                 out["can_list_orders"] = bool(mine)
                 own = {_account_address(account.pubkey, c) for c in _account_chains()} if account else set()
-                out["trade_orders"] = [o for o in state.trade_orders.visible(_online)
+                out["trade_orders"] = [o for o in state.trade_orders.visible(_online, tab_live=_tab_live)
                                        if o["lister"] not in own]
             else:
-                out["trade_orders"] = [o for o in state.trade_orders.visible(_online)
+                out["trade_orders"] = [o for o in state.trade_orders.visible(_online, tab_live=_tab_live)
                                        if o["node"] != mine]
             if not _account_view(request) and _node_trades():
                 trader = state.node_trader
@@ -25061,7 +25084,7 @@ def create_app(state: AppState) -> FastAPI:
         try:
             if not _node_trades():
                 raise ValueError(NODE_TRADES_OFF)
-            found = next((o for o in state.trade_orders.visible(_online)
+            found = next((o for o in state.trade_orders.visible(_online, tab_live=_tab_live)
                           if o["id"] == order and o["lister"] == lister), None)
             if found is None:
                 raise ValueError("that order is gone, or its arcade is offline right now")

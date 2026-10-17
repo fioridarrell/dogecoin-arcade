@@ -96,6 +96,9 @@
       <p class="ex-note">A swap settles on both chains at once: either both sides get paid, or both get their own back.
         Nobody holds anybody's coins, and each swap is taken whole: <b>Best price now</b> takes the best one as it stands;
         <b>Set my price</b> lists yours for anyone to take.</p>
+      <p class="ex-note" style="margin-top:0"><b>A swap you list stays on the book only while an arcade page is open here
+        with your wallet unlocked</b>: your page is what answers whoever takes it. Close them all and it comes off every
+        arcade's book within seconds; open one again and it is back.</p>
       {# What the box sends: the same swap forms as before (_tab_swaps.html binds them), out of sight. #}
       {% for side_ in ('sell', 'buy') %}
       <form class="cp-form" hidden data-pair-side="{{ side_ }}" data-base="{{ b.network }}" data-quote="{{ q.network }}"

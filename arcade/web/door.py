@@ -416,6 +416,8 @@ PUBLIC_POST = ("/auth/challenge", "/auth/login", "/auth/logout",
                "/account/sign",
                # starring a market: the caller's own list of favorites, nothing else
                "/account/favorites",
+               # the page holding this account's listed swaps is open (order_presence)
+               "/account/orders/alive",
                "/signup")
 
 #: What an inscribed page's own hostname may reach, and nothing else. A page

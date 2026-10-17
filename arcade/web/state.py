@@ -639,6 +639,16 @@ class AppState:
                                      int(time.time()))
         return txid
 
+    # --- whose browser-listed swaps are answerable now (arcade/order_presence.py) ----
+
+    def order_presence(self):
+        from .. import order_presence as presencelib
+        held = getattr(self, "_presence", None)
+        if held is None:
+            held = presencelib.Presence(lambda: getattr(self, "mesh", None), self.bump_generation)
+            self._presence = held
+        return held
+
     # --- content flags shared between arcades (arcade/flags.py) -----------------------
 
     def flags(self):

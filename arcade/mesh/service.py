@@ -503,6 +503,13 @@ class MeshService:
 
     # ---------------------------------------------------------------- the web side
 
+    def room_live(self, room: str) -> bool:
+        """Whether any node holds `room` right now (order_presence). A dict read, from the web thread."""
+        try:
+            return bool(self.node.room_live(str(room)))
+        except Exception:
+            return False
+
     def online(self, node_id: str) -> bool:
         """Whether a node is on the mesh right now (its heartbeat, or a direct link).
         Read from the web thread: a dict lookup, no call into the mesh loop."""

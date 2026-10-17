@@ -2889,7 +2889,7 @@ async function postNow(wallet) {
   const now = Math.floor(Date.now() / 1000);
   const orders = Object.values(book.orders).map((o) => ({
     id: o.id, give: o.give, get: o.get, trade_key: o.trade_key, take_key: o.take_key,
-    msg_key: coinsHex(me.publicKey || me.public || me.pub), node: acct.mesh_node,
+    msg_key: coinsHex(me.publicKey || me.public || me.pub), node: acct.mesh_node, tab: true,
     expires: now + TAB_ORDER_LIFE}));
   const body = new TextEncoder().encode(JSON.stringify({arcade: "orders", v: 1, orders, cancels: book.cancels || []}));
   let b64 = "";
@@ -2923,6 +2923,7 @@ export async function listOrder(wallet, give, get, options = {}) {
                      take_key: coinsHex(keysOn(wallet, get.network).pubkey)};
   keepMyOrders(wallet, book);
   await postMyOrders(wallet);
+  sayAlive();
   return book.orders[id];
 }
 
@@ -3016,6 +3017,20 @@ async function tradePass() {
   } finally { runnerBusy = false; }
 }
 
+//: How often an open page with listed swaps says it is here (order_presence.ALIVE_FOR is 12 s).
+export const ALIVE_BEAT = 3000;
+
+/** Tell this node the page holding the account's listed swaps is open, its wallet unlocked. */
+export async function sayAlive() {
+  if (!runnerChain) return;
+  try {
+    const w = await opened(runnerChain);
+    if (!w || !myOrders(w).length) return;
+    await fetch("/account/orders/alive", {method: "POST", credentials: "same-origin",
+                                          headers: {"Content-Type": "application/json"}, body: "{}"});
+  } catch (e) { /* the next beat tries again */ }
+}
+
 /** Start the runner in this tab (it waits its turn behind any other arcade tab running it). */
 export function startTradeRunner(chain, beat = TRADE_BEAT) {
   if (runnerStarted) return;
@@ -3029,6 +3044,9 @@ export function startTradeRunner(chain, beat = TRADE_BEAT) {
       worker.onmessage = () => { tradePass(); };
     } catch (e) { setInterval(tradePass, beat); }
     if (kicks) kicks.onmessage = () => { tradePass(); };
+    // This page answers its listed swaps, so it tells its node it is here (order_presence):
+    // every arcade shows them only while it does (2026-10-17).
+    setInterval(sayAlive, ALIVE_BEAT);
     globalThis.__arcadeTradeRunner = true;
     tradePass();
     await new Promise(() => {});          // the lock is this tab's until it closes

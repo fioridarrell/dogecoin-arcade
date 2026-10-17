@@ -100,6 +100,10 @@ class BlockWatcher:
                 self._check_pending_offers()
             except Exception:            # never let it die
                 log.debug("pool watch failed", exc_info=True)
+            try:
+                self._check_listers()
+            except Exception:
+                log.debug("lister watch failed", exc_info=True)
             self._stop.wait(POOL_SECONDS)
 
     def stop(self) -> None:
@@ -363,6 +367,19 @@ class BlockWatcher:
                | {act["txid"] for act in waiting.acts})
         if now != self._pending_feed:
             self._pending_feed = now
+            self.state.bump_generation()
+
+    _listers_live: frozenset = frozenset()
+
+    def _check_listers(self) -> None:
+        """Browser-listed swaps stand while their lister's page is open (order_presence): let go
+        of quiet pages, and redraw the markets when anybody's listings come or go."""
+        presence = self.state.order_presence()
+        presence.expire()
+        listers = self.state.trade_orders.tab_listers()
+        live = frozenset(a for a in listers if presence.live(a))
+        if live != self._listers_live:
+            self._listers_live = live
             self.state.bump_generation()
 
     def _check_pending_offers(self) -> None:
