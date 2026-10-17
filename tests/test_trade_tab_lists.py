@@ -385,3 +385,33 @@ def test_the_swap_finishes_with_the_listers_browser_closed(world, monkeypatch):
     assert b.book.get(trade).state == "done"
     tx = dg.call("getrawtransaction", sent, 1)
     assert [o["scriptPubKey"]["addresses"] for o in tx["vout"]] == [[made["doge"]]], "the DOGE is the lister's"
+
+
+def test_a_withdrawn_swap_leaves_this_nodes_book_at_once(world, monkeypatch):
+    """2026-10-17: Cancel "says your order is off the books, but it stays there". The node
+    drops it as soon as the page says so (/account/orders/cancel), before the cancel batch's block."""
+    from playwright.sync_api import sync_playwright
+    base, a, b, pep, dg = world
+    monkeypatch.setattr(a, "mesh", _Mesh(), raising=False)
+    net = {"network": "regtest", "version": 111}
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        tab = browser.new_page()
+        tab.goto(f"{base}/join")
+        tab.evaluate("async () => { window.w = await import('/wallet.js'); }")
+        made = tab.evaluate("""async (net) => {
+            const r = await w.signUp('quitter' + Math.floor(Math.random() * 1e6), 'a long enough password', net);
+            return r.wallet.on.regtest.address; }""", net)
+        pep.call("sendtoaddress", made, 10)
+        _mine(pep)
+        _scan_a(a)
+        mine = tab.evaluate("""async ([net, give, get]) => w.listOrder(await w.opened(net), give, get)""",
+                            [net, {"network": "regtest", "amount": 3 * COIN}, {"network": "doge", "amount": 2 * COIN}])
+        _mine(pep)
+        _scan_a(a)
+        O.import_announced(a.trade_orders, a.token_index(a.messaging), "regtest")
+        assert any(o["id"] == mine["id"] for o in a.trade_orders.visible(a.mesh.online))
+        tab.evaluate("async ([net, id]) => w.withdrawOrder(await w.opened(net), id)", [net, mine["id"]])
+        assert not any(o["id"] == mine["id"] for o in a.trade_orders.visible(a.mesh.online)), "gone before any block"
+        assert tab.evaluate("async ([net]) => w.myCancelled(await w.opened(net))", [net]) == [mine["id"]]
+        browser.close()

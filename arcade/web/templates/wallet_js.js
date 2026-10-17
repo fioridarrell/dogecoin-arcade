@@ -3065,8 +3065,20 @@ export async function withdrawOrder(wallet, id) {
   const book = myOrdersOf(wallet);
   delete book.orders[id];
   book.cancels = [...new Set([...(book.cancels || []), id])];
+  book.withdrawn = [...new Set([...(book.withdrawn || []), id])].slice(-200);   // kept after the cancel is posted
   keepMyOrders(wallet, book);
+  // Off this node's book at once (2026-10-17: Cancel "says your order is off the books, but it
+  // stays there"): the cancel batch below reaches every other arcade when its block lands.
+  try {
+    await fetch("/account/orders/cancel", {method: "POST", credentials: "same-origin",
+      headers: {"Content-Type": "application/json"}, body: JSON.stringify({ids: [id]})});
+  } catch (e) { /* the chain's cancel still takes it off */ }
   await postMyOrders(wallet);
+}
+
+/** The ids this browser has withdrawn: never drawn as a book row again, whatever a page still shows. */
+export function myCancelled(wallet) {
+  return myOrdersOf(wallet).withdrawn || [];
 }
 
 /** Answer proposals against this tab's orders: exactly the order's terms are accepted (and
@@ -3140,12 +3152,31 @@ export async function answerProposals(wallet) {
  */
 
 export const TRADE_BEAT = 8000;
-const RUNNER_LOCK = "arcade-trade-runner";
 let runnerChain = null, runnerBusy = false, runnerStarted = false;
 const kicks = (() => { try { return new BroadcastChannel("arcade-trade-kick"); } catch (e) { return null; } })();
 
+/* Which tab works on the swaps: a lease, not a lock held until the tab closes (2026-10-17: two
+ * listings never reached the book). On a phone a tab in the background is frozen but kept its lock, so
+ * the tab in front never ran: no heartbeat, nobody to answer a taker. The lease is renewed by the tab
+ * that runs, every pass; a frozen tab cannot renew it, so it goes stale in LEASE_STALE, and a tab that
+ * is looked at takes it at once from one that is not. */
+const LEASE_KEY = "arcade-trade-lease", LEASE_STALE = 5000;
+function mayRun() {
+  let lease = null;
+  try { lease = JSON.parse(localStorage.getItem(LEASE_KEY) || "null"); } catch (e) { lease = null; }
+  const now = Date.now(), hidden = !!(globalThis.document && document.hidden);
+  const mine = lease && lease.id === THIS_PAGE;
+  const free = !lease || now - Number(lease.at || 0) > LEASE_STALE || (!hidden && lease.hidden);
+  if (!mine && !free) return false;
+  try { localStorage.setItem(LEASE_KEY, JSON.stringify({id: THIS_PAGE, at: now, hidden})); } catch (e) {}
+  return true;
+}
+
 async function tradePass() {
-  if (runnerBusy || !runnerChain) return;
+  if (!runnerChain) return;
+  if (runnerBusy) { if (globalThis.__arcadeTradeRunner) mayRun(); return; }   // still at it: keep the lease
+  if (!mayRun()) { globalThis.__arcadeTradeRunner = false; return; }
+  globalThis.__arcadeTradeRunner = true;
   runnerBusy = true;
   try {
     const w = await opened(runnerChain);
@@ -3221,6 +3252,7 @@ export const ALIVE_BEAT = 3000;
  *  swap messages (talk_relay). */
 export async function sayAlive(wallet = null) {
   if (!runnerChain && !wallet) return;
+  if (!wallet && !globalThis.__arcadeTradeRunner) return;     // the tab holding the lease says it
   try {
     const w = wallet || await opened(runnerChain);
     if (!w) return;
@@ -3261,12 +3293,11 @@ export function startTradeRunner(chain, beat = TRADE_BEAT) {
     // This page answers its listed swaps, so it tells its node it is here (order_presence):
     // every arcade shows them only while it does (2026-10-17).
     setInterval(sayAlive, ALIVE_BEAT);
-    globalThis.__arcadeTradeRunner = true;
+    // Brought to the front: take the lease now rather than at the next beat.
+    try { document.addEventListener("visibilitychange", () => { if (!document.hidden) tradePass(); }); } catch (e) {}
     tradePass();
-    await new Promise(() => {});          // the lock is this tab's until it closes
   };
-  if (globalThis.navigator && navigator.locks) navigator.locks.request(RUNNER_LOCK, run).catch(() => {});
-  else run();
+  run();
 }
 
 /** Run a pass now: in this tab if it is the runner, else in whichever tab is. */

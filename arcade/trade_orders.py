@@ -172,6 +172,16 @@ class OrderBook:
                                  (lister, oid))
         return filed
 
+    def cancel_local(self, listers: list[str], ids: list[str]) -> int:
+        """Mark `ids` cancelled, where one of `listers` listed them (its own withdraw, said to this node)."""
+        if not listers or not ids:
+            return 0
+        with self._open() as conn:
+            got = conn.execute(
+                f"UPDATE trade_order SET cancelled=1 WHERE cancelled=0 AND lister IN ({','.join('?' * len(listers))})"
+                f" AND id IN ({','.join('?' * len(ids))})", (*listers, *ids))
+            return got.rowcount
+
     def visible(self, online: Callable[[str], bool], now: float | None = None,
                 tab_live: Callable[[str], bool] | None = None,
                 browser: Callable[[str], bool] | None = None) -> list[dict]:

@@ -25068,6 +25068,19 @@ def create_app(state: AppState) -> FastAPI:
         return JSONResponse({"messages": [{"seq": s, "payload": wrap(p)} for s, p in got], "cursor": cursor},
                             headers={"Cache-Control": "no-store"})
 
+    @app.post("/account/orders/cancel")
+    def orders_cancel(request: Request, payload: Any = Body(None)):
+        """This account withdrew these swaps: off this node's book now (the cancel batch it inscribes
+        takes them off every other arcade's when its block lands). Only the account's own orders."""
+        account = _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        ids = [str(i) for i in (said.get("ids") or []) if isinstance(i, str) and re.fullmatch(r"ord-[0-9a-f]{16}", i)][:50]
+        mine = [a for a in (_account_address(account.pubkey, c) for c in _account_chains()) if a]
+        gone = state.trade_orders.cancel_local(mine, ids) if ids and mine else 0
+        if gone:
+            state.bump_generation()
+        return JSONResponse({"cancelled": gone})
+
     @app.post("/account/orders/alive")
     def orders_alive(request: Request, payload: Any = Body(None)):
         """The page holding this account's listed swaps is open, its wallet unlocked: keep them

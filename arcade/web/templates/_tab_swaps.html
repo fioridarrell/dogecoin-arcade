@@ -76,6 +76,11 @@
       return markBook(w, o);
     }
     function drawOrders(w) {
+      // A swap the reader withdrew stays off the page, though a node still lists it until it hears.
+      for (const id of wallet.myCancelled(w)) {
+        document.querySelectorAll(`[data-take-id="${CSS.escape(id)}"], [data-mine-id="${CSS.escape(id)}"]`)
+          .forEach((b) => (b.closest(".obrow") || b).remove());
+      }
       const every = wallet.myOrders(w);
       globalThis.myOrderIds = new Set(every.map((o) => o.id));
       const all = every.filter((o) => !markBook(w, o) && !document.querySelector(`[data-mine-id="${CSS.escape(o.id)}"]`)
