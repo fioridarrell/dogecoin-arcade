@@ -201,7 +201,8 @@ def test_a_transfer_costs_one_small_transaction(inscribing):
     node, alice, bob, params, follower, path = inscribing
 
     plan = inscribe.plan(b"x" * 9000, "text/plain")
-    MessageSender(node.rpc, params, public_only=True).ensure_outputs(alice, plan.chunks)
+    # _put splits and mines the coins itself (ensure_outputs here waited for a block nobody mined, and the test
+    # passed only after another one had left split coins behind).
     _put(node, params, alice, plan.payloads)
     _sync(node, follower)
     index = LedgerIndex(path, params, rpc_factory=lambda: node.rpc)
