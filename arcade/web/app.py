@@ -5654,6 +5654,18 @@ def create_app(state: AppState) -> FastAPI:
     TEMPLATES.env.filters["who_text"] = _who_text
     TEMPLATES.env.globals["name_of"] = _name_of
 
+    def _fav_key(href: str, net: str = "") -> str:
+        """A market's favorite key: its address, and for a one-chain market its chain too
+        (a token's page is the same address on every chain). Swaps name both chains already."""
+        href = str(href or "").split("?")[0]
+        held = re.fullmatch(r"/exchange/x/(\w+)/([\w.-]+)", href)
+        if held:                       # the held book's row opens the swap market (exchange_xchain)
+            test, main = state.messaging.network, state.ledger.network
+            left = f"{test}-coin" if held[1] == "coin" else f"{test}-{held[1]}-{held[2]}"
+            return f"/exchange/swap/{left}/{main}-coin"
+        return href if "/exchange/swap/" in href or not net else f"{href}@{net}"
+    TEMPLATES.env.globals["fav_key"] = _fav_key
+
     def _to_join(request: Request):
         """To sign in, and back to where they were going afterwards (a tester,
         2026-09-26: after /me/wallet -> /join you landed on /me)."""
@@ -8673,6 +8685,47 @@ def create_app(state: AppState) -> FastAPI:
         if push is None:
             return JSONResponse({"enabled": False})
         return JSONResponse({"enabled": True, "key": push.public_key()})
+
+    # --- favorite markets (2026-10-17: "The token pairs page should load to the user's
+    # favorites ... a star that they can check just like when they follow a user profile") ---
+    #
+    # Kept on this node per account, like everything else an account chose here, so a star
+    # set on the phone is there on the laptop. The operator's own machine keeps the node's.
+    # A key is a market's address and, for a one-chain market, its chain (`fav_key`).
+
+    FAVORITES_MOST = 200
+
+    def _favorites_owner(request: Request) -> str | None:
+        if not _account_view(request):
+            return "node"
+        account = signed_in(request)
+        return account.pubkey.lower() if account is not None else None
+
+    def _favorites(owner: str) -> list[str]:
+        return [k for k in (state.setting(f"favorites:{owner}") or []) if isinstance(k, str)]
+
+    @app.get("/account/favorites")
+    def favorites_get(request: Request):
+        owner = _favorites_owner(request)
+        return JSONResponse({"favorites": _favorites(owner) if owner else [], "saved": owner is not None},
+                            headers={"Cache-Control": "no-store"})
+
+    @app.post("/account/favorites")
+    def favorites_set(request: Request, payload: Any = Body(None)):
+        owner = _favorites_owner(request)
+        if owner is None:
+            raise HTTPException(403, "sign in first")
+        said = payload if isinstance(payload, dict) else {}
+        key = str(said.get("key", "")).strip()
+        if not re.fullmatch(r"/exchange/[A-Za-z0-9/_.@?=&-]{1,200}", key):
+            return JSONResponse({"detail": "that is not a market"}, status_code=400)
+        now = [k for k in _favorites(owner) if k != key]
+        if said.get("on", True):
+            if len(now) >= FAVORITES_MOST:
+                return JSONResponse({"detail": f"{FAVORITES_MOST} favorites is the most"}, status_code=400)
+            now.insert(0, key)
+        state.set_setting(f"favorites:{owner}", now)
+        return JSONResponse({"favorites": now, "saved": True})
 
     @app.post("/account/push/subscribe")
     def push_subscribe(request: Request, payload: Any = Body(None)):

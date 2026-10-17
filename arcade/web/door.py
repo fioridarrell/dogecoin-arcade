@@ -120,6 +120,7 @@ PUBLIC_PAGES = frozenset({
     "/account/inscribe/unfinished",
     "/account/dust",                  # coins in this account's own payload outputs
     "/account/coins",                 # this account's own coins on one chain (the Doginals check)
+    "/account/favorites",             # the markets this account starred (Exchange, 2026-10-17)
     "/account/activity",              # this account's own coin history (signed in)
     "/account/standing/fillable",     # this account's buy orders a sell order meets
     "/account/claimpools",            # this account's own prize pools, to withdraw
@@ -411,6 +412,8 @@ PUBLIC_POST = ("/auth/challenge", "/auth/login", "/auth/logout",
                "/account/token/send", "/account/token/create",
                "/account/token/manage",
                "/account/sign",
+               # starring a market: the caller's own list of favorites, nothing else
+               "/account/favorites",
                "/signup")
 
 #: What an inscribed page's own hostname may reach, and nothing else. A page

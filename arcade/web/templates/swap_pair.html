@@ -17,7 +17,7 @@
    book. The box drives the swap forms and Take buttons that _tab_swaps.html binds, kept below it. #}
 <div id="live" data-generation="{{ state.generation }}" class="live"></div>
 <a class="back-link" href="/exchange?tab=tokens">&#8592; All markets</a>
-{{ ex.style() }}{{ ex.market_css() }}
+{{ ex.style() }}{{ ex.fav_script() }}{{ ex.market_css() }}
 
 <div class="ex-hero">
   {% if face.icon %}<img class="ex-tic" src="/content/{{ face.icon }}" alt="" loading="lazy" style="width:46px;height:46px;object-fit:cover">
@@ -33,6 +33,7 @@
       {%- else %}{{ bname }} priced in {{ qname }}{% endif %}
       &middot; <span class="ex-pill done">Lock scripts</span></div>
   </div>
+  {{ ex.fav_button(fav_key(here)) }}
 </div>
 <div class="ex-price">
   {%- if last is not none %}<b>{{ ex.px(last) }}</b><span class="unit">{{ qname }} {{ unit }}</span>

@@ -237,6 +237,60 @@ window.exTrade = window.exTrade || function (root, o) {
 </style>
 {% endmacro %}
 
+{# A market's star (2026-10-17: "a star that they can check just like when they follow a
+   user profile"): ☆ Favorite / ★ Favorited on a market page; `small` is the list row's bare star.
+   Saved per account on this node (/account/favorites); a visitor who is not signed in keeps them
+   in this browser. fav_script() once per page wires every [data-fav] on it. #}
+{% macro fav_button(key, small=false) -%}
+<button type="button" class="{{ 'ex-star' if small else 'ex-fav' }}" data-fav="{{ key }}" aria-pressed="false"
+        aria-label="Favorite this market" title="Favorite">{{ '☆' if small else '☆ Favorite' }}</button>
+{%- endmacro %}
+{% macro fav_script() %}
+<style>
+.ex-fav{margin-left:auto;border:1px solid var(--accent);color:var(--accent);background:none;border-radius:999px;
+  padding:6px 12px;font-weight:700;font-size:.86rem;white-space:nowrap;box-shadow:none;flex:none}
+.ex-fav[aria-pressed="true"]{background:var(--accent);color:var(--accent-fg)}
+.ex-star{background:none;border:0;box-shadow:none;padding:4px 6px;font-size:1.3rem;line-height:1;color:var(--muted);flex:none}
+.ex-star[aria-pressed="true"]{color:var(--accent)}
+</style>
+<script>
+window.arcadeFavs = window.arcadeFavs || (function () {
+  var LS = "arcade-favorites", set = null, saved = false, listeners = [];
+  function local() { try { return JSON.parse(localStorage.getItem(LS) || "[]"); } catch (e) { return []; } }
+  function paint() {
+    document.querySelectorAll("[data-fav]").forEach(function (b) {
+      var on = set.indexOf(b.dataset.fav) >= 0;
+      b.setAttribute("aria-pressed", on ? "true" : "false");
+      b.textContent = b.classList.contains("ex-star") ? (on ? "\u2605" : "\u2606") : (on ? "\u2605 Favorited" : "\u2606 Favorite");
+    });
+    listeners.forEach(function (f) { f(set); });
+  }
+  var ready = fetch("/account/favorites", {cache: "no-store", credentials: "same-origin"})
+    .then(function (r) { return r.ok ? r.json() : {favorites: [], saved: false}; })
+    .catch(function () { return {favorites: [], saved: false}; })
+    .then(function (d) { saved = !!d.saved; set = saved ? (d.favorites || []) : local(); paint(); return set; });
+  function toggle(key) {
+    var on = set.indexOf(key) < 0;
+    set = on ? [key].concat(set) : set.filter(function (k) { return k !== key; });
+    paint();
+    if (!saved) { try { localStorage.setItem(LS, JSON.stringify(set)); } catch (e) {} return; }
+    fetch("/account/favorites", {method: "POST", credentials: "same-origin", headers: {"Content-Type": "application/json"},
+                                 body: JSON.stringify({key: key, on: on})})
+      .then(function (r) { return r.json(); }).then(function (d) { if (d.favorites) { set = d.favorites; paint(); } })
+      .catch(function () {});
+  }
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest && e.target.closest("[data-fav]");
+    if (!b) return;
+    e.preventDefault(); e.stopPropagation();
+    if (set) toggle(b.dataset.fav);
+  }, true);
+  return {ready: ready, has: function (k) { return !!set && set.indexOf(k) >= 0; },
+          onChange: function (f) { listeners.push(f); if (set) f(set); }, paint: function () { if (set) paint(); }};
+})();
+</script>
+{% endmacro %}
+
 {% macro spark(values) -%}
 {%- if values and values|length >= 2 -%}
 {%- set lo = values|min -%}{%- set hi = values|max -%}{%- set span = (hi - lo) or 1 -%}

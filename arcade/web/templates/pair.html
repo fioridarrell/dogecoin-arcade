@@ -6,7 +6,7 @@
 <div id="live" data-generation="{{ state.generation }}" class="live"></div>
 <a class="back-link" href="/exchange?tab=tokens">&#8592; All markets</a>
 
-{{ ex.style() }}
+{{ ex.style() }}{{ ex.fav_script() }}
 {% set coin_name = chain.params.coin %}
 {# The market's face, its price big, and the day's move (the Exchange redesign,
    2026-10-09); the rest of the day's numbers in one quiet line under it. #}
@@ -20,6 +20,7 @@
       {%- if face.about %} &middot; {{ wall(face.about, 'description') }}{% endif %}
       {%- if face.url %} &middot; <a href="{{ face.url }}" rel="noopener noreferrer nofollow" target="_blank">link</a>{% endif %}</div>
   </div>
+  {{ ex.fav_button(fav_key('/exchange/pair/' ~ prop.property_id, chain.network)) }}
 </div>
 <div class="ex-price">
   {%- if day.last is not none %}<b>{{ ex.px(day.last) }}</b><span class="unit">{{ coin_name }}</span>{{ ex.chg(day.change, day.new) }}
