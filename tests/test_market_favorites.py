@@ -54,3 +54,16 @@ def test_the_list_and_the_market_page_star_the_same_market(client, monkeypatch):
     assert f'data-fav-key="{key}"' in listing and f'data-fav="{key}"' in listing, "every row has its star"
     market = app.get(f"/exchange/swap/{net}-token-59/{main}-coin").text
     assert f'data-fav="{key}"' in market, "and the market page stars the same key"
+
+
+def test_a_starred_market_stays_listed_with_nothing_on_its_book(client, monkeypatch):
+    """2026-10-17: "Once a pair has been favored, it should not be removed from the users list" -- the
+    list held only markets with orders or trades, so a starred one vanished when its last order went."""
+    app, state = client
+    _gold(monkeypatch)
+    net, main = state.messaging.network, state.ledger.network
+    key = f"/exchange/swap/{net}-token-59/{main}-coin"
+    assert app.post("/account/favorites", headers=LOCAL, json={"key": key, "on": True}).status_code == 200
+    page = app.get("/exchange?tab=tokens", headers=LOCAL).text
+    assert f'data-fav-key="{key}"' in page, "no order on it, and still in the list"
+    assert 'id="mktmode"' in page

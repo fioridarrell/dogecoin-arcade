@@ -22340,6 +22340,57 @@ def create_app(state: AppState) -> FastAPI:
     #: mainnet only, and cross chain only Sort buttons to the token exchange").
     PAIR_SHOWS = ("mix", "testnet", "mainnet", "dogecoin", "cross")
 
+    def _favorite_rows(request: Request, chain, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """A starred market stays in the list with nothing on its book (2026-10-17: "Once a pair has been
+        favored, it should not be removed from the users list"): a quiet row, its name and chains, no price, for each
+        favorite the list does not already hold."""
+        owner = _favorites_owner(request)
+        if not owner:
+            return []
+        have = {_fav_key(r["href"], r.get("chain_net", "")) for r in rows}
+        out = []
+        for key in _favorites(owner):
+            if key in have:
+                continue
+            row = {"href": key, "switch": "", "property_id": None, "quote_label": None, "icon": "", "about": "",
+                   "orders": 0, "coins": 0, "trades": 0, "all_trades": 0, "last": None, "ask": None, "bid": None,
+                   "change": None, "new": False, "quiet": True}
+            try:
+                one = re.fullmatch(r"/exchange/pair/(\d+)@([\w-]+)", key)
+                swap = re.fullmatch(r"/exchange/swap/([\w.-]+)/([\w.-]+)", key)
+                if one:
+                    c = next(c for c in state.token_chains if c.network == one[2])
+                    prop = state.token_index(c).property(int(one[1]))
+                    if not prop:
+                        continue
+                    row.update(href=f"/exchange/pair/{one[1]}", name=prop["name"], property_id=int(one[1]),
+                               divisible=bool(prop.get("divisible", True)), managed=prop.get("managed", 0),
+                               chain_net=c.network, mainnet=c.is_mainnet, net=c.net,
+                               switch="" if c is chain else c.network)
+                elif re.fullmatch(r"/exchange/pairs/(\d+)/(\d+)@([\w-]+)", key):
+                    a_, b_, net_ = re.fullmatch(r"/exchange/pairs/(\d+)/(\d+)@([\w-]+)", key).groups()
+                    c = next(c for c in state.token_chains if c.network == net_)
+                    idx = state.token_index(c)
+                    pa, pb = idx.property(int(a_)), idx.property(int(b_))
+                    if not pa or not pb:
+                        continue
+                    row.update(href=f"/exchange/pairs/{a_}/{b_}", name=pa["name"], quote_label=pb["name"],
+                               property_id=int(a_), managed=pa.get("managed", 0), chain_net=c.network,
+                               mainnet=c.is_mainnet, net=c.net, switch="" if c is chain else c.network)
+                elif swap:
+                    b, q = _leg_info(swap[1]), _leg_info(swap[2])
+                    row.update(name=b["name"], quote_label=q["name"], chain_net=b["network"],
+                               quote_net=q["network"], mainnet=b["chain"].is_mainnet, net="cross")
+                else:
+                    continue
+            except (StopIteration, ValueError, KeyError):
+                continue
+            except Exception:                              # noqa: BLE001 -- a favorite this node cannot read now
+                log.debug("favorite %s could not be drawn", key, exc_info=True)
+                continue
+            out.append(row)
+        return out
+
     def _pairs_by_net(chain, index, trades, show: str) -> list[dict[str, Any]]:
         """The Tokens tab's rows for one chip: every indexed chain's own pairs
         and the cross-chain book's, each row saying which it is.
@@ -25542,6 +25593,7 @@ def create_app(state: AppState) -> FastAPI:
             # (D-048). Clicking one opens its own page.
             data["show"] = show if show in PAIR_SHOWS else "mix"
             data["pairs"] = _pairs_by_net(chain, index, trades, data["show"])
+            data["pairs"] += _favorite_rows(request, chain, data["pairs"])
             # The open-a-pair box (2026-10-06: "When creating a pair the
             # drop-down should only list assets that you have in your wallet"):
             # what this reader holds on one side, any token on the other.
