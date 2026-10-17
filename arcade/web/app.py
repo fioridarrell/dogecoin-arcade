@@ -3374,7 +3374,7 @@ def create_app(state: AppState) -> FastAPI:
             return JSONResponse({"detail": f"nobody holds @{wanted} on this chain"},
                                 status_code=404)
         _tchain, index = _token_chain()
-        rows = index.inscriptions(owner=address, collection=collection,
+        rows = index.inscriptions(pieces_only=True, owner=address, collection=collection,
                                   limit=61, offset=max(0, int(offset)))
         return JSONResponse({
             "pieces": [{"txid": r["txid"], "number": r["number"],
@@ -3688,7 +3688,7 @@ def create_app(state: AppState) -> FastAPI:
                 index = state.token_index(context)
                 entry["tokens"] = [row for row in index.balances([where])
                                    if row["balance"]]
-                entry["pieces"] = index.inscriptions(owners=[where], limit=24)
+                entry["pieces"] = index.inscriptions(pieces_only=True, owners=[where], limit=24)
             except Exception:
                 pass
             # From the index's own watch of the address, as every account page
@@ -4586,7 +4586,7 @@ def create_app(state: AppState) -> FastAPI:
         try:
             addresses = sorted(owned)
             data["my_total"] = index.inscription_count(owners=addresses)
-            data["mine"] = index.inscriptions(owners=addresses,
+            data["mine"] = index.inscriptions(pieces_only=True, owners=addresses,
                                               limit=PAGE_INSCRIPTIONS)
         except Exception as exc:
             data["node_error"] = data["node_error"] or f"the index could not be read: {exc}"
@@ -6163,7 +6163,7 @@ def create_app(state: AppState) -> FastAPI:
     def r_inscriptions_of(address: str, limit: int = 200, offset: int = 0,
                           pending: int = 0):
         index = _content_index()
-        rows = index.inscriptions(owner=address, limit=limit, offset=offset)
+        rows = index.inscriptions(pieces_only=True, owner=address, limit=limit, offset=offset)
         if not rows and offset == 0:   # an address of another chain (2026-10-14)
             for _, ix in _other_indexes():
                 try:
@@ -10337,7 +10337,7 @@ def create_app(state: AppState) -> FastAPI:
                 continue
             try:
                 index = state.token_index(chain)
-                held = index.inscriptions(owner=address, limit=200)
+                held = index.inscriptions(pieces_only=True, owner=address, limit=200)
                 listed = _nft_listings(index, chain)
                 asked = _prices_for(index, chain)
                 _sweep_book(chain, force=True)   # your own page: a cancel shows at once
@@ -23615,7 +23615,7 @@ def create_app(state: AppState) -> FastAPI:
                                      "label": f"{name} (#{pid}) \u00b7 {NETWORKS[c.network].coin}",
                                      "mine": False, "held": ""})
                     out += rest[:2000]
-                for r in index.inscriptions(owners=[a for a in pieces_at if a], limit=50):
+                for r in index.inscriptions(pieces_only=True, owners=[a for a in pieces_at if a], limit=50):
                     out.append({"key": f"{c.network}-nft-{r['txid']}", "kind": "nft", "net": c.network,
                                 "name": f"NFT #{r['number']}", "divisible": False,
                                 "label": f"NFT #{r['number']} \u00b7 {NETWORKS[c.network].coin}",

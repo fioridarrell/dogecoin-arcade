@@ -76,6 +76,11 @@ TYPE_NAMES = {
 
 
 @dataclass
+
+#: Inscriptions that are the arcade's own machine records -- order batches, prize pools -- not anybody's NFT: left out of
+#: what a wallet holds (2026-10-17: "Hide these types of inscriptions from your wallet NFTs").
+MACHINE_TYPES = "application/vnd.arcade.%"
+
 class Stopped:
     """Why the index is not moving, and where it stopped."""
 
@@ -583,7 +588,7 @@ class LedgerIndex:
     def inscriptions(self, owner: str | None = None, creator: str | None = None,
                      limit: int = 100, after: int = -1,
                      offset: int = 0, owners: list[str] | None = None,
-                     collection: str | None = None) -> list[dict]:
+                     collection: str | None = None, pieces_only: bool = False) -> list[dict]:
         """One page, newest first. Never the content: a listing of a hundred
         files would be a hundred files.
 
@@ -609,6 +614,10 @@ class LedgerIndex:
             where.append("COALESCE(c.collection, '') = ?"); args.append(collection)
         if after >= 0:
             where.append("i.number > ?"); args.append(after)
+        if pieces_only:
+            # What a person would call an NFT: not the arcade's own machine records (2026-10-17: order batches showed
+            # in wallets as pieces).
+            where.append("i.content_type NOT LIKE ?"); args.append(MACHINE_TYPES)
         if where:
             sql += " WHERE " + " AND ".join(where)
         sql += " ORDER BY i.number DESC LIMIT ? OFFSET ?"
@@ -632,14 +641,15 @@ class LedgerIndex:
                 "SELECT COALESCE(c.collection, '') AS collection, COUNT(*) AS count, "
                 "MAX(i.block_height) AS latest "
                 "FROM inscription i LEFT JOIN collection_item c ON c.txid = i.txid "
-                "WHERE i.owner = ? GROUP BY COALESCE(c.collection, '')", (owner,))]
+                "WHERE i.owner = ? AND i.content_type NOT LIKE ? GROUP BY COALESCE(c.collection, '')",
+                (owner, MACHINE_TYPES))]
             for group in groups:
                 group["cover"] = [dict(row) for row in db.conn.execute(
                     "SELECT i.txid, i.content_type FROM inscription i "
                     "LEFT JOIN collection_item c ON c.txid = i.txid "
-                    "WHERE i.owner = ? AND COALESCE(c.collection, '') = ? "
+                    "WHERE i.owner = ? AND COALESCE(c.collection, '') = ? AND i.content_type NOT LIKE ? "
                     "ORDER BY (i.content_type LIKE 'image/%') DESC, i.number DESC LIMIT ?",
-                    (owner, group["collection"], int(cover)))]
+                    (owner, group["collection"], MACHINE_TYPES, int(cover)))]
         return groups
 
     def held_pieces(self, owner: str, collection: str, query: str = "",
@@ -647,8 +657,8 @@ class LedgerIndex:
                     limit: int = 60) -> tuple[list[dict], int]:
         """One page of what `owner` holds in one collection ("" for none),
         searched by #number/edition or by name, and how many match in all."""
-        where = ["i.owner = ?", "COALESCE(c.collection, '') = ?"]
-        args: list = [owner, collection]
+        where = ["i.owner = ?", "COALESCE(c.collection, '') = ?", "i.content_type NOT LIKE ?"]
+        args: list = [owner, collection, MACHINE_TYPES]
         text = (query or "").strip().lstrip("#")
         if text.isdigit():
             where.append("(CAST(c.edition AS TEXT) LIKE ? OR CAST(i.number AS TEXT) LIKE ?)")

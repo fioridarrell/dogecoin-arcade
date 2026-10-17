@@ -224,3 +224,11 @@ def test_moving_a_doginal_needs_dogecoin_besides_it(client, monkeypatch, tmp_pat
     assert "sendShort" in wallet and "swapShort" in wallet and 'swap.setAttribute("aria-disabled", "true")' in wallet
     market = (pathlib.Path(__file__).resolve().parent.parent / "arcade/web/templates/swap_pair.html").read_text()
     assert 'id="dg-need"' in market and "doginal_lock_need" in market, "a visitor's Sell and List sale wait for DOGE too"
+
+
+def test_machine_records_are_not_anybodys_nfts(tmp_path):
+    """2026-10-17: order batches (application/vnd.arcade.orders+json) showed in wallets as NFTs."""
+    from arcade.ledger import MACHINE_TYPES
+    import fnmatch
+    assert fnmatch.fnmatch("application/vnd.arcade.orders+json", MACHINE_TYPES.replace("%", "*"))
+    assert not fnmatch.fnmatch("image/png", MACHINE_TYPES.replace("%", "*"))
