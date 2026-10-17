@@ -23510,12 +23510,14 @@ def create_app(state: AppState) -> FastAPI:
             for t in takes:
                 sold = t["maker"] in mine
                 rows.append({"txid": t["txid"], "net": chain.network, "chain": chain, "when": t["time"],
+                             "keys": {f"{chain.network}-token-{t['property_id']}", f"{chain.network}-coin"},
                              "side": "sold" if sold else "bought", "what": token(t["property_id"], t["tokens"]),
                              "for": f"{t['coins'] / COIN:,.8f}".rstrip("0").rstrip(".") + f" {coin}",
                              "who": t["sender"] if sold else t["maker"]})
             for m in matches:
                 took = m["taker"] in mine
                 rows.append({"txid": m["txid"], "net": chain.network, "chain": chain, "when": m["time"],
+                             "keys": {f"{chain.network}-token-{m['gave_property']}", f"{chain.network}-token-{m['got_property']}"},
                              "side": "traded", "what": token(m["gave_property"] if took else m["got_property"],
                                                              m["gave"] if took else m["got"]),
                              "for": token(m["got_property"] if took else m["gave_property"], m["got"] if took else m["gave"]),
@@ -23527,7 +23529,11 @@ def create_app(state: AppState) -> FastAPI:
                         label = lambda leg: (f"{leg.amount / COIN:,.8f}".rstrip("0").rstrip(".") + f" {coin}"
                                              if leg.kind == I.LEG_COINS else token(leg.property_id, leg.amount)
                                              if leg.kind == I.LEG_TOKEN else "a piece")
+                        key = lambda leg: (f"{chain.network}-coin" if leg.kind == I.LEG_COINS else  # noqa: E731
+                                           f"{chain.network}-token-{leg.property_id}" if leg.kind == I.LEG_TOKEN
+                                           else f"{chain.network}-nft-{leg.txid.hex() if leg.txid else ''}")
                         rows.append({"txid": t["txid"], "net": chain.network, "chain": chain, "when": t["when"],
+                                     "keys": {key(g), key(k)},
                                      "side": "sold", "what": label(g), "for": label(k), "who": ""})
             except Exception:
                 pass
@@ -23541,11 +23547,26 @@ def create_app(state: AppState) -> FastAPI:
                                   if leg["kind"] == "token" else f"{n / COIN:,.8f}".rstrip("0").rstrip("."))  # noqa: E731
             sold = r["seller"] in everyone
             rows.append({"txid": r["id"], "net": b["network"], "chain": b["chain"], "when": r["at"],
-                         "side": "sold" if sold else "bought", "what": f"{amt(b, r['base_amount'])} {b['name']}",
+                         "keys": {r["base"], r["quote"]}, "side": "sold" if sold else "bought", "what": f"{amt(b, r['base_amount'])} {b['name']}",
                          "for": f"{amt(q, r['quote_amount'])} {q['name']}", "who": r["buyer"] if sold else r["seller"],
                          "href": f"/exchange/swap-trade/{r['id']}"})
+        # Opened from a market (its Trade history button): that market's trades only.
+        pair, pair_label, back = None, "", "/exchange?tab=tokens"
+        asked = (request.query_params.get("base", ""), request.query_params.get("quote", ""))
+        if all(asked):
+            pair = set(asked)
+            rows = [r for r in rows if r.get("keys") == pair]
+            try:
+                pb, pq = _leg_info(asked[0]), _leg_info(asked[1])
+                pair_label = f"{pb['name']}/{pq['name']}"
+                back = (f"/exchange/pair/{pb['asset']}" if pb["kind"] == "token" and pq["kind"] == "coin" and pb["network"] == pq["network"]
+                        else f"/exchange/pairs/{pb['asset']}/{pq['asset']}" if pb["kind"] == pq["kind"] == "token" and pb["network"] == pq["network"]
+                        else f"/exchange/swap/{asked[0]}/{asked[1]}")
+            except ValueError:
+                pass
         rows.sort(key=lambda r: -(r["when"] or 0))
-        return render(request, "trade_history.html", rows=rows[:300], viewer=viewer)
+        return render(request, "trade_history.html", rows=rows[:300], viewer=viewer, pair=list(asked) if pair else None,
+                      pair_label=pair_label, back=back)
 
     @app.get("/exchange/pairs/{base}/{quote}", response_class=HTMLResponse)
     def exchange_token_pair(request: Request, base: int, quote: int):

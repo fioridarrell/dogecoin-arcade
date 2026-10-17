@@ -5,9 +5,11 @@
 {# The reader's own trades (2026-10-17): what the chain says they were a side of, newest
    first, each opening its own page; then their lock-script swaps, kept in this browser. #}
 <div id="live" data-generation="{{ state.generation }}" class="live"></div>
-<a class="back-link" href="/exchange?tab=tokens">&#8592; All markets</a>
+<a class="back-link" href="{{ back }}">&#8592; {{ 'Back to ' ~ pair_label if pair_label else 'All markets' }}</a>
 {{ ex.style() }}{{ ex.market_css() }}
-<h1 style="margin:6px 0 12px">Trade history</h1>
+<h1 style="margin:6px 0 12px">Trade history{% if pair_label %} <span class="muted" style="font-weight:600">&middot; {{ pair_label }}</span>{% endif %}</h1>
+{% if pair %}<p style="margin:-6px 0 12px;font-size:.84rem"><a href="/exchange/history">All your trades &rarr;</a></p>
+<script>window.HISTORY_PAIR = {{ pair|tojson }};</script>{% endif %}
 {% if viewer == 'nobody' %}
 <div class="panel"><p class="muted" style="margin:0">Sign in to see your trades.</p></div>
 {% else %}
