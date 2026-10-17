@@ -879,9 +879,6 @@ document.addEventListener('click', function (ev) {
   <div class="row" style="gap:8px;margin:0 0 12px;flex-wrap:wrap;align-items:center">
     {{ net_chips('market', ['mix', 'testnet', 'mainnet', 'cross']) }}
   </div>
-  <p class="sub">Collections, each one a market of its
-    own. Open one to buy from it &mdash; what is for sale first, then the rest
-    as it was inscribed. Any NFT can be offered for, listed or not.</p>
 
   {# Collections as cards, the way the Wallet shows them (2026-10-09): the art, the
      name, how many, and the two numbers a buyer looks for, the floor and how many are
@@ -940,7 +937,7 @@ document.addEventListener('click', function (ev) {
        data-fav-key="{{ where }}" data-vol="{{ c.day_coins or 0 }}" data-orders="{{ c.for_sale or 0 }}">
       {{ ex.pair_icon({'icon': c.cover, 'net': cnet, 'letter': (wall_text(c.name, '?') or '?')[:1]|upper}, {'coin': cnet}) }}
       <span class="ex-mid"><b class="ex-name"><span class="ex-name-in">{{ wall(c.name, 'collection name') }}</span></b>
-        <small>{{ net_badge(c.chain_net or c.mainnet) }} {{ "{:,}".format(c.count) }} pieces
+        <small>{{ net_badge(c.chain_net or c.mainnet) }} {{ "{:,}".format(c.count) }} piece{{ '' if c.count == 1 else 's' }}
           {%- if c.for_sale %} &middot; {{ c.for_sale }} for sale{% endif %} &middot; {{ c.creator|who_text }}</small></span>
       <span class="ex-px">
         {%- if c.floor %}{{ ex.px(c.floor / 100000000) }}<div class="muted" style="font-size:.7rem;font-weight:500">floor</div>
