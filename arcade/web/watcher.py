@@ -68,6 +68,12 @@ BLOCKS_PER_PASS = 500
 #: has come: a safety net, since a block is what gives them anything new to do.
 SHOP_EVERY = 60.0
 
+#: How often the mempool is read for market changes, on a thread of its own (the operator
+#: 2026-10-17: "all orders and completion of orders ... near instantaneous as possible"): an
+#: order, a take, a swap or a move a node broadcasts shows on every open market page within
+#: about this plus the page's own poll, instead of waiting for the slow pass or the block.
+POOL_SECONDS = 1.5
+
 
 class BlockWatcher:
     """Scans each chain when its tip moves, on a daemon thread."""
@@ -84,6 +90,17 @@ class BlockWatcher:
         self._thread = threading.Thread(target=self._run, name="arcade-blockwatch",
                                         daemon=True)
         self._thread.start()
+        threading.Thread(target=self._run_pool, name="arcade-poolwatch", daemon=True).start()
+
+    def _run_pool(self) -> None:
+        """The market's mempool, read often and cheaply: one getrawmempool per chain when
+        nothing is new (each reader caches by txid)."""
+        while not self._stop.is_set():
+            try:
+                self._check_pending_offers()
+            except Exception:            # never let it die
+                log.debug("pool watch failed", exc_info=True)
+            self._stop.wait(POOL_SECONDS)
 
     def stop(self) -> None:
         self._stop.set()
@@ -124,7 +141,6 @@ class BlockWatcher:
                                if self.state.doge is not None
                                and self.state.chain_ready(self.state.doge) else None),
                       self._sync_ledgers,
-                      self._check_pending_offers,
                       self._check_pending_feed,
                       self._backfill_history_once,
                       self._check_release_notices,
@@ -368,6 +384,12 @@ class BlockWatcher:
                 orders, cancels = index.pending_orders()
                 now = ({offer["txid"] for offer in index.pending_offers()}
                        | {order["txid"] for order in orders} | cancels)
+                # Completions too (2026-10-17): a take of a resting ask, a price listed for a
+                # piece, a swap moving one, any token or piece on its way somewhere.
+                now |= {f"take:{t}:{n}" for t, n in index.pending_takes().items()}
+                now |= {a.get("txid", "") for a in index.pending_asks()}
+                now |= set(index.pending_swaps().values())
+                now |= {m.get("txid", "") for m in index.pending_moves()}
             except Exception:
                 continue
             if now != self._pending_offers.get(chain.network, set()):
