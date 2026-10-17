@@ -92,7 +92,9 @@
         <span class="obamt"><span class="mono">{% if whole %}1{% else %}{{ o.base_shown }}{% endif %}</span>
           <small class="muted">{% if o.mine %}yours{% else %}{{ o.lister|who }}{% endif %}</small></span>
         <span class="obdo">
-          {%- if o.mine %}<span class="muted" style="font-size:.74rem">yours</span>
+          {%- if o.mine and viewer == 'account' %}<button type="button" class="ghost small" data-mine-id="{{ o.id }}"
+                  data-cancel-order="{{ o.id }}">Cancel</button>
+          {%- elif o.mine %}<span class="muted" style="font-size:.74rem">yours</span>
           {%- elif can_trade_orders %}
           <form method="post" action="/exchange/trade-orders/take" style="margin:0">
             <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="back" value="{{ here }}">

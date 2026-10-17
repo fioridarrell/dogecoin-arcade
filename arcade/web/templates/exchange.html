@@ -921,6 +921,8 @@ document.addEventListener('click', function (ev) {
         <input type="hidden" name="csrf_token" value="{{ csrf }}">
         <input type="hidden" name="order" value="{{ o.id }}"><input type="hidden" name="lister" value="{{ o.lister }}">
         <button type="submit" class="small">Take</button></form>
+      {% elif viewer == 'account' and o.mine %}
+      <button type="button" class="ghost small" data-mine-id="{{ o.id }}" data-cancel-order="{{ o.id }}">Cancel</button>
       {% elif viewer == 'account' %}
       <button type="button" class="small" data-take-order="{{ o|tojson|forceescape }}">Take</button>
       {% endif %}

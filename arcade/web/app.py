@@ -25434,9 +25434,12 @@ def create_app(state: AppState) -> FastAPI:
                 # A person here lists from their own tab (wallet.listOrder) and may take any
                 # order but their own -- other accounts' on this very arcade included.
                 out["can_list_orders"] = bool(mine)
+                # The reader's own orders stay in, marked theirs, with Cancel (2026-10-17: a listing showed on the
+                # buyer's screen "but not my screen to cancel" -- the page had drawn its own only from its own copy, so
+                # another device never saw them). A page never takes its own: no take button on those rows.
                 own = {_account_address(account.pubkey, c) for c in _account_chains()} if account else set()
-                out["trade_orders"] = [o for o in state.trade_orders.visible(_online, tab_live=_tab_live, browser=_browser_lister)
-                                       if o["lister"] not in own]
+                out["trade_orders"] = [{**o, "mine": o["lister"] in own}
+                                       for o in state.trade_orders.visible(_online, tab_live=_tab_live, browser=_browser_lister)]
             else:
                 out["trade_orders"] = [o for o in state.trade_orders.visible(_online, tab_live=_tab_live, browser=_browser_lister)
                                        if o["node"] != mine]

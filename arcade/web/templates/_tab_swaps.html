@@ -414,6 +414,19 @@
         location.href = `/exchange/pairs?base=${encodeURIComponent(box2.base.value)}&quote=${encodeURIComponent(box2.quote.value)}`;
       } catch (e) { go.disabled = false; alert(String(e.message || e)); }
     });
+    // Cancel on one of your own rows the node drew (any device): withdrawn here, off the node's book, its side back.
+    document.addEventListener("click", async (ev) => {
+      const c = ev.target.closest && ev.target.closest("[data-cancel-order]");
+      if (!c || c.disabled) return;
+      ev.preventDefault();
+      c.disabled = true; c.textContent = "Cancelling\u2026"; step("withdrawing");
+      try {
+        const w = await keys();
+        if (!w) throw new Error("Unlock your wallet to cancel.");
+        await wallet.withdrawOrder(w, c.dataset.cancelOrder);
+        (c.closest(".obrow") || c).remove(); step("withdrawn"); draw(w);
+      } catch (e) { c.disabled = false; c.textContent = "Cancel"; step("failed", e); }
+    });
     // One listener for the whole page (2026-10-17: pressed Buy "and nothing happened. He had
     // to refresh"): a market's book is redrawn every couple of seconds by the live update, and a row
     // drawn after this page loaded carried a button nobody was listening to.

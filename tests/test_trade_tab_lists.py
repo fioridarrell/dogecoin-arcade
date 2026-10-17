@@ -440,3 +440,37 @@ def test_a_swap_you_cannot_fund_is_refused_before_anything_is_asked(world, monke
         assert "you hold 75" in short and "100" in short, short
         assert tab.evaluate("() => w.canFund({network: 'regtest', kind: 'token', asset: '150', amount: 50 * 1e8})") == ""
         browser.close()
+
+
+def test_your_own_listing_shows_with_cancel_on_any_device(world, monkeypatch):
+    """2026-10-17: the newest listing showed on the buyer's screen "but not my screen to cancel". The node draws
+    the reader's own orders too, marked theirs, with Cancel -- a page with no copy of them (another device) included."""
+    from playwright.sync_api import sync_playwright
+    base, a, b, pep, dg = world
+    monkeypatch.setattr(a, "mesh", _Mesh(), raising=False)
+    net = {"network": "regtest", "version": 111}
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        tab = browser.new_page()
+        tab.goto(f"{base}/join")
+        tab.evaluate("async () => { window.w = await import('/wallet.js'); }")
+        made = tab.evaluate("""async (net) => {
+            const r = await w.signUp('device' + Math.floor(Math.random() * 1e6), 'a long enough password', net);
+            return r.wallet.on.regtest.address; }""", net)
+        pep.call("sendtoaddress", made, 10)
+        _mine(pep)
+        _scan_a(a)
+        order = tab.evaluate("""async ([net, give, get]) => w.listOrder(await w.opened(net), give, get)""",
+                             [net, {"network": "regtest", "amount": 3 * COIN}, {"network": "doge", "amount": 2 * COIN}])
+        # Another device: this page forgets its own copy of the order.
+        tab.evaluate("() => { for (const k of Object.keys(localStorage)) if (k.startsWith('arcade-my-orders')) localStorage.removeItem(k); }")
+        monkeypatch.setattr(type(a), "order_presence", lambda self: type("P", (), {"live": lambda s, x: True,
+                                                                                   "alive": lambda s, x: None})(),
+                            raising=False)
+        tab.goto(f"{base}/exchange/swap/regtest-coin/doge-coin")
+        cancel = tab.locator(f'[data-cancel-order="{order["id"]}"]')
+        cancel.wait_for(timeout=15000)
+        cancel.click()
+        tab.wait_for_function("(id) => !document.querySelector('[data-cancel-order=\"' + id + '\"]')", arg=order["id"])
+        assert not [o for o in a.trade_orders.visible(a.mesh.online) if o["id"] == order["id"]], "off the node's book"
+        browser.close()
