@@ -75,12 +75,12 @@ TYPE_NAMES = {
 }
 
 
-@dataclass
-
 #: Inscriptions that are the arcade's own machine records -- order batches, prize pools -- not anybody's NFT: left out of
 #: what a wallet holds (2026-10-17: "Hide these types of inscriptions from your wallet NFTs").
 MACHINE_TYPES = "application/vnd.arcade.%"
 
+
+@dataclass
 class Stopped:
     """Why the index is not moving, and where it stopped."""
 
