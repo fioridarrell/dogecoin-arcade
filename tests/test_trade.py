@@ -47,7 +47,12 @@ def test_the_initiator_locks_first_then_claims_only_a_confirmed_agreed_lock():
     assert T.next_step(tr, T.Facts(), now)[0] == T.LOCK
     assert T.next_step(tr, T.Facts(mine=_seen(tr, False)), now)[0] == T.WAIT
     unconfirmed = T.Facts(mine=_seen(tr, False), theirs=_seen(tr, True, conf=0))
+    # Below the big line the lock in the mempool is enough (2026-10-17); a swap that
+    # waits for a confirmation (at or above the line) still does.
+    assert T.next_step(tr, unconfirmed, now)[0] == T.CLAIM
+    tr.need = 1
     assert T.next_step(tr, unconfirmed, now)[0] == T.WAIT
+    tr.need = 0
     good = T.Facts(mine=_seen(tr, False), theirs=_seen(tr, True))
     assert T.next_step(tr, good, now)[0] == T.CLAIM
     short = T.Facts(mine=_seen(tr, False), theirs=_seen(tr, True, value=COIN))
@@ -187,7 +192,9 @@ def test_two_traders_finish_a_pep_doge_swap_from_the_chains_alone(regtest, doge)
         if a[0] == T.DONE and b[0] == T.DONE:
             break
     assert seen[-1] == (T.DONE, T.DONE), seen
-    assert seen[0] == (T.LOCK, T.WAIT), "the initiator locks first; the responder waits"
+    # The initiator locks first; below the big line the responder locks the moment that lock is in
+    # the mempool, in the same pass (2026-10-17).
+    assert seen[0] == (T.LOCK, T.LOCK), seen
     assert (T.CLAIM, T.WAIT) in seen or any(s[0] == T.CLAIM for s in seen)
     assert any(s[1] == T.CLAIM for s in seen), "the responder claimed with the secret it read"
 
@@ -207,6 +214,28 @@ def test_when_the_responder_vanishes_the_initiator_refunds(regtest, doge):
     assert alice.step(None)[0] == T.DONE
 
 
+def test_a_small_swap_finishes_in_the_mempool_without_a_block(regtest, doge):
+    """2026-10-17: "Allow 0-conf for less than 1000 doge and 1000000 pep" -- both locks and
+    both claims, every one of them unconfirmed, and the swap is done before any block."""
+    pep_rpc, doge_rpc = regtest.rpc, doge.rpc
+    if float(pep_rpc.call("getbalance")) < 10:
+        pep_rpc.call("generate", 101)
+    _mine(pep_rpc, doge_rpc)                      # the traders' own coins confirmed beforehand
+    now = int(time.time())
+    alice, bob = _pair(pep_rpc, doge_rpc, now + 6 * 3600, now + 3 * 3600)
+    _mine(pep_rpc, doge_rpc)
+    heights = (pep_rpc.call("getblockcount"), doge_rpc.call("getblockcount"))
+    seen = []
+    for _ in range(8):
+        a = alice.step(bob.my_lock)
+        b = bob.step(alice.my_lock)
+        seen.append((a[0], b[0]))
+        if a[0] == T.DONE and b[0] == T.DONE:
+            break
+    assert seen[-1] == (T.DONE, T.DONE), seen
+    assert (pep_rpc.call("getblockcount"), doge_rpc.call("getblockcount")) == heights, "no block was needed"
+
+
 def test_one_confirmation_and_three_for_a_big_swap():
     """2026-10-13: one confirmation, more for big trades (the line is the operator's)."""
     k = "02" + "11" * 32
@@ -214,8 +243,8 @@ def test_one_confirmation_and_three_for_a_big_swap():
     big = T.Leg("doge", "coin", "", T.BIG["doge"], k, k)
     pep = T.Leg("main", "coin", "", 5 * COIN, k, k)
     test = T.Leg("regtest", "coin", "", 10 ** 15, k, k)
-    assert T.confirmations_for(small, pep) == 1
-    assert T.confirmations_for(pep, big) == 3, "either leg at its line"
-    assert T.confirmations_for(test, test) == 1, "testnet coins never count as big"
-    assert T.confirmations_for(small, pep, {"doge": 5 * COIN}) == 3, "the operator's own line"
+    assert T.confirmations_for(small, pep) == 0, "below the line: the lock in the mempool is enough (2026-10-17)"
+    assert T.confirmations_for(pep, big) == 1, "either leg at its line: one confirmation (2026-10-17)"
+    assert T.confirmations_for(test, test) == 0, "testnet coins never count as big"
+    assert T.confirmations_for(small, pep, {"doge": 5 * COIN}) == 1, "the operator's own line"
     assert T.LOCK_SECONDS["mainnet"] == 2 * 3600, "the operator: 2 h locks"

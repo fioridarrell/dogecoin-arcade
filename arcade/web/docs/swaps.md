@@ -13,8 +13,11 @@ market: the seller signs their half ahead of time and the buyer completes it.
 
 * Either **both** sides get paid, or **both** get their own coins back. There is
   no outcome where one side pays and the other keeps everything.
-* A swap normally takes **two or three minutes**: one confirmation on each chain.
-  A big swap waits for three confirmations each, for extra safety.
+* A swap normally takes **seconds**: each side acts as soon as the other's lock is in the
+  mempool and is exactly the lock the terms say. A swap with a coin side at or above the
+  arcade's big-swap line (1,000,000 PEP or 1,000 DOGE unless its operator sets another) waits
+  for one confirmation on each chain instead. A token, NFT or Doginal side waits for the
+  block that shows it in its lock.
 * You do **not** have to keep the page open. Your own node finishes your side
   with transactions you signed in your browser in advance.
 * If the other side disappears part-way, your coins come back to you
@@ -29,10 +32,10 @@ Say Alice lists 1,000 PEP for 300 DOGE and Bob takes it.
 * **2. Bob locks his 300 DOGE** on the Dogecoin chain in a lock script that says:
   *Alice may take this if she shows the secret; otherwise Bob may take it back
   after two hours.*
-* **3.** Once that lock has a confirmation, **Alice's browser locks her 1,000 PEP** on
+* **3.** As soon as that lock is in the mempool, **Alice's browser locks her 1,000 PEP** on
   the Pepecoin chain: *Bob may take this with the same secret; otherwise Alice
   may take it back after one hour.*
-* **4.** Once that lock has a confirmation, **Bob claims the PEP**. To do it he has to
+* **4.** As soon as that lock is in the mempool, **Bob claims the PEP**. To do it he has to
   put the secret on the Pepecoin chain, where anyone can read it.
 * **5. Alice claims the DOGE** with the secret she just read off the chain.
 

@@ -2457,14 +2457,14 @@ function legWhat(leg) {
  * them). Pure: what the chains show in, the one thing to do next out. */
 export const TRADE = {
   LOCK_SECONDS: {mainnet: 2 * 3600, testnet: 2 * 3600},
-  CONFIRMATIONS: 1, CONFIRMATIONS_BIG: 3,
+  CONFIRMATIONS: 0, CONFIRMATIONS_BIG: 1,       // 0 below the big line, 1 at or above it (2026-10-17; trade.py)
   BIG: {main: 1_000_000 * 100_000_000, doge: 1_000 * 100_000_000},
   CLAIM_MARGIN: 20 * 60, LOCK_MARGIN: 30 * 60,
   LOCK_RESERVE: 2_000_000,          // htlc.SPEND_FEE + htlc.DUST (trade.LOCK_RESERVE)
 };
 const tierOf = (leg) => (leg.network === "main" || leg.network === "doge") ? "mainnet" : "testnet";
 
-/** 1, or 3 when a mainnet coin leg is at or above its line (trade.confirmations_for). */
+/** 0, or 1 when a mainnet coin leg is at or above its line (trade.confirmations_for). */
 export function confirmationsFor(give, get, big = TRADE.BIG) {
   for (const leg of [give, get]) {
     const line = big[leg.network];
@@ -2730,7 +2730,7 @@ export async function takeOrder(wallet, order, options = {}) {
   return trade;
 }
 
-//: The node's "big swap" lines (/account swap_big): above one, a swap waits 3 confirmations.
+//: The node's "big swap" lines (/account swap_big): at or above one, a swap waits 1 confirmation; below, none.
 let bigKnown = null;
 async function swapBig() {
   if (!bigKnown) {

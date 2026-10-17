@@ -99,7 +99,7 @@ def observe(rpc: Any, lock: dict | None, my_addresses: set[str],
 
 def swap_big(state: Any) -> dict:
     """The operator's "big swap" lines per mainnet network, in sats (admin: swap_big:<net>);
-    a swap with a coin leg at or above its line waits 3 confirmations instead of 1."""
+    a swap with a coin leg at or above its line waits 1 confirmation instead of none (2026-10-17)."""
     out = {}
     for network, default in T.BIG.items():
         try:

@@ -39,11 +39,16 @@ INITIATOR, RESPONDER = "initiator", "responder"
 #: side's node holds its pre-signed claim and refund (arcade/trade_watch.py), so the lock
 #: time only bounds how long coins sit when the other side vanishes.
 LOCK_SECONDS = {"mainnet": 2 * 3600, "testnet": 2 * 3600}
-#: Confirmations a lock needs before the other side acts on it. 2026-10-13: one --
-#: a swap takes two or three minutes -- and three for a big one (reorg safety), "big" being
-#: a coin leg at or above BIG[network]; the operator sets the real line (admin, swap_big_*).
-CONFIRMATIONS = 1
-CONFIRMATIONS_BIG = 3
+#: Confirmations a lock needs before the other side acts on it. 2026-10-13: one, and
+#: three for a big one (reorg safety), "big" being a coin leg at or above BIG[network]; the
+#: operator sets the real line (admin, swap_big_*). 2026-10-17: none below that line
+#: ("Allow 0-conf for less than 1000 doge and 1000000 pep") -- a lock seen in the mempool, and
+#: exactly the one the terms say, is enough, so a small swap is as quick as its messages. The
+#: risk he accepted: whoever locks first could double-spend an unconfirmed lock, up to the line.
+#: A token, NFT or Doginal lock still waits for the ledger to show it there, which is a block.
+CONFIRMATIONS = 0
+#: At or above the line, one confirmation (2026-10-17: "1 conf above the threshold").
+CONFIRMATIONS_BIG = 1
 BIG = {"main": 1_000_000 * 100_000_000, "doge": 1_000 * 100_000_000}
 #: Never claim the responder's lock when less than this is left on it: the responder
 #: must still have time to see the secret and claim the initiator's lock before T1.
@@ -53,7 +58,7 @@ LOCK_MARGIN = 30 * 60
 
 
 def confirmations_for(give: "Leg", get: "Leg", big: dict | None = None) -> int:
-    """1, or 3 when a mainnet coin leg is at or above its BIG line."""
+    """0 (the lock seen in the mempool), or 1 when a mainnet coin leg is at or above its BIG line."""
     big = BIG if big is None else big
     for leg in (give, get):
         line = big.get(leg.network)

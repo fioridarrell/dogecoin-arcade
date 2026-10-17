@@ -10047,7 +10047,7 @@ def create_app(state: AppState) -> FastAPI:
             # This node on the mesh: a swap a tab lists names it, and shows on other
             # arcades while it is online (trade_orders.py, 2026-10-13).
             "mesh_node": getattr(mesh, "node_id", "") if mesh is not None else "",
-            # Where a swap waits 3 confirmations instead of 1 (node_trader.swap_big).
+            # Where a swap waits 1 confirmation instead of none (node_trader.swap_big; 2026-10-17).
             "swap_big": _swap_big_lines(),
             "pubkey": account.pubkey, "network": chain.network,
             "version": chain.params.pubkeyhash_version,
@@ -21701,7 +21701,7 @@ def create_app(state: AppState) -> FastAPI:
                 if flag in said:
                     state.set_setting(flag, bool(said[flag]))
             if isinstance(said.get("swap_big"), dict):
-                # Where a swap waits 3 confirmations instead of 1 (2026-10-13: "1,
+                # Where a swap waits 1 confirmation instead of none (2026-10-17; was 3 instead of 1, 2026-10-13: "1,
                 # more for big trades"): a mainnet coin leg at or above this, in whole coins.
                 for network, text in said["swap_big"].items():
                     if network in tradelib.BIG and str(text).strip():
