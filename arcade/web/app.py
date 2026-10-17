@@ -728,6 +728,10 @@ def _request_timer():
     return _req_timer
 
 
+#: When each account last inscribed an order batch (account_inscribe's once-a-minute guard).
+_ORDER_POSTS: dict[str, float] = {}
+
+
 def create_app(state: AppState) -> FastAPI:
     TEMPLATES._screen_of = state.screen          # the feed card's screen_text()
     TEMPLATES.env.globals["brand"] = brandlib.current()   # this node's name, colours, icons (brand.py)
@@ -10467,6 +10471,14 @@ def create_app(state: AppState) -> FastAPI:
         """
         account = _signed_in_account(request)
         said = payload if isinstance(payload, dict) else {}
+        # An order batch at most once a minute per account (2026-10-17: a page re-posted its orders several times a
+        # minute, each a Class B transaction): a listing still goes out at once, a repeat waits.
+        if str(said.get("content_type", "")) == "application/vnd.arcade.orders+json":
+            last = _ORDER_POSTS.get(account.pubkey, 0.0)
+            if time.time() - last < 60:
+                return JSONResponse({"detail": "your orders were posted less than a minute ago; they stand as they are"},
+                                    status_code=429)
+            _ORDER_POSTS[account.pubkey] = time.time()
         try:
             chain = _chain_asked(said)
         except ValueError as exc:
