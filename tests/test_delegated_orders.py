@@ -42,17 +42,19 @@ def test_a_delegated_order_fills_with_the_seller_away(world):
     give = b.leg("regtest", 3 * COIN, key)                           # the taker gives 3 PEP
     get = T.Leg("doge", "coin", "", 2 * COIN, key.hex(), b.key.pubkey.hex())
     trade = b.propose(a.identity.public_bytes, "order-away", give, get)
-    log = []
+    log, seen = [], set()
     for _ in range(40):
         for t in (b, seller_node):
             _scan(t)
             _catch_up(t.state)
             log.extend(t.tick())
+        seen |= {o["state"] for o in seller_node.delegated_of("seller")}
         _mine(pep, dg)
         if b.book.get(trade.id).state == "done" and (seller_node.book.get(trade.id) or trade).state == "done":
             break
     assert b.book.get(trade.id).state == "done", log[-6:]
     assert seller_node.book.get(trade.id).state == "done", log[-6:]
+    assert "taking" in seen, f"its seller's page was told a swap was under way: {seen}"
     got = sum(u["amount"] for u in pep.call("listunspent", 0, 9999999, [payout]))
     assert got >= 2.98, f"the seller's 3 PEP (less the claim fee) at its own address: {got}"
     assert seller_node.delegated("order-away")["state"] in ("releasing", "returned"), "taken whole, off the book"

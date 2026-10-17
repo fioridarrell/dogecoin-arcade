@@ -3134,7 +3134,7 @@ let delegatedAsked = 0;
 export async function syncDelegated(wallet) {
   const book = myOrdersOf(wallet);
   const mine = Object.values(book.orders || {}).filter((o) => o.delegated);
-  if (!mine.length || Date.now() - delegatedAsked < 4000) return false;
+  if (!mine.length || Date.now() - delegatedAsked < 1500) return false;
   delegatedAsked = Date.now();
   let said = null;
   try { said = await (await fetch("/account/orders/delegated", {cache: "no-store"})).json(); } catch (e) { return false; }
@@ -3142,10 +3142,14 @@ export async function syncDelegated(wallet) {
   let changed = false;
   for (const o of mine) {
     const st = states[o.id];
-    if (st && st !== "open") {
+    if (st === "taking") {
+      if (!o.taking) { o.taking = true; changed = true; }          // a buyer's swap is under way: no Cancel now
+    } else if (st && st !== "open") {
       delete book.orders[o.id];
       book.withdrawn = [...new Set([...(book.withdrawn || []), o.id])].slice(-200);
       changed = true;
+    } else if (o.taking) {
+      delete o.taking; changed = true;                              // it fell through: it stands again
     }
   }
   if (changed) {

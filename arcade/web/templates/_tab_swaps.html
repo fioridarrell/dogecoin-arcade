@@ -86,7 +86,11 @@
         document.querySelectorAll(`[data-take-id="${CSS.escape(id)}"], [data-mine-id="${CSS.escape(id)}"]`)
           .forEach((b) => (b.closest(".obrow") || b).remove());
       }
-      const every = wallet.myOrders(w);
+      // One being filled right now is off the book, here as everywhere: no row, no Cancel (2026-10-17).
+      const every = wallet.myOrders(w).filter((o) => !o.taking);
+      for (const o of wallet.myOrders(w).filter((x) => x.taking)) {
+        document.querySelectorAll(`.obrow[data-local="${CSS.escape(o.id)}"]`).forEach((r) => r.remove());
+      }
       globalThis.myOrderIds = new Set(every.map((o) => o.id));
       const all = every.filter((o) => !markBook(w, o) && !document.querySelector(`[data-mine-id="${CSS.escape(o.id)}"]`)
                                       && !addToBook(w, o));

@@ -372,9 +372,20 @@ class NodeTrader:
 
     def delegated_of(self, owner: str) -> list[dict]:
         """An account's delegated orders and where each stands: open, filled, releasing, returned."""
+        out = []
         with self._db() as conn:
-            return [{"id": r["order_id"], "state": r["state"]}
-                    for r in conn.execute("SELECT order_id, state FROM delegated WHERE owner=?", (owner,))]
+            rows = conn.execute("SELECT order_id, state FROM delegated WHERE owner=?", (owner,)).fetchall()
+            for r in rows:
+                st = r["state"]
+                if st == "open":
+                    # A swap on it under way: "taking", so its seller's page shows no Cancel meanwhile (2026-10-17).
+                    for link in conn.execute("SELECT id FROM link WHERE order_id=? AND agreed=1", (r["order_id"],)):
+                        t = self.book.get(link["id"])
+                        if t is not None and t.state not in ("done", "aborted"):
+                            st = "taking"
+                            break
+                out.append({"id": r["order_id"], "state": st})
+        return out
 
     #: How long an accepted swap waits for the taker's lock before it is called off and its order stands again.
     TAKER_WAIT = 30 * 60
