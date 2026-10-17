@@ -25540,8 +25540,18 @@ def _tag_address(state, destination: str, *, mainnet) -> str:
         if not twin:
             raise ValueError(f"@{wanted} has no address this node can pay in DOGE.")
         return twin
+    # Which family to read the claim in. A caller may name the chain itself --
+    # the wallet's send forms, a page's ask and the admin API all hand over a
+    # ChainContext -- or only say main or test. A context is truthy whatever
+    # network it is, so `bool(mainnet)` read a testnet ask as a mainnet one and
+    # searched the wrong chain entirely (2026-10-16: on the public arcade every
+    # page send to an @name filed an empty destination, so a game's own token
+    # going back to its creator never matched and no send from the game signed
+    # without a card -- ASHVALE's players' packs fell out of step with their
+    # wallets, and every test passed because each one asked to an address).
+    family = bool(getattr(mainnet, "is_mainnet", mainnet))
     for chain in state.token_chains:
-        if bool(chain.is_mainnet) != bool(mainnet) or chain.is_doge:
+        if bool(chain.is_mainnet) != family or chain.is_doge:
             continue
         try:
             found = state.token_index(chain).address_of(wanted)
@@ -25551,7 +25561,7 @@ def _tag_address(state, destination: str, *, mainnet) -> str:
             return found
     raise ValueError(
         f"nobody holds @{wanted} on "
-        f"{'mainnet' if mainnet else 'testnet'}, or this node has not indexed "
+        f"{'mainnet' if family else 'testnet'}, or this node has not indexed "
         f"the claim yet. A tag is claimed from the Address book.")
 
 

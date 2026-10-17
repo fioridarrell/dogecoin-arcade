@@ -2625,6 +2625,17 @@ def test_anything_can_be_sent_to_a_tag(client, monkeypatch):
         assert appmod._tag_address(state, "@FRIEND", mainnet=mainnet) \
             == "nTagHolderAddress1111111111111111", "a tag is not case sensitive"
 
+    # A caller may hand over the chain itself rather than the word for it, and
+    # several do: the wallet's send forms pass `_context(which)`, a page's ask
+    # passes the chain it is on, the admin API passes `_context` again. Only the
+    # network says which chain that is, so that is what decides where the claim
+    # is read -- a context object is truthy on any network (2026-10-16: reading
+    # it as a boolean sent every testnet ask looking for its name on mainnet
+    # chains, finding nothing, and filing an empty destination).
+    for chain in [c for c in state.token_chains if not c.is_doge]:
+        assert appmod._tag_address(state, "@friend", mainnet=chain) \
+            == "nTagHolderAddress1111111111111111", chain.title
+
     # The @ is punctuation: a name resolves with or without it, because what
     # tells a name from an address is the shape and not the sigil (D-112).
     assert appmod._tag_address(state, "friend", mainnet=False) \
