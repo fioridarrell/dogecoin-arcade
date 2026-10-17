@@ -2666,11 +2666,26 @@ export function myTrades(wallet) {
 }
 
 /** One trade step, sealed in this tab to `toKey` (hex, a messaging key), carried by this node. */
-export async function tradeSay(wallet, toKey, body) {
-  return spending(() => _tradeSay(wallet, toKey, body));
+export async function tradeSay(wallet, toKey, body, options = {}) {
+  return spending(() => _tradeSay(wallet, toKey, body, options));
 }
 
-async function _tradeSay(wallet, toKey, body) {
+/* Each step of a trade goes on the chain at most once (2026-10-17, of a wallet full of
+ * "Sent to n...  -0.0804": "Why are we sending so many transactions?"). A chain message costs
+ * coins, and a step a page said again on every pass -- a "no" to the same proposal, heard again
+ * -- became a transaction every few seconds. Kept per browser; the mesh copy is free and not
+ * counted. */
+const SAID_ON_CHAIN = "arcade-trade-said";
+function saidOnChain(key, add) {
+  let said = [];
+  try { said = JSON.parse(localStorage.getItem(SAID_ON_CHAIN) || "[]") || []; } catch (e) { said = []; }
+  if (!add) return said.includes(key);
+  said = [...said.filter((k) => k !== key), key].slice(-500);
+  try { localStorage.setItem(SAID_ON_CHAIN, JSON.stringify(said)); } catch (e) {}
+  return true;
+}
+
+async function _tradeSay(wallet, toKey, body, options = {}) {
   const {mail, me} = await messenger(wallet);
   const asked = await fetch("/account/talk", {
     method: "POST", headers: {"Content-Type": "application/json"},
@@ -2686,11 +2701,18 @@ async function _tradeSay(wallet, toKey, body) {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({to: String(toKey).toLowerCase(), sealed}),
     });
-    // Talk (propose, accept, cancel) goes by the mesh alone; a step that says coins moved
-    // (locked, claimed, refunded) goes on the chain as well, where it cannot be lost.
-    const moved = ["locked", "claimed", "refunded"].includes(body && body.step);
-    if (relayed.ok && (await relayed.json()).mesh && !moved) return {mesh: true};
+    // Delivered over the mesh: that is the whole message, every step alike (2026-10-17:
+    // "Why is it falling back to on chain transmissions?"). The chain carries it only when the
+    // other page is not on the mesh now -- closed, its wallet locked, or a node that reads the
+    // chain alone. Coins that moved are on the chain anyway: a lock the message missed is still
+    // there to claim, and both sides get their own back after the timeout either way.
+    if (relayed.ok && (await relayed.json()).mesh) return {mesh: true};
   } catch (e) { /* the chain carries it */ }
+  // A refusal of a proposal the mesh brought stays on the mesh: it never costs a transaction.
+  if (options.meshOnly) return {mesh: false};
+  const once = `${String(toKey).toLowerCase()}|${(body && body.id) || ""}|${(body && body.step) || ""}`;
+  if (saidOnChain(once)) return {already: true};
+  saidOnChain(once, true);
   const talked = await fetch("/account/talk", {
     method: "POST", headers: {"Content-Type": "application/json"},
     body: JSON.stringify({op: "send", to: said.seal_to, sealed}),
@@ -3034,6 +3056,10 @@ export async function answerProposals(wallet) {
   for (const a of heard.answers) {
     const p = a.json;
     if (p.step !== "propose" || trades[p.id]) continue;
+    // A proposal is answered once: heard again (another tab, the chain and the mesh copy, a
+    // cursor read over) it is not answered again.
+    book.refused = book.refused || [];
+    if (book.refused.includes(p.id)) continue;
     const mine = book.orders[p.order];
     const fits = mine && p.get && p.give
       && p.get.network === mine.give.network && p.get.kind === mine.give.kind
@@ -3044,18 +3070,18 @@ export async function answerProposals(wallet) {
       && p.give.taker_key === mine.take_key
       && Number.isInteger(p.t1) && Number.isInteger(p.t2) && p.t2 < p.t1
       && p.t2 - TRADE.LOCK_MARGIN > now && /^[0-9a-f]{64}$/.test(p.secret_hash || "");
-    if (!fits) {
-      await tradeSay(wallet, a.sender, {t: "trade", v: 1, id: p.id, step: "cancel",
-                                        reason: mine ? "those are not this swap's terms" : "no such swap here"});
-      continue;
-    }
+    const refuse = async (reason) => {
+      book.refused = [...book.refused, p.id].slice(-300);
+      keepMyOrders(wallet, book);
+      // Back the way it came: a proposal off the mesh is refused there, free; one that came by the
+      // chain (which cost its sender a transaction too) is refused there, once.
+      await tradeSay(wallet, a.sender, {t: "trade", v: 1, id: p.id, step: "cancel", reason},
+                     {meshOnly: a.via === "mesh"}).catch(() => {});
+    };
+    if (!fits) { await refuse(mine ? "those are not this swap's terms" : "no such swap here"); continue; }
     // Able to lock its side? If not, say so now, before the taker locks anything.
     const short = await canFund(mine.give);
-    if (short) {
-      await tradeSay(wallet, a.sender, {t: "trade", v: 1, id: p.id, step: "cancel",
-                                        reason: `the lister cannot fund its side (${short})`});
-      continue;
-    }
+    if (short) { await refuse(`the lister cannot fund its side (${short})`); continue; }
     const trade = {id: p.id, role: "responder", order: p.order, peer: a.sender, give: p.get, get: p.give,
                    secret: "", secretHash: p.secret_hash, t1: p.t1, t2: p.t2, myLock: null, theirLock: null,
                    agreed: true, acceptSent: false, cancelled: false, state: "accepted",

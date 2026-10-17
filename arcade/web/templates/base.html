@@ -2848,7 +2848,9 @@ if (typeof ARCADE_SIGNED !== "undefined" && (ARCADE_SIGNED || ARCADE_ME)) {
   import("/wallet.js").then((w) => {
     w.startTradeRunner(ARCADE_CHAIN);
     // Message outputs come back by themselves (wallet.js autoSweep), a few seconds after a page opens.
-    // autoSweep is off (2026-10-17: a run of sends nobody asked for showed in a wallet; checked first).
+    // Message outputs come back by themselves (wallet.js autoSweep), a few seconds after a page opens.
+    setTimeout(() => w.autoSweep().catch(() => {}), 8000);
+    setInterval(() => { if (!document.hidden) w.autoSweep().catch(() => {}); }, 150000);
   }).catch(() => {});
 }
 </script>
