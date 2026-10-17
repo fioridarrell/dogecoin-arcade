@@ -313,7 +313,10 @@
         const w = await keys();
         if (!w) throw new Error("Unlock your wallet to trade.");
         await wallet.listOrder(w, give, get, {approved: true});
-        if (globalThis.arcadeToast) arcadeToast("Listed! Keep the arcade open with your wallet unlocked -- any page, a game too. Go play while you wait: when it sells you get a notification.");
+        // No toast here (2026-10-17, of the "Listed!" toast: "The OK button does not work"): the page was
+        // already on its way to the market, and a leaving page takes no taps. The button says it; the market page's
+        // callout says the rest (swap_pair.html #stay-open, "Your swap is listed: keep the arcade open").
+        go.textContent = "Listed \u2713 Opening your market\u2026";
         location.href = `/exchange/pairs?base=${encodeURIComponent(box2.base.value)}&quote=${encodeURIComponent(box2.quote.value)}`;
       } catch (e) { go.disabled = false; alert(String(e.message || e)); }
     });

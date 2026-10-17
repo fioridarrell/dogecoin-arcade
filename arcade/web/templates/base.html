@@ -2036,6 +2036,9 @@ function arcadeToast(text){
   var x = document.createElement('button');
   x.type = 'button'; x.className = 'ghost small'; x.textContent = 'OK';
   x.onclick = function(){ t.remove(); };
+  // Anywhere on it closes it, not only the small OK (2026-10-17: "The OK button does not work").
+  t.onclick = function(e){ if (!e.target.closest('a')) t.remove(); };
+  t.style.cursor = 'pointer';
   t.append(x);
   document.body.append(t);
   setTimeout(function(){ t.remove(); }, 15000);
