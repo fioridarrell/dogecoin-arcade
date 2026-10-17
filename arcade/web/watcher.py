@@ -110,6 +110,7 @@ class BlockWatcher:
                 relay.drain()
             except Exception:
                 log.debug("talk relay failed", exc_info=True)
+            self._run_trader()                       # delegated orders: every couple of seconds, not every pass of the slow loop
             self._stop.wait(POOL_SECONDS)
 
     def stop(self) -> None:
@@ -242,19 +243,32 @@ class BlockWatcher:
     def _run_trader(self) -> None:
         """This node's own lock-script trades, every 15 s -- only while the operator has
         node-facilitated trades on (the trader checks the switch itself)."""
-        if not self.state.setting("node_trades", False):
-            return
-        if time.time() - getattr(self, "_trader_at", 0.0) < 15:
-            return
-        self._trader_at = time.time()
+        on = self.state.setting("node_trades", False)
         trader = self.state.node_trader
+        # A seller's delegated orders run whatever the switch (2026-10-17: orders "filled without the
+        # counterparty being on Arcade"), every 2 s: the node must stay on the mesh (talk_relay ALIVE_FOR 12 s) and
+        # answer a taker as fast as a page would.
+        try:
+            delegated = trader.has_delegated()
+        except Exception:                                  # noqa: BLE001
+            delegated = False
+        if not on and not delegated:
+            return
+        if time.time() - getattr(self, "_trader_at", 0.0) < (2 if delegated else 15):
+            return
+        lock = self.__dict__.setdefault("_trader_lock", threading.Lock())
+        if not lock.acquire(blocking=False):
+            return                                   # the other loop is in a pass already
+        self._trader_at = time.time()
         try:
             trader.tick()
             mesh = getattr(self.state, "mesh", None)
-            if mesh is not None and trader.post_due():
+            if on and mesh is not None and trader.post_due():
                 trader.post(mesh.node_id)
         except Exception:
             log.warning("node trader pass failed", exc_info=True)
+        finally:
+            lock.release()
 
     def _import_listings(self) -> None:
         """Listings other nodes' sellers put on the chain, filed here too, so a

@@ -172,6 +172,11 @@ class OrderBook:
                                  (lister, oid))
         return filed
 
+    def cancel_id(self, order_id: str) -> None:
+        """Off this node's book: an order its node finished for the seller (node_trader delegated orders)."""
+        with self._open() as conn:
+            conn.execute("UPDATE trade_order SET cancelled=1 WHERE id=?", (order_id,))
+
     def cancel_local(self, listers: list[str], ids: list[str]) -> int:
         """Mark `ids` cancelled, where one of `listers` listed them (its own withdraw, said to this node)."""
         if not listers or not ids:

@@ -69,6 +69,24 @@ class TradeKey:
         return utils.encode_dss_signature(r, s) + bytes([sighash_type])
 
 
+class HeldKey(TradeKey):
+    """One delegated order's key (2026-10-17: orders that fill "without the counterparty being on Arcade"):
+    made in the seller's browser from its seed, one per order, handed to this node to finish that order only."""
+
+    def __init__(self, secret_hex: str):
+        secret = int(secret_hex, 16)
+        if not 0 < secret < _N:
+            raise ValueError("that is not a key")
+        self._secret, self._key, self._lock = secret, None, threading.Lock()
+        self.path = None
+
+    def _private(self):
+        from cryptography.hazmat.primitives.asymmetric import ec
+        if self._key is None:
+            self._key = ec.derive_private_key(self._secret, ec.SECP256K1())
+        return self._key
+
+
 # --- what the chains show --------------------------------------------------------------------
 
 def observe(rpc: Any, lock: dict | None, my_addresses: set[str],
@@ -169,6 +187,15 @@ CREATE TABLE IF NOT EXISTS standing_order (  -- what this node will answer a pro
     get  TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS delegated (       -- a seller's order this node finishes with the order's own key
+    order_id  TEXT PRIMARY KEY,
+    key       TEXT NOT NULL,                  -- the order key's secret, hex (this file is the node's, 0600 home)
+    deposit   TEXT NOT NULL,                  -- {network: P2PKH of the order key}: where the seller's side waits
+    payout    TEXT NOT NULL,                  -- {network: the seller's own address}: where the proceeds go
+    owner     TEXT NOT NULL DEFAULT '',       -- the account that delegated it
+    state     TEXT NOT NULL DEFAULT 'open',   -- open | filled | returned
+    created   REAL NOT NULL DEFAULT 0
+);
 """
 
 
@@ -188,6 +215,10 @@ class NodeTrader:
         self._db_path = self.home / "trades.sqlite"
         with self._db() as conn:
             conn.executescript(SCHEMA)
+            try:                                       # which order a trade answers (delegated orders' keys)
+                conn.execute("ALTER TABLE link ADD COLUMN order_id TEXT NOT NULL DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass
         self._scanned: dict[str, int] = {}
         self._addresses: dict[str, str] = {}
 
@@ -211,6 +242,57 @@ class NodeTrader:
             conn.execute("INSERT OR REPLACE INTO standing_order(id, give, get) VALUES(?,?,?)",
                          (order_id, json.dumps(what(give)), json.dumps(what(get))))
         courier.mesh_inbox(self.state)                    # reachable on the mesh for whoever takes it
+
+    def delegate(self, order_id: str, give: dict, get: dict, key_hex: str, deposit: dict, payout: dict,
+                 owner: str = "") -> bytes:
+        """Take on a seller's order to finish it with its own key (HeldKey): answer proposals, lock from the deposit,
+        claim to the seller's payout address. Returns the order key's public key."""
+        import json
+        key = HeldKey(key_hex)
+        if give["network"] not in deposit or get["network"] not in payout:
+            raise ValueError("a deposit on the giving chain and a payout on the getting chain are needed")
+        self.stand(order_id, give, get)
+        self._watch_deposit(give["network"], deposit[give["network"]])
+        with self._db() as conn:
+            conn.execute("INSERT OR REPLACE INTO delegated(order_id, key, deposit, payout, owner, state, created) "
+                         "VALUES(?,?,?,?,?,'open',?)", (order_id, key_hex, json.dumps(deposit), json.dumps(payout),
+                                                         owner, time.time()))
+        return key.pubkey
+
+    #: How far back a new deposit address is read for coins sent to it before the order reached this node.
+    DEPOSIT_LOOKBACK = 100
+
+    def _watch_deposit(self, network: str, address: str) -> None:
+        """The order key's address is watched from now (utxos.watch: the index follows only what it is asked to),
+        and the last DEPOSIT_LOOKBACK blocks are read for the deposit the browser made just before."""
+        import contextlib
+        from . import utxos
+        chain = self.chains[network]
+        index = self.state.token_index(chain)
+        with contextlib.closing(index.open()) as db:
+            height = index.indexed_height() or 0
+            utxos.watch(db, address, height, why="delegated order")
+        with chain.rpc() as rpc:
+            tip = rpc.get_block_count()
+            utxos.backfill(index, rpc, chain.params, address, max(0, tip - self.DEPOSIT_LOOKBACK), tip)
+
+    def delegated(self, order_id: str) -> dict | None:
+        import json
+        with self._db() as conn:
+            row = conn.execute("SELECT * FROM delegated WHERE order_id=?", (order_id,)).fetchone()
+        if row is None:
+            return None
+        return {**dict(row), "deposit": json.loads(row["deposit"]), "payout": json.loads(row["payout"]),
+                "held": HeldKey(row["key"])}
+
+    def has_delegated(self) -> bool:
+        with self._db() as conn:
+            return conn.execute("SELECT 1 FROM delegated WHERE state='open' LIMIT 1").fetchone() is not None
+
+    def _order_of(self, trade_id: str) -> dict | None:
+        with self._db() as conn:
+            row = conn.execute("SELECT order_id FROM link WHERE id=?", (trade_id,)).fetchone()
+        return self.delegated(row["order_id"]) if row and row["order_id"] else None
 
     def propose(self, peer_pub: bytes, order_id: str, give: T.Leg, get: T.Leg,
                 now: int | None = None) -> T.Trade:
@@ -301,11 +383,15 @@ class NodeTrader:
     def tick(self, now: int | None = None) -> list[tuple[str, str, str]]:
         """Read new trade steps, then take each open trade one step. Returns what was
         done: [(trade id, step, why)]. Does nothing while the operator's switch is off."""
-        if not self.enabled():
+        on = self.enabled()
+        if not on and not self.has_delegated():
             return []
         done: list[tuple[str, str, str]] = []
         self._read_inbox()
         for trade in self.book.open_trades():
+            # The operator's switch covers the node's own trading; a seller's delegated order is the seller's.
+            if not on and self._order_of(trade.id) is None:
+                continue
             step, why = self._advance(trade, int(now or time.time()))
             done.append((trade.id, step, why))
         return done
@@ -346,13 +432,18 @@ class NodeTrader:
         import json
         with self._db() as conn:
             order = conn.execute("SELECT * FROM standing_order WHERE id=?", (said["order"],)).fetchone()
+        held = self.delegated(said["order"]) if order is not None else None
+        if order is not None and held is None and not self.enabled():
+            order = None                                   # the node's own orders wait for the operator's switch
+        if held is not None and held["state"] != "open":
+            order = None
         if order is None:
             courier.send(self.state, self.messaging, bytes.fromhex(peer),
                          M.build("cancel", said["id"], reason="no such order here"))
             return
         want_give, want_get = json.loads(order["give"]), json.loads(order["get"])
         they_give, they_get = M.leg_from(said["give"]), M.leg_from(said["get"])
-        mine = self.key.pubkey.hex()
+        mine = (held["held"] if held else self.key).pubkey.hex()
         ok = (they_get.network == want_give["network"] and they_get.kind == want_give["kind"]
               and they_get.asset == want_give["asset"] and they_get.amount == want_give["amount"]
               and they_get.giver_key == mine
@@ -369,7 +460,8 @@ class NodeTrader:
                         need=self.need(they_get, they_give))
         self.book.save(trade)
         with self._db() as conn:
-            conn.execute("INSERT INTO link(id, peer, agreed) VALUES(?,?,1)", (trade.id, peer))
+            conn.execute("INSERT INTO link(id, peer, agreed, order_id) VALUES(?,?,1,?)",
+                         (trade.id, peer, said["order"] if held else ""))
         courier.send(self.state, self.messaging, bytes.fromhex(peer), M.build("accept", trade.id))
 
     def _note(self, said: dict) -> None:
@@ -495,15 +587,37 @@ class NodeTrader:
                                   reference_value=T.LOCK_RESERVE)
         return sender.broadcast(prepared)
 
-    def _way_out(self, coin: dict, leg: T.Leg, redeem: bytes, chain: Any):
-        """The claim or refund's inputs and outputs, to this node: the coin itself, or the
+    def _way_out(self, coin: dict, leg: T.Leg, redeem: bytes, chain: Any, to: str = ""):
+        """The claim or refund's inputs and outputs, to this node (or `to`): the coin itself, or the
         token/NFT moved out by the lock's own reserve."""
-        to = self._address(leg.network)
+        to = to or self._address(leg.network)
         if leg.kind == "coin":
             return H.pay_out(coin, to)
         if leg.kind == "doginal":
             return H.doginal_out(coin, {"txid": coin["txid"], "vout": 1, "value": coin["reserve"]}, to)
         return H.move_out(coin, H.address_of(redeem, chain.params), T.move_data(leg), to)
+
+    def _delegated_lock(self, held: dict, leg: T.Leg, lock_address: str, chain: Any, rpc: Any) -> str:
+        """The seller's side into its lock from the order's deposit address, signed with the order's key: a coin
+        straight in; a token or NFT as one OP_RETURN plus the lock's reserve (last, so the lock is the recipient)."""
+        import contextlib
+        from . import encoding, fees, funding, inscriptions as I, payload as P, tokens as tokenlib, txbuild
+        deposit = held["deposit"][leg.network]
+        lock_script = txbuild.p2pkh_script(lock_address)
+        if leg.kind == "coin":
+            outputs = [(leg.amount, lock_script)]
+        elif leg.kind in ("token", "nft"):
+            raw = (tokenlib.send_payload(int(leg.asset), leg.amount) if leg.kind == "token"
+                   else P.AnyData(data=I.Transfer(txid=bytes.fromhex(leg.asset)).encode()).encode())
+            outputs = [(0, txbuild.op_return_script(encoding.encode_class_c(raw))), (T.LOCK_RESERVE, lock_script)]
+        else:
+            raise ValueError(f"a delegated order does not lock a {leg.kind} yet")
+        with contextlib.closing(self.state.token_index(chain).open()) as db:
+            unsigned = funding.build(db, chain.params, deposit, outputs, rate=fees.MIN_FEE_PER_KB,
+                                     what=f"lock order {held['order_id']}")
+        key = held["held"]
+        signatures = [key.sign(bytes.fromhex(h)).hex() for h in unsigned.sighashes]
+        return rpc.call("sendrawtransaction", funding.assemble(unsigned, signatures, key.pubkey))
 
     def _advance(self, trade: T.Trade, now: int) -> tuple[str, str]:
         with self._db() as conn:
@@ -519,17 +633,23 @@ class NodeTrader:
         mine = _pointer(link["my_lock"])
         theirs = _pointer(link["their_lock"])
         give_chain, get_chain = self.chains[trade.give.network], self.chains[trade.get.network]
+        held = self._order_of(trade.id)
+        key = held["held"] if held else self.key
+        home_give = held["deposit"][trade.give.network] if held else self._address(trade.give.network)
+        home_get = held["payout"][trade.get.network] if held else self._address(trade.get.network)
         with give_chain.rpc() as grpc, get_chain.rpc() as trpc:
             facts = T.Facts(
-                mine=self._asset(observe(grpc, mine, {self._address(trade.give.network)}, self._scanned),
+                mine=self._asset(observe(grpc, mine, {home_give}, self._scanned),
                                  trade.give, trade.my_redeem(), give_chain, grpc),
-                theirs=self._asset(observe(trpc, theirs, {self._address(trade.get.network)}, self._scanned),
+                theirs=self._asset(observe(trpc, theirs, {home_get}, self._scanned),
                                    trade.get, trade.their_redeem(), get_chain, trpc))
             step, why = T.next_step(trade, facts, now)
             peer = bytes.fromhex(link["peer"])
             if step == T.LOCK:
                 lock_address = H.address_of(trade.my_redeem(), give_chain.params)
-                if trade.give.kind == "coin":
+                if held:
+                    txid = self._delegated_lock(held, trade.give, lock_address, give_chain, grpc)
+                elif trade.give.kind == "coin":
                     txid = self._send_coins(grpc, trade.give.network, lock_address, trade.give.amount)
                 elif trade.give.kind == "doginal":
                     txid = self._lock_doginal(trade.give, trade.my_redeem(), grpc)
@@ -544,20 +664,29 @@ class NodeTrader:
                     "locked", trade.id, network=trade.give.network, txid=txid, vout=vout))
             elif step == T.CLAIM:
                 coin = {**theirs, "value": facts.theirs.value, "reserve": facts.theirs.reserve}
-                inputs, outputs = self._way_out(coin, trade.get, trade.their_redeem(), get_chain)
+                inputs, outputs = self._way_out(coin, trade.get, trade.their_redeem(), get_chain, to=home_get)
                 txid = trpc.call("sendrawtransaction", H.claimed(
-                    inputs, outputs, trade.their_redeem(), bytes.fromhex(trade.secret), self.key.sign))
+                    inputs, outputs, trade.their_redeem(), bytes.fromhex(trade.secret), key.sign))
                 courier.send(self.state, self.messaging, peer, M.build(
                     "claimed", trade.id, network=trade.get.network, txid=txid))
             elif step == T.REFUND:
                 coin = {**mine, "value": facts.mine.value, "reserve": facts.mine.reserve}
-                inputs, outputs = self._way_out(coin, trade.give, trade.my_redeem(), give_chain)
+                inputs, outputs = self._way_out(coin, trade.give, trade.my_redeem(), give_chain, to=home_give)
                 txid = grpc.call("sendrawtransaction", H.refunded(
-                    inputs, outputs, trade.my_redeem(), self.key.sign))
+                    inputs, outputs, trade.my_redeem(), key.sign))
                 courier.send(self.state, self.messaging, peer, M.build(
                     "refunded", trade.id, network=trade.give.network, txid=txid))
             elif step in (T.DONE, T.ABORT):
                 trade.state = "done" if step == T.DONE else "aborted"
+                if held and step == T.DONE:
+                    # Taken whole: the order is filled, off this node's book, and answers no one else.
+                    with self._db() as conn:
+                        conn.execute("UPDATE delegated SET state='filled' WHERE order_id=?", (held["order_id"],))
+                    self.withdraw(held["order_id"])
+                    try:
+                        self.state.trade_orders.cancel_id(held["order_id"])
+                    except Exception:                      # noqa: BLE001 -- a node without the order book
+                        pass
             trade.note = why
             self.book.save(trade)
         return step, why
