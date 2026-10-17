@@ -228,7 +228,7 @@
       <div class="obrow {{ side_ }}{{ ' mine' if o.mine }}" style="--depth:{{ o.depth }}%">
         <span class="obprice mono">{{ ex.px(o.price) }}</span>
         <span class="obamt"><span class="mono">{% if whole %}1{% else %}{{ o.base_shown }}{% endif %}</span>
-          <small class="muted">for {{ o.quote_shown }} {{ qname }} &middot; {% if o.mine %}yours{% else %}{{ o.lister|who }}{% endif %}</small></span>
+          <small class="muted">{% if o.mine %}yours{% else %}{{ o.lister|who }}{% endif %}</small></span>
         <span class="obdo">
           {%- if o.mine %}<span class="muted" style="font-size:.74rem">yours</span>
           {%- elif can_trade_orders %}
@@ -251,6 +251,12 @@
         {%- elif asks or bids %}<span class="muted">Only one side has orders so far.</span>{% endif %}</div>
       {% endif %}
       {% endfor %}
+    </div>
+
+    <div class="panel">
+      <h3 style="margin:0 0 2px">Recent trades</h3>
+      <p class="muted" style="font-size:.78rem;margin:0 0 6px">In {{ qname }}</p>
+      <p class="muted" style="margin:0">No swap has settled on this market yet.</p>
     </div>
   </div>
 </div>

@@ -169,7 +169,7 @@
     <div class="obrow {{ side_ }}{{ ' mine' if o.mine }}" style="--depth:{{ o.depth }}%">
       <span class="obprice mono">{{ "%.8f"|format(o.each)|trim('0')|trim('.') }}</span>
       <span class="obamt"><span class="mono">{{ o.base_shown }}</span>
-        <small class="muted">for {{ o.quote_shown }} {{ qname }} &middot; {% if o.mine %}yours{% else %}{{ o.address|who }}{% endif %}
+        <small class="muted">{% if o.mine %}yours{% else %}{{ o.address|who }}{% endif %}
           {%- if o.pending %} &middot; {{ 'trades when its block lands' if o.crosses else 'waiting for its block' }}{% endif %}</small></span>
       <span class="obdo">{% if takes and not o.mine and not o.pending %}<button type="button" class="small{{ '' if side_ == 'ask' else ' ghost' }}" data-ex-take
           data-side="{{ 'buy' if side_ == 'ask' else 'sell' }}" data-amount="{{ o.base_shown }}" data-price="{{ ex.px(o.each) }}">{{ 'Buy' if side_ == 'ask' else 'Sell' }}</button>{% endif %}</span>
@@ -190,11 +190,15 @@
     <h3 style="margin:0 0 2px">Recent trades</h3>
     <p class="muted" style="font-size:.78rem;margin:0 0 6px">In {{ qname }}</p>
     {% if trades %}
-    <table style="width:100%;font-size:.86rem">
-      <tr class="muted" style="font-size:.74rem;text-transform:uppercase;letter-spacing:.06em"><td>Price</td><td style="text-align:right">{{ bname }}</td><td style="text-align:right">Block</td></tr>
+    <table>
+      <tr class="muted" style="font-size:.74rem;text-transform:uppercase;letter-spacing:.06em">
+        <td>Price</td><td style="text-align:right">Amount</td>
+        <td style="text-align:right">{{ qname }}</td><td style="text-align:right">Block</td></tr>
       {% for t in trades %}
-      <tr><td class="mono" style="color:{{ 'var(--ok)' if t.side == 'buy' else 'var(--bad)' }}">{{ "%.8f"|format(t.each)|trim('0')|trim('.') if t.each is not none else '—' }}</td>
-          <td class="mono" style="text-align:right">{{ t.base_shown }}</td><td class="muted" style="text-align:right">{{ "{:,}".format(t.height) }}</td></tr>
+      <tr><td class="mono">{{ "%.8f"|format(t.each) if t.each is not none else '—' }}</td>
+          <td class="mono" style="text-align:right">{{ t.base_shown }}</td>
+          <td class="mono muted" style="text-align:right">{{ t.quote_shown }}</td>
+          <td class="muted" style="text-align:right">{{ "{:,}".format(t.height) }}</td></tr>
       {% endfor %}
     </table>
     {% else %}<p class="muted" style="margin:0">Nothing has traded on this pair yet.</p>{% endif %}
