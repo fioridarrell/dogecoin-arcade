@@ -910,7 +910,7 @@ document.addEventListener('click', function (ev) {
     <button type="button" data-mode="all" aria-pressed="true">All collections</button>
     <button type="button" data-mode="new" data-href="/me/nfts" aria-pressed="false">+ List yours</button>
   </div>
-  <input autocomplete="off" id="marketfind" class="ex-find" type="search" placeholder="Search {{ collections|length }} collection{{ '' if collections|length == 1 else 's' }}"
+  <input autocomplete="off" id="marketfind" class="ex-find" type="search" placeholder="Search {{ (collections|length) + (ord_rows or [])|length }} collections"
          oninput="findMarket(this.value)" aria-label="Search collections">
   <div class="ex-list" id="markets">
     <p class="ex-note" id="fav-empty" hidden style="margin:6px 4px 10px">Tap &#9734; on any collection to keep it here.</p>
@@ -975,7 +975,7 @@ document.addEventListener('click', function (ev) {
   </table></div>
   {% endif %}
 
-  {% if not collections %}
+  {% if not collections and not ord_rows %}
   <div class="panel empty"><p>No collections
     {%- if show == 'cross' %} have a piece on the cross-chain book{% else %} are indexed on {{ show if show != 'mix' else 'any chain' }}{% endif %} yet.</p>
     <p class="muted" style="font-size:.86rem">A collection appears here because it
