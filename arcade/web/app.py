@@ -3364,7 +3364,7 @@ def create_app(state: AppState) -> FastAPI:
         return out
 
     @app.get("/u/{tag}/pieces")
-    def profile_pieces(tag: str, collection: str = "", offset: int = 0):
+    def profile_pieces(tag: str, collection: str = "", offset: int = 0, chain: str = ""):
         """One collection of what somebody holds, sixty at a time, for the
         profile's Collections tab. Public, as the chain is: the same pieces
         /u/{tag}/wallet lists, cut by collection ("" for the loose ones)."""
@@ -3374,6 +3374,15 @@ def create_app(state: AppState) -> FastAPI:
             return JSONResponse({"detail": f"nobody holds @{wanted} on this chain"},
                                 status_code=404)
         _tchain, index = _token_chain()
+        if chain and chain != _tchain.network:
+            # Another chain's pieces: at the address the profile published for it.
+            other = next((c for c in state.token_chains if c.network == chain), None)
+            profile = _profile_of(address) or {}
+            where = (profile.get("doge", "") if other is not None and other.is_doge
+                     else profile.get("mainnet", "") if other is not None else "")
+            if not where:
+                return JSONResponse({"pieces": [], "more": False})
+            address, index = where, state.token_index(other)
         rows = index.inscriptions(pieces_only=True, owner=address, collection=collection,
                                   limit=61, offset=max(0, int(offset)))
         return JSONResponse({
@@ -3689,6 +3698,10 @@ def create_app(state: AppState) -> FastAPI:
                 entry["tokens"] = [row for row in index.balances([where])
                                    if row["balance"]]
                 entry["pieces"] = index.inscriptions(pieces_only=True, owners=[where], limit=24)
+                # By collection, each opened a page at a time (2026-10-17: "Sort by collection and Paginate the
+                # NFTs while viewing someone wallet").
+                entry["groups"] = sorted(index.held_collections(where),
+                                         key=lambda g: (g["collection"] == "", str(g["collection"]).lower()))
             except Exception:
                 pass
             # From the index's own watch of the address, as every account page

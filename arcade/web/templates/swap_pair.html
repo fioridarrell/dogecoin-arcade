@@ -131,7 +131,19 @@
             <span class="unit">{{ wall(b.name, 'token name') }}</span></div></div>
         <div class="ex-box" id="swap-price-box"><label for="swap-price"><span>{{ 'Price' if whole else 'Price each' }}</span><span>Total <b data-ex-total>0</b> {{ qname }}</span></label>
           <div class="line"><input autocomplete="off" id="swap-price" inputmode="decimal" placeholder="0.00000000">
-            <span class="unit">{{ qname }}</span></div></div>
+            {#- Priced in any coin, or any token you hold (2026-10-17: "make an offer in any coin or token you
+                hold. Just like token pairs"): each is its own market, so picking one opens it. #}
+            {%- if quotes %}
+            <select class="unit ex-quote-pick" aria-label="Priced in"
+                    onchange="location.href = '/exchange/swap/{{ b.key|urlencode }}/' + encodeURIComponent(this.value)">
+              <option value="{{ q.key }}" selected>{{ qname }}</option>
+              {%- for o in quotes if not o.on %}<option value="{{ o.key }}">{{ o.label }}</option>{% endfor %}
+            </select>
+            {%- else %}<span class="unit">{{ qname }}</span>{% endif %}</div></div>
+      <style>
+        .ex-quote-pick{background:transparent;border:0;color:inherit;font:inherit;font-weight:700;text-align:right;
+          max-width:52%;padding:2px 0;cursor:pointer;box-shadow:none}
+      </style>
         <div class="ex-quote"></div>
         <button type="button" id="swap-go" class="ex-cta">Enter an amount</button>
       </div>
