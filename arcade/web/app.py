@@ -17395,6 +17395,58 @@ def create_app(state: AppState) -> FastAPI:
                          "cover": coll["cover"], "word": _ord_word(oc), "coin": NETWORKS[oc.network].coin})
         return rows
 
+    @app.get("/r/collection-item/{network}/{inscription}")
+    def r_collection_item(network: str, inscription: str):
+        """Which collection an ord inscription belongs to, its number and traits, as its collection JSON says
+        (arcade/collection_registry.py); 404 when no collection this node knows names it. For any page or game."""
+        found = state.collection_registry().item(network, str(inscription).lower())
+        if found is None:
+            return JSONResponse({"detail": "no collection this arcade knows names that inscription"}, status_code=404)
+        return JSONResponse({"inscription": found["id"], "collection": {"root": found["root"], "name": found["name"]},
+                             "number": found["number"], "traits": found["traits"]},
+                            headers={"Cache-Control": "public, max-age=60"})
+
+    @app.get("/r/doginals/{address}")
+    def r_doginals(address: str):
+        """The Doginals a Dogecoin address holds that belong to a collection this node knows, with their numbers and
+        traits (2026-10-17, for games: a holder of a collection's piece gets something for it in a game).
+        `address` is the Dogecoin address, or the same key's address on Pepecoin (an account's), which names the
+        same Dogecoin address. Coins not readable just now are counted in `unknown`, not guessed."""
+        from .. import doginals as doginalslib
+        from ..script import b58check_decode
+        doge = state.doge
+        if doge is None or not state.chain_ready(doge):
+            return JSONResponse({"detail": "this arcade's Dogecoin node is not ready"}, status_code=503)
+        try:
+            _, h160 = b58check_decode(str(address))
+        except Exception:
+            return JSONResponse({"detail": "that is not an address"}, status_code=400)
+        if len(h160) != 20:
+            return JSONResponse({"detail": "that is not a key's address"}, status_code=400)
+        there = b58check_encode(doge.params.pubkeyhash_version, h160)
+        guard = fundinglib.guard_for(there) or fundinglib.GUARD
+        if guard is None:
+            return JSONResponse({"detail": "Doginals are not checked on this node"}, status_code=503)
+        reg = state.collection_registry()
+        with contextlib.closing(state.token_index(doge).open()) as db:
+            coins = [c for c in utxoslib.unspent(db, there) if int(c["value"]) <= doginalslib.POSTAGE_MAX]
+        items, unknown = [], 0
+        for c in coins:
+            try:
+                on = guard.held(c["txid"]).get(int(c["vout"])) or []
+            except doginalslib.Unknown:
+                unknown += 1
+                continue
+            for ins in on:
+                found = reg.item("doge", str(ins.get("id") or ""))
+                if found is not None:
+                    items.append({"inscription": found["id"], "collection": {"root": found["root"],
+                                                                              "name": found["name"]},
+                                  "number": found["number"], "traits": found["traits"]})
+        items.sort(key=lambda i: (i["collection"]["name"].lower(), i["number"]))
+        return JSONResponse({"address": there, "items": items, "unknown": unknown},
+                            headers={"Cache-Control": "no-store"})
+
     @app.get("/exchange/ord/{root}", response_class=HTMLResponse)
     def ord_collection(request: Request, root: str, page: int = 1, number: int = 0):
         """A Doginals (or Pepinals) collection that described itself in an inscription: what is for sale, then every

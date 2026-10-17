@@ -189,3 +189,20 @@ def test_a_collection_json_gets_a_row_and_a_page_with_its_listings(doge):
     assert "Page 1 of 3" in page and ">#25<" not in page and ">#25<" in app.get(f"/exchange/ord/{root}?page=2").text
     assert ">#40<" in app.get(f"/exchange/ord/{root}?number=40").text
     assert app.get("/exchange/ord/" + "cd" * 32).status_code == 404
+
+
+def test_a_game_reads_which_collection_pieces_an_address_holds(doge):
+    """2026-10-17: a holder of a collection's Doginal gets something for it in a game. /r/doginals answers for
+    the Dogecoin address, or for the same key's Pepecoin address (an account's)."""
+    from arcade.script import b58check_decode
+    app, state, chain, node = doge
+    root = _collection(state, [f"{k:064x}i0" for k in range(1, 3)] + [INSCRIPTION])
+    said = app.get(f"/r/doginals/{SELLER}").json()
+    assert said["address"] == SELLER and said["unknown"] == 0
+    assert said["items"] == [{"inscription": INSCRIPTION, "number": 3, "traits": {"Fur": "Red"},
+                              "collection": {"root": root, "name": "Anti Doginal Dogs"}}]
+    pep = b58check_encode(111, b58check_decode(SELLER)[1])
+    assert app.get(f"/r/doginals/{pep}").json()["items"] == said["items"], "the same key on Pepecoin"
+    assert app.get(f"/r/doginals/{BUYER}").json()["items"] == []
+    assert app.get(f"/r/collection-item/doge/{INSCRIPTION}").json()["number"] == 3
+    assert app.get(f"/r/collection-item/doge/{'ef' * 32}i0").status_code == 404
