@@ -155,6 +155,7 @@ PUBLIC_TREES = (
     "/exchange/swap/",        # every cross-chain market, through lock scripts (2026-10-15)
     "/exchange/trade/",       # one trade: who sold, who bought (2026-10-17)
     "/exchange/history",      # the reader's own trades (2026-10-17)
+    "/exchange/swap-trade/",  # one finished lock-script swap (2026-10-17)
     "/exchange/coins/",       # a coin pair: redirects to its swap market
 )
 
@@ -422,6 +423,8 @@ PUBLIC_POST = ("/auth/challenge", "/auth/login", "/auth/logout",
                "/account/orders/alive",
                # swap messages over the mesh (talk_relay): sealed to another page's key
                "/account/talk/relay",
+               # a finished lock-script swap, for its market's history (swap_history)
+               "/account/trade/done",
                "/signup")
 
 #: What an inscribed page's own hostname may reach, and nothing else. A page

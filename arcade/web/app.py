@@ -23473,6 +23473,7 @@ def create_app(state: AppState) -> FastAPI:
         public = _account_view(request)
         viewer = "wallet" if not public else ("account" if signed_in(request) is not None else "nobody")
         rows: list[dict] = []
+        everyone: set[str] = set()
         for chain in state.token_chains:
             try:
                 if viewer == "wallet":
@@ -23487,6 +23488,7 @@ def create_app(state: AppState) -> FastAPI:
                 mine = set()
             if not mine:
                 continue
+            everyone |= mine
             index = state.token_index(chain)
             coin = chain.params.coin
 
@@ -23529,6 +23531,19 @@ def create_app(state: AppState) -> FastAPI:
                                      "side": "sold", "what": label(g), "for": label(k), "who": ""})
             except Exception:
                 pass
+        # Finished lock-script swaps (swap_history), each opening its own page.
+        for r in state.swap_history().of(everyone):
+            try:
+                b, q = _leg_info(r["base"]), _leg_info(r["quote"])
+            except ValueError:
+                continue
+            amt = lambda leg, n: ("1" if leg["kind"] in ("nft", "doginal") else format_amount(n, leg["divisible"])
+                                  if leg["kind"] == "token" else f"{n / COIN:,.8f}".rstrip("0").rstrip("."))  # noqa: E731
+            sold = r["seller"] in everyone
+            rows.append({"txid": r["id"], "net": b["network"], "chain": b["chain"], "when": r["at"],
+                         "side": "sold" if sold else "bought", "what": f"{amt(b, r['base_amount'])} {b['name']}",
+                         "for": f"{amt(q, r['quote_amount'])} {q['name']}", "who": r["buyer"] if sold else r["seller"],
+                         "href": f"/exchange/swap-trade/{r['id']}"})
         rows.sort(key=lambda r: -(r["when"] or 0))
         return render(request, "trade_history.html", rows=rows[:300], viewer=viewer)
 
@@ -23888,13 +23903,29 @@ def create_app(state: AppState) -> FastAPI:
                             held_shown = f"{utxoslib.balance(db, address) / COIN:,.8f}".rstrip("0").rstrip(".")
             except Exception:
                 held_shown = None
-        frame = chartlib.timeframe(request.query_params.get("tf", "1d"))
+        # Its history (swap_history, 2026-10-17: "the recent trades didn't update and there is no
+        # chart"): every finished swap on this market, as the token/coin page draws its trades.
+        def units(leg: dict, n: int) -> float:
+            return 1.0 if leg["kind"] in ("nft", "doginal") else (n / COIN if leg["divisible"] else float(n))
+        points, recent = [], []
+        for r in state.swap_history().for_pair(b["key"], q["key"]):
+            size, paid = units(b, r["base_amount"]), units(q, r["quote_amount"])
+            if size > 0:
+                points.append({"when": r["at"], "height": 0, "txid": r["id"], "price": paid / size, "size": size})
+                recent.append({"id": r["id"], "price": paid / size, "size": size, "total": paid, "when": r["at"]})
+        day = chartlib.day(points)
+        if points:
+            last = points[0]["price"]
+        asked_tf = request.query_params.get("tf", "")
+        frame = chartlib.timeframe(asked_tf if asked_tf in {t[0] for t in chartlib.TIMEFRAMES}
+                                   else chartlib.pick_timeframe(points))
         best = asks[0]["price"] if (asks := book["asks"]) else (book["bids"][0]["price"] if book["bids"] else None)
         most = max([o["base_amount"] for o in book["asks"] + book["bids"]] or [1]) or 1
         for o in book["asks"] + book["bids"]:
             o["depth"] = round(100 * o["base_amount"] / most)
         return render(request, "swap_pair.html", b=b, q=q, here=here, quotes=quotes,
-                      face=face, held=held_shown, best=best, slots=[],
+                      face=face, held=held_shown, best=best, day=day, recent=recent[:20],
+                      slots=chartlib.candles(points, buckets=frame[2], span=frame[1]),
                       tf=frame[0], timeframes=[t[0] for t in chartlib.TIMEFRAMES],
                       held_url=f"/exchange/x/{b['kind']}/{b['asset']}?held=1",
                       b_form=_leg_form(b), q_form=_leg_form(q),
@@ -24821,6 +24852,75 @@ def create_app(state: AppState) -> FastAPI:
     def _tab_live(lister: str) -> bool:
         """A browser's listing stands only while its lister's page is open (order_presence)."""
         return state.order_presence().live(lister)
+
+    @app.post("/account/trade/done")
+    def account_trade_done(request: Request, payload: Any = Body(None)):
+        """A lock-script swap this page finished (wallet.js, when its state turns "done"): filed
+        for its market once both locks are on their chains (arcade/swap_history.py)."""
+        account = _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        try:
+            tid = str(said.get("id", ""))
+            if not re.fullmatch(r"tr-[0-9a-f]{16}", tid):
+                raise ValueError("a swap id")
+            sides = []
+            for name in ("give", "get"):
+                leg = said.get(name) if isinstance(said.get(name), dict) else {}
+                side = {"network": str(leg.get("network", "")), "kind": str(leg.get("kind") or "coin"),
+                        "asset": str(leg.get("asset") or ""), "amount": int(leg.get("amount") or 0)}
+                if side["network"] not in NETWORKS or side["amount"] <= 0:
+                    raise ValueError("each side names its chain and an amount")
+                sides.append(side)
+            give, get = sides
+            locks = {}
+            for name, side in (("my_lock", give), ("their_lock", get)):
+                txid = str(said.get(name, "")).lower()
+                if not re.fullmatch(r"[0-9a-f]{64}", txid):
+                    raise ValueError("both locks, by txid")
+                chain = next((c for c in state.token_chains if c.network == side["network"]), None)
+                if chain is None:
+                    raise ValueError("this node does not run that chain")
+                with chain.rpc() as rpc:
+                    rpc.call("getrawtransaction", txid)          # raises if the chain has no such lock
+                locks[name] = txid
+            me = _account_address(account.pubkey, _account_chain()) or ""
+            other = trade_orders_lister = ""
+            if said.get("role") == "initiator" and said.get("order"):
+                trade_orders_lister = state.trade_orders.lister_of(str(said["order"]))
+                other = trade_orders_lister
+            base, quote = trade_orders.base_first(give, get)
+            sold_base = base is give
+            state.swap_history().record(
+                tid, trade_orders.leg_key(base), trade_orders.leg_key(quote), base["amount"], quote["amount"],
+                seller=me if sold_base else other, buyer=other if sold_base else me,
+                lock_base=locks["my_lock"] if sold_base else locks["their_lock"],
+                lock_quote=locks["their_lock"] if sold_base else locks["my_lock"])
+        except (ValueError, TypeError) as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        except Exception as exc:                            # noqa: BLE001 -- e.g. a lock not on its chain yet
+            return JSONResponse({"detail": f"not filed yet: {exc}"[:200]}, status_code=409)
+        state.bump_generation()
+        return JSONResponse({"ok": True})
+
+    @app.get("/exchange/swap-trade/{tid}", response_class=HTMLResponse)
+    def exchange_swap_trade(request: Request, tid: str):
+        """One finished lock-script swap: who sold, who bought, what each gave, and its two locks."""
+        row = state.swap_history().get(tid)
+        if row is None:
+            raise HTTPException(404, "no such swap here")
+        b, q = _leg_info(row["base"]), _leg_info(row["quote"])
+        amount = lambda leg, n: ("1" if leg["kind"] in ("nft", "doginal") else
+                                 format_amount(n, leg["divisible"]) if leg["kind"] == "token"
+                                 else f"{n / COIN:,.8f}".rstrip("0").rstrip("."))  # noqa: E731
+        fills = [{"seller": row["seller"], "buyer": row["buyer"],
+                  "sold": f"{amount(b, row['base_amount'])} {b['name']}",
+                  "paid": f"{amount(q, row['quote_amount'])} {q['name']}",
+                  "how": "A lock-script swap: both sides locked on their own chain, then each claimed the other's"}]
+        said = urllib.parse.urlsplit(request.headers.get("referer") or "")
+        back = (said.path + (f"?{said.query}" if said.query else "")) if said.path.startswith("/exchange") else "/exchange?tab=tokens"
+        return render(request, "trade.html", txid=row["lock_base"], chain=b["chain"], fills=fills, inputs=[],
+                      confirmations=0, when=row["at"], height=None, back=back,
+                      second={"txid": row["lock_quote"], "chain": q["chain"]})
 
     @app.post("/account/talk/relay")
     def talk_relay_send(request: Request, payload: Any = Body(None)):

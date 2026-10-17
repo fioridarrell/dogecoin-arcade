@@ -36,14 +36,14 @@
   {{ ex.fav_button(fav_key(here)) }}
 </div>
 <div class="ex-price">
-  {%- if last is not none %}<b>{{ ex.px(last) }}</b><span class="unit">{{ qname }} {{ unit }}</span>
+  {%- if last is not none %}<b>{{ ex.px(last) }}</b><span class="unit">{{ qname }} {{ unit }}</span>{% if day.change is not none %}{{ ex.chg(day.change, day.new) }}{% endif %}
   {%- elif best is not none %}<b>{{ ex.px(best) }}</b><span class="unit">{{ qname }} {{ unit }}, {{ 'lowest ask' if asks else 'highest bid' }}</span>
   {%- else %}<b>&mdash;</b><span class="unit">no trades yet</span>{% endif %}
 </div>
 <div class="ex-stats">
-  <span>24h high <b>&mdash;</b></span>
-  <span>24h low <b>&mdash;</b></span>
-  <span>24h volume <b>0</b> {{ qname }}</span>
+  <span>24h high <b>{% if day.high is not none %}{{ ex.px(day.high) }}{% else %}&mdash;{% endif %}</b></span>
+  <span>24h low <b>{% if day.low is not none %}{{ ex.px(day.low) }}{% else %}&mdash;{% endif %}</b></span>
+  <span>24h volume <b>{{ "%.4f"|format(day.coins) }}</b> {{ qname }}</span>
   {% if held is not none %}<span>You hold <b>{{ held }}</b></span>{% endif %}
 </div>
 {% if viewer != 'nobody' %}<p style="margin:-6px 0 12px;font-size:.84rem"><a href="/exchange/history">Your trade history &rarr;</a></p>{% endif %}
@@ -264,7 +264,22 @@
     <div class="panel">
       <h3 style="margin:0 0 2px">Recent trades</h3>
       <p class="muted" style="font-size:.78rem;margin:0 0 6px">In {{ qname }}</p>
-      <p class="muted" style="margin:0">No swap has settled on this market yet.</p>
+      {% if recent %}
+      <table>
+        <tr class="muted" style="font-size:.74rem;text-transform:uppercase;letter-spacing:.06em">
+          <td>Price</td><td style="text-align:right">Amount</td>
+          <td style="text-align:right">{{ qname }}</td><td style="text-align:right">When</td></tr>
+        {% for t in recent %}
+        <tr class="tradelink" data-href="/exchange/swap-trade/{{ t.id }}" title="Who traded"><td class="mono"><a href="/exchange/swap-trade/{{ t.id }}" style="color:inherit">{{ "%.8f"|format(t.price) }}</a></td>
+            <td class="mono" style="text-align:right">{{ "{:,.8f}".format(t.size).rstrip('0').rstrip('.') }}</td>
+            <td class="mono muted" style="text-align:right">{{ "%.4f"|format(t.total) }}</td>
+            <td class="muted" style="text-align:right"><span data-when-short="{{ t.when }}"></span></td></tr>
+        {% endfor %}
+      </table>
+      <script>document.querySelectorAll("[data-when-short]").forEach(function (e) {
+        var d = new Date(Number(e.dataset.whenShort) * 1000);
+        e.textContent = d.toLocaleDateString(undefined, {month: "short", day: "numeric"}) + " " + d.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"}); });</script>
+      {% else %}<p class="muted" style="margin:0">No swap has settled on this market yet.</p>{% endif %}
     </div>
   </div>
 </div>

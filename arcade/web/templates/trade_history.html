@@ -18,9 +18,10 @@
     <tr class="muted" style="font-size:.74rem;text-transform:uppercase;letter-spacing:.06em">
       <td>When</td><td>You</td><td style="text-align:right">For</td></tr>
     {% for r in rows %}
-    <tr class="tradelink" data-href="/exchange/trade/{{ r.txid }}?chain={{ r.net }}">
+    {% set href = r.href or ('/exchange/trade/' ~ r.txid ~ '?chain=' ~ r.net) %}
+    <tr class="tradelink" data-href="{{ href }}">
       <td class="muted" style="font-size:.8rem;white-space:nowrap"><span data-when="{{ r.when }}"></span><br>{{ net_badge(r.chain) }}</td>
-      <td><a href="/exchange/trade/{{ r.txid }}?chain={{ r.net }}" style="color:inherit"><b>{{ r.side }}</b> {{ r.what }}</a>
+      <td><a href="{{ href }}" style="color:inherit"><b>{{ r.side }}</b> {{ r.what }}</a>
         {% if r.who %}<br><small class="muted">with {{ r.who|who }}</small>{% endif %}</td>
       <td class="mono" style="text-align:right">{{ r.for }}</td></tr>
     {% endfor %}
