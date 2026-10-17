@@ -721,6 +721,18 @@ document.addEventListener('click', function (ev) {
      that chain's own market (instant, one transaction); two chains list a swap, settled by lock
      scripts. Below it, the swaps every arcade lists, each with its price. #}
   {% set trades_here = (viewer == 'account' and can_list_orders) or can_trade_orders %}
+  <style>
+    .pick{position:relative;flex:1 1 170px;min-width:0;display:block}
+    .pick-q{width:100%;box-sizing:border-box}
+    .pick-list{position:absolute;z-index:30;left:0;right:0;top:calc(100% + 4px);max-height:280px;overflow-y:auto;
+      background:var(--panel,#1b1916);border:1px solid var(--line,#3a352d);border-radius:12px;padding:4px;
+      box-shadow:0 10px 28px rgba(0,0,0,.45)}
+    .pick-row{display:flex;justify-content:space-between;align-items:baseline;gap:10px;width:100%;text-align:left;
+      background:none;border:0;border-radius:8px;padding:9px 10px;color:inherit;font:inherit;cursor:pointer}
+    .pick-row:hover,.pick-row.on{background:var(--hover,rgba(255,255,255,.07))}
+    .pick-held{color:var(--muted,#a69d8e);font-size:.82rem;white-space:nowrap}
+    .pick-none{display:block;padding:9px 10px;color:var(--muted,#a69d8e);font-size:.86rem}
+  </style>
   <div class="ex-card" id="trade-orders" style="margin-top:18px">
     <h3 style="margin:0 0 4px">Trade any pair</h3>
     <p class="muted" style="font-size:.84rem;margin:0 0 12px">Both on one chain: that chain's own market, settled
@@ -735,17 +747,21 @@ document.addEventListener('click', function (ev) {
       </div>
       <div class="row" style="gap:6px;flex-wrap:wrap;align-items:center">
         <input name="amount" inputmode="decimal" placeholder="1000" autocomplete="off" style="width:96px;flex:0 0 auto" aria-label="How many">
-        <select id="pair-base" name="base" style="flex:1 1 150px;min-width:0" aria-label="Of what">
+        {#- Search boxes, not drop-downs (2026-10-17): the reader's own half lists only what they hold,
+            with how much; the select behind each box keeps the value the form sends. #}
+        <span class="pick" data-for="pair-base"><input type="search" class="pick-q" placeholder="Search a coin or token" autocomplete="off" role="combobox" aria-expanded="false" aria-label="Of what"><span class="pick-list" role="listbox" hidden></span></span>
+        <select id="pair-base" name="base" hidden aria-label="Of what">
           {#- Coins and tokens only (2026-10-17: "NFT's should not be in the coin and token pair list"): a piece is sold from its own page. #}
-          {%- for o in pair_choices or [] if o.kind not in ('nft', 'doginal') %}<option value="{{ o.key }}" data-net="{{ o.net }}" data-kind="{{ o.kind }}" data-div="{{ 1 if o.divisible else 0 }}" data-name="{{ o.name }}"{% if loop.first and o.kind != 'coin' %} selected{% endif %}>{{ o.label }}</option>{% endfor %}
+          {%- for o in pair_choices or [] if o.kind not in ('nft', 'doginal') %}<option value="{{ o.key }}" data-net="{{ o.net }}" data-kind="{{ o.kind }}" data-div="{{ 1 if o.divisible else 0 }}" data-name="{{ o.name }}" data-mine="{{ 1 if o.mine else 0 }}" data-held="{{ o.held }}"{% if loop.first and o.kind != 'coin' %} selected{% endif %}>{{ o.label }}</option>{% endfor %}
         </select>
         <input name="token" inputmode="numeric" placeholder="token #" autocomplete="off" hidden style="width:96px;flex:0 0 auto" aria-label="Token number">
       </div>
       <div class="row" style="gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px">
         <span class="muted" style="font-size:.9rem">at</span>
         <input name="price" inputmode="decimal" placeholder="price" autocomplete="off" style="width:96px;flex:0 0 auto" aria-label="Price">
-        <select id="pair-quote" name="quote" style="flex:1 1 150px;min-width:0" aria-label="Priced in">
-          {%- for o in pair_choices or [] if o.kind not in ('nft', 'other') %}<option value="{{ o.key }}" data-net="{{ o.net }}" data-kind="{{ o.kind }}" data-div="{{ 1 if o.divisible else 0 }}" data-name="{{ o.name }}"{% if loop.index == 2 %} selected{% endif %}>{{ o.label }}</option>{% endfor %}
+        <span class="pick" data-for="pair-quote"><input type="search" class="pick-q" placeholder="Search a coin or token" autocomplete="off" role="combobox" aria-expanded="false" aria-label="Priced in"><span class="pick-list" role="listbox" hidden></span></span>
+        <select id="pair-quote" name="quote" hidden aria-label="Priced in">
+          {%- for o in pair_choices or [] if o.kind not in ('nft', 'other') %}<option value="{{ o.key }}" data-net="{{ o.net }}" data-kind="{{ o.kind }}" data-div="{{ 1 if o.divisible else 0 }}" data-name="{{ o.name }}" data-mine="{{ 1 if o.mine else 0 }}" data-held="{{ o.held }}"{% if loop.index == 2 %} selected{% endif %}>{{ o.label }}</option>{% endfor %}
         </select>
         <span class="muted" style="font-size:.9rem">per <b id="pair-per">each</b></span>
       </div>
@@ -765,6 +781,9 @@ document.addEventListener('click', function (ev) {
         f.token.hidden = !other;
         document.getElementById('pair-per').textContent = nft ? 'it' : other ? ('token #' + (f.token.value || '…')) : (a.name || 'each');
         var same = a.net && a.net === b.net, sum = document.getElementById('pair-sum'), go = document.getElementById('pair-go');
+        go.disabled = !a.net || !b.net;
+        if (go.disabled) { sum.textContent = (f.side.value === 'buy' ? 'Pick what you pay with' : 'Pick what you sell')
+          + ': only coins and tokens in your wallet can go on your side.'; return; }
         go.textContent = same || !trades ? 'Open the market' : 'Place order';
         if (same) { sum.textContent = 'One chain: this opens its own market, where it trades instantly.'; return; }
         if (n > 0 && p > 0) {
@@ -775,7 +794,73 @@ document.addEventListener('click', function (ev) {
         } else sum.textContent = trades ? 'Fill in how many and the price each.' : '';
       }
       ['input', 'change'].forEach(function (e) { f.addEventListener(e, draw); });
-      draw();
+      // The two search boxes. The reader's own half -- what they pay on a bid, what they sell on an
+      // ask -- offers only what they hold, each with how much; the other half offers anything.
+      var known = {{ 'false' if pair_viewer == 'nobody' else 'true' }};
+      function ownHalf(sel) { return known && (f.side.value === 'buy' ? sel === f.quote : sel === f.base); }
+      function allowed(sel, o) { return !ownHalf(sel) || o.dataset.mine === '1'; }
+      function shown(sel) { var o = sel.selectedOptions[0]; return o && allowed(sel, o) ? o.textContent : ''; }
+      var boxes = [].slice.call(f.querySelectorAll('.pick')).map(function (box) {
+        var sel = document.getElementById(box.dataset.for), q = box.querySelector('.pick-q'),
+            list = box.querySelector('.pick-list'), at = -1;
+        function open(on) { list.hidden = !on; q.setAttribute('aria-expanded', on ? 'true' : 'false'); }
+        function choose(o) {
+          sel.value = o.value; q.value = o.textContent; open(false);
+          sel.dispatchEvent(new Event('change', {bubbles: true}));
+        }
+        function fill() {
+          var words = q.value.trim().toLowerCase(), opts = [].slice.call(sel.options).filter(function (o) {
+            return allowed(sel, o) && (!words || q.value === shown(sel)
+              || (o.textContent + ' ' + o.value).toLowerCase().indexOf(words) >= 0);
+          });
+          list.innerHTML = ''; at = -1;
+          if (!opts.length) {
+            var none = document.createElement('span'); none.className = 'pick-none';
+            none.textContent = ownHalf(sel) ? 'Nothing you hold matches. You can only offer coins and tokens in your wallet.'
+                                            : 'Nothing matches.';
+            list.appendChild(none);
+          }
+          opts.slice(0, 60).forEach(function (o) {
+            var row = document.createElement('button'); row.type = 'button'; row.className = 'pick-row';
+            row.setAttribute('role', 'option'); row.dataset.value = o.value;
+            var name = document.createElement('span'); name.textContent = o.textContent; row.appendChild(name);
+            if (o.dataset.held) {
+              var has = document.createElement('span'); has.className = 'pick-held';
+              has.textContent = 'you have ' + o.dataset.held; row.appendChild(has);
+            }
+            row.addEventListener('mousedown', function (e) { e.preventDefault(); choose(o); });
+            list.appendChild(row);
+          });
+          open(true);
+        }
+        q.addEventListener('focus', function () { q.select(); fill(); });
+        q.addEventListener('input', function (e) { e.stopPropagation(); fill(); });
+        q.addEventListener('blur', function () { open(false); q.value = shown(sel); });
+        q.addEventListener('keydown', function (e) {
+          var rows = list.querySelectorAll('.pick-row');
+          if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault(); if (list.hidden) fill();
+            at = Math.max(0, Math.min(rows.length - 1, at + (e.key === 'ArrowDown' ? 1 : -1)));
+            rows.forEach(function (r, i) { r.classList.toggle('on', i === at); });
+            if (rows[at]) rows[at].scrollIntoView({block: 'nearest'});
+          } else if (e.key === 'Enter' && !list.hidden) {
+            e.preventDefault();
+            var r = rows[at < 0 ? 0 : at]; if (r) choose(sel.querySelector('option[value="' + CSS.escape(r.dataset.value) + '"]'));
+          } else if (e.key === 'Escape') { open(false); q.blur(); }
+        });
+        return {sel: sel, q: q, sync: function () {
+          // A side switch can leave the reader's half on something they do not hold: take the first they do.
+          var o = sel.selectedOptions[0];
+          if (!o || !allowed(sel, o)) {
+            var first = [].slice.call(sel.options).filter(function (x) { return allowed(sel, x); })[0];
+            if (first) sel.value = first.value; else sel.selectedIndex = -1;
+          }
+          q.value = shown(sel);
+        }};
+      });
+      function syncAll() { boxes.forEach(function (b) { b.sync(); }); draw(); }
+      [].slice.call(f.side).forEach(function (r) { r.addEventListener('change', syncAll); });
+      syncAll();
     })();
     </script>
 

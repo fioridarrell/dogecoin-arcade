@@ -278,10 +278,16 @@ def test_the_list_form_offers_a_token_the_account_holds(world, monkeypatch):
         assert nft.count() == 0, "no NFT in the coin and token pair list (2026-10-17)"
         option = tab.locator('#pair-base option[value="regtest-token-150"]')
         assert option.count() == 1 and "Gold" in option.inner_text()
-        tab.select_option("#pair-base", "regtest-token-150")
-        tab.select_option("#pair-quote", "doge-coin")
-        # "I want to sell 40 Gold at 0.05 DOGE per Gold" (2026-10-15), straight from the box.
+        # "I want to sell 40 Gold at 0.05 DOGE per Gold" (2026-10-15), straight from the box,
+        # picked in its search boxes (2026-10-17): your own half lists what you hold, with how much.
         tab.click('#start-market label:has(input[value=sell])')
+        tab.fill('.pick[data-for="pair-base"] .pick-q', "gold")
+        row = tab.locator('.pick[data-for="pair-base"] .pick-row[data-value="regtest-token-150"]')
+        assert "you have 100" in row.inner_text()
+        row.dispatch_event("mousedown")
+        tab.fill('.pick[data-for="pair-quote"] .pick-q', "doge")
+        tab.locator('.pick[data-for="pair-quote"] .pick-row[data-value="doge-coin"]').dispatch_event("mousedown")
+        assert tab.input_value("#pair-base") == "regtest-token-150" and tab.input_value("#pair-quote") == "doge-coin"
         tab.fill("#start-market input[name=amount]", "40")
         tab.fill("#start-market input[name=price]", "0.05")
         assert "You get 2 DOGE for 40 Gold" in tab.inner_text("#pair-sum")

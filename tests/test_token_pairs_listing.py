@@ -64,12 +64,17 @@ def test_opening_a_pair_offers_only_what_you_hold_and_the_two_coins(client, monk
     page = app.get("/exchange?tab=tokens").text
     # One trade box (2026-10-15): "I want to buy/sell <amount> <A> at <price> <B> per <A>".
     assert 'id="pair-base"' in page and 'id="pair-quote"' in page
+    # Search boxes (2026-10-17): the reader's own half lists only what they hold, with
+    # how much; the other half can name any token. Each option says which it is.
     for side in (page[page.index('id="pair-base"'):], page[page.index('id="pair-quote"'):]):
         side = side[:side.index("</select>")]
-        assert "GOLD (#8)" in side, "what this wallet holds"
-        assert "LOGS (#7)" not in side and "ORE (#9)" not in side, "and nothing it does not"
-        # Every chain's coin, open (2026-10-15: one way for every pair, cross-chain included).
+        gold = side[side.index('value="regtest-token-8"'):]
+        gold = gold[:gold.index(">")]
+        assert 'data-mine="1"' in gold and 'data-held="' in gold and "GOLD (#8)" in side, "what this wallet holds"
+        logs = side[side.index('value="regtest-token-7"'):]
+        assert 'data-mine="0"' in logs[:logs.index(">")], "anything else is there, marked not yours"
         assert 'value="regtest-coin"' in side and 'value="main-coin"' in side, "plus both Pepecoins"
+    assert page.count('class="pick-q"') == 2
 
 
 def test_the_testnet_coin_opens_the_tokens_coin_market(client, monkeypatch):

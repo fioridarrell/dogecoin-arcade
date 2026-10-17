@@ -23295,53 +23295,91 @@ def create_app(state: AppState) -> FastAPI:
         return P.MetaDExCancelPair(property_id_for_sale=sale["property_id"],
                                    property_id_desired=want["property_id"])
 
-    def _pair_choices(request: Request, viewer: str) -> list[dict[str, Any]]:
+    def _pair_choices(request: Request, viewer: str, everything: bool = False) -> list[dict[str, Any]]:
         """What the "Start a market" box offers (2026-10-15: every pair the same way):
         the coin of every chain this node runs, then the tokens and pieces this reader holds on
         each (2026-10-06: only what you hold, so the list is not a million long).
-        Each {key (trade_orders.leg_key), label, kind, net}."""
+        Each {key (trade_orders.leg_key), label, kind, net, mine, held}: `held` is how much the
+        reader has, as the wallet shows it ("" for nothing). 2026-10-17: "the users half of
+        the contract should only show tokens and coins that they possess along with the total
+        amount they possess" -- the box's own half lists `mine` ones; with `everything`, the
+        other half can also name any token on the chain (search boxes, not drop-downs)."""
         out: list[dict[str, Any]] = []
         chains = list(state.token_chains)
+        account = signed_in(request) if viewer == "account" else None
+        where: dict[str, tuple[list[str], list[str]]] = {}
         for c in chains:
+            at: list[str] = []
+            pieces_at: list[str] = []
+            if viewer == "nobody":
+                pass
+            elif account is not None:
+                at = pieces_at = [a for a in [_account_address(account.pubkey, c)] if a]
+            else:
+                try:
+                    with c.rpc() as rpc:
+                        at = list(_ledger_addresses(rpc))
+                except HTTPException:
+                    raise
+                except Exception:
+                    log.debug("the node's addresses on %s could not be read", c.network, exc_info=True)
+                try:
+                    pieces_at = [state.home_address(c)]
+                except HTTPException:
+                    raise
+                except Exception:
+                    log.debug("the node's home on %s could not be read", c.network, exc_info=True)
+            where[c.network] = (at, pieces_at)
+            held = ""
+            if at:
+                try:
+                    index = state.token_index(c)
+                    with contextlib.closing(index.open()) as db:
+                        sats = sum(utxoslib.balance(db, a) for a in at)
+                    held = f"{sats / COIN:,.8f}".rstrip("0").rstrip(".") if sats else ""
+                except Exception:
+                    log.debug("the coins held on %s could not be read", c.network, exc_info=True)
             out.append({"key": f"{c.network}-coin", "kind": "coin", "net": c.network,
                         "name": NETWORKS[c.network].coin, "divisible": True,
-                        "label": f"{NETWORKS[c.network].coin} \u00b7 {c.title or c.net}"})
-        if viewer == "nobody":
+                        "label": f"{NETWORKS[c.network].coin} \u00b7 {c.title or c.net}",
+                        "mine": bool(held), "held": held})
+        if viewer == "nobody" and not everything:
             return out
-        account = signed_in(request) if viewer == "account" else None
         for c in chains:
+            at, pieces_at = where.get(c.network, ([], []))
             try:
                 index = state.token_index(c)
-                at, pieces_at = [], []
-                if account is not None:
-                    at = pieces_at = [a for a in [_account_address(account.pubkey, c)] if a]
-                else:
-                    try:
-                        with c.rpc() as rpc:
-                            at = list(_ledger_addresses(rpc))
-                    except HTTPException:
-                        raise
-                    except Exception:
-                        log.debug("the node's addresses on %s could not be read", c.network, exc_info=True)
-                    try:
-                        pieces_at = [state.home_address(c)]
-                    except HTTPException:
-                        raise
-                    except Exception:
-                        log.debug("the node's home on %s could not be read", c.network, exc_info=True)
                 held: dict[int, dict] = {}
                 for row in index.balances(at):
-                    if row["property_id"] not in held:
-                        prop = index.property(row["property_id"]) or {}
-                        held[row["property_id"]] = {
-                            "key": f"{c.network}-token-{row['property_id']}", "kind": "token", "net": c.network,
+                    pid = row["property_id"]
+                    if pid not in held:
+                        prop = index.property(pid) or {}
+                        held[pid] = {
+                            "key": f"{c.network}-token-{pid}", "kind": "token", "net": c.network,
                             "name": wall_plain(row["name"], "token"), "divisible": bool(prop.get("divisible", True)),
-                            "label": f"{wall_plain(row['name'], 'token')} (#{row['property_id']}) \u00b7 {NETWORKS[c.network].coin}"}
+                            "label": f"{wall_plain(row['name'], 'token')} (#{pid}) \u00b7 {NETWORKS[c.network].coin}",
+                            "mine": True, "units": 0}
+                    held[pid]["units"] += int(row["balance"] or 0)
+                for t in held.values():
+                    t["held"] = format_amount(t.pop("units"), t["divisible"])
                 out += sorted(held.values(), key=lambda t: t["label"].lower())
+                if everything:
+                    rest = []
+                    for prop in index.properties():
+                        pid = int(prop["property_id"])
+                        if pid in held:
+                            continue
+                        name = wall_plain(prop.get("name") or f"Token {pid}", "token")
+                        rest.append({"key": f"{c.network}-token-{pid}", "kind": "token", "net": c.network,
+                                     "name": name, "divisible": bool(prop.get("divisible", True)),
+                                     "label": f"{name} (#{pid}) \u00b7 {NETWORKS[c.network].coin}",
+                                     "mine": False, "held": ""})
+                    out += rest[:2000]
                 for r in index.inscriptions(owners=[a for a in pieces_at if a], limit=50):
                     out.append({"key": f"{c.network}-nft-{r['txid']}", "kind": "nft", "net": c.network,
                                 "name": f"NFT #{r['number']}", "divisible": False,
-                                "label": f"NFT #{r['number']} \u00b7 {NETWORKS[c.network].coin}"})
+                                "label": f"NFT #{r['number']} \u00b7 {NETWORKS[c.network].coin}",
+                                "mine": True, "held": "1"})
             except HTTPException:
                 raise
             except Exception:
@@ -23351,7 +23389,8 @@ def create_app(state: AppState) -> FastAPI:
         for c in chains:
             if not c.is_doge:
                 out.append({"key": f"other:{c.network}", "kind": "other", "net": c.network, "name": "",
-                            "divisible": True, "label": f"Another token on {NETWORKS[c.network].coin} (by number)\u2026"})
+                            "divisible": True, "label": f"Another token on {NETWORKS[c.network].coin} (by number)\u2026",
+                            "mine": False, "held": ""})
         return out
 
     @app.post("/exchange/pairs")
@@ -25513,7 +25552,7 @@ def create_app(state: AppState) -> FastAPI:
                 raise
             except Exception:
                 data["held_nfts"] = []
-            data["pair_choices"] = _pair_choices(request, data["pair_viewer"])
+            data["pair_choices"] = _pair_choices(request, data["pair_viewer"], everything=True)
         elif tab == "market":
             # A collection is a market of its own, and the marketplace is the
             # list of them -- the same table the Tokens tab draws for pairs.
