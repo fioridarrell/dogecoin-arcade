@@ -82,3 +82,8 @@ class SwapHistory:
             rows = conn.execute(f"SELECT rowid AS seq, * FROM swap_trade WHERE seller IN ({marks}) OR buyer IN ({marks})"
                                 " ORDER BY at DESC LIMIT ?", (*addresses, *addresses, int(limit))).fetchall()
         return [dict(r) for r in rows]
+
+    def pairs(self) -> list[tuple[str, str]]:
+        """Every market with a finished swap: (base, quote) as the book orients them."""
+        with self._open() as conn:
+            return [(r[0], r[1]) for r in conn.execute("SELECT DISTINCT base, quote FROM swap_trade")]

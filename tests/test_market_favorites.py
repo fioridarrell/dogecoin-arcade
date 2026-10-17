@@ -67,3 +67,18 @@ def test_a_starred_market_stays_listed_with_nothing_on_its_book(client, monkeypa
     page = app.get("/exchange?tab=tokens", headers=LOCAL).text
     assert f'data-fav-key="{key}"' in page, "no order on it, and still in the list"
     assert 'id="mktmode"' in page
+
+
+def test_a_lock_script_market_with_trades_is_listed_with_its_price(client, monkeypatch):
+    """2026-10-17: "The pair has activity, but it is not showing on the pair listing" -- a token/DOGE swap
+    market lived only on its own page; now the list carries it, with its last trade, like every other market."""
+    app, state = client
+    _gold(monkeypatch)
+    net = state.messaging.network
+    state.swap_history().record("tr-0000000000000001", f"{net}-token-59", "doge-coin", 1000 * COIN, 114_000_000,
+                                seller="nA", buyer="nB")
+    page = app.get("/exchange?tab=tokens").text
+    row = page[page.index(f'href="/exchange/swap/{net}-token-59/doge-coin"') - 400:]
+    row = row[:row.index("</a>")]
+    assert "LOGS" in row and "0.00114" in row, "named, and priced at its last swap"
+    assert "1 trade today" in row

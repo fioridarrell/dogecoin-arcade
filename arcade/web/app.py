@@ -22340,6 +22340,63 @@ def create_app(state: AppState) -> FastAPI:
     #: mainnet only, and cross chain only Sort buttons to the token exchange").
     PAIR_SHOWS = ("mix", "testnet", "mainnet", "dogecoin", "cross")
 
+    def _swap_market_rows(request: Request, rows: list[dict[str, Any]], show: str) -> list[dict[str, Any]]:
+        """Lock-script markets in the list like any other (2026-10-17: "The pair has activity, but it is not
+        showing on the pair listing. Also, the listing is missing the token icon"): every pair with a finished swap
+        (swap_history) or a swap on its book now, with its last price, the day, its orders and the token's face."""
+        if show not in ("mix", "cross"):
+            return []
+        have = {r["href"] for r in rows}
+        try:
+            orders = _trade_order_view(request).get("trade_orders") or []
+        except Exception:                                  # noqa: BLE001 -- the book is a bonus here
+            orders = []
+        keys = set(state.swap_history().pairs())
+        for o in orders:
+            try:
+                b_, q_ = trade_orders.base_first(o["give"], o["get"])
+                keys.add((trade_orders.leg_key(b_), trade_orders.leg_key(q_)))
+            except Exception:                              # noqa: BLE001
+                continue
+        out = []
+        for bk, qk in sorted(keys):
+            href = f"/exchange/swap/{bk}/{qk}"
+            if href in have:
+                continue
+            try:
+                b, q = _leg_info(bk), _leg_info(qk)
+            except ValueError:
+                continue
+            if b["kind"] in ("nft", "doginal") or q["kind"] in ("nft", "doginal"):
+                continue                                   # pieces are sold from their own pages
+            def units(leg: dict, n: int) -> float:
+                return n / COIN if leg["divisible"] else float(n)
+            points = []
+            for r in state.swap_history().for_pair(bk, qk):
+                size, paid = units(b, r["base_amount"]), units(q, r["quote_amount"])
+                if size > 0:
+                    points.append({"when": r["at"], "height": 0, "txid": r["id"], "price": paid / size, "size": size})
+            book = trade_orders.pair_book(orders, b, q)
+            stats = chartlib.day(points)
+            change, new = chartlib.table_move(points, stats["change"]) if points else (None, False)
+            row = {"href": href, "switch": "", "name": b["name"], "quote_label": q["name"],
+                   "chain_net": b["network"], "quote_net": q["network"], "net": "cross",
+                   "mainnet": b["chain"].is_mainnet, "property_id": None, "icon": "", "about": "",
+                   "orders": len(book["asks"]) + len(book["bids"]), "all_trades": len(points),
+                   "last": stats["last"] if points else None, "change": change, "new": new,
+                   "trades": stats["trades"] if points else 0, "coins": stats["coins"] if points else 0,
+                   "ask": book["asks"][0]["price"] if book["asks"] else None,
+                   "bid": book["bids"][0]["price"] if book["bids"] else None}
+            if b["kind"] == "token" and b.get("prop"):
+                try:
+                    face = _faces_for(state.token_index(b["chain"]), [b["prop"]]).get(int(b["asset"]), {})
+                    row.update(icon=face.get("icon", ""), about=face.get("about", ""), property_id=int(b["asset"]),
+                               managed=b["prop"].get("managed", 0), divisible=b["divisible"])
+                except Exception:                          # noqa: BLE001 -- no face, a letter instead
+                    log.debug("no face for %s", bk, exc_info=True)
+            out.append(row)
+        return out
+
     def _favorite_rows(request: Request, chain, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """A starred market stays in the list with nothing on its book (2026-10-17: "Once a pair has been
         favored, it should not be removed from the users list"): a quiet row, its name and chains, no price, for each
@@ -22381,6 +22438,10 @@ def create_app(state: AppState) -> FastAPI:
                     b, q = _leg_info(swap[1]), _leg_info(swap[2])
                     row.update(name=b["name"], quote_label=q["name"], chain_net=b["network"],
                                quote_net=q["network"], mainnet=b["chain"].is_mainnet, net="cross")
+                    if b["kind"] == "token" and b.get("prop"):
+                        face = _faces_for(state.token_index(b["chain"]), [b["prop"]]).get(int(b["asset"]), {})
+                        row.update(icon=face.get("icon", ""), property_id=int(b["asset"]),
+                                   managed=b["prop"].get("managed", 0))
                 else:
                     continue
             except (StopIteration, ValueError, KeyError):
@@ -25593,6 +25654,8 @@ def create_app(state: AppState) -> FastAPI:
             # (D-048). Clicking one opens its own page.
             data["show"] = show if show in PAIR_SHOWS else "mix"
             data["pairs"] = _pairs_by_net(chain, index, trades, data["show"])
+            data["pairs"] += _swap_market_rows(request, data["pairs"], data["show"])
+            data["pairs"].sort(key=_by_popularity)
             data["pairs"] += _favorite_rows(request, chain, data["pairs"])
             # The open-a-pair box (2026-10-06: "When creating a pair the
             # drop-down should only list assets that you have in your wallet"):
