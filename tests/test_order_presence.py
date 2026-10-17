@@ -64,6 +64,9 @@ def test_the_book_shows_a_tab_order_only_while_its_lister_is_live(tmp_path):
     assert ids(True) == {"tab-0001", "node-0001"}
     assert ids(False) == {"node-0001"}, "the closed page's swap comes off; the node's own stays"
     assert book.tab_listers() == {"nLister"}
+    assert {o["id"] for o in book.visible(lambda n: True, tab_live=lambda a: False,
+                                          browser=lambda a: a == "nLister")} == set(), \
+        "an older listing by one of this node's accounts needs its page open too"
 
 
 def test_a_mesh_node_knows_a_room_live_here_or_elsewhere():

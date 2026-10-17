@@ -2749,6 +2749,16 @@ export async function tradeTick(wallet, id) {
     trade.state = "aborted"; trade.note = "the other side walked away; nothing was locked";
     keepTrade(wallet, trade); return trade;
   }
+  // Nobody answered: the lister's page is closed (or its wallet locked), and only it can accept.
+  // Called off with nothing locked, rather than "proposed" for ever (2026-10-17: the Buy
+  // button "is not working ... the lock script is not being sent").
+  if (!trade.agreed && trade.role === "initiator" && Date.now() - (trade.created || 0) > PROPOSE_WAIT) {
+    trade.state = "aborted";
+    trade.note = "no answer: the seller's arcade page is not open, so nothing was locked. Try again when it is";
+    keepTrade(wallet, trade);
+    tradeSay(wallet, trade.peer, {t: "trade", v: 1, id: trade.id, step: "cancel"}).catch(() => {});
+    return trade;
+  }
   if (!trade.agreed) { keepTrade(wallet, trade); return trade; }
   const {myRedeem, theirRedeem} = await redeemsOf(trade);
   const facts = {
@@ -3016,6 +3026,9 @@ async function tradePass() {
     try { globalThis.dispatchEvent(new CustomEvent("arcade:trades")); } catch (e) {}
   } finally { runnerBusy = false; }
 }
+
+//: How long a take waits for the lister's page to accept before it is called off (nothing locked).
+export const PROPOSE_WAIT = 120 * 1000;
 
 //: How often an open page with listed swaps says it is here (order_presence.ALIVE_FOR is 12 s).
 export const ALIVE_BEAT = 3000;

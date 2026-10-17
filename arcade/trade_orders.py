@@ -173,7 +173,8 @@ class OrderBook:
         return filed
 
     def visible(self, online: Callable[[str], bool], now: float | None = None,
-                tab_live: Callable[[str], bool] | None = None) -> list[dict]:
+                tab_live: Callable[[str], bool] | None = None,
+                browser: Callable[[str], bool] | None = None) -> list[dict]:
         """Orders to show: not expired, not cancelled, and their node online right now -- and one
         a browser listed (`tab`), only while that lister's page is open (order_presence)."""
         now = now or time.time()
@@ -183,19 +184,24 @@ class OrderBook:
         out = []
         for row in rows:
             body = json.loads(row["body"])
-            if online(row["node"]) and not (body.get("tab") and tab_live is not None
+            # `browser`: a lister known to list from a browser though its order predates the flag
+            # (this node's own accounts).
+            tab = body.get("tab") or (browser is not None and browser(row["lister"]))
+            if online(row["node"]) and not (tab and tab_live is not None
                                             and not tab_live(row["lister"])):
                 out.append({**json.loads(row["body"]), "lister": row["lister"],
                             "inscription": row["inscription"], "network": row["network"]})
         return out
 
     def tab_listers(self, now: float | None = None) -> set[str]:
-        """Who has a standing order a browser listed (`tab`): their pages must be open for it."""
+        """Who has a standing order (the pool watch redraws the markets when any of them come or go)."""
         now = now or time.time()
         with self._open() as conn:
             rows = conn.execute("SELECT lister, body FROM trade_order WHERE cancelled=0 AND expires>?",
                                 (int(now),)).fetchall()
-        return {r["lister"] for r in rows if json.loads(r["body"]).get("tab")}
+        # Every lister, flagged or not: whether each is live is the caller's question, and asking
+        # it of a node-held order costs nothing and never changes.
+        return {r["lister"] for r in rows}
 
     def cursor(self, network: str) -> int:
         with self._open() as conn:

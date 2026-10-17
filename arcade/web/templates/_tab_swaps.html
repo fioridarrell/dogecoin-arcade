@@ -146,9 +146,48 @@
       } catch (e) { alert(String(e.message || e)); }
       finally { button.disabled = false; }
     });
+    // What happened to the reader's swaps, said as it happens (2026-10-17: "there needs
+    // to be some kind of notification that it happened"): a toast at each step, and on a market
+    // page (#swap-progress) a card with the swaps still running or just finished.
+    const SAID = {proposed: "Swap asked: waiting for the seller's page to accept",
+                  accepted: "Swap accepted: locking your side", locked: "Your side is locked: waiting for theirs, then it settles",
+                  done: "Swap done", aborted: "Swap called off"};
+    const seenStates = (() => { try { return JSON.parse(sessionStorage.getItem("arcade-swap-states") || "{}"); } catch (e) { return {}; } })();
+    function tell(all) {
+      let changed = false;
+      for (const t of all) {
+        if (seenStates[t.id] === t.state) continue;
+        const first = !(t.id in seenStates);
+        seenStates[t.id] = t.state; changed = true;
+        // A swap already finished before this page opened is history, not news.
+        if (first && (t.state === "done" || t.state === "aborted") && Date.now() - (t.created || 0) > 10 * 60 * 1000) continue;
+        if (globalThis.arcadeToast) arcadeToast(`${SAID[t.state] || t.state}: ${amt(t.give)} for ${amt(t.get)}`
+                                                + (t.state === "aborted" && t.note ? ` (${t.note})` : ""));
+      }
+      if (changed) try { sessionStorage.setItem("arcade-swap-states", JSON.stringify(seenStates)); } catch (e) {}
+    }
+    function progress(all) {
+      const card = document.getElementById("swap-progress");
+      if (!card) return;
+      const shown = all.filter((t) => !["done", "aborted"].includes(t.state) || Date.now() - (t.created || 0) < 30 * 60 * 1000).slice(0, 5);
+      card.hidden = !shown.length;
+      card.querySelector("[data-list]").replaceChildren(...shown.map((t) => {
+        const p = document.createElement("div");
+        p.style.cssText = "display:flex;gap:8px;align-items:baseline;padding:4px 0;font-size:.88rem";
+        const pill = document.createElement("span");
+        pill.className = "ex-pill" + (t.state === "done" ? " done" : "");
+        pill.textContent = t.state === "proposed" ? "asked" : t.state === "aborted" ? "called off" : t.state;
+        const what = document.createElement("span");
+        what.textContent = `${amt(t.give)} for ${amt(t.get)}${t.note ? " \u00b7 " + t.note : ""}`;
+        p.append(pill, what);
+        return p;
+      }));
+    }
     function draw(w) {
       drawOrders(w);
-      const all = wallet.myTrades(w).sort((a, b) => b.created - a.created).slice(0, 10);
+      const every = wallet.myTrades(w).sort((a, b) => b.created - a.created);
+      tell(every); progress(every);
+      const all = every.slice(0, 10);
       box.hidden = !all.length;
       list.replaceChildren(...all.map((t) => {
         const p = document.createElement("p");
