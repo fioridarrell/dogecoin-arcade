@@ -195,7 +195,7 @@
         <td>Price</td><td style="text-align:right">Amount</td>
         <td style="text-align:right">{{ qname }}</td><td style="text-align:right">Block</td></tr>
       {% for t in trades %}
-      <tr><td class="mono">{{ "%.8f"|format(t.each) if t.each is not none else '—' }}</td>
+      <tr class="tradelink" data-href="/exchange/trade/{{ t.txid }}?chain={{ chain.network }}" title="Who traded"><td class="mono"><a href="/exchange/trade/{{ t.txid }}?chain={{ chain.network }}" style="color:inherit">{{ "%.8f"|format(t.each) if t.each is not none else '—' }}</a></td>
           <td class="mono" style="text-align:right">{{ t.base_shown }}</td>
           <td class="mono muted" style="text-align:right">{{ t.quote_shown }}</td>
           <td class="muted" style="text-align:right">{{ "{:,}".format(t.height) }}</td></tr>

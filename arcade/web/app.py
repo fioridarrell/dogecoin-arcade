@@ -23386,6 +23386,75 @@ def create_app(state: AppState) -> FastAPI:
             return back
         return RedirectResponse(where, status_code=303)
 
+    @app.get("/exchange/trade/{txid}", response_class=HTMLResponse)
+    def exchange_trade(request: Request, txid: str):
+        """One trade, opened from a market's Recent trades (2026-10-17: "The recent trades
+        should be clickable and show more information like who was on both sides of the trade").
+
+        Who is the chain's to say: a take (type 29) is its sender buying from the resting
+        order's maker; a token-for-token match names its taker and each maker it met; a
+        one-transaction swap's seller is its sender and its buyer the first input that is not
+        the seller's (inscriptions.Swap)."""
+        from .. import inscriptions as I
+        from ..indexer import PrevOutCache
+        txid = txid.strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", txid):
+            raise HTTPException(404, "a trade is named by its txid")
+        asked = request.query_params.get("chain", "")
+        chain = next((c for c in state.token_chains if c.network == asked), None) or _token_chain()[0]
+        index = state.token_index(chain)
+        coin = chain.params.coin
+
+        def leg_text(kind: int, pid: int, amount: int, ins: str = "") -> tuple[str, str]:
+            if kind == I.LEG_COINS:
+                return f"{amount / COIN:,.8f}".rstrip("0").rstrip("."), coin
+            if kind == I.LEG_TOKEN:
+                prop = index.property(pid) or {}
+                return format_amount(amount, bool(prop.get("divisible", True))), str(prop.get("name") or f"token #{pid}")
+            return "1", f"inscription {ins[:12]}…"
+
+        fills: list[dict] = []
+        with contextlib.closing(index.open()) as db:
+            sender = db.conn.execute("SELECT sender, block_height FROM arcade_tx WHERE txid = ?", (txid,)).fetchone()
+            take = db.conn.execute("SELECT * FROM take_trade WHERE txid = ?", (txid,)).fetchone()
+            pairs = db.conn.execute("SELECT * FROM pair_trade WHERE txid = ? ORDER BY seq", (txid,)).fetchall()
+        if take is not None:
+            n, what = leg_text(I.LEG_TOKEN, take["property_id"], take["tokens"])
+            c, cn = leg_text(I.LEG_COINS, 0, take["coins"])
+            fills.append({"seller": take["maker"], "buyer": sender["sender"] if sender else "",
+                          "sold": f"{n} {what}", "paid": f"{c} {cn}", "how": "Taken from the book"})
+        for r in pairs:
+            g, gn = leg_text(I.LEG_TOKEN, r["gave_property"], r["gave"])
+            t, tn = leg_text(I.LEG_TOKEN, r["got_property"], r["got"])
+            fills.append({"seller": r["maker"], "buyer": r["taker"], "sold": f"{t} {tn}", "paid": f"{g} {gn}",
+                          "how": "Matched by the chain: a crossing order met one standing on the book"})
+        tx, inputs, confirmations, when = None, [], 0, 0
+        try:
+            with chain.rpc() as rpc:
+                tx = rpc.call("getrawtransaction", txid, 1)
+                prev = PrevOutCache(rpc, chain.params)
+                inputs = [prev.lookup(v["txid"], int(v["vout"])).address for v in tx.get("vin", []) if v.get("txid")]
+            confirmations, when = int(tx.get("confirmations") or 0), int(tx.get("blocktime") or tx.get("time") or 0)
+        except Exception:
+            log.debug("the trade's transaction could not be read", exc_info=True)
+        if not fills:
+            swap = next((t for t in index.trades(limit=5000) if t["txid"] == txid), None)
+            if swap is not None:
+                seller = swap["seller"]
+                buyer = next((a for a in inputs if a and a != seller), "")
+                g = swap["give"]; k = swap["take"]
+                n, what = leg_text(g.kind, g.property_id, g.amount, g.txid.hex() if g.txid else "")
+                c, cn = leg_text(k.kind, k.property_id, k.amount, k.txid.hex() if k.txid else "")
+                fills.append({"seller": seller, "buyer": buyer, "sold": f"{n} {what}", "paid": f"{c} {cn}",
+                              "how": "One transaction both of them signed: both sides moved, or neither"})
+        if not fills and tx is None:
+            raise HTTPException(404, "this node does not know that trade")
+        said = urllib.parse.urlsplit(request.headers.get("referer") or "")
+        back = (said.path + (f"?{said.query}" if said.query else "")) if said.path.startswith("/exchange") else "/exchange?tab=tokens"
+        return render(request, "trade.html", txid=txid, chain=chain, fills=fills, inputs=inputs,
+                      confirmations=confirmations, when=when,
+                      height=(sender["block_height"] if sender else None), back=back)
+
     @app.get("/exchange/pairs/{base}/{quote}", response_class=HTMLResponse)
     def exchange_token_pair(request: Request, base: int, quote: int):
         """BASE/QUOTE: its book, what traded, the chart, and the order form."""

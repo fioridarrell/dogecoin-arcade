@@ -6,7 +6,7 @@
 <div id="live" data-generation="{{ state.generation }}" class="live"></div>
 <a class="back-link" href="/exchange?tab=tokens">&#8592; All markets</a>
 
-{{ ex.style() }}{{ ex.fav_script() }}
+{{ ex.style() }}{{ ex.fav_script() }}{{ ex.market_css() }}
 {% set coin_name = chain.params.coin %}
 {# The market's face, its price big, and the day's move (the Exchange redesign,
    2026-10-09); the rest of the day's numbers in one quiet line under it. #}
@@ -697,7 +697,7 @@
           <td>Price</td><td style="text-align:right">Amount</td>
           <td style="text-align:right">{{ coin_name }}</td><td style="text-align:right">Block</td></tr>
         {% for t in recent %}
-        <tr><td class="mono">{{ "%.8f"|format(t.price) }}</td>
+        <tr class="tradelink" data-href="/exchange/trade/{{ t.txid }}?chain={{ chain.network }}" title="Who traded"><td class="mono"><a href="/exchange/trade/{{ t.txid }}?chain={{ chain.network }}" style="color:inherit">{{ "%.8f"|format(t.price) }}</a></td>
             <td class="mono" style="text-align:right">{{ "{:,.8f}".format(t.size).rstrip('0').rstrip('.') }}</td>
             <td class="mono muted" style="text-align:right">{{ "%.4f"|format(t.price * t.size) }}</td>
             <td class="muted" style="text-align:right">{{ "{:,}".format(t.height) }}</td></tr>

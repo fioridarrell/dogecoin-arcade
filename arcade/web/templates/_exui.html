@@ -234,7 +234,15 @@ window.exTrade = window.exTrade || function (root, o) {
 .obmid{text-align:center;padding:8px 4px;margin:6px 0;border-top:1px solid var(--line);
   border-bottom:1px solid var(--line);font-size:.86rem}
 .obmid:empty{display:none}
+tr.tradelink{cursor:pointer}tr.tradelink:hover td{background:var(--code)}
 </style>
+<script>
+// A recent trade opens its own page (who sold, who bought) wherever the row is pressed.
+document.addEventListener("click", function (e) {
+  var row = e.target.closest && e.target.closest("tr.tradelink");
+  if (row && !e.target.closest("a")) location.href = row.dataset.href;
+});
+</script>
 {% endmacro %}
 
 {# A market's star (2026-10-17: "a star that they can check just like when they follow a
