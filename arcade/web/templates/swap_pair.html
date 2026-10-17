@@ -47,16 +47,6 @@
   {% if held is not none %}<span>You hold <b>{{ held }}</b></span>{% endif %}
 </div>
 
-{% if quotes and b.kind in ('nft', 'doginal', 'token') %}
-{# Price it in anything (2026-10-15): every coin, and every token this reader holds. #}
-<div class="row" style="gap:6px;flex-wrap:wrap;margin:0 0 12px;align-items:center">
-  <span class="muted" style="font-size:.82rem">Price {{ 'it' if b.kind != 'token' else bname }} in</span>
-  {% for o in quotes %}
-  <a class="btn small {{ '' if o.on else 'ghost' }}" href="/exchange/pairs?base={{ b.key|urlencode }}&amp;quote={{ o.key|urlencode }}"
-     {% if o.on %}aria-current="true"{% endif %}>{{ o.label }}</a>
-  {% endfor %}
-</div>
-{% endif %}
 {% if b.kind == 'doginal' and q.network == 'doge' %}
 <p class="ex-note" style="margin:0 0 10px">Offers in DOGE live here. To sell it at a price you name, in one transaction,
   <a href="/exchange?tab=doginals">list it on the Doginals tab</a>.</p>
@@ -126,7 +116,11 @@
         var num = function (t) { var n = Number(String(t || "").replace(/,/g, "").trim()); return isFinite(n) ? n : 0; };
         var fmt = function (n) { return Number(n).toLocaleString(undefined, {maximumFractionDigits: 8}); };
         var side = function () { return root.querySelector('input[name="swap-side"]:checked').value; };
-        var best = function () { var l = side() === "buy" ? asks : bids; return l.length ? l[0] : null; };
+        // Never the reader's own swap: those are marked in the book by _tab_swaps (window.myOrderIds).
+        var best = function () {
+          var mine = window.myOrderIds || new Set();
+          var l = (side() === "buy" ? asks : bids).filter(function (o) { return !mine.has(o.id); });
+          return l.length ? l[0] : null; };
         var draw = function () {
           root.querySelectorAll(".ex-modes button").forEach(function (b) { b.setAttribute("aria-pressed", b.dataset.mode === mode ? "true" : "false"); });
           var o = mode === "best" ? best() : null, q = root.querySelector(".ex-quote"), go = $("swap-go");

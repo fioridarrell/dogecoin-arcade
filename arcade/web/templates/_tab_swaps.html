@@ -23,8 +23,35 @@
       : leg.kind === "token" ? `${leg.amount} of token #${leg.asset}`
       : leg.kind === "nft" ? `NFT ${String(leg.asset).slice(0, 10)}\u2026` : `${(leg.amount / 1e8).toString()} ${coinName(leg.network)}`);
     const obox = document.getElementById("tab-orders"), olist = document.getElementById("tab-orders-list");
+    // The reader's own swap is a row of the market's own book where that book is on the page
+    // (2026-10-17: "the user's order should go into the order book and instead of a buy or
+    // take button it should have a cancel button"): marked yours, Cancel withdraws it. Only the
+    // ones on no book here are listed below.
+    function markBook(w, o) {
+      const take = document.querySelector(`[data-take-id="${CSS.escape(o.id)}"]`);
+      if (!take) return false;
+      const row = take.closest(".obrow");
+      if (row) {
+        row.classList.add("mine");
+        const who = row.querySelector(".obamt small");
+        if (who && !who.dataset.yours) { who.dataset.yours = "1"; who.textContent = who.textContent.replace(/\u00b7[^\u00b7]*$/, "\u00b7 yours"); }
+      }
+      const cancel = document.createElement("button");
+      cancel.type = "button"; cancel.className = "ghost small"; cancel.textContent = "Cancel";
+      cancel.dataset.mineId = o.id;
+      cancel.addEventListener("click", async () => {
+        cancel.disabled = true;
+        try { await wallet.withdrawOrder(w, o.id); if (row) row.remove(); else cancel.remove(); drawOrders(w); }
+        catch (e) { cancel.disabled = false; alert(String(e.message || e)); }
+      });
+      take.replaceWith(cancel);
+      return true;
+    }
     function drawOrders(w) {
-      const all = wallet.myOrders(w);
+      const every = wallet.myOrders(w);
+      globalThis.myOrderIds = new Set(every.map((o) => o.id));
+      const all = every.filter((o) => !markBook(w, o) && !document.querySelector(`[data-mine-id="${CSS.escape(o.id)}"]`));
+      if (globalThis.swapBoxDraw) globalThis.swapBoxDraw();
       obox.hidden = !all.length;
       olist.replaceChildren(...all.map((o) => {
         const row = document.createElement("div");
