@@ -614,6 +614,7 @@ document.addEventListener('click', function (ev) {
      starred, with All markets and + New pair beside it; search always looks through every
      market. Stars are kept per account (/account/favorites, _exui.fav_script). #}
   {{ ex.fav_script() }}
+  <div class="row" style="justify-content:flex-end;margin:-4px 0 8px"><a class="btn small ghost" href="/exchange/history">Trade history</a></div>
   <div class="ex-seg" id="mktmode" role="group" aria-label="Which markets">
     <button type="button" data-mode="fav" aria-pressed="false">&#9733; Favorites</button>
     <button type="button" data-mode="all" aria-pressed="true">All markets</button>
@@ -735,7 +736,8 @@ document.addEventListener('click', function (ev) {
       <div class="row" style="gap:6px;flex-wrap:wrap;align-items:center">
         <input name="amount" inputmode="decimal" placeholder="1000" autocomplete="off" style="width:96px;flex:0 0 auto" aria-label="How many">
         <select id="pair-base" name="base" style="flex:1 1 150px;min-width:0" aria-label="Of what">
-          {%- for o in pair_choices or [] %}<option value="{{ o.key }}" data-net="{{ o.net }}" data-kind="{{ o.kind }}" data-div="{{ 1 if o.divisible else 0 }}" data-name="{{ o.name }}"{% if loop.first and o.kind != 'coin' %} selected{% endif %}>{{ o.label }}</option>{% endfor %}
+          {#- Coins and tokens only (2026-10-17: "NFT's should not be in the coin and token pair list"): a piece is sold from its own page. #}
+          {%- for o in pair_choices or [] if o.kind not in ('nft', 'doginal') %}<option value="{{ o.key }}" data-net="{{ o.net }}" data-kind="{{ o.kind }}" data-div="{{ 1 if o.divisible else 0 }}" data-name="{{ o.name }}"{% if loop.first and o.kind != 'coin' %} selected{% endif %}>{{ o.label }}</option>{% endfor %}
         </select>
         <input name="token" inputmode="numeric" placeholder="token #" autocomplete="off" hidden style="width:96px;flex:0 0 auto" aria-label="Token number">
       </div>
@@ -796,8 +798,10 @@ document.addEventListener('click', function (ev) {
     {% endfor %}
     {% if not trade_orders %}<p class="muted" style="margin:0 0 8px">No arcade is offering a swap right now.</p>{% endif %}
     {% if viewer == 'account' %}
-    {# A tab's own swaps (2026-10-13): run here while this tab is open, settled by the locks. #}
-    {% include "_tab_swaps.html" %}
+    {# A tab's own swaps (2026-10-13): run here while this tab is open, settled by the locks; shown on
+       Trade history (2026-10-17), so only their machinery is here. #}
+    <div hidden>{% include "_tab_swaps.html" %}</div>
+    <p style="margin:6px 0 0;font-size:.84rem"><a href="/exchange/history">Your swaps and trade history &rarr;</a></p>
     {% endif %}
     {% if can_trade_orders %}
     {% if my_trade_orders %}

@@ -23455,6 +23455,76 @@ def create_app(state: AppState) -> FastAPI:
                       confirmations=confirmations, when=when,
                       height=(sender["block_height"] if sender else None), back=back)
 
+    @app.get("/exchange/history", response_class=HTMLResponse)
+    def exchange_history(request: Request):
+        """The reader's own trade history (2026-10-17: "a trade history button on the main
+        token exchange page"): every trade the chain says this account (or, on the operator's
+        machine, this node's wallet) was a side of -- takes, token-for-token matches, one-transaction
+        swaps it sold in -- each opening its own page; and, drawn by the tab from this browser, the
+        lock-script swaps it made (_tab_swaps.html)."""
+        from .. import inscriptions as I
+        public = _account_view(request)
+        viewer = "wallet" if not public else ("account" if signed_in(request) is not None else "nobody")
+        rows: list[dict] = []
+        for chain in state.token_chains:
+            try:
+                if viewer == "wallet":
+                    with chain.rpc() as rpc:
+                        mine = set(_ledger_addresses(rpc))
+                elif viewer == "account":
+                    a = _account_address(signed_in(request).pubkey, chain)
+                    mine = {a} if a else set()
+                else:
+                    mine = set()
+            except Exception:
+                mine = set()
+            if not mine:
+                continue
+            index = state.token_index(chain)
+            coin = chain.params.coin
+
+            def token(pid: int, amount: int) -> str:
+                prop = index.property(pid) or {}
+                return f"{format_amount(amount, bool(prop.get('divisible', True)))} {prop.get('name') or f'token #{pid}'}"
+            marks = ",".join("?" * len(mine))
+            try:
+                with contextlib.closing(index.open()) as db:
+                    takes = db.conn.execute(
+                        "SELECT t.txid, t.property_id, t.tokens, t.coins, t.maker, a.sender, a.block_height, b.time "
+                        "FROM take_trade t JOIN arcade_tx a ON a.txid = t.txid LEFT JOIN block b ON b.height = a.block_height "
+                        f"WHERE a.valid = 1 AND (t.maker IN ({marks}) OR a.sender IN ({marks}))", (*mine, *mine)).fetchall()
+                    matches = db.conn.execute(
+                        "SELECT p.*, b.time FROM pair_trade p LEFT JOIN block b ON b.height = p.block_height "
+                        f"WHERE p.maker IN ({marks}) OR p.taker IN ({marks})", (*mine, *mine)).fetchall()
+            except Exception:
+                takes, matches = [], []
+            for t in takes:
+                sold = t["maker"] in mine
+                rows.append({"txid": t["txid"], "net": chain.network, "chain": chain, "when": t["time"],
+                             "side": "sold" if sold else "bought", "what": token(t["property_id"], t["tokens"]),
+                             "for": f"{t['coins'] / COIN:,.8f}".rstrip("0").rstrip(".") + f" {coin}",
+                             "who": t["sender"] if sold else t["maker"]})
+            for m in matches:
+                took = m["taker"] in mine
+                rows.append({"txid": m["txid"], "net": chain.network, "chain": chain, "when": m["time"],
+                             "side": "traded", "what": token(m["gave_property"] if took else m["got_property"],
+                                                             m["gave"] if took else m["got"]),
+                             "for": token(m["got_property"] if took else m["gave_property"], m["got"] if took else m["gave"]),
+                             "who": m["maker"] if took else m["taker"]})
+            try:
+                for t in index.trades(limit=2000):
+                    if t["seller"] in mine and t["txid"] not in {r["txid"] for r in rows}:
+                        g, k = t["give"], t["take"]
+                        label = lambda leg: (f"{leg.amount / COIN:,.8f}".rstrip("0").rstrip(".") + f" {coin}"
+                                             if leg.kind == I.LEG_COINS else token(leg.property_id, leg.amount)
+                                             if leg.kind == I.LEG_TOKEN else "a piece")
+                        rows.append({"txid": t["txid"], "net": chain.network, "chain": chain, "when": t["when"],
+                                     "side": "sold", "what": label(g), "for": label(k), "who": ""})
+            except Exception:
+                pass
+        rows.sort(key=lambda r: -(r["when"] or 0))
+        return render(request, "trade_history.html", rows=rows[:300], viewer=viewer)
+
     @app.get("/exchange/pairs/{base}/{quote}", response_class=HTMLResponse)
     def exchange_token_pair(request: Request, base: int, quote: int):
         """BASE/QUOTE: its book, what traded, the chart, and the order form."""

@@ -47,10 +47,39 @@
       take.replaceWith(cancel);
       return true;
     }
+    // A listing of the reader's own for THIS market that the book does not show yet (the node reads
+    // order batches once they are in a block): drawn into the book at once, yours, with Cancel.
+    const legKey = (l) => l.kind === "coin" ? `${l.network}-coin` : `${l.network}-${l.kind}-${l.asset}`;
+    function addToBook(w, o) {
+      const book = document.getElementById("swap-pair");
+      if (!book || !o.give || !o.get) return false;
+      const B = book.dataset.base, Q = book.dataset.quote, gk = legKey(o.give), tk = legKey(o.get);
+      const sell = gk === B && tk === Q, buy = gk === Q && tk === B;
+      if (!sell && !buy) return false;
+      const scale = (div) => div === "1" ? 1e8 : 1;
+      const base = sell ? o.give : o.get, quote = sell ? o.get : o.give;
+      const units = Number(base.amount) / scale(book.dataset.baseDiv), paid = Number(quote.amount) / scale(book.dataset.quoteDiv);
+      const fmt = (n) => Number(n).toLocaleString(undefined, {maximumFractionDigits: 8});
+      const row = document.createElement("div");
+      row.className = `obrow ${sell ? "ask" : "bid"} mine`; row.style.setProperty("--depth", "100%");
+      const px = document.createElement("span"); px.className = "obprice mono"; px.textContent = fmt(units ? paid / units : 0);
+      const amt = document.createElement("span"); amt.className = "obamt";
+      const n = document.createElement("span"); n.className = "mono"; n.textContent = book.dataset.whole === "1" ? "1" : fmt(units);
+      const who = document.createElement("small"); who.className = "muted"; who.textContent = "yours \u00b7 listed just now";
+      amt.append(n, who);
+      const take = document.createElement("span"); take.className = "obdo";
+      const btn = document.createElement("button"); btn.dataset.takeId = o.id; take.append(btn);
+      row.append(px, amt, take);
+      document.getElementById("book-empty")?.remove();
+      const mid = book.querySelector(".obmid");
+      if (sell && mid) mid.before(row); else book.append(row);
+      return markBook(w, o);
+    }
     function drawOrders(w) {
       const every = wallet.myOrders(w);
       globalThis.myOrderIds = new Set(every.map((o) => o.id));
-      const all = every.filter((o) => !markBook(w, o) && !document.querySelector(`[data-mine-id="${CSS.escape(o.id)}"]`));
+      const all = every.filter((o) => !markBook(w, o) && !document.querySelector(`[data-mine-id="${CSS.escape(o.id)}"]`)
+                                      && !addToBook(w, o));
       if (globalThis.swapBoxDraw) globalThis.swapBoxDraw();
       obox.hidden = !all.length;
       olist.replaceChildren(...all.map((o) => {
@@ -131,6 +160,7 @@
     // this only shows them, whenever a pass ends here or another tab changes them.
     async function redraw() { const w = await wallet.opened(CHAIN); if (w) draw(w); }
     globalThis.addEventListener("arcade:trades", redraw);
+    document.addEventListener("arcade:changed", redraw);   // a live update redrew the book: mark it again
     globalThis.addEventListener("storage", (e) => { if (!e.key || e.key.startsWith("arcade-trades") || e.key.startsWith("arcade-my-orders")) redraw(); });
     // A coin pair's own forms (the PEP/DOGE market, 2026-10-13): sell or buy `amount` of the
     // base coin at `price` of the quote coin each.

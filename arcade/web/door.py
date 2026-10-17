@@ -152,6 +152,7 @@ PUBLIC_TREES = (
     "/account/doginal-tx/",   # the Wallet's Doginals check, asked by the node for the account's own coins (2026-10-15)
     "/exchange/swap/",        # every cross-chain market, through lock scripts (2026-10-15)
     "/exchange/trade/",       # one trade: who sold, who bought (2026-10-17)
+    "/exchange/history",      # the reader's own trades (2026-10-17)
     "/exchange/coins/",       # a coin pair: redirects to its swap market
 )
 

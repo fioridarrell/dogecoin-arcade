@@ -46,6 +46,7 @@
   <span>24h volume <b>0</b> {{ qname }}</span>
   {% if held is not none %}<span>You hold <b>{{ held }}</b></span>{% endif %}
 </div>
+{% if viewer != 'nobody' %}<p style="margin:-6px 0 12px;font-size:.84rem"><a href="/exchange/history">Your trade history &rarr;</a></p>{% endif %}
 
 {% if b.kind == 'doginal' and q.network == 'doge' %}
 <p class="ex-note" style="margin:0 0 10px">Offers in DOGE live here. To sell it at a price you name, in one transaction,
@@ -192,11 +193,9 @@
     </div>
 
     {% if viewer == 'account' %}
-    <div class="panel">{% include "_tab_swaps.html" %}
-      <p class="muted" style="font-size:.8rem;margin:8px 0 0">A swap takes a few minutes. Once your side is
-        locked, your node finishes it with transactions you signed here -- you can close the page; if the other side
-        never pays, yours comes back by itself within two hours. <a href="/docs/swaps.md">How a swap works</a></p>
-    </div>
+    {# The swap machinery (binds Take, the list forms, marks the reader's own orders in the book),
+       out of sight (2026-10-17: "Remove this"): the swaps themselves are in Trade history. #}
+    <div hidden>{% include "_tab_swaps.html" %}</div>
     {% endif %}
   </div>
 
@@ -216,11 +215,13 @@
     </div>
     {% endif %}
 
-    <div class="panel" id="swap-pair">
+    <div class="panel" id="swap-pair" data-base="{{ b.key }}" data-quote="{{ q.key }}"
+         data-base-div="{{ '1' if b.divisible else '0' }}" data-quote-div="{{ '1' if q.divisible else '0' }}"
+         data-whole="{{ '1' if whole else '0' }}" data-quote-name="{{ qname }}" data-base-name="{{ bname }}">
       <h3 style="margin:0 0 2px">Order book</h3>
       <p class="muted" style="font-size:.78rem;margin:0 0 4px">Prices in {{ qname }} {{ net_badge(q.network) }}</p>
       {% if asks or bids %}<p class="muted" style="font-size:.78rem;margin:0 0 8px">Press Buy or Sell on a row to take it.</p>
-      {% else %}<p class="muted" style="margin:0">Nothing on either side yet.</p>{% endif %}
+      {% else %}<p class="muted" style="margin:0" id="book-empty">Nothing on either side yet.</p>{% endif %}
       {% for side_, rows, word in (('ask', asks, 'Selling ' ~ bname), ('bid', bids, 'Buying ' ~ bname)) %}
       {% if rows %}
       <div class="obhead">{{ word }}</div>
