@@ -58,7 +58,7 @@
           <label><input type="radio" name="book-side" value="bid" checked><span>Buy</span></label>
           <label><input type="radio" name="book-side" value="ask"><span>Sell</span></label>
         </div>
-        <div class="ex-modes"><button type="button" data-mode="best">Best price now</button><button type="button" data-mode="limit">Set my price</button></div>
+        {#- Always "set my price" (2026-10-17): to fill an order, press it in the order book. #}
         <div class="ex-box"><label for="book-amount"><span>Amount</span><span>You hold {{ held }}</span></label>
           <div class="line"><input autocomplete="off" id="book-amount" inputmode="decimal" placeholder="0">
             <span class="unit">{{ wall(prop.name, 'token name') }}</span></div></div>

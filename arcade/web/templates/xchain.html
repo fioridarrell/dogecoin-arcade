@@ -59,7 +59,7 @@
       <label><input type="radio" name="side" value="buy" checked><span>{{ 'Make offer' if a.kind == 'nft' else 'Buy ' ~ aname }}</span></label>
       <label><input type="radio" name="side" value="sell"><span>{{ 'Sell it' if a.kind == 'nft' else 'Sell ' ~ aname }}</span></label>
     </div>
-    <div class="ex-modes"><button type="button" data-mode="best">Best price now</button><button type="button" data-mode="limit">Set my price</button></div>
+    {#- Always "set my price" (2026-10-17): to fill an order, press it in the order book. #}
     {% if a.kind != 'nft' %}
     <div class="ex-box"><label for="x-amount"><span>Amount</span><span></span></label>
       <div class="line"><input autocomplete="off" name="amount" id="x-amount" inputmode="decimal" placeholder="0">

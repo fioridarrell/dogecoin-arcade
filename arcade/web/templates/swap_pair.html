@@ -82,7 +82,7 @@
           <label><input type="radio" name="swap-side" value="buy" {% if side != 'sell' %}checked{% endif %}><span>Buy</span></label>
           <label><input type="radio" name="swap-side" value="sell" {% if side == 'sell' %}checked{% endif %}><span>Sell</span></label>
         </div>
-        <div class="ex-modes"><button type="button" data-mode="best">Best price now</button><button type="button" data-mode="limit">Set my price</button></div>
+        {#- Always "set my price" (2026-10-17): to fill an order, press it in the order book. #}
         <div class="ex-box" id="swap-amount-box"{% if whole %} hidden{% endif %}><label for="swap-amount"><span>Amount</span>
             <span>{% if held is not none %}You hold {{ held }}{% endif %}</span></label>
           <div class="line"><input autocomplete="off" id="swap-amount" inputmode="decimal" placeholder="0" value="{{ '1' if whole else '' }}">
@@ -129,8 +129,8 @@
       <a class="btn small ghost" style="margin:10px 0 0;display:inline-block"
          href="/exchange/history?base={{ b.key|urlencode }}&amp;quote={{ q.key|urlencode }}">Trade history</a>
       <p class="ex-note">A swap settles on both chains at once: either both sides get paid, or both get their own back.
-        Nobody holds anybody's coins, and each swap is taken whole: <b>Best price now</b> takes the best one as it stands;
-        <b>Set my price</b> lists yours for anyone to take. You confirm once, when you buy or list; every step
+        Nobody holds anybody's coins, and each swap is taken whole: press an order in the book to take it, or set your
+        price here to list yours for anyone to take. You confirm once, when you buy or list; every step
         after that happens by itself and pops up as it does. Network fees are about 0.01 of each chain's coin per lock.</p>
       {# What the box sends: the same swap forms as before (_tab_swaps.html binds them), out of sight. #}
       {% for side_ in ('sell', 'buy') %}
@@ -149,7 +149,7 @@
         var whole = {{ whole|tojson }}, qname = {{ qname|tojson }}, bname = {{ bname|tojson }};
         var asks = [{% for o in asks if not o.mine %}{{ {"price": o.price, "base": o.base_shown, "quote": o.quote_shown, "id": o.id}|tojson }},{% endfor %}];
         var bids = [{% for o in bids if not o.mine %}{{ {"price": o.price, "base": o.base_shown, "quote": o.quote_shown, "id": o.id}|tojson }},{% endfor %}];
-        var mode = (asks.length || bids.length) ? "best" : "limit";
+        var mode = "limit";    // always the reader's price; taking an order is a press on its book row (2026-10-17)
         var num = function (t) { var n = Number(String(t || "").replace(/,/g, "").trim()); return isFinite(n) ? n : 0; };
         var fmt = function (n) { return Number(n).toLocaleString(undefined, {maximumFractionDigits: 8}); };
         var side = function () { return root.querySelector('input[name="swap-side"]:checked').value; };

@@ -145,7 +145,7 @@ window.exTrade = window.exTrade || function (root, o) {
   var amount = $(o.amount), price = $(o.price), button = $(o.button);
   var quote = root.querySelector(".ex-quote"), modes = root.querySelectorAll(".ex-modes button");
   var total = root.querySelector("[data-ex-total]");
-  var mode = (o.asks.length || o.bids.length) ? "best" : "limit";
+  var mode = "limit";      // the reader sets the price; an order is filled from the book itself (2026-10-17)
   var num = function (t) { var n = Number(String(t || "").replace(/,/g, "").trim()); return isFinite(n) ? n : 0; };
   var fmt = function (n) { return Number(n).toLocaleString(undefined, {maximumFractionDigits: 8}); };
   var side = function () { var r = root.querySelector("input[name=" + o.sideName + "]:checked"); return r ? r.value : o.buyValue; };
