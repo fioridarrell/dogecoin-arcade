@@ -119,7 +119,7 @@ def asset_seen(seen: T.LockSeen | None, leg: T.Leg, lock_address: str, index: An
     height = None
     if seen.confirmations > 0:
         height = int(rpc.call("getblockcount")) - seen.confirmations + 1
-    said = T.asset_at(index, leg, lock_address, height)
+    said = T.asset_at(index, leg, lock_address, height, lock_txid=seen.txid)
     if said is None:
         seen.confirmations = 0
     else:

@@ -45,7 +45,8 @@ LOCK_SECONDS = {"mainnet": 2 * 3600, "testnet": 2 * 3600}
 #: ("Allow 0-conf for less than 1000 doge and 1000000 pep") -- a lock seen in the mempool, and
 #: exactly the one the terms say, is enough, so a small swap is as quick as its messages. The
 #: risk he accepted: whoever locks first could double-spend an unconfirmed lock, up to the line.
-#: A token, NFT or Doginal lock still waits for the ledger to show it there, which is a block.
+#: A token or NFT lock counts unconfirmed when the pool shows its own transaction moving exactly
+#: that asset in (asset_at); a Doginal lock already reads from the coin it spent (doginal_at).
 CONFIRMATIONS = 0
 #: At or above the line, one confirmation (2026-10-17: "1 conf above the threshold").
 CONFIRMATIONS_BIG = 1
@@ -141,15 +142,24 @@ def move_data(leg: Leg) -> bytes:
     raise ValueError("a coin leg moves no asset, and a Doginal moves by koinu order, not by a payload")
 
 
-def asset_at(index: Any, leg: Leg, address: str, lock_height: int | None) -> bool | None:
+def asset_at(index: Any, leg: Leg, address: str, lock_height: int | None,
+             lock_txid: str = "") -> bool | None:
     """Does the ledger show `leg`'s token or NFT at the lock `address`? None when the
     ledger has not yet read the lock's block (`lock_height`, None while unconfirmed):
     a lagging index must make a lock look not-yet-there, never wrong -- a wrong lock is
-    walked away from (next_step ABORT)."""
+    walked away from (next_step ABORT).
+
+    An unconfirmed lock (2026-10-17: the same 0-conf as coins, "for NFT's"): True when
+    the lock transaction itself moves exactly this piece into the lock from its current owner
+    with no other move of it in the pool, or at least this many tokens from an address whose
+    confirmed balance covers them and every other pending send of that token; else None (wait
+    for the block) -- never False, which would walk away from a lock that may yet be good."""
     if leg.kind == "coin":
         return True
     if lock_height is None:
-        return None
+        if not lock_txid or not hasattr(index, "pool_moves_of"):
+            return None
+        return _pool_asset_at(index, leg, address, lock_txid)
     with index.open() as db:
         tip = db.tip()
     if tip is None or int(tip["height"]) < int(lock_height):
@@ -158,6 +168,31 @@ def asset_at(index: Any, leg: Leg, address: str, lock_height: int | None) -> boo
         return int(index.balance(address, int(leg.asset))) >= leg.amount
     row = index.inscription(leg.asset)
     return bool(row) and row["owner"] == address
+
+
+def _pool_asset_at(index: Any, leg: Leg, address: str, lock_txid: str) -> bool | None:
+    try:
+        rows = index.pool_moves_of(lock_txid)
+        others = [m for m in index.pending_moves() if m.get("txid") != lock_txid]
+    except Exception:
+        return None
+    if leg.kind == "nft":
+        here = any(r["kind"] == "inscription" and r["inscription"] == leg.asset and r["to"] == address
+                   for r in rows)
+        racing = any(m["kind"] == "inscription" and m.get("inscription") == leg.asset for m in others)
+        return True if here and not racing else None
+    if leg.kind == "token":
+        pid = int(leg.asset)
+        sent = [r for r in rows if r["kind"] == "token" and r["property_id"] == pid and r["to"] == address
+                and r.get("why") == "send"]
+        if not sent or sum(r["units"] for r in sent) < leg.amount:
+            return None
+        sender = sent[0]["from"]
+        also = sum(m["units"] for m in others if m["kind"] == "token" and m["property_id"] == pid
+                   and m["from"] == sender and m.get("why") != "grant")
+        covered = int(index.balance(sender, pid)) >= sum(r["units"] for r in sent) + also
+        return True if covered else None
+    return None
 
 
 def doginal_at(doginals: Any, leg: Leg, redeem: bytes, lock_tx: dict, parent_tx: dict) -> bool | None:

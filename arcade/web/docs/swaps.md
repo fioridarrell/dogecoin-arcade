@@ -16,8 +16,10 @@ market: the seller signs their half ahead of time and the buyer completes it.
 * A swap normally takes **seconds**: each side acts as soon as the other's lock is in the
   mempool and is exactly the lock the terms say. A swap with a coin side at or above the
   arcade's big-swap line (1,000,000 PEP or 1,000 DOGE unless its operator sets another) waits
-  for one confirmation on each chain instead. A token, NFT or Doginal side waits for the
-  block that shows it in its lock.
+  for one confirmation on each chain instead. A token, NFT or Doginal side counts from the
+  mempool too, once its lock transaction plainly moves exactly that asset in from its owner
+  and nothing else in the mempool is moving it; if that cannot be told yet, it waits for the
+  block.
 * You do **not** have to keep the page open. Your own node finishes your side
   with transactions you signed in your browser in advance.
 * If the other side disappears part-way, your coins come back to you

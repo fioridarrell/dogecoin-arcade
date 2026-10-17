@@ -2107,6 +2107,32 @@ class LedgerIndex:
                 out.append(row)
         return out
 
+    def pool_moves_of(self, txid: str) -> list[dict]:
+        """The moves one transaction still in the mempool makes (a swap's lock, 2026-10-17), read
+        straight from it rather than out of a capped walk of the whole pool; a piece only while it
+        is still its sender's."""
+        from . import inscriptions as I
+        from .indexer import PrevOutCache
+        from .tx import extract
+        try:
+            with self._rpc() as rpc:
+                tx = rpc.call("getrawtransaction", txid, True)
+                if int(tx.get("confirmations") or 0) > 0:
+                    return []
+                rtx = extract(tx, 0, 0, self.params, PrevOutCache(rpc, self.params).lookup)
+        except Exception as exc:
+            log.debug("pool move %s unreadable: %s", txid, exc)
+            return []
+        rows = self._move_rows(rtx, I) if rtx else []
+        out = []
+        for row in rows:
+            if row["kind"] == "inscription":
+                held = self.inscription(row["inscription"])
+                if held is None or held["owner"] != row["from"]:
+                    continue
+            out.append(row)
+        return out
+
     def _move_rows(self, rtx, I) -> list[dict]:
         """One mempool transaction as the moves it makes, or [] when it makes none."""
         if not rtx.payload:
