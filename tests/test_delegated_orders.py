@@ -95,3 +95,60 @@ def test_a_delegated_token_order_fills_with_the_seller_away(world):
     assert seller_node.book.get(trade.id).state == "done", log[-6:]
     got = sum(u["amount"] for u in dg.call("listunspent", 0, 9999999, [payout]))
     assert got >= 1.98, f"the seller's 2 DOGE (less the claim fee) at its own address: {got}"
+
+
+def test_a_page_lists_a_delegated_order_and_closes_and_it_still_fills(world, monkeypatch):
+    """The whole way: the seller's page derives the order key, tells its node, deposits 2 DOGE there and lists; then
+    nobody runs that page any more. Another node takes the order and the 3 PEP land at the seller's own address."""
+    from playwright.sync_api import sync_playwright
+    from test_trade_tab_browser import _scan_a
+    from test_trade_tab_lists import _Mesh
+    from arcade import trade_orders as O
+    base, a, b, pep, dg = world
+    monkeypatch.setattr(a, "mesh", _Mesh(), raising=False)
+    a.node_trader.enabled = lambda: False
+    net = {"network": "regtest", "version": 111}
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        tab = browser.new_page()
+        tab.goto(f"{base}/join")
+        tab.evaluate("async () => { window.w = await import('/wallet.js'); }")
+        made = tab.evaluate("""async (net) => {
+            const r = await w.signUp('away' + Math.floor(Math.random() * 1e6), 'a long enough password', net);
+            return {regtest: r.wallet.on.regtest.address, doge: r.wallet.on.doge.address}; }""", net)
+        pep.call("sendtoaddress", made["regtest"], 5)
+        dg.call("sendtoaddress", made["doge"], 5)
+        _mine(pep, dg)
+        _scan_a(a)
+        order = tab.evaluate("""async ([net, give, get]) => w.listOrder(await w.opened(net), give, get,
+                                {approved: true, delegated: true})""",
+                             [net, {"network": "doge", "amount": 2 * COIN}, {"network": "regtest", "amount": 3 * COIN}])
+        browser.close()                                              # the seller's page is gone
+    assert order["delegated"] and order["msg_key"] == a.identity.public_bytes.hex()
+    _mine(pep, dg)
+    _scan_a(a)
+    O.import_announced(a.trade_orders, a.token_index(a.messaging), "regtest")
+    shown = next(o for o in a.trade_orders.visible(a.mesh.online) if o["id"] == order["id"])
+    assert not shown.get("tab") and shown["delegated"], "no page needed for it to stand"
+    from arcade import trade_courier
+    trade_courier.mesh_inbox(a)
+    key = bytes.fromhex(shown["trade_key"])
+    give = b.leg("regtest", 3 * COIN, key)
+    get = T.Leg("doge", "coin", "", 2 * COIN, key.hex(), b.key.pubkey.hex())
+    trade = b.propose(bytes.fromhex(shown["msg_key"]), order["id"], give, get)
+    for _ in range(40):
+        for t in (b, a.node_trader):
+            _scan(t)
+            _catch_up(t.state)
+            t.tick()
+        _mine(pep, dg)
+        if b.book.get(trade.id).state == "done":
+            break
+    assert b.book.get(trade.id).state == "done"
+    import contextlib
+    from arcade import utxos
+    _mine(pep)
+    _catch_up(a)
+    with contextlib.closing(a.token_index(a.messaging).open()) as db:
+        got = utxos.balance(db, made["regtest"]) / COIN
+    assert got >= 7.9, f"the seller's own address: its 5 PEP and the 3 PEP it sold for (less a fee): {got}"

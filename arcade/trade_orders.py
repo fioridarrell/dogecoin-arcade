@@ -99,6 +99,9 @@ def check_order(said: Any, now: float | None = None) -> dict:
         # Listed from a browser, answered by that browser: shown only while its page is open
         # (order_presence, 2026-10-17). Older readers ignore the field.
         out["tab"] = True
+    if said.get("delegated") is True:
+        # Finished by its lister's node with the order's own key (node_trader.delegate): no page needed.
+        out["delegated"] = True
     return out
 
 

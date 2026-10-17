@@ -19350,8 +19350,14 @@ def create_app(state: AppState) -> FastAPI:
                 raise ValueError(complaint)
             if to == address:
                 raise ValueError("that is this account's own address")
-            amount = parse_amount(str(said.get("amount", "")),
-                                       prop["divisible"])
+            if said.get("units") is not None:
+                # Raw units, as an order's leg carries them (a delegated order's deposit, wallet.js delegateOrder).
+                amount = int(said["units"])
+                if amount <= 0:
+                    raise ValueError("an amount above zero")
+            else:
+                amount = parse_amount(str(said.get("amount", "")),
+                                      prop["divisible"])
             # Read from the pool as well as the ledger (2026-09-29): what is
             # already on its way out in a send or an ask is not here to send.
             going = index.pending_out(address, property_id)
@@ -25277,6 +25283,51 @@ def create_app(state: AppState) -> FastAPI:
         wrap = lambda h: (Header(type=TYPE_API, clen=len(bytes.fromhex(h))).encode() + bytes.fromhex(h)).hex()  # noqa: E731
         return JSONResponse({"messages": [{"seq": s, "payload": wrap(p)} for s, p in got], "cursor": cursor},
                             headers={"Cache-Control": "no-store"})
+
+    @app.post("/account/orders/delegate")
+    def orders_delegate(request: Request, payload: Any = Body(None)):
+        """This account hands its node one order to finish with the order's own key (2026-10-17: orders
+        "filled without the counterparty being on Arcade"; node_trader.delegate). The deposit must be the key's own
+        address on the giving chain, and the proceeds go to this account's own address on the getting chain -- the
+        node checks both, so a page cannot be talked into sending them anywhere else."""
+        from ..node_trader import HeldKey
+        account = _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        try:
+            order = said.get("order") if isinstance(said.get("order"), dict) else {}
+            oid = str(order.get("id", ""))
+            if not re.fullmatch(r"ord-[0-9a-f]{16}", oid):
+                raise ValueError("an order id")
+            legs = {}
+            for side in ("give", "get"):
+                leg = order.get(side) if isinstance(order.get(side), dict) else {}
+                net, kind = str(leg.get("network", "")), str(leg.get("kind", "coin"))
+                amount = int(leg.get("amount", 0))
+                if kind not in ("coin", "token", "nft") or amount <= 0:
+                    raise ValueError(f"the order's {side} side")
+                legs[side] = {"network": net, "kind": kind, "asset": str(leg.get("asset", "")), "amount": amount}
+            give_chain = next(c for c in state.token_chains if c.network == legs["give"]["network"])
+            get_chain = next(c for c in state.token_chains if c.network == legs["get"]["network"])
+            if give_chain is get_chain:
+                raise ValueError("a swap on one chain is a listing on its own market, not a delegated order")
+            held = HeldKey(str(said.get("key", "")))
+            deposit = b58check_encode(give_chain.params.pubkeyhash_version, hash160(held.pubkey))
+            if (said.get("deposit") or {}).get(give_chain.network) != deposit:
+                raise ValueError("the deposit is not that key's own address")
+            payout = _account_address(account.pubkey, get_chain)
+            if not payout or (said.get("payout") or {}).get(get_chain.network) != payout:
+                raise ValueError("the proceeds go to this account's own address, nowhere else")
+            mesh = getattr(state, "mesh", None)
+            if mesh is None:
+                raise ValueError("this node is not on the mesh, so nobody could take the order")
+            state.node_trader.delegate(oid, legs["give"], legs["get"], str(said["key"]),
+                                       {give_chain.network: deposit}, {get_chain.network: payout}, owner=account.pubkey)
+        except StopIteration:
+            return JSONResponse({"detail": "this node does not run that chain"}, status_code=400)
+        except (ValueError, KeyError, TypeError) as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        return JSONResponse({"msg_key": state.ensure_identity().public_bytes.hex(), "node": mesh.node_id,
+                             "deposit": deposit})
 
     @app.post("/account/orders/cancel")
     def orders_cancel(request: Request, payload: Any = Body(None)):

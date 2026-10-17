@@ -184,6 +184,16 @@ export async function coinKey(seed, network, index = 0) {
   return {key: node.key, pubkey: publicKey(node.key)};
 }
 
+/** A delegated swap order's own key (2026-10-17: orders filled "without the counterparty being on Arcade"; the
+ *  seller's node finishes them with this key, for this order only): m/44'/1'/7'/0/i, i from the order id, so the wallet
+ *  can derive it again any time and take the deposit back itself. */
+export async function orderKey(seed, orderId) {
+  const h = new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode("arcade-order:" + orderId)));
+  const i = ((h[0] << 24) | (h[1] << 16) | (h[2] << 8) | h[3]) & 0x7fffffff;
+  const node = await derive(seed, [44 + HARDENED, 1 + HARDENED, 7 + HARDENED, 0, i]);
+  return {key: node.key, pubkey: publicKey(node.key)};
+}
+
 /* --- reading a transaction ----------------------------------------------
  *
  * A signer that cannot read signs whatever it is handed. The node has

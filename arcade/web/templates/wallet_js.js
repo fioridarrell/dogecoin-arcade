@@ -2988,6 +2988,10 @@ async function holdSpends(wallet, trade, view, facts) {
 
 const MY_ORDERS = "arcade-my-orders";
 export const TAB_ORDER_LIFE = 3600;
+//: A delegated order stands until it is taken or withdrawn: its node answers for it.
+export const DELEGATED_ORDER_LIFE = 30 * 86400;
+//: Coin set beside a delegated order's side for its lock and the way back (network fees), per chain.
+const DELEGATED_FEES = 5_000_000;
 const TAB_REPOST = 45 * 60 * 1000;
 
 function myOrdersOf(wallet) {
@@ -3019,10 +3023,13 @@ async function postNow(wallet) {
   if (!acct.mesh_node) throw new Error("this node is not on the mesh, so no other arcade would see the swap");
   const tags = (acct.chains || []).find((c) => c.tags) || {};
   const now = Math.floor(Date.now() / 1000);
-  const orders = Object.values(book.orders).map((o) => ({
-    id: o.id, give: o.give, get: o.get, trade_key: o.trade_key, take_key: o.take_key,
-    msg_key: coinsHex(me.publicKey || me.public || me.pub), node: acct.mesh_node, tab: true,
-    expires: now + TAB_ORDER_LIFE}));
+  const orders = Object.values(book.orders).map((o) => o.delegated
+    // Finished by this account's node with the order's own key: its messaging key, no page needed, a long life.
+    ? {id: o.id, give: o.give, get: o.get, trade_key: o.trade_key, take_key: o.take_key,
+       msg_key: o.msg_key, node: o.node, tab: false, delegated: true, expires: now + DELEGATED_ORDER_LIFE}
+    : {id: o.id, give: o.give, get: o.get, trade_key: o.trade_key, take_key: o.take_key,
+       msg_key: coinsHex(me.publicKey || me.public || me.pub), node: acct.mesh_node, tab: true,
+       expires: now + TAB_ORDER_LIFE});
   const body = new TextEncoder().encode(JSON.stringify({arcade: "orders", v: 1, orders, cancels: book.cancels || []}));
   let b64 = "";
   for (let i = 0; i < body.length; i += 0x8000) b64 += String.fromCharCode(...body.subarray(i, i + 0x8000));
@@ -3043,7 +3050,40 @@ async function postNow(wallet) {
   return sent;
 }
 
-/** List a swap from this tab: give `give` {network, kind?, asset?, amount}, get `get` (coin, token or NFT). */
+/** A delegated order (2026-10-17): its side moved to the order's own key, the key handed to this account's node,
+ *  which then answers, locks and claims for it -- the seller can close every page. Proceeds go to the wallet's own
+ *  address on the chain it is paid on. */
+async function delegateOrder(wallet, id, give, get, approved) {
+  const k = await coins.orderKey(wallet.seed, id);
+  const giveKeys = keysOn(wallet, give.network);
+  const deposit = await coins.address(k.pubkey, giveKeys.version);
+  const ok = approved ? {reviewed: true} : null;
+  const send = async (url, body) => {
+    const {ok: good, said} = await askJson(url, body);
+    if (!good) throw new Error(said.detail || "the deposit could not be made");
+    return confirm(wallet, said, ok);
+  };
+  // The node is told first (it starts watching the deposit address), then the side goes there.
+  const {ok: told, said} = await askJson("/account/orders/delegate", {
+    order: {id, give, get}, key: coinsHex(k.key), deposit: {[give.network]: deposit},
+    payout: {[get.network]: keysOn(wallet, get.network).address}});
+  if (!told) throw new Error(said.detail || "this arcade's node would not take the order on");
+  if (give.kind === "coin") {
+    await confirm(wallet, await offerSend(deposit, coinsText(give.amount + DELEGATED_FEES), give.network), ok);
+  } else {
+    if (give.kind === "token") {
+      await send("/account/token/send", {property_id: give.asset, to: deposit, units: give.amount, chain: give.network});
+    } else {
+      await send("/account/nft/send", {piece: give.asset, to: deposit, chain: give.network});
+    }
+    await confirm(wallet, await offerSend(deposit, coinsText(TRADE.LOCK_RESERVE + DELEGATED_FEES), give.network), ok);
+  }
+  return {trade_key: coinsHex(k.pubkey), take_key: coinsHex(k.pubkey), msg_key: said.msg_key, node: said.node,
+          deposit};
+}
+
+/** List a swap from this tab: give `give` {network, kind?, asset?, amount}, get `get` (coin, token or NFT).
+ *  `options.delegated`: its node finishes it with the seller away (delegateOrder). */
 export async function listOrder(wallet, give, get, options = {}) {
   const short = await canFund({network: give.network, kind: give.kind || "coin", amount: Number(give.amount)});
   if (short) throw new Error(`You can't list this swap yet: ${short}.`);
@@ -3051,10 +3091,12 @@ export async function listOrder(wallet, give, get, options = {}) {
   const id = "ord-" + coinsHex(crypto.getRandomValues(new Uint8Array(8)));
   const side = (s) => ({network: s.network, kind: s.kind || "coin", asset: String(s.asset || ""),
                         amount: s.kind === "nft" ? 1 : Math.round(Number(s.amount))});
-  book.orders[id] = {id, give: side(give), get: side(get), labels: [give.label || "", get.label || ""],
-                     approved: !!options.approved,
-                     trade_key: coinsHex(keysOn(wallet, give.network).pubkey),
-                     take_key: coinsHex(keysOn(wallet, get.network).pubkey)};
+  const sides = {give: side(give), get: side(get)};
+  const keys = options.delegated
+    ? {...(await delegateOrder(wallet, id, sides.give, sides.get, !!options.approved)), delegated: true}
+    : {trade_key: coinsHex(keysOn(wallet, give.network).pubkey), take_key: coinsHex(keysOn(wallet, get.network).pubkey)};
+  book.orders[id] = {id, ...sides, labels: [give.label || "", get.label || ""],
+                     approved: !!options.approved, ...keys};
   keepMyOrders(wallet, book);
   await postMyOrders(wallet);
   await sayAlive(wallet);
@@ -3256,7 +3298,7 @@ export async function sayAlive(wallet = null) {
   try {
     const w = wallet || await opened(runnerChain);
     if (!w) return;
-    const listed = myOrders(w).length > 0;
+    const listed = myOrders(w).some((o) => !o.delegated);   // a delegated order's node answers for it
     const running = myTrades(w).some((t) => t.state !== "done" && t.state !== "aborted");
     if (!listed && !running) return;
     const {me} = await messenger(w);
@@ -3274,7 +3316,7 @@ let lastIdlePass = 0;
 
 /** Whether this wallet has a swap running or listed: then passes run every TRADE_BEAT_BUSY. */
 function swapsBusy(w) {
-  return myOrders(w).length > 0 || outbox().length > 0
+  return myOrders(w).some((o) => !o.delegated) || outbox().length > 0
     || myTrades(w).some((t) => t.state !== "done" && t.state !== "aborted");
 }
 
