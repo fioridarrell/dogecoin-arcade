@@ -25332,8 +25332,11 @@ def create_app(state: AppState) -> FastAPI:
                 leg = order.get(side) if isinstance(order.get(side), dict) else {}
                 net, kind = str(leg.get("network", "")), str(leg.get("kind", "coin"))
                 amount = int(leg.get("amount", 0))
-                if kind not in ("coin", "token", "nft") or amount <= 0:
-                    raise ValueError(f"the order's {side} side")
+                # What the seller gets may be a Doginal or Pepinal (a bid for one in PEP, 2026-10-17); what it gives
+                # waits at the order's key, so it is a coin, a token or an NFT.
+                allowed = ("coin", "token", "nft", "doginal") if side == "get" else ("coin", "token", "nft")
+                if kind not in allowed or amount <= 0:
+                    raise ValueError(f"the order's {side} side cannot be a {kind} here")
                 legs[side] = {"network": net, "kind": kind, "asset": str(leg.get("asset", "")), "amount": amount}
             give_chain = next(c for c in state.token_chains if c.network == legs["give"]["network"])
             get_chain = next(c for c in state.token_chains if c.network == legs["get"]["network"])
