@@ -22734,6 +22734,13 @@ def create_app(state: AppState) -> FastAPI:
             row["orders"] = standing.get(key, 0)
             row["ask"] = book["asks"][0]["price"] if book["asks"] else None
             row["bid"] = book["bids"][0]["price"] if book["bids"] else None
+        # The held book's markets with no swap standing now: priced from every trade too, not its fills alone.
+        for key, row in by_key.items():
+            if key not in wanted:
+                try:
+                    _priced(row, _market_points(_leg_info(key[0]), _leg_info(key[1])))
+                except ValueError:
+                    pass
         return rows
 
     def _token_pair_markets(index, faces_for) -> list[dict[str, Any]]:
