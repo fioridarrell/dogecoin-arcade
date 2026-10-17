@@ -4,7 +4,7 @@
 {% block body %}
 {# The reader's own trades (2026-10-17): what the chain says they were a side of, newest
    first, each opening its own page; then their lock-script swaps, kept in this browser. #}
-<div id="live" data-generation="{{ state.generation }}" class="live"></div>
+<div id="live" data-generation="{{ state.generation }}" class="live" data-live-fast></div>
 <a class="back-link" href="{{ back }}">&#8592; {{ 'Back to ' ~ pair_label if pair_label else 'All markets' }}</a>
 {{ ex.style() }}{{ ex.market_css() }}
 <h1 style="margin:6px 0 12px">Trade history{% if pair_label %} <span class="muted" style="font-weight:600">&middot; {{ pair_label }}</span>{% endif %}</h1>
@@ -35,8 +35,8 @@
   <h3 style="margin:0 0 6px">Swaps between chains</h3>
   {% include "_tab_swaps.html" %}
   <p class="muted" style="font-size:.8rem;margin:8px 0 0" id="no-swaps">Your lock-script swaps show here; this
-    browser keeps them. A swap you listed stays on the book only while an arcade page is open here with your wallet
-    unlocked. <a href="/docs/swaps.md">How a swap works</a></p>
+    browser keeps them. A swap you list is filled by your arcade's node, with every page closed; Withdraw sends your
+    side straight back. <a href="/docs/swaps.md">How a swap works</a></p>
 </div>
 {% endif %}
 {% endif %}

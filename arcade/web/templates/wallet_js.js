@@ -2886,6 +2886,15 @@ export async function tradeTick(wallet, id) {
     return trade;
   }
   if (!trade.agreed) { keepTrade(wallet, trade); return trade; }
+  // Accepted, and the taker never locked (2026-10-17: Trade history showed two "accepted" swaps an hour old):
+  // nothing of ours was locked, so it is simply called off rather than left "waiting" until its lock time.
+  if (trade.role === "responder" && !trade.myLock && !trade.theirLock
+      && Date.now() - (trade.created || 0) > RESPONDER_WAIT) {
+    trade.state = "aborted";
+    trade.note = "the taker never locked their side, so nothing was locked";
+    keepTrade(wallet, trade);
+    return trade;
+  }
   const {myRedeem, theirRedeem} = await redeemsOf(trade);
   const facts = {
     mine: trade.myLock ? await tradeFacts(trade.give.network, trade.myLock.txid, trade.myLock.vout,
@@ -3289,6 +3298,8 @@ async function reportDone(wallet, t) {
 
 //: How long a take waits for the lister's page to accept before it is called off (nothing locked).
 export const PROPOSE_WAIT = 120 * 1000;
+//: How long an accepted swap waits for the taker's lock before it is called off with nothing locked.
+export const RESPONDER_WAIT = 30 * 60 * 1000;
 
 //: How often an open page with listed swaps says it is here (order_presence.ALIVE_FOR is 12 s).
 export const ALIVE_BEAT = 3000;
