@@ -218,6 +218,11 @@
           + "every page. Cancel sends it straight back. "
         : "It stands while an arcade page is open here; it settles through lock scripts on both chains. ";
     }
+    if (!document.getElementById("cant-css")) {
+      const st = document.createElement("style"); st.id = "cant-css";
+      st.textContent = "[data-take-order].cant{opacity:.4;filter:grayscale(1)}";
+      document.head.append(st);
+    }
     function step(what, error) {
       const SAY = {asking: ["Taking the swap", 0, "Asking the seller's page\u2026"], asked: ["Taking the swap", 0, ""],
                    listing: ["Listing your swap", -1, "Writing it to the book\u2026"],
@@ -271,8 +276,28 @@
         return p;
       }));
     }
+    // Buttons the reader cannot fund are greyed, the reason on them (one /account read per draw).
+    let marking = false;
+    async function markAffordable() {
+      if (marking) return;
+      const buttons = [...document.querySelectorAll("[data-take-order]")];
+      if (!buttons.length) return;
+      marking = true;
+      try {
+        const can = await wallet.fundsReader();
+        for (const b of buttons) {
+          let order = null;
+          try { order = JSON.parse(b.dataset.takeOrder); } catch (e) { continue; }
+          const short = await can(order.get);
+          b.classList.toggle("cant", !!short);
+          b.setAttribute("aria-disabled", short ? "true" : "false");
+          b.title = short ? short.charAt(0).toUpperCase() + short.slice(1) : "";
+        }
+      } finally { marking = false; }
+    }
     function draw(w) {
       drawOrders(w);
+      markAffordable();
       const every = wallet.myTrades(w).sort((a, b) => b.created - a.created);
       tell(every); progress(every);
       // On a market's Trade history: that market's swaps only (2026-10-17).
@@ -397,6 +422,9 @@
       if (!b || b.disabled) return;
       ev.preventDefault();
       const order = JSON.parse(b.dataset.takeOrder);
+      // What you would give, checked before anything is asked (2026-10-17: 75 GOLD could press Sell on 100).
+      const short = await wallet.canFund(order.get);
+      if (short) { track("You can't take this one", -1, short.charAt(0).toUpperCase() + short.slice(1) + ".", true); return; }
       const ok = await arcadeAsk("Take this swap?",
         `You give ${order.get_label || amt(order.get)} and get ${order.give_label || amt(order.give)}. `
         + "Either both sides get paid or both get their own back. " + wallet.swapFees(order.get, order.give)

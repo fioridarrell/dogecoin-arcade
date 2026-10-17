@@ -3094,7 +3094,8 @@ async function delegateOrder(wallet, id, give, get, approved) {
 /** List a swap from this tab: give `give` {network, kind?, asset?, amount}, get `get` (coin, token or NFT).
  *  `options.delegated`: its node finishes it with the seller away (delegateOrder). */
 export async function listOrder(wallet, give, get, options = {}) {
-  const short = await canFund({network: give.network, kind: give.kind || "coin", amount: Number(give.amount)});
+  const short = await canFund({network: give.network, kind: give.kind || "coin", asset: String(give.asset || ""),
+                               amount: Number(give.amount)});
   if (short) throw new Error(`You can't list this swap yet: ${short}.`);
   const book = myOrdersOf(wallet);
   const id = "ord-" + coinsHex(crypto.getRandomValues(new Uint8Array(8)));
@@ -3289,21 +3290,44 @@ async function tradePass() {
  *  Asked before a listing is posted and before a take is accepted, so nobody locks against a
  *  side that was never going to lock. "" too when the node cannot say: the lock itself will. */
 export async function canFund(give) {
-  try {
-    const acct = await (await fetch("/account", {cache: "no-store"})).json();
-    const c = (acct.chains || []).find((x) => x.network === give.network);
-    if (!c) return "";
-    const kind = give.kind || "coin";
-    const fee = 1_000_000;                                    // about 0.01 to send the lock
-    const need = kind === "coin" ? Number(give.amount) + fee
-      : kind === "doginal" ? Number(c.doginal_lock_need || TRADE.LOCK_RESERVE + fee)
-      : TRADE.LOCK_RESERVE + fee;
-    const have = Number(c.spendable ?? c.balance ?? 0);
-    if (have >= need) return "";
-    const coin = give.network === "doge" ? "DOGE" : give.network === "main" ? "PEP" : "PEP TEST";
-    const show = (n) => (n / 1e8).toFixed(4).replace(/\.?0+$/, "");
-    return `not enough ${coin} to lock it: about ${show(need)} ${coin} is needed and this wallet has ${show(have)}`;
-  } catch (e) { return ""; }
+  return (await fundsReader())(give);
+}
+
+/** A reader for many sides at once (one /account, one /account/tokens): (give) -> "" or why not, in words.
+ *  The token itself is counted too (2026-10-17: a buyer holding 75 GOLD could press Sell on a bid for 100). */
+export async function fundsReader() {
+  let acct = null, toks = null;
+  try { acct = await (await fetch("/account", {cache: "no-store"})).json(); } catch (e) { acct = null; }
+  const show = (n) => (n / 1e8).toFixed(4).replace(/\.?0+$/, "");
+  return async (give) => {
+    try {
+      if (!acct) return "";
+      const c = (acct.chains || []).find((x) => x.network === give.network);
+      if (!c) return "";
+      const kind = give.kind || "coin";
+      const coin = give.network === "doge" ? "DOGE" : give.network === "main" ? "PEP" : "PEP TEST";
+      if (kind === "token") {
+        if (toks === null) {
+          try { toks = await (await fetch("/account/tokens", {cache: "no-store"})).json(); } catch (e) { toks = {}; }
+        }
+        const t = ((toks.chains || []).find((x) => x.network === give.network) || {tokens: []}).tokens
+          .find((x) => String(x.property_id) === String(give.asset));
+        const held = Number((t && t.balance) || 0);
+        if (held < Number(give.amount)) {
+          const name = (t && t.name) || `token #${give.asset}`;
+          const units = (n) => (t && t.divisible === false) ? String(n) : show(n);
+          return `you hold ${units(held)} ${name} and this needs ${units(Number(give.amount))}`;
+        }
+      }
+      const fee = 1_000_000;                                    // about 0.01 to send the lock
+      const need = kind === "coin" ? Number(give.amount) + fee
+        : kind === "doginal" ? Number(c.doginal_lock_need || TRADE.LOCK_RESERVE + fee)
+        : TRADE.LOCK_RESERVE + fee;
+      const have = Number(c.spendable ?? c.balance ?? 0);
+      if (have >= need) return "";
+      return `not enough ${coin} to lock it: about ${show(need)} ${coin} is needed and this wallet has ${show(have)}`;
+    } catch (e) { return ""; }
+  };
 }
 
 /** Tell this node a swap finished, for its market's Recent trades and chart (swap_history). */
