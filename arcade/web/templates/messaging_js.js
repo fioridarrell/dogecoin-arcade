@@ -1088,12 +1088,19 @@ export function openProgram(payload, me) {
  * those are sealed to the shop, so a reader that opened every row here were
  * a reader that opens strangers' trades.
  */
+let mailFrom = null;   // where the account's mail starts, asked once per page (/account is heavy)
+
 export async function programAnswers(me, after) {
   let cursor = Number(after || 0);
   if (!cursor) {
-    try {
-      cursor = (await (await fetch("/account")).json()).mail_from || 0;
-    } catch (e) { cursor = 0; }
+    // Once per page, not once per pass (2026-10-17: an account with no mail yet kept its cursor
+    // at 0 and asked /account -- every balance on every chain -- every 1.5 s, 190 times a minute).
+    if (mailFrom === null) {
+      try {
+        mailFrom = Number((await (await fetch("/account")).json()).mail_from || 0);
+      } catch (e) { mailFrom = 0; }
+    }
+    cursor = mailFrom;
   }
   const start = cursor, answers = [];
   for (;;) {
