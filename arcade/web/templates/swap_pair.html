@@ -213,8 +213,31 @@
           f.querySelector('[name="price"]').value = $("swap-price").value;
           f.requestSubmit();
         };
-        window.swapBoxDraw = draw;
-        draw();
+        // The price box starts at the market (2026-10-17): buying, the best ask; selling, the best bid -- any
+        // order on the book, yours too; then the other side; then the last trade. Typed over, it stays yours.
+        var hint = {asks: [{% for o in asks %}{{ o.price|tojson }},{% endfor %}],
+                    bids: [{% for o in bids %}{{ o.price|tojson }},{% endfor %}], last: {{ last|tojson }}};
+        var typed = false;
+        $("swap-price").addEventListener("input", function () { typed = true; });
+        // The book as drawn: rows the server sent and rows this page added (your own, listed just now).
+        var drawn = function (cls) {
+          return [].slice.call(document.querySelectorAll("#swap-pair .obrow." + cls + " .obprice"))
+            .map(function (e) { return Number(String(e.textContent).replace(/[^0-9.]/g, "")); })
+            .filter(function (n) { return n > 0; });
+        };
+        var prefill = function () {
+          if (typed && $("swap-price").value) { draw(); return; }
+          var asks = hint.asks.concat(drawn("ask")), bids = hint.bids.concat(drawn("bid"));
+          var ask = asks.length ? Math.min.apply(null, asks) : null;
+          var bid = bids.length ? Math.max.apply(null, bids) : null;
+          var p = side() === "buy" ? (ask || bid || hint.last) : (bid || ask || hint.last);
+          if (p) $("swap-price").value = String(+Number(p).toFixed(8));
+          draw();
+        };
+        root.querySelectorAll('input[name="swap-side"]').forEach(function (r) { r.addEventListener("change", prefill); });
+        window.swapBoxDraw = prefill;          // redrawn with the book (_tab_swaps drawOrders, live updates)
+        document.addEventListener("arcade:changed", prefill);
+        prefill();
       })();
       </script>
       {% elif open_here and can_trade_orders %}

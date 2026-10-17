@@ -124,7 +124,8 @@
     {{ held_quote }} {{ qname }}. Whatever is not matched in its block stands at your price, its tokens held back,
     until it fills or you cancel it.</p>
   <script>
-  exTrade(document.getElementById("pair-form"), {sideName: "side", buyValue: "buy",
+  exTrade(document.getElementById("pair-form"), {hint: {asks: [{% for o in book.asks %}Number({{ o.each|tojson }}),{% endfor %}], bids: [{% for o in book.bids %}Number({{ o.each|tojson }}),{% endfor %}], last: {{ (day.last)|tojson }}},
+    sideName: "side", buyValue: "buy",
     amount: "pair-amount", price: "pair-price", button: "pair-order",
     asks: [{% for o in book.asks if not o.mine and not o.pending %}[{{ o.each|tojson }}, {{ o.base_shown|tojson }}],{% endfor %}]
       .map(function (l) { return [Number(l[0]), Number(String(l[1]).replace(/,/g, ""))]; }),

@@ -185,7 +185,8 @@
         holding your coins. You hold {{ held }} {{ wall_text(prop.name, 'this token') }} and
         {{ "%.4f"|format(coins) }} {{ coin_name }}. A sell holds its tokens back until it trades or you cancel it.</p>
       <script>
-      exTrade(document.getElementById("ex-trade"), {sideName: "book-side", buyValue: "bid",
+      exTrade(document.getElementById("ex-trade"), {hint: {asks: [{% for o in book.asks %}Number(String({{ o.price_shown|tojson }}).replace(/,/g, "")),{% endfor %}], bids: [{% for o in book.bids %}Number(String({{ o.price_shown|tojson }}).replace(/,/g, "")),{% endfor %}], last: {{ (day.last)|tojson }}},
+    sideName: "book-side", buyValue: "bid",
         amount: "book-amount", price: "book-price", button: "book-order",
         // What can be taken: not your own orders, not ones still waiting for their block.
         asks: [{% for o in book.asks if not o.mine and not o.pending %}[{{ o.price_shown|tojson }}, {{ o.free_shown|tojson }}],{% endfor %}]

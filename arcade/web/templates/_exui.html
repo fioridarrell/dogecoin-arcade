@@ -201,6 +201,24 @@ window.exTrade = window.exTrade || function (root, o) {
   }
   modes.forEach(function (b) { b.onclick = function () { mode = b.dataset.mode; update(); }; });
   root.addEventListener("input", update);
+  // The price box starts at the market (2026-10-17: "pre-populated with the best ask or bid price ... if there
+  // is no current orders use the latest sale price"): buying, the best ask; selling, the best bid; then the other
+  // side; then the last trade. Typed over, it stays the reader's.
+  var hint = o.hint || {}, typed = false;
+  price.addEventListener("input", function () { typed = true; });
+  function suggest() {
+    var a = (hint.asks || []).filter(function (x) { return x > 0; }), b = (hint.bids || []).filter(function (x) { return x > 0; });
+    var ask = a.length ? Math.min.apply(null, a) : null, bid = b.length ? Math.max.apply(null, b) : null;
+    var last = hint.last > 0 ? hint.last : null;
+    return buying() ? (ask || bid || last) : (bid || ask || last);
+  }
+  function prefill() {
+    if (typed && price.value) return;
+    var p = suggest();
+    if (p) { price.value = String(+Number(p).toFixed(8)); update(); }
+  }
+  root.querySelectorAll("input[name=" + o.sideName + "]").forEach(function (r) { r.addEventListener("change", prefill); });
+  prefill();
   root.addEventListener("change", update);
   // A row of the book filled the boxes in: its price is the reader's now.
   document.addEventListener("click", function (e) {

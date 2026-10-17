@@ -76,7 +76,8 @@
     in the mempool, and trades with any order at your price. You can close the page; <em>Your orders</em> says where it is.</p>
   <p class="msg err" id="x-trouble" hidden></p><p class="msg ok" id="x-news" hidden></p>
   <script>
-  exTrade(document.getElementById("x-form"), {sideName: "side", buyValue: "buy",
+  exTrade(document.getElementById("x-form"), {hint: {asks: [{% for o in book.sells %}Number({{ o.each|tojson }}),{% endfor %}], bids: [{% for o in book.buys %}Number({{ o.each|tojson }}),{% endfor %}], last: {{ (stats.last)|tojson }}},
+    sideName: "side", buyValue: "buy",
     amount: "x-amount", price: "x-price", button: "x-order",
     // Not your own orders: you cannot take yourself.
     asks: [{% for o in book.sells if o.owner != owner %}[{{ o.each|tojson }}, {{ o.units_shown|tojson }}],{% endfor %}]
