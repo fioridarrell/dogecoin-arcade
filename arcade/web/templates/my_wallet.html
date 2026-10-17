@@ -1,7 +1,9 @@
 {% extends "base.html" %}
 {% import "_not_ordinals.html" as notord %}
+{% import "_exui.html" as ex %}
 {% block title %}Wallet · {{ brand.name }}{% endblock %}
 {% block body %}
+{{ ex.fav_script() }}
 {# The Wallet tab, redone (2026-10-08: "our wallet tab is trash. It
    needs to work a lot better. It needs to give feedback when transactions are
    sent it should have a history. The address should auto complete if somebody
@@ -148,6 +150,7 @@ a.wl-act:hover{text-decoration:none}
 .wl-tok .wl-mid small{color:color-mix(in srgb,var(--accent-fg) 62%,transparent)}
 .wl-tokrow{display:flex;align-items:center;gap:6px}
 .wl-tokrow .wl-tok{flex:1;min-width:0}
+.wl-favhead{font-size:.74rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:10px 6px 2px}
 .wl-tok.on{background:var(--accent);box-shadow:inset 0 0 0 3px var(--fg)}
 .wl-backcoin{margin-left:4px;font-size:.8rem;font-weight:700;color:var(--accent);padding:2px 8px;border-radius:999px;background:var(--code);box-shadow:none}
 .wl-piececard{display:flex;flex-direction:column;gap:5px;min-width:0}
@@ -448,6 +451,16 @@ function showTab(which) {
   drawDoginals().catch((e) => { $("doginals").replaceChildren(el("div", "wl-empty", String(e.message || e))); });
 }
 for (const name of ["activity", "tokens", "nfts"]) $("tab-" + name).onclick = () => showTab(name);
+// A star pressed (here or on the Exchange, in another tab) moves the token up at once.
+let favsWere = null;
+if (window.arcadeFavs) window.arcadeFavs.onChange((set) => {
+  const now = JSON.stringify(set || []);
+  if (now === favsWere) return;
+  const first = favsWere === null; favsWere = now;
+  if (!first && tab === "tokens" && tokens) drawTokens().catch(showError("panel-tokens"));
+});
+// The list drawn before the stars were read is drawn again once they are.
+if (window.arcadeFavs) window.arcadeFavs.ready.then(() => { if (tab === "tokens" && tokens) drawTokens().catch(() => {}); });
 const showError = (id) => (e) => { $(id).replaceChildren(el("div", "wl-empty", String(e.message || e))); };
 
 /* --- activity ------------------------------------------------------------
@@ -1125,9 +1138,20 @@ async function drawTokens() {
   const c = chainNow();
   const here = ((tokens.chains || []).find((x) => x.network === (c && c.network)) || {}).tokens || [];
   box.replaceChildren();
-  const held = here.filter((t) => Number(t.balance) > 0 || t.issuer_is_me);
+  // Stars, favorites on top (2026-10-17: "In your wallet for your tokens list, they should also have
+  // stars and favorites on top"). A token's star is its market's (`/exchange/pair/<id>@<chain>`, the same
+  // key the Exchange keeps), so starring it here stars its market there, and the other way round.
+  const favs = window.arcadeFavs;
+  const favKey = (t) => `/exchange/pair/${t.property_id}@${c.network}`;
+  const starred = (t) => !!(favs && favs.has(favKey(t)));
+  const held = here.filter((t) => Number(t.balance) > 0 || t.issuer_is_me)
+    .map((t, i) => [t, i]).sort((a, b) => (starred(b[0]) - starred(a[0])) || (a[1] - b[1])).map((p) => p[0]);
   if (!held.length) box.append(el("div", "wl-empty", `No tokens on ${c ? c.label.toLowerCase() : "this chain"} yet.`));
+  const anyStar = held.some(starred);
+  if (anyStar) box.append(el("div", "wl-favhead", "Favorites"));
+  let shownRest = false;
   for (const t of held) {
+    if (anyStar && !shownRest && !starred(t)) { box.append(el("div", "wl-favhead", "Other tokens")); shownRest = true; }
     const row = el("button", "wl-tok"); row.type = "button";
     if (asset && asset.property_id === t.property_id) row.classList.add("on");
     row.onclick = () => {
@@ -1144,13 +1168,17 @@ async function drawTokens() {
     mid.append(el("b", "", t.sensitive ? "Hidden name" : (t.name || `Token ${t.property_id}`)),
                el("small", "", `#${t.property_id}${t.issuer_is_me ? " · you made it" : ""}`));
     row.append(av, mid, el("span", "wl-amt", t.display ?? String(t.balance)));
+    const wrap = el("div", "wl-tokrow");
+    const star = el("button", "ex-star", starred(t) ? "\u2605" : "\u2606"); star.type = "button";
+    star.dataset.fav = favKey(t); star.setAttribute("aria-pressed", starred(t) ? "true" : "false");
+    star.setAttribute("aria-label", `Favorite ${t.name || "token " + t.property_id}`);
+    wrap.append(star, row);
     if (t.managed && t.issuer_is_me) {
-      const wrap = el("div", "wl-tokrow");
       const manage = el("a", "wl-backcoin", "Manage"); manage.href = `/tokens/${t.property_id}`;
       manage.setAttribute("aria-label", `Manage ${t.name || "token " + t.property_id}`);
-      wrap.append(row, manage);
-      box.append(wrap);
-    } else box.append(row);
+      wrap.append(manage);
+    }
+    box.append(wrap);
   }
   if (held.length) box.prepend(el("p", "wl-note", "Tap a token to send or receive it from the card above."));
   // Sending is the card's Send now, so no link away to do it (2026-10-08).
