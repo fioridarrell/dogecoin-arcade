@@ -9047,12 +9047,26 @@ def create_app(state: AppState) -> FastAPI:
 
     # The coins' own faces on market icons (2026-10-17: "We have both the Pepecoin and Dogecoin icons in the race
     # condition game"): the racer's art, served as files so a page of fifty markets fetches each once.
-    @app.get("/coin-pep.png")
-    @app.get("/coin-pep-test.png")
-    @app.get("/coin-doge.png")
-    def coin_icon(request: Request):
-        return Response((TEMPLATE_DIR / request.url.path.lstrip("/")).read_bytes(), media_type="image/png",
+    # Litecoin's from the racer too, and its testnet coin turned purple like PEP TEST's (2026-10-18: the PEP/LTC
+    # order showed the PEP TEST frog for LTC). A chain's icon is coin-<network>.png when there is one, so a chain added
+    # as Params gets its face by adding the file; the first three keep the names pages already use.
+    @app.get("/coin-{name}.png")
+    def coin_icon(name: str):
+        if not re.fullmatch(r"[a-z0-9-]{2,24}", name or "") or not (TEMPLATE_DIR / f"coin-{name}.png").is_file():
+            raise HTTPException(404, "no such coin")
+        return Response((TEMPLATE_DIR / f"coin-{name}.png").read_bytes(), media_type="image/png",
                         headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+    _COIN_FILES = {"main": "pep", "test": "pep-test", "regtest": "pep-test"}
+
+    def _coin_icon(net: Any) -> str:
+        """The icon URL for a chain's coin by its network name ('' when it has none); the old bool means PEP/PEP TEST."""
+        if isinstance(net, bool) or net is None:
+            net = "main" if net else "test"
+        name = _COIN_FILES.get(str(net), str(net))
+        return f"/coin-{name}.png" if (TEMPLATE_DIR / f"coin-{name}.png").is_file() else ""
+
+    TEMPLATES.env.globals["coin_icon"] = _coin_icon
 
     @app.get("/icon-32.png")
     @app.get("/icon-180.png")
