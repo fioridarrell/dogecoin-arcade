@@ -174,20 +174,26 @@ def _spender(rpc: Any, lock: dict, scanned: dict[str, int]) -> dict | None:
 # --- the trader --------------------------------------------------------------------------------
 
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS link (            -- per trade: who, and where the locks are
+-- per trade: who, and where the locks are
+CREATE TABLE IF NOT EXISTS link (
     id        TEXT PRIMARY KEY,
     peer      TEXT NOT NULL,                  -- the counterparty's messaging key, hex
     my_lock   TEXT NOT NULL DEFAULT '',       -- "txid:vout"
     their_lock TEXT NOT NULL DEFAULT '',
     agreed    INTEGER NOT NULL DEFAULT 0
 );
-CREATE TABLE IF NOT EXISTS standing_order (  -- what this node will answer a proposal with
+-- what this node will answer a proposal with
+CREATE TABLE IF NOT EXISTS standing_order (
     id   TEXT PRIMARY KEY,
     give TEXT NOT NULL,                       -- leg JSON, giver = this node
     get  TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS delegated (       -- a seller's order this node finishes with the order's own key
+CREATE TABLE IF NOT EXISTS meta (
+    k TEXT PRIMARY KEY,
+    v TEXT NOT NULL
+);
+-- a seller's order this node finishes with the order's own key
+CREATE TABLE IF NOT EXISTS delegated (
     order_id  TEXT PRIMARY KEY,
     key       TEXT NOT NULL,                  -- the order key's secret, hex (this file is the node's, 0600 home)
     deposit   TEXT NOT NULL,                  -- {network: P2PKH of the order key}: where the seller's side waits

@@ -39,9 +39,14 @@ def test_an_open_wallet_sweeps_its_message_outputs_back_by_itself(world, monkeyp
         pep.call("sendtoaddress", made, 10)
         _mine(pep)
         _scan_a(a)
-        # An order batch is written from the account in Class B: it leaves payload outputs.
-        tab.evaluate("""async ([net, give, get]) => { await w.listOrder(await w.opened(net), give, get); }""",
-                     [net, {"network": "regtest", "amount": 3 * COIN}, {"network": "doge", "amount": 2 * COIN}])
+        # A long post is written from the account in Class B: it leaves payload outputs. (An order batch did,
+        # until orders went to the node over the mesh on 2026-10-17.)
+        tab.evaluate("""async (net) => { await w.claim(await w.opened(net), 'sweeper' + Math.floor(Math.random() * 1e6)); }""",
+                     net)
+        _mine(pep)
+        _scan_a(a)
+        tab.evaluate("""async (net) => { await w.post(await w.opened(net), 'a post long enough to need Class B. '.repeat(20)); }""",
+                     net)
         _mine(pep)
         _scan_a(a)
         dust = tab.evaluate("async () => (await (await fetch('/account/dust')).json()).chains")

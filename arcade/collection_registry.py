@@ -40,7 +40,8 @@ CREATE TABLE IF NOT EXISTS ext_root (
 );
 CREATE TABLE IF NOT EXISTS ext_item (
     chain      TEXT NOT NULL,
-    id         TEXT NOT NULL,              -- the item's inscription id on its chain
+    -- id: the item's inscription id on its chain
+    id         TEXT NOT NULL,
     root       TEXT NOT NULL,
     number     INTEGER NOT NULL,
     traits     TEXT NOT NULL DEFAULT '{}',
