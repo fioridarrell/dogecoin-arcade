@@ -12,7 +12,7 @@
 {% if error %}<div class="msg err">{{ error }}</div>{% endif %}
 
 {% if prepared %}
-  {% set mainnet = which in ('ledger', 'doge') %}
+  {% set mainnet = which in ('ledger', 'doge', 'ltc') %}
   <h2>Confirm before sending</h2>
   <div class="panel" {% if mainnet %}style="border-color:var(--bad);border-width:2px"{% endif %}>
     {% if mainnet %}
@@ -127,7 +127,7 @@
     {% endif %}</p>
   {% if mining.mining %}
   <div class="msg info" id="mining" style="margin:0 0 8px">
-    <strong>Mining a block on this machine&hellip;</strong>
+    <strong>Mining a block on this machine&hellip;</strong>{% if mining.chain and mining.chain != 'P test' %} ({{ mining.chain }}){% endif %}
     <span id="mining-so-far"></span>
     This page refreshes itself when one is found.</div>
   <form method="post" action="/fund/stop">
@@ -243,6 +243,40 @@
     Until then nothing can be sent, held or shown on it.</p>
 </div>
 {% endif %}
+{% endif %}
+{% if ltc_test_mine %}
+{# Litecoin testnet, "L test" (2026-10-18, SadFrog's side): one block mined here, paid to the signed-in account. #}
+<h2 id="ltctest-mine"><b class="netl litecoin">L</b> test <span class="tag litecoin">test</span></h2>
+<div class="panel">
+  {% if not ltc_test_mine.ready %}
+  <p style="margin:0" class="muted">L test opens here when its node has finished syncing.</p>
+  {% elif not ltc_test_mine.signed_in %}
+  <p style="margin:0">Sign in as this node&rsquo;s operator to mine an L test block.</p>
+  {% elif not ltc_test_mine.operator %}
+  <p style="margin:0" class="muted">Only this node&rsquo;s operator mines L test blocks here.</p>
+  {% else %}
+  <p style="margin:0 0 8px">Litecoin testnet blocks come when somebody mines one. This mines one block on this
+    machine and pays it to this node&rsquo;s own wallet, the L test faucet{% if ltc_test_mine.address %}
+    (<code style="word-break:break-all">{{ ltc_test_mine.address }}</code>){% endif %}, which tops every
+    account up. A block pays about 1.56 LTC TEST, spendable after 100 more blocks (Litecoin&rsquo;s rule
+    for mined coins); test coins, worth nothing.</p>
+  {% if mining.mining %}
+  <p class="muted" style="margin:0">Mining a {{ mining.chain }} block now; see above.</p>
+  {% else %}
+  <form method="post" action="/fund/ltctest">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}"><button type="submit">Mine one L test block</button>
+  </form>
+  {% endif %}
+  {% set f = ltc_test_mine.faucet %}
+  {% if f %}
+  <p class="muted" style="font-size:.86rem;margin:10px 0 0">Faucet: every account is topped back up to
+    <b>{{ f.amount }} {{ f.coin }}</b> once a day, from this node&rsquo;s wallet, which holds
+    {{ f.balance if f.balance is not none else '?' }}{% if f.immature %} (+{{ f.immature }} ripening){% endif %}.
+    {{ 'It mines here by itself when it runs low.' if f.supply == 'auto' else 'Mine to it with the button when it runs low.' }}
+    Set both in Admin &rarr; Chains.</p>
+  {% endif %}
+  {% endif %}
+</div>
 {% endif %}
 <h2>Fast sending <span class="tag testnet">test</span></h2>
 <div class="panel">

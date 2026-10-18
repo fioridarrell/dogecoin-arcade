@@ -25,7 +25,7 @@ import time
 from dataclasses import dataclass
 from typing import Callable
 
-from ..config import Params, require_messaging_network
+from ..config import MESSAGING_NETWORKS, MainnetRefused, Params, require_messaging_network
 from ..rpc import RpcClient, RpcError
 
 log = logging.getLogger(__name__)
@@ -52,6 +52,11 @@ MAX_TRIES = 50_000_000
 # inside the timeout and lets the caller count progress and stop in between.
 FIRST_TRIES = 20_000
 SECONDS_PER_CALL = 30
+#: On a test add-on chain (Litecoin testnet, 2026-10-18), batches of a few seconds: a block is
+#: built on the tip as it was when its call began, and that chain is raced by another CPU miner at
+#: the same minimum difficulty. Two of our blocks lost because a 30-second call kept hashing on a tip
+#: another miner's block had already replaced.
+ADDON_SECONDS_PER_CALL = 5
 TRIES_PER_CALL = (5_000, 5_000_000)
 
 # Difficulty 1 is the 0x1d00ffff target (rpc/blockchain.cpp GetDifficulty);
@@ -98,8 +103,12 @@ class Miner:
 
     def __init__(self, rpc: RpcClient, params: Params):
         # Belt and braces over the CLI's own check. Mining on mainnet would be
-        # both futile and a waste of someone's electricity.
-        require_messaging_network(params)
+        # both futile and a waste of someone's electricity. A test add-on chain
+        # (Litecoin testnet, 2026-10-18) may be mined too; never one with real coins.
+        if getattr(params, "real_coins", False):
+            raise MainnetRefused(f"mining is for test chains; refusing {params.name!r}")
+        if not (params.name in MESSAGING_NETWORKS or getattr(params, "addon", False)):
+            require_messaging_network(params)
         self.rpc = rpc
         self.params = params
 
@@ -155,7 +164,8 @@ class Miner:
                 return result[0]
             rate = batch / max(time.monotonic() - started, 0.001)
             low, high = TRIES_PER_CALL
-            batch = int(min(max(rate * SECONDS_PER_CALL, low), high))
+            seconds = ADDON_SECONDS_PER_CALL if getattr(self.params, "addon", False) else SECONDS_PER_CALL
+            batch = int(min(max(rate * seconds, low), high))
             if on_progress:
                 on_progress(tries, rate)
             if stop and stop():

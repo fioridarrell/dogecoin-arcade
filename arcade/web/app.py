@@ -2332,6 +2332,15 @@ def create_app(state: AppState) -> FastAPI:
     imports: dict[str, Any] = {}
 
     def _chain_for(which: str):
+        # Dogecoin's node wallet too (2026-10-18): Dogecoin Core 1.14 keeps one wallet.dat as
+        # Pepecoin's does, so saving, importing and switching work the same way. Litecoin Core 0.21
+        # keeps named wallets loaded over RPC instead (backup.named_wallets and the rest), L main
+        # and L test both, when their node runs here.
+        if which == "doge" and state.doge is not None:
+            return state.doge
+        litecoin = {"ltc": state.ltc, "ltctest": state.ltc_test}.get(which)
+        if litecoin is not None and not litecoin.borrowed:
+            return litecoin
         chain = state.ledger if which == "ledger" else state.messaging
         if which not in ("ledger", "messaging"):
             raise ValueError("unknown chain")
@@ -2339,18 +2348,28 @@ def create_app(state: AppState) -> FastAPI:
 
     def _chain_cards() -> list[dict[str, Any]]:
         cards = []
-        for which, chain in (("messaging", state.messaging), ("ledger", state.ledger)):
+        chains = [("messaging", state.messaging), ("ledger", state.ledger)]
+        if state.doge is not None and state.chain_ready(state.doge):
+            chains.append(("doge", state.doge))
+        for which, chain in (("ltc", state.ltc), ("ltctest", state.ltc_test)):
+            if chain is not None and not chain.borrowed and state.chain_ready(chain):
+                chains.append((which, chain))
+        for which, chain in chains:
+            named = chain.is_litecoin
             card: dict[str, Any] = {
                 "which": which, "label": chain.label, "network": chain.network,
                 "is_mainnet": chain.is_mainnet, "online": False, "wallet": None,
                 "wallet_file": None, "job": imports.get(which),
-                "wallets": [], "can_switch": False,
+                "wallets": [], "can_switch": False, "named": named,
             }
             try:
                 with chain.rpc() as rpc:
                     card["wallet"] = backup.wallet_summary(rpc)
                     card["online"] = True
-                if chain.datadir:
+                    if named:
+                        card["wallets"] = backup.named_wallets(rpc)
+                        card["can_switch"] = True
+                if chain.datadir and not named:
                     path = backup.wallet_path(chain.datadir, chain.network)
                     card["wallet_file"] = str(path)
                     card["wallet_readable"] = os.access(path, os.R_OK)
@@ -2377,8 +2396,11 @@ def create_app(state: AppState) -> FastAPI:
             target = Path(folder.strip()).expanduser() if folder.strip() \
                 else backup.default_backup_dir()
             with chain.rpc() as rpc:
-                written = backup.backup_wallet(rpc, target, datadir=chain.datadir,
-                                               network=chain.network)
+                if chain.is_litecoin:
+                    written = backup.backup_named_wallet(rpc, target)
+                else:
+                    written = backup.backup_wallet(rpc, target, datadir=chain.datadir,
+                                                   network=chain.network)
             state.flash(f"Saved a copy of the {chain.label.lower()} wallet to {written}. "
                         f"Keep it somewhere other than this computer.", "ok")
         except HTTPException:
@@ -2450,6 +2472,10 @@ def create_app(state: AppState) -> FastAPI:
                     "tick the box to confirm you want to replace the wallet that "
                     "is in use")
             chain = _chain_for(which)
+            if chain.is_litecoin:
+                raise ValueError(
+                    "Litecoin Core keeps each wallet in a folder of its own. Put the "
+                    "wallet's folder in the node's wallets folder, then pick it on this page")
             if not chain.datadir:
                 raise ValueError(
                     "this application does not know where that node keeps its "
@@ -2485,6 +2511,15 @@ def create_app(state: AppState) -> FastAPI:
         try:
             check_csrf(csrf_token)
             chain = _chain_for(which)
+            if chain.is_litecoin:
+                result = backup.create_named_wallet(chain.rpc, name)
+                previous = ", ".join(n or "the default wallet" for n in result["previous"])
+                state.flash(
+                    f"Now using a new empty wallet called {result['created']}. "
+                    + (f"{previous} is put aside, not deleted: it stays in the node's "
+                       f"wallets folder and can be used again from this page."
+                       if previous else ""), "ok")
+                return RedirectResponse("/backup", status_code=303)
             if not chain.datadir:
                 raise ValueError("this application does not know where that node "
                                  "keeps its files")
@@ -2513,6 +2548,11 @@ def create_app(state: AppState) -> FastAPI:
         try:
             check_csrf(csrf_token)
             chain = _chain_for(which)
+            if chain.is_litecoin:
+                result = backup.switch_named_wallet(chain.rpc, name)
+                state.flash(f"Now using {result['now_using'] or 'the default wallet'}. The "
+                            f"one before is put aside, not deleted.", "ok")
+                return RedirectResponse("/backup", status_code=303)
             if not chain.datadir:
                 raise ValueError("this application does not know where that node "
                                  "keeps its files")
@@ -2542,6 +2582,9 @@ def create_app(state: AppState) -> FastAPI:
         try:
             check_csrf(csrf_token)
             chain = _chain_for(which)
+            if chain.is_litecoin:
+                raise ValueError("a Litecoin wallet that is not in use is already put "
+                                 "aside: it stays in its folder, unloaded")
             if not chain.datadir:
                 raise ValueError("this application does not know where that node "
                                  "keeps its files")
@@ -4183,11 +4226,13 @@ def create_app(state: AppState) -> FastAPI:
     # --- wallet ---------------------------------------------------------------
 
     def _context(which: str):
-        # The node's own Dogecoin wallet too, once its node has synced (2026-10-13).
-        if which == "doge" and state.doge is not None:
-            if not state.chain_ready(state.doge):
-                raise ValueError("Dogecoin is not open yet: its node is still syncing")
-            return state.doge
+        # The node's own Dogecoin wallet too, once its node has synced (2026-10-13); and every other
+        # add-on chain's by its network name (2026-10-18: L main, L test).
+        addon = state.addon(which) if which not in ("messaging", "ledger") else None
+        if addon is not None:
+            if not state.chain_ready(addon):
+                raise ValueError(f"{addon.label} is not open yet: its node is still syncing")
+            return addon
         if which not in ("messaging", "ledger"):
             raise ValueError("unknown wallet")
         return state.messaging if which == "messaging" else state.ledger
@@ -4198,8 +4243,8 @@ def create_app(state: AppState) -> FastAPI:
         LTC" from the operator's Wallet)."""
         out = []
         for ctx in list(getattr(state, "addons", None) or []):
-            if ctx is state.doge and not ctx.borrowed:
-                continue                                  # its own Core wallet, on the page already
+            if not ctx.borrowed:
+                continue                                  # a Core here has its own wallet and its own section
             row = {"network": ctx.network, "title": ctx.title, "letter": ctx.letter, "net": ctx.net,
                    "word": ctx.word, "coin": ctx.params.coin, "mainnet": bool(ctx.is_mainnet),
                    "borrowed": bool(ctx.borrowed), "minable": not ctx.params.real_coins
@@ -4216,7 +4261,8 @@ def create_app(state: AppState) -> FastAPI:
         chain, _ = _token_chain()
         return render(request, "wallet.html", messaging=messaging_status(),
                       ledger=ledger_status(), **_doge_status(), prepared=None, which=None, now=time.time(),
-                      mining=_mining_json(), tab="coins", chain=chain, keyed=_keyed_wallets(),
+                      mining=_mining_json(), ltc_test_mine=_ltc_test_mine(request), tab="coins", chain=chain,
+                      keyed=_keyed_wallets(),
                       other_chains=[c for c in state.token_chains if c is not chain])
 
     @app.get("/wallet/tokens", response_class=HTMLResponse)
@@ -4439,21 +4485,140 @@ def create_app(state: AppState) -> FastAPI:
             state.flash(f"Mining failed: {exc}", "err")
         return RedirectResponse("/wallet", status_code=303)
 
-    def _mine_one(address: str) -> None:
-        """The thread behind /fund: one block, counting as it goes, then a notice."""
+    def _ltc_test_mine(request: Request) -> dict[str, Any] | None:
+        """What the Wallet page's L test mining panel needs, or None when this node has no L test."""
+        chain = getattr(state, "ltc_test", None)
+        if chain is None:
+            return None
+        account = signed_in(request)
+        return {"ready": bool(state.chain_ready(chain)), "signed_in": account is not None,
+                "operator": _mines_here(request), "faucet": _admin_faucet_row(chain.network),
+                "address": str(state.setting(f"faucet_address:{chain.network}", "") or "")}
+
+    def _mines_here(request: Request) -> bool:
+        """Only the operator's account mines to itself (2026-10-18, SadFrog: "only for the admin's
+        account, just like before on the other chains"): the operator signed in, or, on a node that
+        names no operator yet, whoever is at the node's own machine. Never the public door."""
+        if signed_in(request) is None:
+            return False
+        if state.operator:
+            return _is_operator(request)
+        return not _public_request(request)
+
+    def _start_mining(address: str, chain, why: str = "", until: float | None = None) -> bool:
+        """Start the one mining thread (the Wallet page's progress and Stop follow it) on `chain`,
+        or False when it is already mining. `why` names it in the page's line ("faucet"). With
+        `until` (a time), it mines block after block until then (Admin -> Chains, 2026-10-18)."""
+        if state.mining is not None:
+            return False
+        with chain.rpc() as rpc:
+            expected = Miner(rpc, chain.params).expected_hashes()          # refuses real coins
+        state.mining = {"started": time.time(), "address": address, "tries": 0, "rate": 0.0,
+                        "expected": expected, "stop": False, "net": chain.network,
+                        "until": until, "blocks": 0,
+                        "chain": chain.title + (f" {why}" if why else "")}
+        threading.Thread(target=_mine_one, args=(address, chain, until), name="arcade-mine",
+                         daemon=True).start()
+        return True
+
+    def _faucet_address(chain) -> str:
+        """Where a chain's faucet keeps its coins: the node's own wallet. The messaging chain's is the
+        address /fund has always mined to; an add-on test chain's is made once and kept."""
+        if chain.network == state.messaging.network:
+            if state.derived_address:
+                return state.derived_address
+            with chain.rpc() as rpc:
+                return rpc.call("getnewaddress")
+        key = f"faucet_address:{chain.network}"
+        kept = str(state.setting(key, "") or "")
+        if not kept:
+            with chain.rpc() as rpc:
+                kept = rpc.call("getnewaddress", "faucet", "legacy")
+            state.set_setting(key, kept)
+        return kept
+
+    @app.post("/fund/ltctest")
+    def fund_ltc_test(request: Request, csrf_token: str = Form("")):
+        """Mine one Litecoin TESTNET block to this node's own wallet, its faucet: the same thread and
+        stop as /fund, which has always mined Pepecoin testnet to the node. First it paid the signed-in
+        account; then (2026-10-18, SadFrog) the operator's account is "a normal user save for being
+        tied to the operator account", and faucet work is the node's. Ripens over 100 blocks."""
+        try:
+            check_csrf(csrf_token)
+            chain = getattr(state, "ltc_test", None)
+            if chain is None:
+                raise ValueError("this node does not run Litecoin testnet")
+            if not state.chain_ready(chain):
+                raise ValueError("Litecoin testnet is not open yet: its node is still syncing")
+            account = signed_in(request)
+            if account is None:
+                raise ValueError("sign in first: the block pays your account")
+            if not _mines_here(request):
+                raise ValueError("only this node's operator mines L test blocks here")
+            if state.mining is not None:
+                state.flash("Already mining a block; it will say when one is found.")
+                return RedirectResponse("/wallet", status_code=303)
+            address = _faucet_address(chain)
+            # Said before the thread starts: the notice is one slot, and a block found at once
+            # would otherwise have its "Mined" overwritten by this.
+            state.flash(f"Mining one L test block to this node's faucet, {address}. "
+                        f"The page will say when it is found.")
+            if not _start_mining(address, chain, "faucet"):
+                state.flash("Already mining a block; it will say when one is found.")
+        except HTTPException:
+            raise          # a rejected form is a 400, not an error page
+        except Exception as exc:
+            state.flash(f"Mining failed: {exc}", "err")
+        return RedirectResponse("/wallet", status_code=303)
+
+    def _mine_one(address: str, chain=None, until: float | None = None) -> None:
+        """The thread behind /fund: one block, counting as it goes, then a notice.
+        `chain` is the messaging chain unless said (L test: /fund/ltctest). With `until`, blocks one
+        after another until that time or Stop, then one notice of how many."""
+        chain = chain or state.messaging
+        # How this run ended, kept for Admin -> Chains (2026-10-18: a block found and lost to another
+        # miner's, or a run that ended while nobody watched, left the row looking as if nothing happened).
+        found_blocks: list[str] = []
+        outcome = "failed"
+
         def progress(tries: int, rate: float) -> None:
             if state.mining:
                 state.mining.update(tries=tries, rate=rate)
 
         def stopped() -> bool:
-            return bool(state.mining and state.mining.get("stop"))
+            return bool(state.mining and state.mining.get("stop")) or \
+                (until is not None and time.time() >= until)
 
         try:
-            with state.messaging.rpc() as rpc:
-                miner = Miner(rpc, state.messaging.params)
+            with chain.rpc() as rpc:
+                miner = Miner(rpc, chain.params)
+                if until is not None:
+                    found = 0
+                    while not stopped():
+                        block = miner.mine_one(address, on_progress=progress, stop=stopped)
+                        if block:
+                            found_blocks.append(block)
+                            found += 1
+                            if state.mining:
+                                state.mining.update(blocks=found, tries=0)
+                            log.info("mined %s block %d of a timed run to %s", chain.title, found, address)
+                            state.bump_generation()
+                    how = "Stopped" if state.mining and state.mining.get("stop") else "Done"
+                    outcome = "found" if found else ("stopped" if how == "Stopped" else "none")
+                    state.flash(f"{how} mining {chain.title}: {found} block{'' if found == 1 else 's'} to "
+                                f"{address}." + (" Their coins can be spent after 100 more blocks."
+                                                 if found else ""), "ok" if found else "info")
+                    return
                 block = miner.mine_one(address, on_progress=progress, stop=stopped)
                 tries = (state.mining or {}).get("tries", 0)
                 if block:
+                    found_blocks.append(block)
+                outcome = "found" if block else ("stopped" if stopped() else "none")
+                if block and chain is not state.messaging:
+                    log.info("mined %s block %s to %s", chain.title, block, address)
+                    state.flash(f"Mined {chain.title} block {block[:16]}… to {address}. Its coins can be "
+                                f"spent after 100 more blocks.", "ok")
+                elif block:
                     state.flash(f"Mined block {block[:16]}… to {address}. "
                                 f"{miner.status().describe()}.", "ok")
                 elif stopped():
@@ -4461,8 +4626,11 @@ def create_app(state: AppState) -> FastAPI:
                 else:
                     state.flash(f"No block in {tries:,} hashes; press it again.", "err")
         except Exception as exc:
+            outcome = f"failed: {str(exc)[:160]}"
             state.flash(f"Mining failed: {exc}", "err")
         finally:
+            state.last_mined = {"net": chain.network, "chain": chain.title, "ended": time.time(),
+                                "outcome": outcome, "blocks": list(found_blocks)}
             state.mining = None
             state.bump_generation()
 
@@ -4488,11 +4656,13 @@ def create_app(state: AppState) -> FastAPI:
             return {"mining": False}
         rate = float(mining.get("rate") or 0)
         return {"mining": True, "seconds": int(time.time() - mining["started"]),
+                "net": mining.get("net") or state.messaging.network,
+                "until": mining.get("until"), "blocks": int(mining.get("blocks") or 0),
                 "tries": int(mining.get("tries", 0)), "rate": int(rate),
                 "expected": int(mining.get("expected", 0)),
                 # At the rate seen so far; 0 until the first batch is in.
                 "expected_seconds": int(mining["expected"] / rate) if rate else 0,
-                "stopping": bool(mining.get("stop"))}
+                "stopping": bool(mining.get("stop")), "chain": mining.get("chain") or "P test"}
 
     # --- tokens ---------------------------------------------------------------
     # Shown for one chain at a time: mainnet, the ledger (D-012), or testnet,
@@ -10020,8 +10190,8 @@ def create_app(state: AppState) -> FastAPI:
         account's balance tops it back up to the gift, once a UTC day, testnet
         only, in the background so the page never waits on the wallet."""
         chain = _account_chain()
-        if chain.is_mainnet or spendable >= int(state.setting("faucet", faucetlib.GIFT)
-                                                or faucetlib.GIFT) \
+        if chain.is_mainnet or not state.faucet_topoff(chain) \
+                or spendable >= int(state.setting("faucet", faucetlib.GIFT) or faucetlib.GIFT) \
                 or pubkey in _topping:
             return
         _topping.add(pubkey)
@@ -10043,6 +10213,76 @@ def create_app(state: AppState) -> FastAPI:
                 _topping.discard(pubkey)
 
         threading.Thread(target=work, name="arcade-topoff", daemon=True).start()
+
+    #: How many days of top-offs a faucet set to "auto" keeps: below this it mines here.
+    FAUCET_RESERVE_DAYS = 3
+
+    def _account_keys() -> dict[str, str]:
+        """Every account's tag-chain (testnet) address, by pubkey: `address:<pubkey>` in settings."""
+        out = {}
+        for name, value in state.settings().items():
+            if name.startswith("address:") and ":" not in name[8:] and isinstance(value, str) and value:
+                out[name[8:]] = value
+        return out
+
+    def _test_twin(address: str, chain) -> str:
+        """The same testnet key's address on another test chain (coin type 1 on every one)."""
+        try:
+            version, payload = b58check_decode(address)
+        except Exception:
+            return ""
+        if version not in (NETWORKS["test"].pubkeyhash_version, NETWORKS["regtest"].pubkeyhash_version) \
+                or len(payload) != 20:
+            return ""
+        return b58check_encode(chain.params.pubkeyhash_version, payload)
+
+    def _keep_faucets() -> None:
+        """The faucets of every test chain (Admin -> Chains, 2026-10-18: "give every new account a set
+        amount to top off every day"). Each add-on test chain whose node has synced brings every
+        account back up to its daily amount once a UTC day, from this node's wallet; and a faucet set
+        to "auto" mines here whenever it holds less than FAUCET_RESERVE_DAYS of top-offs. Called by
+        the block watcher. Pepecoin testnet's own top-off still runs when a page reads a balance."""
+        keys = _account_keys()
+        for chain in [state.messaging, *getattr(state, "addons", [])]:
+            if getattr(chain.params, "real_coins", False) or not state.chain_ready(chain):
+                continue
+            amount, supply = state.faucet_conf(chain)
+            if amount <= 0:
+                continue
+            if chain.network != state.messaging.network and state.faucet_topoff(chain):
+                _top_off_accounts(chain, keys)
+            if supply == "auto":
+                _stock_faucet(chain, amount, len(keys))
+
+    def _top_off_accounts(chain, keys: dict[str, str]) -> None:
+        faucet = state.addon_faucet(chain)
+        index = state.token_index(chain)
+        for pubkey, home in keys.items():
+            address = _account_address(pubkey, chain) or _test_twin(home, chain)
+            if not address:
+                continue
+            with contextlib.closing(index.open()) as db:
+                spendable = utxoslib.balance(db, address)
+            try:
+                sent = faucetlib.top_off(chain, faucet, f"{chain.network}:{pubkey}", address, spendable)
+            except Exception as exc:                      # noqa: BLE001 -- an empty faucet, a node away
+                log.info("faucet %s: top-off: %s", chain.title, exc)
+                return                                   # the next pass tries again
+            if sent:
+                log.info("faucet %s: topped %s… up by %s", chain.title, pubkey[:12], sent)
+
+    def _stock_faucet(chain, amount: int, accounts: int) -> None:
+        wallet = (chain.status() or {}).get("wallet") or {}
+        have = float(wallet.get("balance") or 0) + float(wallet.get("immature") or 0)
+        want = amount / 100_000_000 * max(accounts, 1) * FAUCET_RESERVE_DAYS
+        if have < want and state.mining is None:
+            try:
+                if _start_mining(_faucet_address(chain), chain, "faucet"):
+                    log.info("faucet %s: %.4f held, %.4f wanted: mining a block", chain.title, have, want)
+            except Exception as exc:                      # noqa: BLE001
+                log.info("faucet %s: could not mine: %s", chain.title, exc)
+
+    state.keep_faucets = _keep_faucets
 
     def _watch(address: str, why: str, chain=None) -> None:
         """Start following an address's coins, so it can be funded at all."""
@@ -10242,7 +10482,13 @@ def create_app(state: AppState) -> FastAPI:
             def run(chain=chain, address=address, key=key, start=start, end=end, index=index):
                 try:
                     with chain.rpc() as rpc:
-                        filed = utxoslib.backfill(index, rpc, chain.params, address, start, end)
+                        # The Core's coin set first (2026-10-18): coins below the floor too. A Core without
+                        # `scantxoutset` (Pepecoin, Dogecoin) or a borrowed one reads the blocks instead.
+                        filed = None if chain.borrowed else \
+                            utxoslib.seed_from_core(index, rpc, chain.params, {address},
+                                                    index.indexed_height() or 0)
+                        if filed is None:
+                            filed = utxoslib.backfill(index, rpc, chain.params, address, start, end)
                     state.set_setting(key, filed)
                     state.bump_generation()
                     log.info("backfill: %s held %d coins before this node watched it",
@@ -21647,6 +21893,43 @@ def create_app(state: AppState) -> FastAPI:
             raise HTTPException(404, "no such game")
         return launch_thread(request, txid)
 
+    @app.get("/play/{which}", response_class=HTMLResponse)
+    def game_door(request: Request, which: str):
+        """A game's own front door (SadFrog, 2026-10-17): the sign-up in the game's
+        colours and words, for somebody who came from the game's site to play it.
+
+        `which` is a card's txid, or the name or `family` a game's cards share
+        (/play/ashvale), so the link on a game's site keeps working across every
+        card its maker inscribes. Signed in already, it is just the game; anybody
+        else, the node's own machine included, gets the sign-up, as /join does. The
+        account it makes is the same account /join makes, by the same wallet.js.
+        """
+        wanted = (which or "").strip().lower()
+        found = None
+        if re.fullmatch(r"[0-9a-f]{64}", wanted):
+            row = _game_by_txid(wanted)
+            if row:
+                found = {"txid": wanted, "game": row["game"]}
+        elif re.fullmatch(r"[a-z0-9._-]{1,64}", wanted):  # lowered above
+            for item in _games_ranked(request, "new"):
+                g = item["game"]
+                if wanted in ((g.get("family") or "").lower(), gameslib.slug(g["name"])):
+                    found = item
+                    break
+        if found is None:
+            raise HTTPException(404, "no such game")
+        game = found["game"]
+        opens = f"/inscriptions/{game.get('opens') or found['txid']}/full"
+        if signed_in(request) is not None:
+            return RedirectResponse(opens, status_code=303)
+        register = state.accounts()
+        return render(request, "game_door.html", chain=_account_chain(), game=game,
+                      card=found["txid"], opens=opens, skin=gameslib.door_skin(game),
+                      notice=gameslib.door_notice(game),
+                      seats=register.seats, free=register.free(),
+                      secure_enough=secure_context(request),
+                      why_not=WHY_NOT_SECURE)
+
     def _mintpad_inscription(chain, creator: str, name: str) -> str:
         """The newest inscription that is this collection's mintpad, by its JSON,
         inscribed by the seller: '' when there is none yet."""
@@ -22207,8 +22490,8 @@ def create_app(state: AppState) -> FastAPI:
     def _admin_wallets() -> list[dict]:
         out = []
         wallets = [("messaging", state.messaging), ("ledger", state.ledger)]
-        if state.doge is not None:
-            wallets.append(("doge", state.doge))
+        # Every add-on chain's node wallet, Dogecoin's first as before (2026-10-18: L main, L test).
+        wallets += [(c.network, c) for c in getattr(state, "addons", [])]
         for which, ctx in wallets:
             row = {"which": which, "label": ctx.title, "network": ctx.network,
                    "net": ctx.net, "coin": ctx.params.coin}
@@ -22538,6 +22821,7 @@ def create_app(state: AppState) -> FastAPI:
         index = check.status() if check else {}
         for row in rows:
             row["index"] = index.get(row["net"], {})
+            row["faucet"] = _admin_faucet_row(row["net"])
             # Whether the Wallet and the markets offer it yet (2026-10-18: Litecoin borrowed, and still grey with
             # nothing to say why): the same reading they use, the sharer's getblockchaininfo.
             chain = state.addon(row["net"])
@@ -22548,7 +22832,60 @@ def create_app(state: AppState) -> FastAPI:
         unknown = sorted((net, s.get("sharers", 0)) for net, s in status.items()
                          if net not in NETWORKS and s.get("sharers"))
         return {"rows": rows, "mesh": mesh is not None, "unknown": unknown,
-                "restart": bool(os.environ.get("INVOCATION_ID"))}
+                "restart": bool(os.environ.get("INVOCATION_ID")), "mining": _mining_json()}
+
+    def _admin_faucet_row(net: str) -> dict | None:
+        """A test chain's faucet for Admin -> Chains (2026-10-18): its daily top-off, how it is stocked,
+        and what its wallet holds. None for a chain with real coins or one not running here."""
+        chain = state.messaging if net == state.messaging.network else state.addon(net)
+        params = NETWORKS.get(net)
+        if chain is None or params is None or getattr(params, "real_coins", False):
+            return None
+        amount, supply = state.faucet_conf(chain)
+        wallet = {}
+        try:
+            wallet = (chain.status() or {}).get("wallet") or {}
+        except Exception:                                  # noqa: BLE001 -- a node away
+            pass
+        last = getattr(state, "last_mined", None)
+        if last and last.get("net") == net:
+            last = dict(last, blocks=[_block_fate(chain, b) for b in last.get("blocks", [])[-5:]])
+        else:
+            last = None
+        return {"amount": amount / 100_000_000, "coin": params.coin, "supply": supply,
+                "topoff": state.faucet_topoff(chain), "last": last,
+                "ready": bool(state.chain_ready(chain)),
+                "balance": wallet.get("balance"), "immature": wallet.get("immature"),
+                "sign_up_gift": net == state.messaging.network}
+
+    def _block_fate(chain, block: str) -> dict:
+        """A mined block as the node sees it now: on the chain with its confirmations, or lost to another
+        miner's block at the same height (confirmations -1), or unknown when the node cannot be asked."""
+        try:
+            with chain.rpc() as rpc:
+                head = rpc.call("getblockheader", block)
+            return {"hash": block, "height": head.get("height"), "confirmations": head.get("confirmations")}
+        except Exception:                                  # noqa: BLE001 -- a node away
+            return {"hash": block, "height": None, "confirmations": None}
+
+    def _save_faucets(said: dict) -> None:
+        """{net: {amount: coins, supply: "button" | "auto"}} from Admin -> Chains. Test chains only."""
+        for net, conf in (said or {}).items():
+            if not isinstance(conf, dict) or _admin_faucet_row(net) is None:
+                raise ValueError(f"{net}: a faucet is for a test chain that runs here")
+            if "amount" in conf:
+                amount = float(conf["amount"])
+                if not 0 <= amount <= 1_000_000:
+                    raise ValueError(f"{net}: the daily amount is between 0 and 1,000,000 coins")
+                sats = int(round(amount * 100_000_000))
+                state.set_setting("faucet" if net == state.messaging.network else f"faucet:{net}", sats)
+            if "topoff" in conf:
+                state.set_setting(f"faucet_topoff:{net}", bool(conf["topoff"]))
+            if "supply" in conf:
+                supply = str(conf["supply"])
+                if supply not in state.FAUCET_SUPPLIES:
+                    raise ValueError(f"{net}: the faucet is stocked by \"button\" or \"auto\"")
+                state.set_setting(f"faucet_supply:{net}", supply)
 
     @app.post("/admin/api/cores")
     def admin_cores(request: Request, payload: Any = Body(None)):
@@ -22564,7 +22901,8 @@ def create_app(state: AppState) -> FastAPI:
                 modes[net] = str(m)
         try:
             coreslib.check(modes, required=state.messaging.network)
-        except coreslib.CoreRule as exc:
+            _save_faucets(said.get("faucet") or {})
+        except (coreslib.CoreRule, ValueError, TypeError) as exc:
             return JSONResponse({"detail": str(exc)}, status_code=400)
         for net, m in modes.items():
             if net != state.messaging.network and m != current.get(net):
@@ -22574,6 +22912,51 @@ def create_app(state: AppState) -> FastAPI:
                 state.set_setting(f"share:{net}", bool(on) and modes[net] == coreslib.HERE)
         running = {r["net"]: r["now"] for r in _admin_chains()["rows"]}
         return JSONResponse({"ok": True, "restart": any(modes[n] != running.get(n) for n in modes)})
+
+    #: The longest timed run Admin -> Chains starts: three days.
+    MINE_HOURS_MAX = 72
+
+    @app.post("/admin/api/faucet/mine")
+    def admin_faucet_mine(request: Request, payload: Any = Body(None)):
+        """Mine a test chain that runs here to its faucet, the node's own wallet (2026-10-18, SadFrog:
+        "add the mine a block button, and add a mine for x amount of hours button on the admin panel"):
+        one block, or {"hours": n} of blocks one after another. The one mining thread, so the Wallet
+        page shows it too, and Stop is /admin/api/faucet/mine/stop. The node's own
+        `generatetoaddress`; the operator's CPU miner (arcade/blockminer.py) is /admin/api/mine. Never a chain with real coins."""
+        _admin_check(request, write=True)
+        said = payload if isinstance(payload, dict) else {}
+        net = str(said.get("net") or "")
+        if _admin_faucet_row(net) is None:
+            return JSONResponse({"detail": "mining here is for a test chain that runs on this node"},
+                                status_code=400)
+        chain = state.messaging if net == state.messaging.network else state.addon(net)
+        if not state.chain_ready(chain):
+            return JSONResponse({"detail": f"{chain.title} is still syncing"}, status_code=400)
+        try:
+            hours = float(said.get("hours") or 0)
+        except (TypeError, ValueError):
+            hours = -1
+        if not 0 <= hours <= MINE_HOURS_MAX:
+            return JSONResponse({"detail": f"mine for up to {MINE_HOURS_MAX} hours"}, status_code=400)
+        if state.mining is not None:
+            return JSONResponse({"detail": f"already mining {state.mining.get('chain') or 'a block'}; "
+                                           f"stop it first"}, status_code=409)
+        try:
+            address = _faucet_address(chain)
+            until = time.time() + hours * 3600 if hours else None
+            if not _start_mining(address, chain, "faucet", until=until):
+                return JSONResponse({"detail": "already mining; stop it first"}, status_code=409)
+        except Exception as exc:                          # noqa: BLE001 -- a node away, a refusal
+            return JSONResponse({"detail": f"could not mine: {exc}"}, status_code=400)
+        return JSONResponse({"ok": True, "address": address, "until": until})
+
+    @app.post("/admin/api/faucet/mine/stop")
+    def admin_faucet_mine_stop(request: Request):
+        """Stop the mining thread after the batch the node is hashing now."""
+        _admin_check(request, write=True)
+        if state.mining is not None:
+            state.mining["stop"] = True
+        return JSONResponse({"ok": True, "mining": state.mining is not None})
 
     # --- mining test coins on this machine's CPU (arcade/blockminer.py, 2026-10-18) ---------------
     _cpu_mining: dict[str, Any] = {}
@@ -27509,6 +27892,17 @@ def _check_address(address: str, *, mainnet: bool) -> str | None:
     else:
         wanted = (NETWORKS["main"],) if mainnet else (NETWORKS["test"], NETWORKS["regtest"])
     word = (getattr(mainnet, "label", "") or "").lower() or ("mainnet" if mainnet else "testnet")
+    # Litecoin's other address kinds, said for what they are (2026-10-18; they read as "the checksum
+    # does not match" before). MWEB first: its prefix also starts like a bech32 one.
+    lowered = (address or "").strip().lower()
+    if lowered.startswith(("ltcmweb1", "tmweb1")):
+        return ("that is a Litecoin MWEB (private) address. This arcade cannot pay one: coins sent "
+                "there could not be seen or spent from here. Ask for an L… or M… address.")
+    for params in NETWORKS.values():
+        hrp = getattr(params, "bech32_hrp", None)
+        if hrp and lowered.startswith(hrp + "1"):
+            return (f"that is a {params.label} SegWit or Taproot address ({hrp}1…). This arcade pays "
+                    f"{params.label}'s legacy addresses for now; ask for one of those.")
     try:
         version, payload = b58check_decode(address)
     except HTTPException:

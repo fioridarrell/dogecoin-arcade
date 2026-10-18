@@ -170,6 +170,15 @@ class Params:
     #: and 0.01 LTC/kB is over its own -maxtxfee for a Class B transaction (2026-10-17).
     min_fee_per_kb: int = 1_000_000
 
+    #: Whether relay charges the soft-dust fee again for every output under `dust_limit` (Pepecoin
+    #: and Dogecoin: GetPepecoinDustFee). Litecoin has no such fee: Bitcoin-style, an output under
+    #: its dust threshold is simply not relayed, so nothing is added (2026-10-18).
+    soft_dust: bool = True
+    #: The least change worth an output of its own; below it the change goes to the miner. 0.01
+    #: on the Dogecoin family (the soft-dust line); 0.0001 LTC on Litecoin, above its P2PKH dust
+    #: threshold of 5,460 litoshis at the 0.0003 LTC/kB dustrelayfee (2026-10-18).
+    dust_limit: int = 1_000_000
+
     #: Where @names (tag claims, and the messaging keys that go with them) are
     #: read from, when that is EARLIER than the floor (2026-09-25: names
     #: survive a floor move). Moving the floor raises `activation_height` and the
@@ -450,14 +459,19 @@ DOGECOIN = dataclasses.replace(
 # The floor (2026-10-17): the network tip at 16:20 UTC that day was 3,196,698 (a public explorer;
 # this node still syncing), rounded up to 3,198,000 -- about two days ahead at 2.5-minute blocks --
 # so nothing that existed before the arcade read Litecoin can be read as an arcade transaction
-# (the D-004 margin, as Dogecoin's floor was set).
+# (the D-004 margin, as Dogecoin's floor was set). Then lowered (2026-10-18, at SadFrog's word) to
+# 3,197,300, just under block 3,197,387, where 0.1 LTC was sent to an account's L address: an index
+# reads only from its floor up, so coins an account got below it never show in its Wallet. Nothing
+# arcade-made existed on Litecoin mainnet below it, and the Litecoin safety fixes (4bfc4d6) were in.
+LTC_MAINNET_FLOOR = 3_197_300
+
 LITECOIN = dataclasses.replace(
     MAINNET,
     name="ltc",
     rpc_port=9332,
     p2p_port=9333,
-    activation_height=3_198_000,
-    messaging_start_height=3_198_000,
+    activation_height=LTC_MAINNET_FLOOR,
+    messaging_start_height=LTC_MAINNET_FLOOR,
     pubkeyhash_version=48,      # addresses start with "L"
     scripthash_version=50,      # "M" (the legacy "3", version 5, is read as P2SH too: txbuild)
     other_pubkeyhash_version=113,
@@ -465,6 +479,7 @@ LITECOIN = dataclasses.replace(
     coin="LTC",
     label="Litecoin",
     min_fee_per_kb=10_000,      # 0.0001 LTC/kB: ten times Litecoin 0.21's minimum relay fee
+    soft_dust=False, dust_limit=10_000,     # no soft-dust fee; change from 0.0001 LTC
     genesis="12a765e31ffd4059bada1e25190f6e98c99d9714d334efa41a195a7e7e04bfe2",
     auxpow_chain_id=None,       # scrypt, mined on its own (it is the PARENT Dogecoin merge-mines with)
     addon=True, node_dir=".litecoin", node_conf="litecoin.conf",
@@ -476,10 +491,12 @@ LITECOIN = dataclasses.replace(
 # Litecoin mainnet's Params with testnet4's ports, address versions (m/n... 111, Q... 58) and genesis,
 # its node's chain in testnet4/. Keys on coin type 1, as every test chain (coins.js COIN_TYPE), so an
 # account's L test key is its Pepecoin testnet key.
-# The floor (2026-10-18 01:00 UTC): a peer's tip was 4,926,272, rounded up to 4,927,000 -- about a day
-# ahead at 2.5-minute blocks (often less: testnet's min-difficulty blocks come faster), the D-004
-# margin as on L main. This node was syncing from block 0 then.
-LTC_TESTNET_FLOOR = 4_927_000
+# The floor: first 4,927,000 (2026-10-18 01:00 UTC, a peer's tip 4,926,272 rounded up), then lowered
+# the same day to 4,926,300, just under the tip of 4,926,38x, at SadFrog's word: "lower the floor" so
+# the arcade's first L test block, CPU-mined to an account that day, is read. Nothing arcade-made
+# existed on Litecoin testnet below it, and this network's blocks come about every 5-6 minutes
+# (min-difficulty blocks after each 5-minute gap), so 4,927,000 was two days away.
+LTC_TESTNET_FLOOR = 4_926_300
 
 LITECOIN_TESTNET = dataclasses.replace(
     LITECOIN,
