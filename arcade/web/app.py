@@ -701,6 +701,9 @@ def _above_dust(sats: int, what: str) -> None:
                          f"and nobody would relay it")
 
 
+#: How many of an account's payload transactions one /account/dust reads from the node; the rest on later asks.
+DUST_READS = 200
+
 #: When a request counts as stalled, and how often the stacks of a stall are logged (_request_timer).
 STALL_AFTER = 45
 STALL_EVERY = 120
@@ -12398,6 +12401,7 @@ def create_app(state: AppState) -> FastAPI:
     #: Per (network, address): the Class B transactions already read, and the
     #: payload outputs among them still unspent, with when each was last asked.
     _dust_memo: dict[tuple[str, str], dict] = {}
+    _dust_busy: dict[tuple[str, str], threading.Lock] = {}
 
     def _payload_dust(chain, address: str) -> list[dict]:
         """This account's own Class B payload outputs that are still unspent.
@@ -12409,17 +12413,52 @@ def create_app(state: AppState) -> FastAPI:
         -- at most hourly per output, since only this account's key can spend
         them and a sweep here drops them at once."""
         from ..script import OutputType, parse_output
-        memo = _dust_memo.setdefault((chain.network, address), {"read": set(), "coins": {}})
+        memo = _dust_memo.get((chain.network, address)) or _dust_load(chain.network, address)
+        _dust_memo[(chain.network, address)] = memo
+        # One reader per address (2026-10-18: two Wallet tabs read the same 12,000 transactions side by side, 140 s,
+        # and every other page waited on the node behind them): the second asker gets what is known so far.
+        busy = _dust_busy.setdefault((chain.network, address), threading.Lock())
+        if not busy.acquire(blocking=False):
+            return sorted(memo["coins"].values(), key=lambda c: (c["txid"], c["vout"]))
+        try:
+            return _payload_dust_read(chain, address, memo)
+        finally:
+            busy.release()
+
+    def _dust_path(network: str, address: str) -> Path:
+        return Path(state.home) / "dust" / f"{network}-{address}.json"
+
+    def _dust_load(network: str, address: str) -> dict:
+        """What was read before this start (2026-10-18: kept in memory only, every restart read an account's whole
+        history again)."""
+        try:
+            said = json.loads(_dust_path(network, address).read_text())
+            return {"read": set(said.get("read") or []),
+                    "coins": {(c["txid"], int(c["vout"])): c for c in said.get("coins") or []}}
+        except (OSError, ValueError, KeyError, TypeError):
+            return {"read": set(), "coins": {}}
+
+    def _dust_save(network: str, address: str, memo: dict) -> None:
+        path = _dust_path(network, address)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"read": sorted(memo["read"]), "coins": list(memo["coins"].values())}))
+            tmp.replace(path)
+        except OSError as exc:
+            log.info("dust memo not kept: %s", exc)
+
+    def _payload_dust_read(chain, address: str, memo: dict) -> list[dict]:
+        from ..script import OutputType, parse_output
         index = state.token_index(chain)
         with contextlib.closing(index.open()) as db:
             txids = [r[0] for r in db.conn.execute(
                 "SELECT txid FROM arcade_tx WHERE sender=? AND encoding_class='B'", (address,))]
         mine = b58check_decode(address)[1]
         now = time.time()
+        fresh = [t for t in txids if t not in memo["read"]][-DUST_READS:]     # newest first to be counted
         with chain.rpc() as rpc:
-            for txid in txids:
-                if txid in memo["read"]:
-                    continue
+            for txid in fresh:
                 try:
                     tx = rpc.call("getrawtransaction", txid, 1)
                 except Exception:
@@ -12446,6 +12485,7 @@ def create_app(state: AppState) -> FastAPI:
                     memo["coins"].pop(key, None)
                 else:
                     coin["asked"] = now
+        _dust_save(chain.network, address, memo)
         return sorted(memo["coins"].values(), key=lambda c: (c["txid"], c["vout"]))
 
     @app.get("/account/activity")
