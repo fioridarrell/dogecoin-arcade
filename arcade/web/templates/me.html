@@ -192,8 +192,8 @@
   <p class="muted" style="margin:0 0 10px;font-size:.88rem">Which chains show in your Wallet tab. A hidden wallet keeps
     its address: it is still published with your name, and coins sent to it still arrive.</p>
   {% for c in chain_menu(account_side=True) %}
-  <label class="row" style="gap:8px;align-items:center;margin:0 0 6px">
-    <input type="checkbox" class="wallet-chain" data-network="{{ c.network }}" {{ '' if c.network in (hidden or []) else 'checked' }}>
+  <label style="display:flex;flex-direction:row;gap:10px;align-items:center;margin:0 0 8px;cursor:pointer">
+    <input type="checkbox" class="wallet-chain" style="width:auto;flex:none;margin:0" data-network="{{ c.network }}" {{ '' if c.network in (hidden or []) else 'checked' }}>
     <span>{{ net_badge(c.network) }} {{ c.coin }}{% if not c.ready %} <span class="muted small">(not open yet)</span>{% endif %}</span>
   </label>
   {% endfor %}
