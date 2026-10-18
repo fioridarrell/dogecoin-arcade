@@ -17416,10 +17416,10 @@ def create_app(state: AppState) -> FastAPI:
         (arcade/collection_registry.py); 404 when no collection this node knows names it. For any page or game."""
         found = state.collection_registry().item(network, str(inscription).lower())
         if found is None:
-            return JSONResponse({"detail": "no collection this arcade knows names that inscription"}, status_code=404)
+            return JSONResponse({"detail": "no collection this arcade knows names that inscription"}, status_code=404, headers=contentlib.CORS)
         return JSONResponse({"inscription": found["id"], "collection": {"root": found["root"], "name": found["name"]},
                              "number": found["number"], "traits": found["traits"]},
-                            headers={"Cache-Control": "public, max-age=60"})
+                            headers={**contentlib.CORS, "Cache-Control": "public, max-age=60"})
 
     def _doge_address_for(address: str, h160: bytes) -> str:
         """The Dogecoin address an address stands for. A Dogecoin address is itself. An account's Pepecoin address
@@ -17458,19 +17458,19 @@ def create_app(state: AppState) -> FastAPI:
         from ..script import b58check_decode
         doge = state.doge
         if doge is None or not state.chain_ready(doge):
-            return JSONResponse({"detail": "this arcade's Dogecoin node is not ready"}, status_code=503)
+            return JSONResponse({"detail": "this arcade's Dogecoin node is not ready"}, status_code=503, headers=contentlib.CORS)
         try:
             _, h160 = b58check_decode(str(address))
         except Exception:
-            return JSONResponse({"detail": "that is not an address"}, status_code=400)
+            return JSONResponse({"detail": "that is not an address"}, status_code=400, headers=contentlib.CORS)
         if len(h160) != 20:
-            return JSONResponse({"detail": "that is not a key's address"}, status_code=400)
+            return JSONResponse({"detail": "that is not a key's address"}, status_code=400, headers=contentlib.CORS)
         there = _doge_address_for(str(address), h160)
         if not there:
-            return JSONResponse({"detail": "no account on this arcade has that address"}, status_code=404)
+            return JSONResponse({"detail": "no account on this arcade has that address"}, status_code=404, headers=contentlib.CORS)
         guard = fundinglib.guard_for(there) or fundinglib.GUARD
         if guard is None:
-            return JSONResponse({"detail": "Doginals are not checked on this node"}, status_code=503)
+            return JSONResponse({"detail": "Doginals are not checked on this node"}, status_code=503, headers=contentlib.CORS)
         reg = state.collection_registry()
         with contextlib.closing(state.token_index(doge).open()) as db:
             coins = [c for c in utxoslib.unspent(db, there) if int(c["value"]) <= doginalslib.POSTAGE_MAX]
@@ -17489,7 +17489,7 @@ def create_app(state: AppState) -> FastAPI:
                                   "number": found["number"], "traits": found["traits"]})
         items.sort(key=lambda i: (i["collection"]["name"].lower(), i["number"]))
         return JSONResponse({"address": there, "items": items, "unknown": unknown},
-                            headers={"Cache-Control": "no-store"})
+                            headers={**contentlib.CORS, "Cache-Control": "no-store"})
 
     @app.get("/exchange/ord/{root}", response_class=HTMLResponse)
     def ord_collection(request: Request, root: str, page: int = 1, number: int = 0):

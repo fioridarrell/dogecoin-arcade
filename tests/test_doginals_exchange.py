@@ -209,6 +209,10 @@ def test_a_game_reads_which_collection_pieces_an_address_holds(doge):
     assert app.get(f"/r/doginals/{BUYER}").json()["items"] == []
     assert app.get(f"/r/collection-item/doge/{INSCRIPTION}").json()["number"] == 3
     assert app.get(f"/r/collection-item/doge/{'ef' * 32}i0").status_code == 404
+    # Games read these from the sandboxed frame (origin "null"), like the other /r/ reads: CORS on every answer.
+    for path in (f"/r/doginals/{SELLER}", f"/r/doginals/{stranger}", f"/r/collection-item/doge/{INSCRIPTION}",
+                 f"/r/collection-item/doge/{'ef' * 32}i0"):
+        assert app.get(path).headers.get("access-control-allow-origin") == "*", path
 
 
 def test_every_account_s_dogecoin_address_is_watched_and_read_back(client, monkeypatch):
