@@ -110,6 +110,7 @@ from . import door as doorlib
 from .. import bootstrap as bootstraplib
 from . import watcher as watcherlib
 from . import rpc as botrpc
+from .. import keywallet as keywalletlib
 from .state import AppState, ChainContext
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
@@ -22099,6 +22100,19 @@ def create_app(state: AppState) -> FastAPI:
             except Exception as exc:                    # noqa: BLE001 -- node away
                 row["error"] = str(exc)[:200]
             out.append(row)
+        # Every add-on chain: the node's own key address there, where it is paid with no Core wallet of its own
+        # -- a sharer's tenth, fees on a borrowed chain, mined coins -- and spent from here, signed by this
+        # arcade with that key (keywallet.py; 2026-10-18: "there should be no extra step").
+        for ctx in list(getattr(state, "addons", None) or []):
+            if ctx is state.doge and not ctx.borrowed:
+                continue                                 # its own Core wallet, above
+            row = {"which": f"key:{ctx.network}", "label": ctx.title, "network": ctx.network, "net": ctx.net,
+                   "coin": ctx.params.coin, "keyed": True}
+            try:
+                row.update(keywalletlib.balance(state, ctx))
+            except Exception as exc:                    # noqa: BLE001
+                row["error"] = str(exc)[:200]
+            out.append(row)
         return out
 
     def _admin_tag(pubkey: str) -> str:
@@ -22551,11 +22565,15 @@ def create_app(state: AppState) -> FastAPI:
         _admin_check(request, write=True)
         said = payload if isinstance(payload, dict) else {}
         try:
-            ctx = _context(str(said.get("which", "")))
+            which = str(said.get("which", ""))
+            ctx = _keyed_context(which) if which.startswith("key:") else _context(which)
             sats = walletlib.parse_amount(str(said.get("amount", "")))
             to = _tag_address(state, str(said.get("to", "")), mainnet=ctx)
-            with ctx.rpc() as rpc:
-                prepared = walletlib.prepare_send(rpc, to, sats)
+            if which.startswith("key:"):
+                prepared = keywalletlib.prepare(state, ctx, to, sats)
+            else:
+                with ctx.rpc() as rpc:
+                    prepared = walletlib.prepare_send(rpc, to, sats)
         except Exception as exc:                        # noqa: BLE001
             return JSONResponse({"detail": str(exc)}, status_code=400)
         ticket = secrets.token_urlsafe(16)
@@ -22582,17 +22600,31 @@ def create_app(state: AppState) -> FastAPI:
             return JSONResponse({"detail": "that send has expired -- prepare it again"},
                                 status_code=400)
         try:
-            with _context(held[1]).rpc() as rpc:
-                txid = walletlib.broadcast(rpc, held[2])
+            if held[1].startswith("key:"):
+                txid = keywalletlib.broadcast(_keyed_context(held[1]), held[2])
+            else:
+                with _context(held[1]).rpc() as rpc:
+                    txid = walletlib.broadcast(rpc, held[2])
         except Exception as exc:                        # noqa: BLE001
             return JSONResponse({"detail": str(exc)}, status_code=400)
         return JSONResponse({"txid": txid})
+
+    def _keyed_context(which: str):
+        """The add-on chain a `key:<net>` wallet card names (keywallet.py)."""
+        net = which.split(":", 1)[1]
+        ctx = next((c for c in (getattr(state, "addons", None) or []) if c.network == net), None)
+        if ctx is None:
+            raise ValueError("unknown wallet")
+        return ctx
 
     @app.post("/admin/api/receive")
     def admin_receive(request: Request, payload: Any = Body(None)):
         _admin_check(request, write=True)
         try:
-            with _context(str((payload or {}).get("which", ""))).rpc() as rpc:
+            which = str((payload or {}).get("which", ""))
+            if which.startswith("key:"):
+                return JSONResponse({"address": state.key_address(_keyed_context(which))})
+            with _context(which).rpc() as rpc:
                 return JSONResponse({"address": walletlib.receive_address(rpc, "admin")})
         except Exception as exc:                        # noqa: BLE001
             return JSONResponse({"detail": str(exc)}, status_code=400)

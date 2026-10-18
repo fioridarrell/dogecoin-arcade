@@ -95,8 +95,13 @@ own. `state.payout_address(chain)` is now where a sharer's tenth, fees on a borr
 the **operator account's** own address on that chain, spent from its Wallet like any other coins. That's the
 address its browser gave, or else the same key's address (`ltc` shares the Pepecoin mainnet key, `ltctest` the
 testnet key). With no operator account named, it falls back to the Core wallet's address, and only then to the
-identity key. **Please name your operator account** (Admin → Operator & remote access) so your tenth lands in
-your Wallet.
+identity key.
+
+The operator's operator is the node's own identity (@bigchiefenergy is the arcade's derived address), so for the
+key-address case there is now `arcade/keywallet.py`. Every add-on chain gets a wallet card in **Admin → The
+node's coins**: the identity key's address there, its coins from that chain's index (the watcher watches it
+like an account's), and Send, signed by the arcade with the key it reads from the Pepecoin testnet Core
+wallet (`dumpprivkey`). Tested against regtest litecoind. Your Litecoin tenth will show in your Admin there.
 
 ### 2026-10-18 (evening) · the operator's side (Claude) · branch `claude/borrowed-mining`
 

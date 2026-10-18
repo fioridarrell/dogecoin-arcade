@@ -96,9 +96,12 @@ An arcade that borrows a chain pays the arcade whose Core it uses a tenth of wha
 - **Mined blocks.** A block mined with a borrowed Core's work pays the sharer a tenth of its reward in its
   own coinbase.
 
-Each sharing arcade names the address it is paid at for every chain it shares. That is its Core wallet's
-address, or its identity key's address on that chain when the wallet has none. On a borrowed chain, this
-arcade is paid at its identity key's address too.
+Each sharing arcade names the address it is paid at for every chain it shares, and a borrowing arcade is
+paid its fees and mined coins in the same way. It's the operator account's own address on that chain when
+one is named, so the coins show up in that account's Wallet. Otherwise it's the Core wallet's address, or,
+on a chain with no Core wallet here (a borrowed one, or Litecoin), the arcade's own key's address there.
+**Admin → The node's coins** shows and spends those coins, signed by the arcade itself with its identity
+key. Nothing has to be imported into another wallet.
 
 ## Mining test coins
 

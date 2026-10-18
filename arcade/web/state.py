@@ -1613,12 +1613,15 @@ class AppState:
                     return b58check_encode(chain.params.pubkeyhash_version, b58check_decode(base)[1])
                 except Exception:                              # noqa: BLE001
                     pass
+        if chain.network == self.messaging.network and self.derived_address:
+            return self.derived_address
         if not getattr(chain, "borrowed", False):
             try:
                 with chain.rpc() as rpc:
                     return str(rpc.call("getaccountaddress", "arcade-identity"))
             except Exception:                                  # noqa: BLE001 -- a Core without accounts
                 pass
+        # Its identity key's address there, which Admin -> The node's coins spends (keywallet.py).
         return self.key_address(chain)
 
     def _address_setting(self, pubkey: str, network: str) -> str:
