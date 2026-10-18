@@ -118,8 +118,32 @@ class BlockWatcher:
                     self.state.talk_relay().hold(self.state.ensure_identity().public_bytes.hex())
             except Exception:
                 log.debug("holding the node's own talk rooms failed", exc_info=True)
+            try:
+                self._read_pool_coins()
+            except Exception:
+                log.debug("pool coins failed", exc_info=True)
             self._run_trader()                       # delegated orders: every couple of seconds, not every pass of the slow loop
             self._stop.wait(POOL_SECONDS)
+
+    #: How often each chain's mempool is read for coins on their way to an address (arcade/pool_coins.py).
+    POOL_COINS_SECONDS = 5.0
+
+    def _read_pool_coins(self) -> None:
+        """Every chain's mempool, for plain payments arriving (2026-10-17: "add incoming that reads from the
+        mempool to all of the chains"); open wallets redraw when something arrives or lands."""
+        changed = False
+        for chain in self.state.token_chains:
+            pool = self.state.pool_coins(chain.network)
+            if time.time() - pool.read_at < self.POOL_COINS_SECONDS:
+                continue
+            try:
+                with chain.rpc() as rpc:
+                    changed = pool.refresh(rpc, chain.params) or changed
+            except Exception:
+                pool.read_at = time.time()
+                log.debug("the %s mempool could not be read for coins", chain.network, exc_info=True)
+        if changed:
+            self.state.bump_generation()
 
     def stop(self) -> None:
         self._stop.set()

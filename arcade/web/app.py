@@ -9695,6 +9695,19 @@ def create_app(state: AppState) -> FastAPI:
                    in _flights.change_for(pubkey, network)
                    if (coin["txid"], coin["vout"]) not in listed)
 
+    def _arriving(pubkey: str, network: str, db, address: str) -> int:
+        """Satoshis paid to this address by a transaction waiting in the pool that this node did not send (anybody's
+        payment: arcade/pool_coins.py). Shown, not spendable: the node's own flights are `_on_its_way`."""
+        try:
+            pool = state.pool_coins(network).to(address)
+        except Exception:                                      # noqa: BLE001
+            return 0
+        if not pool:
+            return 0
+        known = {(c["txid"], c["vout"]) for c in utxoslib.unspent(db, address)}
+        known |= {(c["txid"], c["vout"]) for c in _flights.change_for(pubkey, network)}
+        return sum(c["value"] for c in pool if (c["txid"], c["vout"]) not in known)
+
     def _leaving(pubkey: str, network: str, db, address: str) -> int:
         """Satoshis the index still lists for this address that a transaction in
         the pool has already spent (this node's flights, and the node's own
@@ -10155,6 +10168,7 @@ def create_app(state: AppState) -> FastAPI:
                     # down is not also on its way.
                     said["incoming"] = _on_its_way(account.pubkey,
                                                    chain.network, db, address)
+                    said["arriving"] = _arriving(account.pubkey, chain.network, db, address)
                     said["leaving"] = _leaving(account.pubkey, chain.network,
                                                db, address)
                     said["inscribed"] = _inscribed(db, address)
@@ -10223,6 +10237,7 @@ def create_app(state: AppState) -> FastAPI:
                         row["watching"] = utxoslib.since(db, here)
                         row["incoming"] = _on_its_way(account.pubkey,
                                                       one.network, db, here)
+                        row["arriving"] = _arriving(account.pubkey, one.network, db, here)
                         row["leaving"] = _leaving(account.pubkey, one.network,
                                                   db, here)
                         row["inscribed"] = _inscribed(db, here)

@@ -650,6 +650,16 @@ class AppState:
             self._swap_history = held
         return held
 
+    def pool_coins(self, network: str):
+        """Coins in `network`'s mempool, by address (arcade/pool_coins.py), refreshed by the watcher's pool thread."""
+        from ..pool_coins import PoolCoins
+        held = getattr(self, "_pool_coins", None)
+        if held is None:
+            held = self._pool_coins = {}
+        if network not in held:
+            held[network] = PoolCoins(network)
+        return held[network]
+
     def collection_registry(self):
         """Collections described by an inscription -- Doginals first (arcade/collection_registry.py), made once."""
         from ..collection_registry import Registry

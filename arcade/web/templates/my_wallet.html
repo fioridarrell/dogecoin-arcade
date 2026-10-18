@@ -399,7 +399,9 @@ function drawHead() {
   const sub = $("sub");
   sub.replaceChildren();
   const bits = [];
-  if (c.incoming) bits.push(["in", `${coinsOf(c.incoming)} arriving`]);
+  // Arriving: this node's own sends on their way (spendable now) and anybody's payment waiting in the pool (2026-10-17).
+  const arriving = Number(c.incoming || 0) + Number(c.arriving || 0);
+  if (arriving) bits.push(["in", `${coinsOf(arriving)} arriving`]);
   if (c.leaving) bits.push(["out", `${coinsOf(c.leaving)} leaving`]);
   // Coins carrying an inscription are held, not spendable (2026-10-15): said beside the number they are left out of.
   if (c.inscribed) bits.push(["out", `${coinsOf(c.inscribed)} held in ${c.network === "doge" ? "Doginals" : c.network === "main" ? "Pepinals" : "inscriptions"}`]);
@@ -1658,6 +1660,11 @@ async function drawPending() {
   try { me = await (await fetch("/account", {cache: "no-store"})).json(); } catch (e) { return; }
   const addresses = [...new Set(((me && me.chains) || []).map((c) => c.address).filter(Boolean))];
   const rows = [];
+  // Coins on their way, from anybody, on every chain (2026-10-17).
+  for (const c of ((me && me.chains) || [])) {
+    if (Number(c.arriving || 0) > 0) rows.push(["arriving", {kind: "coin", amount: Number(c.arriving) / 1e8,
+                                                              name: c.network === "doge" ? "DOGE" : c.mainnet ? "PEP" : "test PEP"}]);
+  }
   for (const address of addresses) {
     let said = null;
     try { said = await (await fetch("/r/pending/" + address, {cache: "no-store"})).json(); }
@@ -1678,7 +1685,7 @@ async function drawPending() {
   for (const [way, m] of rows) {
     const row = document.createElement("div");
     row.style.margin = "4px 0";
-    const what = m.kind === "token" ? `${m.amount} ${m.name}`
+    const what = m.kind === "token" || m.kind === "coin" ? `${m.amount} ${m.name}`
       : (m.number != null ? `#${m.number}` : "an NFT") + (m.name ? ` (${m.name})` : "");
     row.textContent = (way === "arriving" ? "Arriving: " : "Leaving: ") + what;
     box.append(row);
