@@ -36,11 +36,6 @@
          placeholder="Search names, @tags and notes" aria-label="Search your address book">
 </div>
 
-<button type="button" class="mecard" id="mecard" hidden>
-  <span class="av" id="me-av"></span>
-  <span class="mid"><b id="me-tag"></b><small>Your profile</small></span>
-  <span class="share" id="share">Share</span>
-</button>
 
 <div id="favs-box" hidden>
   <div class="booklabel">Favorites</div>
@@ -195,11 +190,6 @@ async function drawMe() {
   myTag = said.tag || "";
   const name = said.tag || said.name || "";
   $("me").textContent = name ? "@" + name : "you";
-  $("mecard").hidden = !myTag;
-  if (myTag) {
-    $("me-tag").textContent = "@" + myTag;
-    $("me-av").replaceWith(Object.assign(face({tag: myTag}, 44), {id: "me-av"}));
-  }
   // Claimed on the chain is the only "published" worth showing: a name this
   // node has written down and not yet mined is a note, not a claim.
   const out = $("published");
@@ -278,7 +268,6 @@ async function drawBook() {
     .sort((a, b) => shown(a).replace(/^@/, "").localeCompare(shown(b).replace(/^@/, ""),
                                                               undefined, {sensitivity: "base"}));
   $("nobody").hidden = people.length > 0 || !!q;
-  $("mecard").style.display = q ? "none" : "";
   const favs = people.filter((e) => e.fav);
   $("favs-box").hidden = !!q || !favs.length;
   $("favs").replaceChildren(...favs.map((e) => {
@@ -398,19 +387,6 @@ $("find").addEventListener("keydown", (e) => {
   if (e.key === "Enter") { e.preventDefault(); search(); }
 });
 
-$("mecard").onclick = (e) => {
-  if (e.target === $("share") || !myTag) {
-    const link = `${location.origin}/u/${myTag}`;
-    $("share-link").textContent = link;
-    try {
-      const qr = qrcode(0, "M"); qr.addData(link); qr.make();
-      $("share-qr").innerHTML = qr.createSvgTag({cellSize: 4, margin: 2, scalable: true});
-    } catch (err) { $("share-qr").textContent = ""; }
-    sheet("sharesheet", true);
-    return;
-  }
-  location.href = `/u/${encodeURIComponent(myTag)}`;
-};
 $("share-copy").onclick = async () => {
   const link = $("share-link").textContent;
   try { await navigator.clipboard.writeText(link); $("share-copy").textContent = "Copied"; }
