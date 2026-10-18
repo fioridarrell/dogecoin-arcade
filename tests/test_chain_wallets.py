@@ -87,3 +87,30 @@ def test_an_announcement_without_litecoin_is_published_again(client, monkeypatch
         store.add_key_announcement("c2" * 32, home, KEY, "fp", 101, 2, stated=True,
                                    chain_addresses=json.dumps({"ltc": ltc}))
     assert app.get("/account").json()["announced"] is True
+
+
+def test_a_litecoin_arrival_is_named_ltc_and_its_list_starts_where_the_index_does(client, monkeypatch):
+    """2026-10-18 (L main: "Arriving: 0.02 PEP", "This list starts at block 0"): a chain's coin is its own,
+    and a watch filed before its index held a block starts at the index's first block."""
+    from test_me_page import _seat
+    from test_litecoin_network import _with_ltc
+    from arcade.script import b58check_encode
+    from arcade import utxos
+    app, state = client
+    ltc = _with_ltc(state, monkeypatch, ready=True)
+    _seat(app)
+    address = b58check_encode(48, bytes(range(20)))
+    assert app.post("/account/address", json={"address": address, "chain": "ltc"}).status_code == 200
+    chains = app.get("/account").json()["chains"]
+    assert next(c for c in chains if c["network"] == "ltc")["coin"] == "LTC"
+    page = app.get("/me/wallet").text
+    assert "name: coinOf(c)}" in page and "c.coin ? c.coin" in page
+    index = state.token_index(ltc)
+    import contextlib
+    with contextlib.closing(index.open()) as db:
+        utxos.watch(db, address, 0, "test")
+        db.conn.execute("INSERT INTO block (height, hash, prev_hash, time, tx_count, processed_at) VALUES (?,?,?,?,?,?)",
+                        (3197300, "aa" * 32, "bb" * 32, 1, 1, 1))
+        db.conn.commit()
+    said = app.get("/account/activity?chain=ltc").json()
+    assert said["since"] == 3197300, said

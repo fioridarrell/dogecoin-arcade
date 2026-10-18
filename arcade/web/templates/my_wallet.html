@@ -343,7 +343,8 @@ let said = {chains: []}, net = null, keys = null, tab = "activity";
  * send receive and balance at the top of your wallet should be in that token").
  * Send and Receive follow it; the network fee is still paid in PEP. */
 let asset = null;
-const coinOf = (c) => !c ? "PEP TEST" : c.network === "doge" ? "DOGE" : c.network === "ltc" ? "LTC" : c.network === "ltctest" ? "LTC TEST" : c.mainnet ? "PEP" : "PEP TEST";
+// The chain's coin as the node names it (Params.coin), so a chain added later is named right too.
+const coinOf = (c) => !c ? "PEP TEST" : c.coin ? c.coin : c.network === "doge" ? "DOGE" : c.network === "ltc" ? "LTC" : c.network === "ltctest" ? "LTC TEST" : c.mainnet ? "PEP" : "PEP TEST";
 const COIN = () => coinOf(chainNow());
 // Chains this node has that are not open yet: Dogecoin while it syncs (2026-10-13).
 // Wallets this account hides (Your arcade -> Your wallets, 2026-10-18): kept, announced and watched, not shown.
@@ -1670,8 +1671,9 @@ async function drawPending() {
   const rows = [];
   // Coins on their way, from anybody, on every chain (2026-10-17).
   for (const c of ((me && me.chains) || [])) {
+    // The chain's own coin (2026-10-18: L main's arriving LTC was called PEP).
     if (Number(c.arriving || 0) > 0) rows.push(["arriving", {kind: "coin", amount: Number(c.arriving) / 1e8,
-                                                              name: c.network === "doge" ? "DOGE" : c.mainnet ? "PEP" : "test PEP"}]);
+                                                              name: coinOf(c)}]);
   }
   for (const address of addresses) {
     let said = null;

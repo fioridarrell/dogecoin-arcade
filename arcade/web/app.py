@@ -10725,7 +10725,7 @@ def create_app(state: AppState) -> FastAPI:
         said["chains"] = []
         for one in _account_chains():
             here = _account_address(account.pubkey, one)
-            row = {"network": one.network, "label": one.label,
+            row = {"network": one.network, "label": one.label, "coin": one.params.coin,
                    "version": one.params.pubkeyhash_version,
                    "p2sh": one.params.scripthash_version,
                    "mainnet": bool(one.is_mainnet),
@@ -12918,8 +12918,12 @@ def create_app(state: AppState) -> FastAPI:
         index = state.token_index(picked)
         with contextlib.closing(index.open()) as db:
             said["since"] = utxoslib.since(db, address)
-            tip = db.conn.execute("SELECT MAX(height) FROM block").fetchone()
-            said["tip"] = int((tip and tip[0]) or 0)
+            tip = db.conn.execute("SELECT MIN(height), MAX(height) FROM block").fetchone()
+            said["tip"] = int((tip and tip[1]) or 0)
+            # A watch filed before the index had a block (2026-10-18: @apple's L main said "starts at block 0") is
+            # read back from the index's first block, which is where its history really starts.
+            if said["since"] is not None and tip and tip[0] is not None and said["since"] < int(tip[0]):
+                said["since"] = int(tip[0])
             rows = utxoslib.activity(db, [address], before, limit + 1)
         said["more"] = len(rows) > limit
         rows = rows[:limit]
