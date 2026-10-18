@@ -22454,10 +22454,10 @@ def create_app(state: AppState) -> FastAPI:
     @app.get("/admin/api/mine")
     def admin_mine_status(request: Request):
         _admin_check(request)
-        chains = [{"net": c.network, "label": c.label, "address": state.key_address(c),
+        chains = [{"net": c.network, "label": c.label, "address": state.payout_address(c),
                    "borrowed": bool(c.borrowed)} for c in state.all_chains if _minable(c)]
         return JSONResponse({**_mining_status(), "chains": chains, "cpus": os.cpu_count() or 1,
-                             "percent": SHARER_PERCENT})
+                             "percent": SHARER_PERCENT, "operator": bool(state.operator)})
 
     @app.post("/admin/api/mine")
     def admin_mine(request: Request, payload: Any = Body(None)):
@@ -22476,7 +22476,7 @@ def create_app(state: AppState) -> FastAPI:
         if not _minable(chain):
             return JSONResponse({"detail": "only a test-coin chain that is not merge-mined is mined here"},
                                 status_code=400)
-        address = str(said.get("address") or state.key_address(chain)).strip()
+        address = str(said.get("address") or state.payout_address(chain)).strip()
         try:
             blockminer.output_script(address, chain.params)
         except Exception as exc:                           # noqa: BLE001

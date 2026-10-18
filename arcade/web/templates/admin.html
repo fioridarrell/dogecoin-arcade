@@ -599,6 +599,9 @@ section.panel h2{margin-top:0}
       return (f.height || 0).toLocaleString() + ' ' + (f.result === 'accepted' ? 'accepted' : 'refused (' + f.result + ')');
     }).join(', '));
     if (m.note) bits.push(m.note);
+    // Where an arcade is paid on a chain with no wallet of its own here (state.payout_address, 2026-10-18).
+    bits.push(m.operator ? 'Mined coins, a sharer\u2019s tenth and fees on borrowed chains go to the operator account\u2019s Wallet.'
+                         : 'No operator account is named: name yours under Operator & remote access, so mined coins, a sharer\u2019s tenth and fees on borrowed chains land in its Wallet.');
     $('minesaid').textContent = bits.join(' \u00b7 ');
   }
   function loadMine() {

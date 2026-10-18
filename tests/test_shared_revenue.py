@@ -59,3 +59,32 @@ def test_the_panel_mines_test_coins_only_and_to_an_address_of_that_chain(client)
     assert bad.status_code == 400 and "address" in bad.json()["detail"]
     page = app.get("/admin", headers=LOCAL).text
     assert 'id="minego"' in page and "a tenth of every block" in page
+
+
+def test_coins_paid_to_this_arcade_land_in_the_operator_accounts_wallet(client):
+    """2026-10-18: "there should be no extra step". A sharer's tenth, fees on a borrowed chain and mined
+    coins go to the operator account's own address on that chain -- the one its browser gave, else the same key's
+    address as its Wallet derives it -- not to a key that would have to be brought into another wallet."""
+    from types import SimpleNamespace
+    from arcade.script import b58check_decode, b58check_encode
+    _app, state = client
+    pubkey = "ab" * 32
+    test_addr = b58check_encode(NETWORKS["test"].pubkeyhash_version, bytes(range(20)))
+    main_addr = b58check_encode(NETWORKS["main"].pubkeyhash_version, bytes(range(1, 21)))
+    state.set_setting("operator", pubkey)
+    try:
+        if not state.operator:
+            state.claim_operator(pubkey)
+        state.set_setting(f"address:{pubkey}", test_addr)
+        state.set_setting(f"address:main:{pubkey}", main_addr)
+        ltctest = SimpleNamespace(network="ltctest", params=NETWORKS["ltctest"], borrowed=True)
+        ltc = SimpleNamespace(network="ltc", params=NETWORKS["ltc"], borrowed=True)
+        got = state.payout_address(ltctest)
+        assert b58check_decode(got) == (NETWORKS["ltctest"].pubkeyhash_version, bytes(range(20))), "its testnet key"
+        assert b58check_decode(state.payout_address(ltc))[1] == bytes(range(1, 21)), "its mainnet key"
+        given = b58check_encode(NETWORKS["ltctest"].pubkeyhash_version, bytes(range(5, 25)))
+        state.set_setting(f"address:ltctest:{pubkey}", given)
+        assert state.payout_address(ltctest) == given, "the address its browser gave comes first"
+        assert state.home_address(ltctest) == given, "and is a borrowed chain's home address"
+    finally:
+        state.set_setting("operator", "")

@@ -88,6 +88,16 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-18 (late) · the operator's side (Claude) · branch `claude/operator-pay`
+
+The operator: "there should be no extra step" for coins an arcade is paid on a chain where it has no wallet of its
+own. `state.payout_address(chain)` is now where a sharer's tenth, fees on a borrowed chain and mined coins go:
+the **operator account's** own address on that chain, spent from its Wallet like any other coins. That's the
+address its browser gave, or else the same key's address (`ltc` shares the Pepecoin mainnet key, `ltctest` the
+testnet key). With no operator account named, it falls back to the Core wallet's address, and only then to the
+identity key. **Please name your operator account** (Admin → Operator & remote access) so your tenth lands in
+your Wallet.
+
 ### 2026-10-18 (evening) · the operator's side (Claude) · branch `claude/borrowed-mining`
 
 Two of the operator's asks: mine testnet LTC with a CPU using your shared Core, and "If a node operator is using a
