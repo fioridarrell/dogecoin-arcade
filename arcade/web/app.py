@@ -2946,6 +2946,8 @@ def create_app(state: AppState) -> FastAPI:
     # An inscription's content: this arcade's own /content/<id>, read from the chain (arcade/doginals.py), 2026-10-15.
     TEMPLATES.env.globals["doginal_content"] = lambda inscription: __import__(
         "arcade.doginals", fromlist=["content_url"]).content_url(str(inscription))
+    TEMPLATES.env.globals["doginal_frame"] = lambda inscription: __import__(
+        "arcade.doginals", fromlist=["frame_url"]).frame_url(str(inscription))
 
     def _tip_chains() -> list[dict[str, Any]]:
         """The chains a tip can be paid on, for the tip form: the tag chain
@@ -5971,6 +5973,21 @@ def create_app(state: AppState) -> FastAPI:
     def inscription_content(key: str, download: int = 0, reveal: int = 0, v: str = ""):
         return _with_viewer_shim(_inscription_content(key, download, reveal),
                                  "" if download else v)
+
+    @app.get("/content/{key}/fit")
+    def inscription_fit(key: str):
+        """An inscription for a card's frame (2026-10-18): a picture is drawn scaled into the frame, whole -- a frame
+        shows an image document at its own size, so a 1000 px Doginal showed one corner of its background -- and
+        anything else (a page that draws itself, which sizes itself to the frame) is sent on to /content/<id>."""
+        answer = _inscription_content(key)
+        kind = str(answer.headers.get("content-type", ""))     # a screened notice is a picture too
+        if not kind.startswith("image/"):
+            return RedirectResponse(f"/content/{quote(key)}", status_code=307)
+        page = ('<!doctype html><meta charset="utf-8"><style>html,body{margin:0;height:100%;background:transparent}'
+                'img{display:block;width:100%;height:100%;object-fit:contain;image-rendering:pixelated}</style>'
+                f'<img src="/content/{html.escape(quote(key))}" alt="">')
+        return Response(page, media_type="text/html",
+                        headers={**contentlib.CONTENT_HEADERS, "Cache-Control": "public, max-age=86400"})
 
     def _chain_inscription(key: str):
         """An ord inscription (a Doginal, or one on Pepecoin mainnet) this arcade's own index does not hold, read from the
@@ -17419,6 +17436,7 @@ def create_app(state: AppState) -> FastAPI:
     def _doginal_row(chain, row: dict) -> dict:
         from .. import doginals as doginalslib
         return {**doginal_marketlib.public(row), "content": doginalslib.content_url(row["inscription"]),
+                "frame": doginalslib.frame_url(row["inscription"]),
                 "price_text": f"{int(row['price']) / COIN:g} {NETWORKS[chain.network].coin}",
                 "seller_tag": _tags_for([row["seller"]]).get(row["seller"], "")}
 
@@ -17582,6 +17600,7 @@ def create_app(state: AppState) -> FastAPI:
         other = "main" if net == "doge" else "doge"
         for p in pieces:
             p["content"] = doginalslib.content_url(p["id"])
+            p["frame"] = doginalslib.frame_url(p["id"])
             p["offer"] = f"/exchange/swap/{net}-doginal-{quote(p['id'])}/{other}-coin"
             p["listing"] = price_of.get(p["id"])
         looking = signed_in(request) if _account_view(request) else None
@@ -17633,6 +17652,7 @@ def create_app(state: AppState) -> FastAPI:
             out.append({"txid": c["txid"], "vout": int(c["vout"]), "value": int(c["value"]),
                         "inscriptions": [i.get("id") for i in on], "listable": ok,
                         "content": doginalslib.content_url(str(on[0].get("id"))),
+                        "frame": doginalslib.frame_url(str(on[0].get("id"))),
                         "listing": listed.get((c["txid"], int(c["vout"])), "")})
         return JSONResponse({"chain": chain.network, "address": address, "doginals": out},
                             headers={"Cache-Control": "no-store"})
