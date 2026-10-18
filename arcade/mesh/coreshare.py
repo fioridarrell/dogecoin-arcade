@@ -572,7 +572,7 @@ class BorrowedRpc(RpcClient):
         p = self._params
         if method == "getblock":
             block_hash = str(params[0])
-            block = rawchain.read_block(bytes.fromhex(str(got[0])), block_hash)
+            block = rawchain.read_block(bytes.fromhex(str(got[0])), block_hash, mweb=p.mweb)
             self._work(block)
             if len(got) == 1:
                 self._remember(block, None)
@@ -608,7 +608,7 @@ class BorrowedRpc(RpcClient):
         return got[0]
 
     def _work(self, block: rawchain.Block) -> None:
-        rawchain.check_work(block, self._params.auxpow_chain_id)
+        rawchain.check_work(block, self._params.auxpow_chain_id, self._params.pow_algo)
         with self._KNOWN_LOCK:
             known = self._KNOWN.setdefault(self.net, OrderedDict())
             before = known.get(block.prev)

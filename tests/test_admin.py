@@ -171,7 +171,8 @@ def test_chains_run_here_or_borrowed_with_testnet_and_one_more_here(public, monk
     app, state = public
     got = app.get("/admin/api/state", headers=LOCAL).json()["chains"]
     nets = {r["net"]: r for r in got["rows"]}
-    assert set(nets) == {state.messaging.network, "main", "doge"} and nets[state.messaging.network]["required"]
+    assert {state.messaging.network, "main", "doge", "ltc", "ltctest"} <= set(nets)
+    assert nets[state.messaging.network]["required"]
     assert nets["main"]["share"] is True, "shared unless the operator unticks it (2026-10-18)"
     app.post("/admin/api/cores", headers={**LOCAL, **WRITE}, json={"share": {"main": False}})
     assert state.setting("share:main") is False

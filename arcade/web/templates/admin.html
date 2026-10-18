@@ -12,6 +12,25 @@
 
 <div class="cards" id="cards"></div>
 
+{# 2026-10-17 (SadFrog's side): this node's face, and the Litecoin nodes on this machine (arcade/litecoin.py).
+   Which chains run here, are borrowed or are off is Admin -> Chains (arcade/cores.py, 2026-10-18). #}
+<section class="panel" id="face">
+  <h2>Face</h2>
+  <p class="muted" style="margin-top:0">The name, colours and icons this arcade shows. Only the look changes: every face
+    is the same network.</p>
+  <div id="facechoices" style="display:flex;gap:14px;flex-wrap:wrap;margin:6px 0 10px"></div>
+  <p class="muted" id="facesaid" hidden></p>
+  <button type="button" class="small" id="saveface">Use this face</button>
+  <p class="muted" style="margin:14px 0 0">Which chains run here, are borrowed or are off: <a href="#chains">Chains</a>.</p>
+  <p class="muted" style="margin:14px 0 0">Litecoin node: <span id="ltcline">checking&hellip;</span></p>
+  <p class="muted" style="margin:4px 0 0">Litecoin testnet node: <span id="ltctestline">checking&hellip;</span></p>
+  <p class="muted" style="margin:8px 0 0;font-size:.84rem">Before switching Litecoin on for people:
+    inscriptions made here use the Doginals format, which Litecoin&rsquo;s Taproot ordinals sites do not
+    show, and this arcade cannot yet move inscriptions on Taproot (ltc1p&hellip;) addresses. Cross-chain
+    swaps cost a fee on each chain and refund only after their lock time.
+    <a href="/docs/litecoin.md">Litecoin on this arcade</a> says it in full.</p>
+</section>
+
 <section class="panel">
   <h2>Seats</h2>
   <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
@@ -59,7 +78,8 @@
    and every arcade's index compared with the others' (index_digest.py, mesh/indexcheck.py). #}
 <section class="panel" id="chains">
   <h2>Chains</h2>
-  <p class="muted" style="margin-top:0">Run a chain's Core on this machine, or borrow it from an arcade
+  <p class="muted" style="margin-top:0">Every coin this arcade knows, with how many linked arcades share
+    it. Turn on as many as you like: run a chain's Core on this machine, or borrow it from an arcade
     that shares its Core through the mesh. Pepecoin testnet always runs here, and at least one more chain
     must too. <b>Share</b> (on unless you untick it) lets other arcades use a Core that runs here: they can
     read blocks and the mempool and send transactions people signed, never touch this node's wallet.</p>
@@ -247,11 +267,14 @@ section.panel h2{margin-top:0}
 .confirmbox{margin-top:10px}
 .confirmbox input{width:100%;margin:0 0 10px}
 .switch{display:flex;gap:8px;align-items:center;margin:6px 0}
+/* The face and chain choices: base.html gives inputs width:100%, which stretched these. */
+#facechoices .switch input{width:auto;flex:none;margin:0}
 .wallet{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:8px 0;border-bottom:1px solid var(--line)}
 .wallet .bal{font-weight:700}
 .wallet .addr{font-size:.8rem;word-break:break-all}
 .tunsteps{padding-left:22px;display:grid;gap:12px}
 #chainrows select{min-width:150px}
+#chainrows input[type=checkbox]{width:auto;margin:0}
 .idx-bad{color:var(--bad, #c0392b)}
 .idx-rows{font-size:.76rem;white-space:pre-wrap;word-break:break-all;max-height:180px;overflow:auto;background:var(--code);padding:6px;border-radius:6px}
 .tunsteps li{line-height:2.2}
@@ -469,13 +492,23 @@ section.panel h2{margin-top:0}
       if (r.now === 'borrow') bits.push(m.sharers ? 'borrowed from ' + m.sharers + ' arcade' + (m.sharers > 1 ? 's' : '')
                                          : 'no sharing arcade linked yet');
       if (r.now === 'here') bits.push('runs here');
-      if (r.now === 'off') bits.push('off');
+      if (r.now === 'off') bits.push(m.sharers ? 'off \u00b7 ' + m.sharers + ' linked arcade' + (m.sharers > 1 ? 's share' : ' shares') + ' it'
+                                               : 'off \u00b7 no linked arcade shares it yet');
+      if (r.now === 'borrow' && r.work !== 'checked') bits.push('blocks checked; proof of work is the sharer\u2019s word');
       if (m.sharing) bits.push('shared' + (m.borrowers ? ', ' + m.borrowers + ' borrowing' : ''));
       if (m.disagree) bits.push('SHARERS DISAGREE about the chain tip');
       if (r.chosen !== r.now) bits.push('becomes \u201c' + CORE_WORDS[r.chosen].toLowerCase() + '\u201d at the next restart');
       tr.appendChild(text('td', bits.join(' \u00b7 '), m.disagree ? 'idx-bad' : 'muted'));
       tb.appendChild(tr);
     });
+    var un = c.unknown || [];
+    if (un.length) {
+      var tr2 = document.createElement('tr');
+      var td2 = document.createElement('td'); td2.colSpan = 4; td2.className = 'muted';
+      td2.textContent = 'Also shared by linked arcades, needing a newer version of this arcade: '
+        + un.map(function (u) { return u[0] + ' (' + u[1] + ')'; }).join(', ');
+      tr2.appendChild(td2); tb.appendChild(tr2);
+    }
     var ix = $('indexrows'); ix.textContent = '';
     (c.rows || []).forEach(function (r) {
       var i = r.index || {};
@@ -519,9 +552,52 @@ section.panel h2{margin-top:0}
   function load() {
     return fetch('/admin/api/state', {credentials: 'same-origin', cache: 'no-store'})
       .then(function (r) { if (r.status === 401) location.href = '/admin/login'; return r.json(); })
-      .then(function (j) { data = j; draw(); })
+      .then(function (j) { data = j; draw(); drawFace(); })
       .catch(function (e) { say('Could not load: ' + e.message, 'err'); });
   }
+
+  // Face and Litecoin (2026-10-17, SadFrog's side)
+  function drawFace() {
+    var b = (data && data.brand) || null, box = $('facechoices');
+    if (!b) return;
+    box.textContent = '';
+    b.choices.forEach(function (c) {
+      var l = document.createElement('label'); l.className = 'switch';
+      var i = document.createElement('input'); i.type = 'radio'; i.name = 'face'; i.value = c[0];
+      i.checked = c[0] === b.current; i.disabled = b.locked;
+      l.appendChild(i); l.appendChild(document.createTextNode(' ' + c[1])); box.appendChild(l);
+    });
+    $('saveface').hidden = b.locked;
+    $('facesaid').hidden = !b.locked;
+    $('facesaid').textContent = b.locked ? 'Set by --brand / ARCADE_BRAND in this node\u2019s service; change it there.' : '';
+  }
+  $('saveface').onclick = function () {
+    var on = document.querySelector('#facechoices input:checked');
+    if (!on) return;
+    call('/admin/api/settings', {brand: on.value})
+      .then(function () { location.reload(); }).catch(function (e) { say(e.message, 'err'); });
+  };
+  function drawLtc(s, id) {
+    var line = $(id || 'ltcline');
+    if (!s.installed) { line.textContent = 'not hosted on this node. Litecoin is optional: a node hosts it by installing the ' + s.unit + ' service.'; return; }
+    var up = s.service === 'active' || s.service === 'activating';
+    var text = 'Service ' + s.service;
+    if (s.answering) {
+      text += ' \u00b7 ' + (s.synced ? 'synced' : 'syncing ' + s.progress + '%') + ' \u00b7 block '
+        + Number(s.blocks).toLocaleString() + ' of ' + Number(s.headers).toLocaleString()
+        + ' \u00b7 ' + s.peers + ' peers \u00b7 ' + s.version;
+    } else if (up) { text += ' \u00b7 ' + (s.note || 'starting'); }
+    line.textContent = text;
+  }
+  function loadLtc() {
+    fetch('/admin/api/litecoin', {credentials: 'same-origin', cache: 'no-store'})
+      .then(function (r) { return r.json(); }).then(function (s) { drawLtc(s); })
+      .catch(function () { $('ltcline').textContent = 'Could not ask about the Litecoin node.'; });
+    fetch('/admin/api/litecoin?network=ltctest', {credentials: 'same-origin', cache: 'no-store'})
+      .then(function (r) { return r.json(); }).then(function (s) { drawLtc(s, 'ltctestline'); })
+      .catch(function () { $('ltctestline').textContent = 'Could not ask about the Litecoin testnet node.'; });
+  }
+  loadLtc(); setInterval(loadLtc, 10000);
 
   $('saveseats').onclick = function () {
     call('/admin/api/seats', {seats: Number($('seats').value)})

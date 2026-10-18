@@ -67,6 +67,9 @@ def test_a_changed_byte_or_a_borrowed_name_is_caught():
     test_block.bits = 0x1D00FFFF                             # a target its work does not meet
     with pytest.raises(rawchain.RawError, match="work"):
         rawchain.check_work(test_block)
+    rawchain.check_work(test_block, algo="")                 # a chain whose work is not checked here
+    with pytest.raises(rawchain.RawError, match="work"):
+        rawchain.check_work(test_block, algo="sha256d")      # Bitcoin's hash of a scrypt block: no work
     # A difficulty that falls more than 4x in a block is refused -- on a test network, except a block at
     # the easiest difficulty, which its rules allow after a long gap (Litecoin and Pepecoin testnet).
     hard = 0x1B0404CB
@@ -314,3 +317,75 @@ def test_a_borrowed_chain_context_reads_through_the_running_mesh(monkeypatch):
         finally:
             await a.stop(); await b.stop()
     run(go())
+
+
+# ------------------------------------------------------------------------------------------- Litecoin
+
+def test_a_real_litecoin_block_with_segwit_and_its_hogex_reads_and_carries_its_work():
+    """Litecoin mainnet block 3,197,009 (litecoinspace.org, 2026-10-18): 366 SegWit transactions and the
+    MWEB HogEx (flag 0x08, empty MWEB part). Scrypt, not merge-mined."""
+    raw = gzip.decompress((Path(__file__).parent / "data/rawchain/ltc-3197009.raw.gz").read_bytes())
+    block = rawchain.read_block(raw, "ba5a40d8935f3fe314515982a2b1488bdcf7d1650dee8f5a9ba49af30dc749d9", mweb=True)
+    rawchain.check_work(block, NETWORKS["ltc"].auxpow_chain_id, NETWORKS["ltc"].pow_algo)
+    assert len(block.txs) == 524 and block.merkleroot == "3a87c49b168f878f6bead0f649e3a6796da05eb4fbe1a983b1928cbd5fd60d84"
+    assert rawchain.read_block(raw + b"\x01mweb-extension", mweb=True).hash == block.hash, "its MWEB block is skipped"
+    with pytest.raises(rawchain.RawError, match="left over"):
+        rawchain.read_block(raw + b"\x01", mweb=False)
+    hogex = next(t for t in block.txs if t.raw[4:6] == b"\x00\x08")
+    assert rawchain.read_tx(hogex.raw, hogex.txid).txid == hogex.txid
+    with pytest.raises(rawchain.RawError, match="MWEB part"):
+        rawchain.read_tx(hogex.raw[:-5] + b"\x01" + hogex.raw[-4:])
+    seg = next(t for t in block.txs if t.raw[4:6] == b"\x00\x01")
+    outs = [o["scriptPubKey"] for o in seg.verbose(NETWORKS["ltc"])["vout"]]
+    assert any(o["type"].startswith("witness_") and o["addresses"][0].startswith("ltc1") for o in outs) or outs
+
+
+@pytest.mark.skipif(__import__("shutil").which("litecoind") is None, reason="litecoind is not installed here")
+def test_litecoin_borrowed_through_the_mesh_reads_as_litecoin_core_prints_it():
+    """A real regtest litecoind behind the sharing arcade: a block with a SegWit spend, borrowed, decoded
+    here from its raw bytes and proved, comes out exactly as Litecoin Core prints it."""
+    from arcade.regtest import LitecoinRegtestNode
+    from arcade.rpc import RpcError as _RpcError
+
+    with LitecoinRegtestNode() as node:
+        rpc = node.rpc
+        rpc.call("generatetoaddress", 200, rpc.call("getnewaddress"))
+        bech = rpc.call("getnewaddress", "", "bech32")
+        t1 = rpc.call("sendtoaddress", bech, 5)
+        rpc.call("generatetoaddress", 1, rpc.call("getnewaddress"))
+        vout = next(o["n"] for o in rpc.call("getrawtransaction", t1, 1)["vout"] if o["value"] == 5)
+        unsigned = rpc.call("createrawtransaction", [{"txid": t1, "vout": vout}], {rpc.call("getnewaddress"): 4.999})
+        t2 = rpc.call("sendrawtransaction", rpc.call("signrawtransactionwithwallet", unsigned)["hex"])
+        block_hash = rpc.call("generatetoaddress", 1, rpc.call("getnewaddress"))[0]
+        params = node.params
+
+        def serve(net, calls):
+            out = []
+            for method, p in calls:
+                try:
+                    out.append({"r": rpc.call(method, *p)})
+                except _RpcError as exc:
+                    out.append({"e": [exc.code, exc.message]})
+            return out
+
+        async def go():
+            a, b = mk(), mk()
+            net = params.name                                # "regtest": the chain's own name
+            sa = CoreShare(serve, lambda: {net: {"h": 202, "b": block_hash}})
+            sb = CoreShare(None, lambda: {}, borrowing={net})
+            a.add_extension(sa); b.add_extension(sb)
+            await started(a, b)
+            try:
+                b.add_address(*addr(a))
+                await until(lambda: sb.sharers(net), what="offer")
+                borrowed = BorrowedRpc(sb, params)
+                got = await asyncio.to_thread(borrowed.call, "getblock", block_hash, 2)
+                core = rpc.call("getblock", block_hash, 2)
+                for tx in core["tx"]:
+                    tx.pop("hex", None)                      # getblock 2 prints each tx's hex; ours leaves it out
+                assert got == core
+                said = await asyncio.to_thread(borrowed.call, "getrawtransaction", t2, 1)
+                assert said == rpc.call("getrawtransaction", t2, 1)
+            finally:
+                await a.stop(); await b.stop()
+        run(go())

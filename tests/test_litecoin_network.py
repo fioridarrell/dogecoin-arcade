@@ -1,0 +1,216 @@
+"""Litecoin as an add-on network (SadFrog's side, 2026-10-17; LITECOIN-PLAN phase 2): attached at
+start-up when the operator hosts it, shown grayed out until its node has synced, never used before,
+and its coins guarded like Dogecoin's and Pepecoin's -- a coin carrying an inscription is never
+handed to an ordinary send."""
+import argparse
+import json
+import pathlib
+import sys
+
+from fastapi.testclient import TestClient
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from test_web import app_state, client                          # noqa: F401,E402
+
+from arcade import funding                                         # noqa: E402
+from arcade.config import NETWORKS                               # noqa: E402
+from arcade.script import b58check_encode                        # noqa: E402
+
+LTC_L = b58check_encode(48, bytes(range(20)))
+LTC_M = b58check_encode(50, bytes(range(20)))
+PEP_MAIN = b58check_encode(56, bytes(range(20)))
+DOGE = b58check_encode(30, bytes(range(20)))
+
+
+def _with_ltc(state, monkeypatch, ready: bool):
+    from arcade.web.state import ChainContext
+    monkeypatch.setattr(state, "ltc", ChainContext(
+        network="ltc", role="ledger", label="Litecoin",
+        conf=pathlib.Path("/nonexistent/litecoin.conf")), raising=False)
+    said = {"ready": ready, "progress": 1.0 if ready else 0.9123, "online": True,
+            "blocks": 100 if ready else 91, "headers": 100}
+    real = type(state).chain_sync
+    monkeypatch.setattr(type(state), "chain_sync",
+                        lambda self, chain: said if chain.is_ltc else real(self, chain))
+    return state.ltc
+
+
+def test_litecoin_is_a_network_of_its_own():
+    ltc = NETWORKS["ltc"]
+    assert ltc.coin == "LTC" and ltc.label == "Litecoin"
+    assert (ltc.pubkeyhash_version, ltc.scripthash_version) == (48, 50)
+    assert ltc.activation_height == ltc.messaging_start_height == 3_198_000
+    assert ltc.genesis == "12a765e31ffd4059bada1e25190f6e98c99d9714d334efa41a195a7e7e04bfe2"
+    assert ltc.marker.startswith("L"), "its own Class B marker, from MARKER_SEED"
+    assert ltc.min_fee_per_kb == 10_000 and NETWORKS["main"].min_fee_per_kb == 1_000_000
+
+
+def test_the_chain_says_what_it_is():
+    from arcade.web.state import ChainContext
+    c = ChainContext(network="ltc", role="ledger", label="Litecoin")
+    assert c.is_ltc and c.is_addon and c.is_mainnet and not c.is_doge
+    assert (c.family, c.letter, c.title, c.net) == ("LTC", "L", "L main", "litecoin")
+    pep = ChainContext(network="main", role="ledger", label="Pepecoin")
+    assert (pep.family, pep.letter, pep.net) == ("PEP", "P", "mainnet") and not pep.is_addon
+
+
+def test_a_syncing_litecoin_is_shown_and_never_used(client, monkeypatch):
+    app, state = client
+    ltc = _with_ltc(state, monkeypatch, ready=False)
+    assert ltc in state.all_chains, "shown"
+    assert ltc not in state.token_chains, "but nothing works on it yet"
+    assert state.rpc_chain("ltc") is None
+    page = app.get("/").text
+    assert "Litecoin" in page and "Opens when its node has synced: 91.2% so far." in page
+
+
+def test_a_synced_litecoin_is_a_network_like_the_others(client, monkeypatch):
+    _, state = client
+    ltc = _with_ltc(state, monkeypatch, ready=True)
+    assert ltc in state.token_chains and state.rpc_chain("ltc") is ltc
+
+
+def test_litecoin_runs_here_when_its_node_is_there_or_borrowed_or_off_as_chosen(tmp_path, monkeypatch):
+    """Admin -> Chains (arcade/cores.py, 2026-10-18): one setting per chain, core:ltc = here | borrow | off."""
+    from arcade.web import __main__ as launcher
+    monkeypatch.setenv("HOME", str(tmp_path))
+    conf = tmp_path / "litecoin.conf"
+    conf.write_text("server=1\n")
+    args = argparse.Namespace(no_ltc=False, ltc_conf=str(conf), ltc_datadir=None, home=str(tmp_path))
+    ctx = launcher._addon_context(args, NETWORKS["ltc"], "")
+    assert ctx is not None and ctx.network == "ltc" and ctx.conf == conf and not ctx.borrowed
+    assert launcher._addon_context(args, NETWORKS["ltc"], "off") is None
+    borrowed = launcher._addon_context(args, NETWORKS["ltc"], "borrow")
+    assert borrowed.borrowed and borrowed.label == "Litecoin"
+    assert launcher._addon_context(argparse.Namespace(**{**vars(args), "no_ltc": True}), NETWORKS["ltc"], "") is None
+    none_here = argparse.Namespace(no_ltc=False, ltc_conf=None, ltc_datadir=None, home=str(tmp_path))
+    assert launcher._addon_context(none_here, NETWORKS["ltc"], "") is None, "no node, no choice: off"
+
+
+def test_litecoin_coins_are_guarded_like_the_others(app_state, monkeypatch):
+    # Guards are module state: an earlier test's Dogecoin guard must not answer for this app (it lingered
+    # in combined runs and this failed only there).
+    monkeypatch.setattr(funding, "GUARD", None)
+    monkeypatch.setattr(funding, "GUARDS", [])
+    monkeypatch.setattr(funding, "GUARD_BY_NET", {})
+    _with_ltc(app_state, monkeypatch, ready=True)
+    TestClient(__import__("arcade.web.app", fromlist=["create_app"]).create_app(app_state))
+    for address in (LTC_L, LTC_M):
+        assert funding.guard_for(address) is not None, f"{address} is watched"
+    ltc_guard = funding.guard_for(LTC_L)
+    assert funding.guard_for(PEP_MAIN) is not None and funding.guard_for(PEP_MAIN) is not ltc_guard, \
+        "Pepecoin keeps its own guard"
+    assert funding.guard_for(DOGE) is None, "no Dogecoin node here, so no Dogecoin guard"
+
+
+# --- the wallet: one key for PEP, DOGE and LTC (2026-10-17, SadFrog's choice) -------------------
+
+def test_a_litecoin_address_is_the_pepecoin_keys_twin():
+    from arcade.script import b58check_decode
+    from arcade.web.app import _ltc_twin
+    twin = _ltc_twin(PEP_MAIN)
+    assert twin.startswith("L") and b58check_decode(twin) == (48, bytes(range(20)))
+    assert _ltc_twin(DOGE) == "" and _ltc_twin("not an address") == "", "only a Pepecoin mainnet key"
+
+
+def test_litecoin_joins_the_accounts_chains_only_once_synced(client, monkeypatch):
+    app, state = client
+    _with_ltc(state, monkeypatch, ready=False)
+    chains = app.get("/account", headers={"Accept": "application/json"})
+    names = [c.get("network") for c in (chains.json().get("chains") or [])] if chains.status_code == 200 else []
+    assert "ltc" not in names, "nothing may be paid, held or signed there while it syncs"
+
+
+def test_an_at_tag_pays_their_twin_on_litecoin(app_state, monkeypatch):
+    from arcade.web import app as applib
+    ltc = _with_ltc(app_state, monkeypatch, ready=True)
+    monkeypatch.setattr(applib.taglib, "looks_like_a_tag", lambda d: d.startswith("@"))
+    monkeypatch.setattr(applib.taglib, "normalise", lambda d: d.lstrip("@"))
+    real = applib._tag_address
+    monkeypatch.setattr(applib, "_tag_address",
+                        lambda state, d, *, mainnet: PEP_MAIN if mainnet is True else real(state, d, mainnet=mainnet))
+    assert applib._tag_address(app_state, "@frog", mainnet=ltc) == applib._ltc_twin(PEP_MAIN)
+
+
+def test_the_backup_page_explains_the_path_and_hands_out_the_litecoin_key():
+    from arcade.web.app import TEMPLATE_DIR
+    page = (TEMPLATE_DIR / "my_backup.html").read_text()
+    for said in ("Your Litecoin key, for other Litecoin wallets", "m/44'/3'/0'/0/0", "m/44'/2'/",
+                 "importprivkey", "never paste it into a website", "coins.wif(ltc.key, coins.LTC_WIF)"):
+        assert said in page, said
+    coins = (TEMPLATE_DIR / "coins.js").read_text()
+    assert "ltc: 3" in coins and "LTC_WIF = 0xb0" in coins
+
+
+def test_the_browser_derives_the_same_key_and_a_wif_that_decodes_to_it(tmp_path):
+    """The real coins.js, run in Node: Litecoin's key is the Pepecoin mainnet key; its WIF (0xB0,
+    compressed, "T...") decodes to that key; its L-address is that key's (checked in Python)."""
+    import shutil, subprocess
+    if shutil.which("node") is None:
+        import pytest
+        pytest.skip("node is not installed here")
+    from arcade.web.app import TEMPLATE_DIR
+    from arcade.script import b58check_decode, b58check_encode, hash160
+    from test_funding import _pubkey
+    web = TEMPLATE_DIR.parent
+    shutil.copytree(web / "vendor", tmp_path / "vendor")
+    (tmp_path / "package.json").write_text('{"type":"module"}')
+    (tmp_path / "coins.js").write_text((TEMPLATE_DIR / "coins.js").read_text().replace('"/vendor/', '"./vendor/'))
+    (tmp_path / "run.js").write_text('''import * as coins from "./coins.js";
+const seed = new Uint8Array(64).map((_, i) => (i * 7 + 3) & 255);
+const ltc = await coins.coinKey(seed, "ltc"), pep = await coins.coinKey(seed, "main");
+const hex = (b) => Buffer.from(b).toString("hex");
+console.log(JSON.stringify({same: hex(ltc.key) === hex(pep.key), key: hex(ltc.key),
+  wif: await coins.wif(ltc.key, coins.LTC_WIF), ltc: await coins.address(ltc.pubkey, 48)}));''')
+    said = json.loads(subprocess.run(["node", "run.js"], cwd=tmp_path, capture_output=True, text=True,
+                                     timeout=60, check=True).stdout)
+    assert said["same"], "one key for PEP and LTC"
+    version, body = b58check_decode(said["wif"])
+    assert version == 0xB0 and body[32:] == b"\x01" and said["wif"].startswith("T")
+    assert body[:32].hex() == said["key"]
+    assert b58check_encode(48, hash160(_pubkey(int.from_bytes(body[:32], "big")))) == said["ltc"]
+
+
+# --- the Exchange (2026-10-17) ---------------------------------------------------------------------
+
+def test_litecoin_trades_are_mainnet_with_their_own_big_line():
+    from arcade import trade, trade_orders
+    from arcade.node_trader import swap_big
+    leg = trade.Leg("ltc", "coin", "", 1, "", "")
+    assert leg.tier() == "mainnet", "real coins: the second confirmation, no faucet"
+    assert trade.BIG["ltc"] == 2 * 100_000_000
+    assert trade_orders.RANK["main"] < trade_orders.RANK["doge"] < trade_orders.RANK["ltc"], \
+        "pairs read PEP/LTC and DOGE/LTC"
+
+    class S:
+        def setting(self, key, default=None):
+            return default
+    assert swap_big(S())["ltc"] == 2 * 100_000_000, "the operator's line, defaulting to trade.BIG"
+
+
+def test_the_exchange_offers_an_l_main_chip(client, monkeypatch):
+    app, state = client
+    _with_ltc(state, monkeypatch, ready=False)
+    page = app.get("/exchange").text
+    assert 'title="L main opens when its node has synced (91.2% so far)"' in page, "grayed while syncing"
+    _with_ltc(state, monkeypatch, ready=True)
+    page = app.get("/exchange").text
+    assert "show=litecoin" in page and '<b class="netl litecoin">L</b> main' in page
+    assert app.get("/exchange?show=litecoin").status_code == 200
+
+
+def test_a_found_config_brings_its_folder_for_the_cookie(tmp_path, monkeypatch):
+    """The installer's configs use cookie authentication: no rpcuser/rpcpassword, the cookie in the
+    data folder. Passing the config alone failed every call -- the chain read "syncing 0%" forever
+    (Dogecoin's too, 2026-10-17) -- so a found config brings its folder."""
+    from arcade.web import __main__ as launcher
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for name, conf in ((".litecoin", "litecoin.conf"), (".dogecoin", "dogecoin.conf")):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / conf).write_text("server=1\n")
+    args = argparse.Namespace(no_ltc=False, ltc_conf=None, ltc_datadir=None, no_doge=False,
+                              doge_conf=None, doge_datadir=None, home=str(tmp_path))
+    ltc = launcher._addon_context(args, NETWORKS["ltc"], "here")
+    doge = launcher._addon_context(args, NETWORKS["doge"], "")
+    assert ltc.datadir == tmp_path / ".litecoin" and ltc.conf == tmp_path / ".litecoin" / "litecoin.conf"
+    assert doge.datadir == tmp_path / ".dogecoin"

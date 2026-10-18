@@ -17,11 +17,14 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .config import NETWORKS
+
 #: The chain every arcade runs itself: the messaging chain (regtest in tests).
 REQUIRED = "test"
 HERE, BORROW, OFF = "here", "borrow", "off"
-#: Chains the arcade can be without (the ledger, Pepecoin mainnet, cannot: it can only be borrowed).
-OPTIONAL = frozenset({"doge"})
+#: Chains the arcade can be without: every add-on chain (Params.addon -- Dogecoin, Litecoin, Litecoin
+#: testnet, any chain added as Params). The ledger, Pepecoin mainnet, cannot be off: only borrowed.
+OPTIONAL = frozenset(name for name, p in NETWORKS.items() if p.addon)
 
 
 class CoreRule(ValueError):
@@ -76,5 +79,6 @@ def rows(settings: dict, chains: list[Any], status: dict | None = None, required
         now = BORROW if getattr(chain, "borrowed", False) else HERE
         out.append({"net": net, "title": chain.title, "label": chain.params.label, "now": now,
                     "chosen": mode(settings, net, now, required), "required": net == required,
-                    "optional": net in OPTIONAL, "share": sharing(settings, net), "mesh": status.get(net, {})})
+                    "optional": net in OPTIONAL, "share": sharing(settings, net), "mesh": status.get(net, {}),
+                    "work": "checked" if chain.params.pow_algo else "the sharer's word"})
     return out

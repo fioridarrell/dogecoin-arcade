@@ -18,6 +18,18 @@
                  None if doge_sync.ready else
                  "Opens when its node has synced: " ~ ('%.1f' % (100 * (doge_sync.progress or 0))) ~ "% so far.") }}
   {% endif %}
+  {% if ltc %}
+  {# Litecoin (2026-10-17, SadFrog's side): an add-on chain the operator hosts, opening when synced. #}
+  {{ chains.card(state.ltc, ltc, "Litecoin — LTC, tokens, NFTs and Doginals-format inscriptions.",
+                 None if ltc_sync.ready else
+                 "Opens when its node has synced: " ~ ('%.1f' % (100 * (ltc_sync.progress or 0))) ~ "% so far.") }}
+  {% endif %}
+  {% if ltc_test %}
+  {# Litecoin testnet, "L test" (2026-10-17): test LTC, beside L main. #}
+  {{ chains.card(state.ltc_test, ltc_test, "Litecoin testnet — LTC TEST, worth nothing: where the arcade tries Litecoin first.",
+                 None if ltc_test_sync.ready else
+                 "Opens when its node has synced: " ~ ('%.1f' % (100 * (ltc_test_sync.progress or 0))) ~ "% so far.") }}
+  {% endif %}
 </div>
 
 <div class="grid">

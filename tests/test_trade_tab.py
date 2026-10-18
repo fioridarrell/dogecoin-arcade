@@ -139,7 +139,8 @@ def test_the_browser_keeps_the_same_reserve():
     assert int(re.search(r"LOCK_RESERVE: ([0-9_]+)", js).group(1).replace("_", "")) == T.LOCK_RESERVE
     num = lambda pattern: eval(re.search(pattern, js).group(1).replace("_", ""))   # noqa: E731
     assert num(r"BIG: \{main: ([0-9_ *]+),") == T.BIG["main"]
-    assert num(r"doge: ([0-9_ *]+)\}") == T.BIG["doge"]
+    assert num(r"doge: ([0-9_ *]+)[,}]") == T.BIG["doge"]
+    assert num(r"ltc: ([0-9_ *]+)\}") == T.BIG["ltc"], "Litecoin's big line, the same both sides"
     assert num(r"CLAIM_MARGIN: ([0-9 *]+),") == T.CLAIM_MARGIN and num(r"LOCK_MARGIN: ([0-9 *]+),") == T.LOCK_MARGIN
 
 

@@ -122,6 +122,11 @@ class SendQueue:
                 held.append(lock)
 
 
+#: The add-on chains: each beside the arcade's own two, run here, borrowed or off (arcade/cores.py). Read
+#: from the chains' own Params (`addon`), so a chain added there is an add-on everywhere.
+ADDON_NETWORKS = tuple(name for name, p in NETWORKS.items() if p.addon)
+
+
 @dataclass
 class ChainContext:
     """One node connection, and what the UI is allowed to do with it."""
@@ -152,21 +157,43 @@ class ChainContext:
     def is_mainnet(self) -> bool:
         """Real coins: Pepecoin mainnet AND Dogecoin (2026-10-13). Everything a
         mainnet page does for safety -- the second confirmation, no faucet, the
-        words backed up -- Dogecoin needs as much."""
-        return self.network in ("main", "doge")
+        words backed up -- Dogecoin needs as much. Litecoin mainnet too: any chain whose
+        Params say `real_coins`."""
+        return self.params.real_coins
 
     @property
     def is_doge(self) -> bool:
         return self.network == "doge"
 
     @property
+    def is_ltc(self) -> bool:
+        """Litecoin MAINNET (SadFrog's side, 2026-10-17): an add-on chain like Dogecoin."""
+        return self.network == "ltc"
+
+    @property
+    def is_ltc_test(self) -> bool:
+        """Litecoin TESTNET, "L test" (2026-10-17): its own add-on chain beside L main."""
+        return self.network == "ltctest"
+
+    @property
+    def is_litecoin(self) -> bool:
+        """Either Litecoin chain: what reads Litecoin's own format (inscriptions, labels) asks this."""
+        return self.network in ("ltc", "ltctest")
+
+    @property
+    def is_addon(self) -> bool:
+        """A chain beside the arcade's own two (Dogecoin, Litecoin): the operator hosts it or not
+        (arcade/cores.py), and it is shown grayed out until its node has synced."""
+        return self.params.addon
+
+    @property
     def family(self) -> str:
-        """Which coin: "PEP" or "DOGE"."""
-        return "DOGE" if self.is_doge else "PEP"
+        """Which coin: "PEP", "DOGE", "LTC" (Params.family)."""
+        return self.params.family
 
     @property
     def letter(self) -> str:
-        return "D" if self.is_doge else "P"
+        return self.params.letter
 
     @property
     def word(self) -> str:
@@ -181,8 +208,8 @@ class ChainContext:
 
     @property
     def net(self) -> str:
-        """The word a page files this chain under: testnet, mainnet or dogecoin."""
-        return "dogecoin" if self.is_doge else ("mainnet" if self.network == "main" else "testnet")
+        """The word a page files this chain under: testnet, mainnet, dogecoin or litecoin."""
+        return self.params.net_word or ("mainnet" if self.network == "main" else "testnet")
 
     def credentials(self):
         """Explicit configuration if given, otherwise go and find the node.
@@ -282,6 +309,10 @@ class AppState:
     #: Dogecoin node. Shown on every page from the start, and only USED -- indexed,
     #: offered, paid on -- once the node has synced (`chain_ready`).
     doge: ChainContext | None = None
+    ltc: ChainContext | None = None      # Litecoin, run here or borrowed (arcade/cores.py)
+    ltc_test: ChainContext | None = None  # Litecoin testnet, "L test", when hosted (2026-10-17)
+    #: Any other add-on chain, by network (a chain that exists as Params alone).
+    more: dict = field(default_factory=dict)
     _sync: dict = field(default_factory=dict)
 
     identity: Identity | None = None
@@ -1218,8 +1249,9 @@ class AppState:
         chains = [self.ledger]
         if self.messaging.network != self.ledger.network:
             chains.append(self.messaging)
-        if self.doge is not None and self.chain_ready(self.doge):
-            chains.append(self.doge)
+        for addon in self.addons:
+            if self.chain_ready(addon):
+                chains.append(addon)
         return chains
 
     @property
@@ -1230,9 +1262,19 @@ class AppState:
         chains = [self.ledger]
         if self.messaging.network != self.ledger.network:
             chains.append(self.messaging)
-        if self.doge is not None:
-            chains.append(self.doge)
+        chains += self.addons
         return chains
+
+    @property
+    def addons(self) -> list[ChainContext]:
+        """The add-on chains this arcade has, run here or borrowed, in the order the chains' Params list
+        them: `doge`, `ltc` and `ltc_test` by name (the pages ask for those by name), and any other in
+        `more` (a chain added as Params alone, 2026-10-18)."""
+        named = {"doge": self.doge, "ltc": self.ltc, "ltctest": self.ltc_test, **(self.more or {})}
+        return [named[n] for n in ADDON_NETWORKS if named.get(n) is not None]
+
+    def addon(self, network: str) -> ChainContext | None:
+        return next((c for c in self.addons if c.network == network), None)
 
     #: How long a sync answer is kept. Pages ask on every draw; the node is asked
     #: at most once a minute, from whichever request comes first.
@@ -1245,7 +1287,7 @@ class AppState:
         Dogecoin node is ready when it is out of its initial download, its blocks
         have reached its headers and it says it is all but done -- a node that is
         merely reachable is not one to take money on."""
-        if not chain.is_doge and not chain.borrowed:
+        if not chain.is_addon and not chain.borrowed:
             return {"ready": True, "progress": 1.0, "online": True}
         now = time.time()
         kept = self._sync.get(chain.network)
@@ -1283,7 +1325,7 @@ class AppState:
     def rpc_chain(self, which: str) -> "ChainContext | None":
         """The chain `/rpc/main` or `/rpc/test` speaks for, if it is indexed."""
         for chain in self.token_chains:
-            if which == ("doge" if chain.is_doge else "main" if chain.is_mainnet else "test"):
+            if which == (chain.network if chain.is_addon else "main" if chain.is_mainnet else "test"):
                 return chain
         return None
 

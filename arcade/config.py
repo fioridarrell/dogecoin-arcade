@@ -165,6 +165,10 @@ class Params:
     #: slate for everyone at once, and lowering it asks every installation to
     #: rescan. Set per network because the chains are unrelated.
     messaging_start_height: int = 0
+    #: The fee rate this chain's transactions pay, in base units per kB of virtual size. Pepecoin and
+    #: Dogecoin relay at COIN/100 (policy.h RECOMMENDED_MIN_TX_FEE); Litecoin relays at 1/1000 of that,
+    #: and 0.01 LTC/kB is over its own -maxtxfee for a Class B transaction (2026-10-17).
+    min_fee_per_kb: int = 1_000_000
 
     #: Where @names (tag claims, and the messaging keys that go with them) are
     #: read from, when that is EARLIER than the floor (2026-09-25: names
@@ -193,6 +197,32 @@ class Params:
     #: such a block through on these chains instead of refusing it.
     min_difficulty_blocks: bool = False
     pow_limit_bits: int = 0x1E0FFFFF
+    #: The proof-of-work hash rawchain checks a borrowed block with: "scrypt" (Pepecoin, Dogecoin,
+    #: Litecoin and the scrypt merge-mined coins), "sha256d" (the SHA-256 ones), or "" for a chain whose
+    #: work this arcade cannot check (a multi-algorithm chain such as DigiByte): its blocks are still
+    #: proved by hash, merkle root and linkage, and the admin panel says the work is the sharer's word.
+    pow_algo: str = "scrypt"
+
+    # --- what a chain is, as data (2026-10-18, the operator: "Eventually, we want to add Digi bite and
+    # other aux pow chains"): a new chain is a Params entry, not code. -------------------------------
+    #: A chain beside the arcade's own two: run here, borrowed through the mesh, or off (arcade/cores.py).
+    addon: bool = False
+    #: Where its Core keeps its config on a machine that runs it: ~/<node_dir>/<node_conf>, and its
+    #: cookie in that folder (or the network's `datadir_subdir` under it).
+    node_dir: str = ""
+    node_conf: str = ""
+    #: One capital letter for badges ("P main", "D main", "L test") and the coin family it belongs to.
+    letter: str = "P"
+    family: str = "PEP"
+    #: The word a page files the chain under ("dogecoin", "litecoin"); empty: mainnet or testnet.
+    net_word: str = ""
+    #: Real coins (the second confirmation, no faucet, the words backed up).
+    real_coins: bool = False
+    #: Its SegWit addresses' human-readable part ("ltc1...", "tltc1..."); empty: no SegWit.
+    bech32_hrp: str = ""
+    #: Litecoin's MimbleWimble extension blocks: a transaction may carry an MWEB part, a block an MWEB
+    #: block after its transactions, and Core prints a few more fields ("ismweb", "nTx", "weight").
+    mweb: bool = False
 
     @property
     def index_start(self) -> int | None:
@@ -238,6 +268,7 @@ MAINNET = Params(
     other_pubkeyhash_version=113,   # its own testnet
     marker_address=None,     # derived and fixed before launch
     auxpow_chain_id=0x3F,
+    real_coins=True,
 )
 
 TESTNET = Params(
@@ -406,9 +437,70 @@ DOGECOIN = dataclasses.replace(
     label="Dogecoin",
     genesis="1a91e3dace36e2be3bf030a65679fe821aa1d6ef92e7c9902eb318182c355691",
     auxpow_chain_id=0x62,
+    addon=True, node_dir=".dogecoin", node_conf="dogecoin.conf",
+    letter="D", family="DOGE", net_word="dogecoin", real_coins=True,
 )
 
-NETWORKS = {p.name: p for p in (MAINNET, TESTNET, REGTEST, DOGECOIN)}
+# Litecoin MAINNET (SadFrog's side, 2026-10-17; LITECOIN-PLAN phase 2). An add-on chain an operator
+# runs here, borrows or leaves off (arcade/cores.py). Same shape as Dogecoin: Pepecoin's feature heights, its own ports,
+# address versions (L... 48, M... 50) and genesis. Verified on a regtest litecoind 0.21.3: bare
+# multisig plus an 80-byte OP_RETURN relays with -acceptnonstdtxn=0, so the Class B layer carries
+# over unchanged.
+#
+# The floor (2026-10-17): the network tip at 16:20 UTC that day was 3,196,698 (a public explorer;
+# this node still syncing), rounded up to 3,198,000 -- about two days ahead at 2.5-minute blocks --
+# so nothing that existed before the arcade read Litecoin can be read as an arcade transaction
+# (the D-004 margin, as Dogecoin's floor was set).
+LITECOIN = dataclasses.replace(
+    MAINNET,
+    name="ltc",
+    rpc_port=9332,
+    p2p_port=9333,
+    activation_height=3_198_000,
+    messaging_start_height=3_198_000,
+    pubkeyhash_version=48,      # addresses start with "L"
+    scripthash_version=50,      # "M" (the legacy "3", version 5, is read as P2SH too: txbuild)
+    other_pubkeyhash_version=113,
+    marker_address=None,
+    coin="LTC",
+    label="Litecoin",
+    min_fee_per_kb=10_000,      # 0.0001 LTC/kB: ten times Litecoin 0.21's minimum relay fee
+    genesis="12a765e31ffd4059bada1e25190f6e98c99d9714d334efa41a195a7e7e04bfe2",
+    auxpow_chain_id=None,       # scrypt, mined on its own (it is the PARENT Dogecoin merge-mines with)
+    addon=True, node_dir=".litecoin", node_conf="litecoin.conf",
+    letter="L", family="LTC", net_word="litecoin", real_coins=True, bech32_hrp="ltc", mweb=True,
+)
+
+# Litecoin TESTNET (SadFrog's side, 2026-10-17; plan B, the arcade's own "hello world" inscription).
+# Its own add-on chain, "L test" beside "L main" (the operator's choice), as P test sits beside P main:
+# Litecoin mainnet's Params with testnet4's ports, address versions (m/n... 111, Q... 58) and genesis,
+# its node's chain in testnet4/. Keys on coin type 1, as every test chain (coins.js COIN_TYPE), so an
+# account's L test key is its Pepecoin testnet key.
+# The floor (2026-10-18 01:00 UTC): a peer's tip was 4,926,272, rounded up to 4,927,000 -- about a day
+# ahead at 2.5-minute blocks (often less: testnet's min-difficulty blocks come faster), the D-004
+# margin as on L main. This node was syncing from block 0 then.
+LTC_TESTNET_FLOOR = 4_927_000
+
+LITECOIN_TESTNET = dataclasses.replace(
+    LITECOIN,
+    name="ltctest",
+    rpc_port=19332,
+    p2p_port=19335,
+    activation_height=LTC_TESTNET_FLOOR,
+    messaging_start_height=LTC_TESTNET_FLOOR,
+    datadir_subdir="testnet4",
+    pubkeyhash_version=111,     # addresses start with "m" or "n"
+    scripthash_version=58,      # "Q" (the older "2", version 196, is read as P2SH too: txbuild)
+    other_pubkeyhash_version=48,
+    coin="LTC TEST",
+    label="Litecoin testnet",
+    genesis="4966625a4b2851d9fdee139e56211a0d88575f59ed816ff5e6a63deb4e3e29a0",
+    # Testnet's 20-minute rule: a block after a long gap may be at the easiest difficulty.
+    min_difficulty_blocks=True,
+    node_dir=".litecoin-testnet", real_coins=False, bech32_hrp="tltc",
+)
+
+NETWORKS = {p.name: p for p in (MAINNET, TESTNET, REGTEST, DOGECOIN, LITECOIN, LITECOIN_TESTNET)}
 
 #: Networks on which the Messenger may operate. Testnet only, permanently
 #: (docs/DECISIONS.md D-010). Enforced in code, not configuration.
@@ -542,6 +634,8 @@ CHAIN_NAMES = {
     "main": "main", "test": "test", "regtest": "regtest",
     # A Dogecoin node calls its mainnet "main" too; `genesis` tells them apart.
     "doge": "main",
+    "ltc": "main",       # and so does Litecoin's
+    "ltctest": "test",
 }
 
 

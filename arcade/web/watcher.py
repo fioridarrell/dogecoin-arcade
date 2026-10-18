@@ -289,28 +289,38 @@ class BlockWatcher:
                 log.debug("collections on %s not read", chain.network, exc_info=True)
 
     def _watch_doge_accounts(self) -> None:
-        """Every account's Dogecoin address watched, whether or not its browser has opened Dogecoin here (the operator
-        2026-10-17: six Doginals sent to @apple were never filed -- only 11 of 97 accounts had told the node their
-        Dogecoin address). An account's Dogecoin key is its Pepecoin MAINNET key (coins.js COIN_TYPE doge = main = 3),
-        so the address is that key's hash under Dogecoin's version byte. A newly watched address is read back over every
-        block this index holds, once, on a thread of its own: coins sent before it was watched are filed too."""
-        if time.time() - getattr(self, "_doge_watch_at", 0.0) < 600 or getattr(self, "_doge_backfilling", False):
+        """Every account's address on every add-on chain watched, whether or not its browser has opened that
+        chain here (2026-10-17: six Doginals sent to @apple were never filed -- only 11 of 97 accounts had
+        told the node their Dogecoin address). A real-coins chain's key is the account's Pepecoin MAINNET key
+        (coins.js: coin type 3 for DOGE and LTC), a test chain's its testnet key (coin type 1, "L test"), so the
+        address is that key's hash under the chain's version byte. A newly watched address is read back over every
+        block this index holds, once, on a thread of its own: coins sent before it was watched are filed too.
+        (Dogecoin first, 2026-10-17; every add-on chain, Litecoin among them, 2026-10-18.)"""
+        if time.time() - getattr(self, "_doge_watch_at", 0.0) < 600:
             return
         self._doge_watch_at = time.time()
-        doge = self.state.doge
-        if doge is None or not self.state.chain_ready(doge):
-            return
+        backfilling = self.__dict__.setdefault("_addon_backfilling", set())
+        for chain in list(getattr(self.state, "addons", None) or [s for s in (self.state.doge,) if s]):
+            if chain.network in backfilling or not self.state.chain_ready(chain):
+                continue
+            self._watch_accounts_on(chain, backfilling)
+
+    def _watch_accounts_on(self, chain, backfilling: set) -> None:
         from .. import utxos as utxoslib
         from ..script import b58check_decode, b58check_encode
+        prefix = "address:main:" if chain.is_mainnet else "address:"
         wanted = {}
         for name, value in self.state.settings().items():
-            if not name.startswith("address:main:") or not isinstance(value, str):
+            if not name.startswith(prefix) or not isinstance(value, str):
+                continue
+            pubkey = name[len(prefix):]
+            if ":" in pubkey:                                  # address:main:<pk> is not a testnet address:<pk>
                 continue
             try:
-                wanted[b58check_encode(doge.params.pubkeyhash_version, b58check_decode(value)[1])] = name[13:]
+                wanted[b58check_encode(chain.params.pubkeyhash_version, b58check_decode(value)[1])] = pubkey
             except Exception:                                  # noqa: BLE001 -- a stored address that does not decode
                 continue
-        index = self.state.token_index(doge)
+        index = self.state.token_index(chain)
         with contextlib.closing(index.open()) as db:
             fresh = sorted(set(wanted) - utxoslib.watching(db))
             if not fresh:
@@ -320,22 +330,23 @@ class BlockWatcher:
                 utxoslib.watch(db, address, tip, f"account {wanted[address][:12]} (derived)")
             first = db.conn.execute("SELECT MIN(height) FROM block").fetchone()[0]
             db.conn.commit()
-        log.info("watching %d more accounts' Dogecoin addresses; reading back blocks %s..%s", len(fresh), first, tip)
+        log.info("watching %d more accounts' %s addresses; reading back blocks %s..%s",
+                 len(fresh), chain.params.label, first, tip)
 
         def back() -> None:
-            self._doge_backfilling = True
+            backfilling.add(chain.network)
             try:
-                with doge.rpc() as rpc:
-                    filed = utxoslib.backfill_many(index, rpc, doge.params, set(fresh), int(first or tip), tip)
-                log.info("Dogecoin read-back filed %d coins for %d accounts", filed, len(fresh))
+                with chain.rpc() as rpc:
+                    filed = utxoslib.backfill_many(index, rpc, chain.params, set(fresh), int(first or tip), tip)
+                log.info("%s read-back filed %d coins for %d accounts", chain.params.label, filed, len(fresh))
                 if filed:
                     self.state.bump_generation()
             except Exception:                                  # noqa: BLE001
-                log.warning("Dogecoin read-back failed; watched from block %s only", tip, exc_info=True)
+                log.warning("%s read-back failed; watched from block %s only", chain.params.label, tip, exc_info=True)
             finally:
-                self._doge_backfilling = False
+                backfilling.discard(chain.network)
 
-        threading.Thread(target=back, name="arcade-doge-backfill", daemon=True).start()
+        threading.Thread(target=back, name=f"arcade-{chain.network}-backfill", daemon=True).start()
 
     def _run_trader(self) -> None:
         """This node's own lock-script trades, every 15 s -- only while the operator has

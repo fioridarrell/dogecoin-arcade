@@ -2518,11 +2518,11 @@ function legWhat(leg) {
 export const TRADE = {
   LOCK_SECONDS: {mainnet: 2 * 3600, testnet: 2 * 3600},
   CONFIRMATIONS: 0, CONFIRMATIONS_BIG: 1,       // 0 below the big line, 1 at or above it (2026-10-17; trade.py)
-  BIG: {main: 1_000_000 * 100_000_000, doge: 1_000 * 100_000_000},
+  BIG: {main: 1_000_000 * 100_000_000, doge: 1_000 * 100_000_000, ltc: 2 * 100_000_000},
   CLAIM_MARGIN: 20 * 60, LOCK_MARGIN: 30 * 60,
   LOCK_RESERVE: 2_000_000,          // htlc.SPEND_FEE + htlc.DUST (trade.LOCK_RESERVE)
 };
-const tierOf = (leg) => (leg.network === "main" || leg.network === "doge") ? "mainnet" : "testnet";
+const tierOf = (leg) => (leg.network === "main" || leg.network === "doge" || leg.network === "ltc") ? "mainnet" : "testnet";
 
 /** 0, or 1 when a mainnet coin leg is at or above its line (trade.confirmations_for). */
 export function confirmationsFor(give, get, big = TRADE.BIG) {
@@ -2657,7 +2657,7 @@ export async function spending(fn) {
 const TRADES = "arcade-trades";
 //: A lock's address on each chain: P2SH version bytes (arcade/config.py). The node's own
 //: word (/account chains[].p2sh) wins: a chain standing in for another has its own.
-const P2SH_VERSION = {main: 22, doge: 22, test: 196, regtest: 196};
+const P2SH_VERSION = {main: 22, doge: 22, ltc: 50, ltctest: 58, test: 196, regtest: 196};   // ltc: "M" (2026-10-17)
 let p2shKnown = null;
 async function p2shOf(network) {
   if (!p2shKnown) {

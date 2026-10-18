@@ -18,7 +18,7 @@ from pathlib import Path
 
 import uvicorn
 
-from ..config import MESSAGING_NETWORKS
+from ..config import MESSAGING_NETWORKS, NETWORKS
 from . import brand as brandlib
 from .app import create_app
 from .state import AppState, ChainContext
@@ -49,11 +49,13 @@ def main(argv: list[str] | None = None) -> int:
                         help="chain for tokens, NFTs and PEP")
     parser.add_argument("--ledger-datadir", help="mainnet datadir, to read its .cookie")
     parser.add_argument("--ledger-conf", help="mainnet config with rpcuser/rpcpassword")
-    # Dogecoin mainnet, the third network (2026-10-13). Found by itself at
-    # ~/.dogecoin/dogecoin.conf, which the installer writes; this names another.
-    parser.add_argument("--doge-conf", help="Dogecoin config with rpcuser/rpcpassword")
-    parser.add_argument("--doge-datadir", help="Dogecoin datadir, to read its .cookie")
-    parser.add_argument("--no-doge", action="store_true", help="run without Dogecoin")
+    # The add-on chains (Dogecoin since 2026-10-13, Litecoin and Litecoin testnet since 2026-10-18, any
+    # chain whose Params say `addon`): each found by itself at ~/<node_dir>/<node_conf>, which its
+    # installer writes; these name another, or leave it out.
+    for addon in ADDON_PARAMS:
+        parser.add_argument(f"--{addon.name}-conf", help=f"{addon.label} config with rpcuser/rpcpassword")
+        parser.add_argument(f"--{addon.name}-datadir", help=f"{addon.label} datadir, to read its .cookie")
+        parser.add_argument(f"--no-{addon.name}", action="store_true", help=f"run without {addon.label}")
     parser.add_argument("--brand", choices=sorted(brandlib.BRANDS),
                         help="the face this node shows (name, colours, icons): "
                              "dogecoin (default) or pepecoin; ARCADE_BRAND works too")
@@ -163,7 +165,8 @@ def main(argv: list[str] | None = None) -> int:
             can_spend=True,
             borrowed=ledger_borrowed,
         ),
-        doge=_doge_context(args, coreslib.mode(chosen, "doge", "")),
+        **_addon_fields({p.name: _addon_context(args, p, coreslib.mode(chosen, p.name, ""))
+                         for p in ADDON_PARAMS}),
     )
 
     # Bots authenticate to /rpc/main and /rpc/test with this file's contents.
@@ -175,14 +178,15 @@ def main(argv: list[str] | None = None) -> int:
     # Report what was found, so a silent misconfiguration is visible at startup
     # rather than as an empty panel later.
     from ..discovery import best
-    borrowed = [c for c in (state.ledger, state.doge) if c is not None and c.borrowed]
+    borrowed = [c for c in (state.ledger, *state.addons) if c.borrowed]
     for context in borrowed:
         print(f"  {context.label:8s} {context.network:10s} borrowed from arcades that share it, through the mesh")
     if borrowed and args.no_mesh:
         print("  WARNING: --no-mesh, so the borrowed chains above cannot be reached")
-    if state.doge is not None and not state.doge.borrowed:
-        print(f"  {state.doge.label:8s} {state.doge.network:10s} "
-              f"{state.doge.conf or state.doge.datadir}  (shown grayed out until it has synced)")
+    for addon in state.addons:
+        if not addon.borrowed:
+            print(f"  {addon.label:8s} {addon.network:10s} "
+                  f"{addon.conf or addon.datadir}  (shown grayed out until it has synced)")
     for context in (state.messaging, state.ledger):
         if context.borrowed:
             continue
@@ -262,6 +266,11 @@ def main(argv: list[str] | None = None) -> int:
         # day put a wallet on a public address.
         print("  PUBLIC: only the feed, the collections and the chain are "
               "served; every form is refused")
+    if not brandlib.FROM_ENV and state.setting("brand"):   # the admin panel's face (create_app applies it too)
+        try:
+            brandlib.use(str(state.setting("brand")))
+        except ValueError:
+            pass
     print(f"{brandlib.current().name}  ->  http://{args.host}:{args.port}")
     # Without a timeout here uvicorn waits for every request to finish before it
     # stops, and a game room's event stream is a request that never finishes --
@@ -275,29 +284,53 @@ def main(argv: list[str] | None = None) -> int:
 
 
 
-def _doge_context(args, mode: str = "") -> "ChainContext | None":
-    """The Dogecoin chain, when this machine runs a Dogecoin node: named on the
-    command line, or the installer's ~/.dogecoin/dogecoin.conf (or a datadir
-    with a readable .cookie). None when there is none -- the arcade then simply
-    has its two Pepecoin chains, as before. `mode` is the operator's choice in
-    Admin -> Chains (arcade/cores.py): "borrow" reads it through an arcade that
-    shares its Dogecoin Core, "off" leaves it out, "here" or none finds the node."""
-    if args.no_doge or mode == "off":
+#: Every add-on chain, from the chains' own Params.
+ADDON_PARAMS = tuple(p for p in NETWORKS.values() if p.addon)
+
+
+def _addon_context(args, params, mode: str = "") -> "ChainContext | None":
+    """An add-on chain (Dogecoin, Litecoin, Litecoin testnet, any chain whose Params say `addon`), as the
+    operator chose in Admin -> Chains (arcade/cores.py): "borrow" reads it through an arcade that shares
+    its Core over the mesh, "off" leaves it out, and "here" -- or no choice yet -- finds this machine's
+    node: named on the command line, or ~/<node_dir>/<node_conf> (its folder too, for the cookie
+    beside it: 2026-10-17, an installer's config with no rpcuser read "syncing 0%" forever), or that
+    folder with a readable .cookie. None when there is none: the arcade runs without that chain."""
+    net = params.name.replace("-", "_")
+    if getattr(args, f"no_{net}", False) or mode == "off":
         return None
     if mode == "borrow":
-        return ChainContext(network="doge", role="ledger", label="Dogecoin", can_spend=True, borrowed=True)
-    conf = Path(args.doge_conf).expanduser() if args.doge_conf else None
-    datadir = Path(args.doge_datadir).expanduser() if args.doge_datadir else None
+        return ChainContext(network=params.name, role="ledger", label=params.label, can_spend=True,
+                            borrowed=True)
+    conf = getattr(args, f"{net}_conf", None)
+    datadir = getattr(args, f"{net}_datadir", None)
+    conf = Path(conf).expanduser() if conf else None
+    datadir = Path(datadir).expanduser() if datadir else None
     if conf is None and datadir is None:
-        found = Path.home() / ".dogecoin" / "dogecoin.conf"
-        if found.exists():
-            conf = found
-        elif (Path.home() / ".dogecoin" / ".cookie").exists():
-            datadir = Path.home() / ".dogecoin"
+        if not params.node_dir:
+            return None
+        home = Path.home() / params.node_dir
+        cookie = home / params.datadir_subdir / ".cookie" if params.datadir_subdir else home / ".cookie"
+        if params.node_conf and (home / params.node_conf).exists():
+            conf, datadir = home / params.node_conf, home
+        elif cookie.exists():
+            datadir = home
         else:
             return None
-    return ChainContext(network="doge", role="ledger", label="Dogecoin",
+    return ChainContext(network=params.name, role="ledger", label=params.label,
                         datadir=datadir, conf=conf, can_spend=True)
+
+
+def _addon_fields(contexts: dict) -> dict:
+    """AppState's fields for the add-on chains: doge, ltc and ltc_test by name, the rest in `more`."""
+    named = {"doge": "doge", "ltc": "ltc", "ltctest": "ltc_test"}
+    out: dict = {"more": {}}
+    for net, context in contexts.items():
+        if net in named:
+            out[named[net]] = context
+        elif context is not None:
+            out["more"][net] = context
+    return out
+
 
 if __name__ == "__main__":
     raise SystemExit(main())

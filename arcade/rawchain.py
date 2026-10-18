@@ -141,8 +141,57 @@ def asm(script: bytes, signatures: bool = False) -> str:
     return " ".join(out)
 
 
+_BECH32 = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+
+
+def _bech32_polymod(values: list[int]) -> int:
+    gen = (0x3B6A57B2, 0x26508E6D, 0x1EA119FA, 0x3D4233DD, 0x2A1462B3)
+    chk = 1
+    for v in values:
+        top = chk >> 25
+        chk = (chk & 0x1FFFFFF) << 5 ^ v
+        for i in range(5):
+            chk ^= gen[i] if (top >> i) & 1 else 0
+    return chk
+
+
+def segwit_address(hrp: str, version: int, program: bytes) -> str:
+    """BIP 173 / 350: bech32 for version 0, bech32m for 1 and up."""
+    data, acc, bits = [version], 0, 0
+    for b in program:
+        acc, bits = (acc << 8) | b, bits + 8
+        while bits >= 5:
+            bits -= 5
+            data.append((acc >> bits) & 31)
+    if bits:
+        data.append((acc << (5 - bits)) & 31)
+    const = 1 if version == 0 else 0x2BC830A3
+    expanded = [ord(c) >> 5 for c in hrp] + [0] + [ord(c) & 31 for c in hrp]
+    mod = _bech32_polymod(expanded + data + [0] * 6) ^ const
+    return hrp + "1" + "".join(_BECH32[d] for d in data + [(mod >> 5 * (5 - i)) & 31 for i in range(6)])
+
+
+def _witness_program(script: bytes) -> tuple[int, bytes] | None:
+    if 4 <= len(script) <= 42 and (script[0] == 0 or 0x51 <= script[0] <= 0x60) and script[1] == len(script) - 2:
+        return (0 if script[0] == 0 else script[0] - 0x50), script[2:]
+    return None
+
+
 def script_pubkey(script: bytes, params) -> dict[str, Any]:
     """`scriptPubKey` as Core prints it: asm, hex, type, and the addresses it pays."""
+    hrp = getattr(params, "bech32_hrp", "")
+    program = _witness_program(script) if hrp else None
+    if program is not None:
+        version, prog = program
+        kind = ("witness_v0_keyhash" if version == 0 and len(prog) == 20 else
+                "witness_v0_scripthash" if version == 0 and len(prog) == 32 else
+                "witness_v1_taproot" if version == 1 and len(prog) == 32 else "witness_unknown")
+        said = {"asm": asm(script), "hex": script.hex(), "type": kind}
+        if kind != "witness_unknown" or version:
+            said.update(reqSigs=1, addresses=[segwit_address(hrp, version, prog)])
+        if kind == "witness_unknown" and version == 0:
+            said.pop("reqSigs", None)
+        return said
     try:
         kind, address, _data, keys, required = classify_script(script, params)
     except Exception:                                   # noqa: BLE001 -- odd scripts are nonstandard
@@ -174,32 +223,43 @@ class Tx:
     def verbose(self, params, *, with_hex: bool = True) -> dict[str, Any]:
         """The transaction as Core's `getrawtransaction t 1` prints its own part of it."""
         weight = self.stripped_size * 3 + len(self.raw)
+        mweb = getattr(params, "mweb", False)
         ins = []
         for i in self.vin:
             if i["vout"] == -1:
-                row = {"coinbase": i["script"].hex(), "sequence": i["sequence"]}
+                row = ({"ismweb": False} if mweb else {}) | {"coinbase": i["script"].hex(), "sequence": i["sequence"]}
             else:
-                row = {"txid": i["txid"], "vout": i["vout"],
+                row = ({"ismweb": False} if mweb else {}) | {"txid": i["txid"], "vout": i["vout"],
                        "scriptSig": {"asm": asm(i["script"], signatures=True), "hex": i["script"].hex()},
                        "sequence": i["sequence"]}
             if i["witness"]:
                 row["txinwitness"] = [w.hex() for w in i["witness"]]
             ins.append(row)
         said = {"txid": self.txid, "hash": self.wtxid, "version": self.version, "size": len(self.raw),
-                "vsize": (weight + 3) // 4, "locktime": self.locktime, "vin": ins,
-                "vout": [{"value": round(v / 100_000_000, 8), "n": n, "scriptPubKey": script_pubkey(s, params)}
+                "vsize": (weight + 3) // 4, **({"weight": weight} if mweb else {}), "locktime": self.locktime,
+                "vin": ins,
+                "vout": [({"ismweb": False} if mweb else {}) |
+                         {"value": round(v / 100_000_000, 8), "n": n, "scriptPubKey": script_pubkey(s, params)}
                          for n, (v, s) in enumerate(self.vout)]}
         if with_hex:
             said["hex"] = self.raw.hex()
         return said
 
 
+#: The extended-serialization flag bits: SegWit witnesses, and Litecoin's MWEB part.
+FLAG_WITNESS, FLAG_MWEB = 0x01, 0x08
+
+
 def _read_tx(r: _Reader) -> Tx:
     start = r.at
     version = r.i32()
-    segwit = r.data[r.at:r.at + 1] == b"\x00" and r.data[r.at + 1:r.at + 2] not in (b"", b"\x00")
-    if segwit:
+    flags = 0
+    if r.data[r.at:r.at + 1] == b"\x00" and r.data[r.at + 1:r.at + 2] not in (b"", b"\x00"):
+        flags = r.data[r.at + 1]
+        if flags & ~(FLAG_WITNESS | FLAG_MWEB):
+            raise RawError(f"a transaction with flags {flags:#04x}")
         r.take(2)
+    segwit = bool(flags)
     body_start = r.at
     ins = []
     for _ in range(r.varint()):
@@ -215,9 +275,14 @@ def _read_tx(r: _Reader) -> Tx:
         value = r.u64()
         outs.append((value, r.blob()))
     body_end = r.at
-    if segwit:
+    if flags & FLAG_WITNESS:
         for i in ins:
             i["witness"] = [r.blob() for _ in range(r.varint())]
+    if flags & FLAG_MWEB:
+        # Its MWEB part, an optional: 0 when there is none (the HogEx in every MWEB block). One that is
+        # there cannot be read here, so such a transaction is refused rather than half read.
+        if r.take(1) != b"\x00":
+            raise RawError("a transaction with an MWEB part, which this arcade does not read")
     locktime_bytes = r.take(4)
     raw = r.data[start:r.at]
     stripped = r.data[start:start + 4] + r.data[body_start:body_end] + locktime_bytes
@@ -275,6 +340,8 @@ class Block:
         }
         stripped = self.size - sum(len(t.raw) - t.stripped_size for t in self.txs)
         said.update(strippedsize=stripped, weight=stripped * 3 + self.size)
+        if getattr(params, "mweb", False):
+            said["nTx"] = len(self.txs)
         if height is not None:
             said["height"] = height
         if self.prev == "00" * 32:
@@ -349,13 +416,15 @@ def merkle_root(txids: list[str]) -> str:
     return level[0][::-1].hex()
 
 
-def read_block(raw: bytes, block_hash: str | None = None) -> Block:
+def read_block(raw: bytes, block_hash: str | None = None, mweb: bool = False) -> Block:
     """A raw block (`getblock h 0`), read whole and proved to be one block: its transactions hash up to
-    the merkle root its header carries, and (with `block_hash`) that header is the block asked for."""
+    the merkle root its header carries, and (with `block_hash`) that header is the block asked for. On an
+    `mweb` chain (Litecoin) what follows the transactions is the block's MWEB extension, which the arcade
+    never reads: the merkle root is of the ordinary transactions, and the HogEx among them commits to it."""
     r = _Reader(raw)
     header, aux = _read_header(r)
     txs = [_read_tx(r) for _ in range(r.varint())]
-    if r.at != len(raw):
+    if r.at != len(raw) and not mweb:
         raise RawError("bytes left over after the block")
     block = Block(**_header_fields(header, aux), txs=txs, size=len(raw))
     if block_hash is not None and block.hash != block_hash:
@@ -375,14 +444,29 @@ def _branch_root(leaf: bytes, branch: list[bytes], index: int) -> bytes:
     return h
 
 
-def check_work(block: Block, chain_id: int | None = None) -> None:
+def pow_hash(header: bytes, algo: str = "scrypt") -> int:
+    """The proof-of-work hash of an 80-byte header as a number: scrypt (Litecoin's), or sha256d (Bitcoin's,
+    and the SHA-256 merge-mined coins')."""
+    if algo == "sha256d":
+        return int.from_bytes(sha256d(header), "little")
+    if algo == "scrypt":
+        return int.from_bytes(scrypt_hash(header), "little")
+    raise RawError(f"no proof-of-work hash called {algo!r}")
+
+
+def check_work(block: Block, chain_id: int | None = None, algo: str = "scrypt") -> None:
     """Raise unless the header carries the work its bits ask for.
 
     Plain: scrypt(header) <= target. Merge-mined (AuxPoW, auxpow.cpp CAuxPow::check): the parent's
     coinbase is in the parent block (its merkle branch reaches the parent header's merkle root), that
     coinbase names the root of a chain merkle tree this block's hash is a leaf of (after fabe6d6d), and
     the PARENT header's scrypt meets this block's target. `chain_id`, when given, must be the one in the
-    version's top half, so another merge-mined coin's block cannot be passed off as this chain's."""
+    version's top half, so another merge-mined coin's block cannot be passed off as this chain's. `algo`
+    is the chain's proof-of-work hash (Params.pow_algo; "scrypt" above stands for it); "" -- a chain whose
+    work cannot be checked here, such as a multi-algorithm one -- checks nothing (the caller still proves
+    hash, merkle root and links)."""
+    if not algo:
+        return
     target = target_of(block.bits)
     if target <= 0:
         raise RawError(f"block {block.hash}: bits {block.bits:08x} name no target")
@@ -391,7 +475,7 @@ def check_work(block: Block, chain_id: int | None = None) -> None:
     if aux is None:
         if version & AUXPOW_FLAG:
             raise RawError(f"block {block.hash}: says it is merge-mined and carries no AuxPoW")
-        if int.from_bytes(scrypt_hash(block.header), "little") > target:
+        if pow_hash(block.header, algo) > target:
             raise RawError(f"block {block.hash}: its work does not meet its target")
         return
     if chain_id is not None and (version >> 16) != chain_id:
@@ -411,7 +495,7 @@ def check_work(block: Block, chain_id: int | None = None) -> None:
         at = script.find(chain_root)
         if at < 0 or at > 20 or script.find(MM_HEADER) >= 0:
             raise RawError(f"block {block.hash}: the parent coinbase does not commit to this block")
-    if int.from_bytes(scrypt_hash(aux.parent_header), "little") > target:
+    if pow_hash(aux.parent_header, algo) > target:
         raise RawError(f"block {block.hash}: its parent's work does not meet its target")
 
 
