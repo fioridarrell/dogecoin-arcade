@@ -8,7 +8,10 @@ block where it went different.
 
 What a block did is written in the index with its height: the protocol transactions it carried (and
 whether each was valid), the inscriptions it completed, the pieces it moved, the @names it gave out, the
-trades, offers and asks it made and the tokens it created. A block's FINGERPRINT is a hash over those
+trades, offers and asks it made and the tokens it created. (The @name table is not among them: it holds
+each name's CURRENT claim, which moves to a later block when a name is claimed again -- the claims
+themselves are protocol transactions, hashed with the rest. Found 2026-10-18 by the first live check:
+a fresh index and .25's "differed" at a block whose transactions were identical.) A block's FINGERPRINT is a hash over those
 rows, in a fixed order, columns that never change after the block only -- an inscription's current owner
 moves with every later transfer, so the moves are hashed, not the owner. A RANGE's fingerprint is a hash
 over its blocks' fingerprints, so two arcades compare a hundred thousand blocks in one message and, when
@@ -31,7 +34,6 @@ TABLES: tuple[tuple[str, tuple[str, ...], str], ...] = (
                      "chunks"), "position, txid"),
     ("inscription_move", ("txid", "inscription", "from_address", "to_address", "position", "how"),
      "position, txid, inscription"),
-    ("tag", ("tag", "address", "claimed_txid", "position"), "position, tag"),
     ("pair_trade", ("txid", "seq", "position", "taker", "maker", "maker_txid", "gave_property", "gave",
                     "got_property", "got"), "position, txid, seq"),
     ("nft_offer", ("txid", "position", "inscription", "buyer", "take_kind", "take_property", "take_amount"),

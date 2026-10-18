@@ -27,7 +27,7 @@ class FakeIndex:
             valid = 0 if h == odd else 1                   # one arcade judged one transaction differently
             self.conn.execute("INSERT INTO arcade_tx (txid, block_height, position, encoding_class, sender, "
                               "payload_hex, valid) VALUES (?, ?, 1, 'B', 'Psender', 'ab', ?)", (f"{h:064x}", h, valid))
-            if h % 49 == 0:
+            if (h - FLOOR) % 49 == 0:
                 self.conn.execute("INSERT INTO tag VALUES (?, ?, ?, ?, 2)", (f"name{h}", f"P{h}", f"{h:064x}", h))
         self.conn.commit()
 
@@ -81,6 +81,10 @@ def test_a_block_fingerprint_ignores_what_later_blocks_change(tmp_path):
     with_piece = index_digest.Fingerprints(ix, FLOOR).digest(FLOOR, 1400)
     assert with_piece != before
     ix.conn.execute("UPDATE inscription SET owner = 'Pnew' WHERE txid = 'aa'")
+    assert index_digest.Fingerprints(ix, FLOOR).digest(FLOOR, 1400) == with_piece
+    # Nor a name's current claim, which moves to a later block when the name is claimed again.
+    assert ix.conn.execute("UPDATE tag SET block_height = 1450, claimed_txid = 'bb' "
+                           "WHERE block_height = 1049").rowcount == 1
     assert index_digest.Fingerprints(ix, FLOOR).digest(FLOOR, 1400) == with_piece
     assert index_digest.checkpoint(1406, FLOOR) == 1400 and index_digest.checkpoint(1405, FLOOR) == 1300
     assert index_digest.checkpoint(1003, FLOOR) is None
