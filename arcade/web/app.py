@@ -22346,6 +22346,12 @@ def create_app(state: AppState) -> FastAPI:
         index = check.status() if check else {}
         for row in rows:
             row["index"] = index.get(row["net"], {})
+            # Whether the Wallet and the markets offer it yet (2026-10-18: Litecoin borrowed, and still grey with
+            # nothing to say why): the same reading they use, the sharer's getblockchaininfo.
+            chain = state.addon(row["net"])
+            if chain is not None and row["now"] != coreslib.OFF:
+                sync = state.chain_sync(chain)
+                row["sync"] = {k: sync.get(k) for k in ("ready", "progress", "blocks", "headers", "online")}
         # Chains other arcades share that this arcade's version does not know yet (a newer chain).
         unknown = sorted((net, s.get("sharers", 0)) for net, s in status.items()
                          if net not in NETWORKS and s.get("sharers"))
