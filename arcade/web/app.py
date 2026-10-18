@@ -701,6 +701,11 @@ def _above_dust(sats: int, what: str) -> None:
                          f"and nobody would relay it")
 
 
+#: When a request counts as stalled, and how often the stacks of a stall are logged (_request_timer).
+STALL_AFTER = 45
+STALL_EVERY = 120
+
+
 def _request_timer():
     """What the node spends its time answering (2026-10-17: 150 % CPU after the 1.5 s swap pace): per path, how many
     requests and how many seconds, logged once a minute when anything was asked. Outside create_app, like the door: the
@@ -709,11 +714,37 @@ def _request_timer():
     _req_lock = threading.Lock()
     _req_last = [time.time()]
 
+    # A request still running after STALL_AFTER seconds (2026-10-18: /exchange stopped answering at 0 % CPU and nothing
+    # said why): every thread's stack goes to the log, at most once per STALL_EVERY, so the next stall names its cause.
+    _in_flight: dict[int, tuple[str, float]] = {}
+    _stall_said = [0.0]
+
+    def _stall_watch():
+        while True:
+            time.sleep(15)
+            with _req_lock:
+                stuck = [(path, time.perf_counter() - at) for path, at in _in_flight.values()
+                         if time.perf_counter() - at > STALL_AFTER]
+            if not stuck or time.time() - _stall_said[0] < STALL_EVERY:
+                continue
+            _stall_said[0] = time.time()
+            import traceback
+            names = {t.ident: t.name for t in threading.enumerate()}
+            stacks = "\n".join(f"--- thread {names.get(ident, ident)}\n" + "".join(traceback.format_stack(frame)[-12:])
+                                for ident, frame in sys._current_frames().items())
+            log.warning("requests stalled: %s\n%s", "; ".join(f"{p} {s:.0f}s" for p, s in stuck[:8]), stacks)
+
+    threading.Thread(target=_stall_watch, name="stall-watch", daemon=True).start()
+
     async def _req_timer(request: Request, call_next):
         started = time.perf_counter()
+        with _req_lock:
+            _in_flight[id(request)] = (request.url.path, started)
         try:
             return await call_next(request)
         finally:
+            with _req_lock:
+                _in_flight.pop(id(request), None)
             parts = request.url.path.split("/")[:4]
             key = "/".join(p if len(p) < 24 else "*" for p in parts)
             with _req_lock:
