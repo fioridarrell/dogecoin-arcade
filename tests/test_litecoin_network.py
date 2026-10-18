@@ -214,3 +214,28 @@ def test_a_found_config_brings_its_folder_for_the_cookie(tmp_path, monkeypatch):
     doge = launcher._addon_context(args, NETWORKS["doge"], "")
     assert ltc.datadir == tmp_path / ".litecoin" and ltc.conf == tmp_path / ".litecoin" / "litecoin.conf"
     assert doge.datadir == tmp_path / ".dogecoin"
+
+
+def test_the_wallet_names_litecoin_testnet_test_and_mines_it_here(client, monkeypatch):
+    """2026-10-18: the operator's Wallet showed "L MAIN" twice and no way to mine test LTC. The chain switch
+    reads a chain's coins, not its word (Litecoin testnet's word is "litecoin"), and each add-on chain with no Core
+    wallet here has its own section: the node's key address, its balance, and Mine on a test-coin chain."""
+    from arcade.web.state import ChainContext
+    from arcade import keywallet
+    app, state = client
+    ltc = ChainContext(network="ltc", role="ledger", label="Litecoin", conf=pathlib.Path("/x"), borrowed=True)
+    ltctest = ChainContext(network="ltctest", role="ledger", label="Litecoin testnet", conf=pathlib.Path("/x"),
+                           borrowed=True)
+    monkeypatch.setattr(state, "ltc", ltc, raising=False)
+    monkeypatch.setattr(state, "ltc_test", ltctest, raising=False)
+    real = type(state).chain_sync
+    monkeypatch.setattr(type(state), "chain_sync", lambda self, chain: {"ready": True, "progress": 1.0, "online": True}
+                        if chain.is_litecoin else real(self, chain))
+    monkeypatch.setattr(keywallet, "balance", lambda st, c: {"spendable": "0.5", "balance": "0.5",
+                                                            "address": f"addr-{c.network}"})
+    page = app.get("/wallet").text
+    switch = page.split('class="chainswitch"', 1)[1].split("</h1>", 1)[0]
+    assert switch.count('title="Switch to L main"') + switch.count("Showing L main") <= 1
+    assert 'L test' in switch and '>test<' in switch.split("L test", 1)[1][:200]
+    assert "addr-ltctest" in page and 'data-net="ltctest"' in page, "mined here"
+    assert 'data-net="ltc"' not in page, "real coins are never mined"

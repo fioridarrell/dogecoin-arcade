@@ -4192,12 +4192,31 @@ def create_app(state: AppState) -> FastAPI:
             raise ValueError("unknown wallet")
         return state.messaging if which == "messaging" else state.ledger
 
+    def _keyed_wallets() -> list[dict[str, Any]]:
+        """The node's coins on each add-on chain it has no Core wallet for (keywallet.py), for the Wallet page:
+        balance, address, and whether this machine's CPU may mine there (2026-10-18: "no way to mine Test
+        LTC" from the operator's Wallet)."""
+        out = []
+        for ctx in list(getattr(state, "addons", None) or []):
+            if ctx is state.doge and not ctx.borrowed:
+                continue                                  # its own Core wallet, on the page already
+            row = {"network": ctx.network, "title": ctx.title, "letter": ctx.letter, "net": ctx.net,
+                   "word": ctx.word, "coin": ctx.params.coin, "mainnet": bool(ctx.is_mainnet),
+                   "borrowed": bool(ctx.borrowed), "minable": not ctx.params.real_coins
+                   and ctx.params.auxpow_chain_id is None, "ready": state.chain_ready(ctx)}
+            try:
+                row.update(keywalletlib.balance(state, ctx))
+            except Exception as exc:                     # noqa: BLE001
+                row["error"] = str(exc)[:200]
+            out.append(row)
+        return out
+
     @app.get("/wallet", response_class=HTMLResponse)
     def wallet(request: Request):
         chain, _ = _token_chain()
         return render(request, "wallet.html", messaging=messaging_status(),
                       ledger=ledger_status(), **_doge_status(), prepared=None, which=None, now=time.time(),
-                      mining=_mining_json(), tab="coins", chain=chain,
+                      mining=_mining_json(), tab="coins", chain=chain, keyed=_keyed_wallets(),
                       other_chains=[c for c in state.token_chains if c is not chain])
 
     @app.get("/wallet/tokens", response_class=HTMLResponse)
