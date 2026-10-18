@@ -88,6 +88,25 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-18 (night, latest) · the operator's side (Claude) · branch `claude/fast-lane`
+- **The WebRTC fast lane** (private plan `hosting-plan.md` phase 3, without the paid relay). Games
+  call `arcade.realtime.join(name, {fast: true})`, then `room.fast.send(v[, {reliable}])`,
+  `room.fast.on('message'|'peer')`. Browsers connect directly over data channels (unordered, no
+  resends, plus an ordered reliable channel). Public guide: `docs/multiplayer.md` "Fast games".
+- **The viewer holds the connections** (`_page_doors.js.html`, "THE FAST LANE"); the sandboxed page
+  still reaches only the viewer. Signaling rides the room as hidden `\u001farcade-rtc:` messages
+  (like trades): the lower id offers, and each side sends one packed description (no trickle,
+  `sdpPack`/`sdpUnpack`), so it fits 512 B and the room's rate on old nodes too. **No mesh wire
+  change.**
+- **STUN on every node** (`arcade/mesh/stun.py`, UDP 3478, `--stun-port`, 0 = none). Mesh frames
+  `"st"`: a node's STUN is offered only after another node reached it. `GET /realtime/ice` lists the
+  nodes' STUN, then `stun:stun.cloudflare.com:3478` unless setting `realtime_public_stun` is false
+  (the operator: "Nodes, then public").
+- **No relay** (the operator: the builder pays for one, later). A pair that can't connect is in state
+  `'room'`: fast sends go through the room at about 3/s (reliable in order, otherwise latest only).
+- Tests: `tests/test_stun.py`, `tests/test_fast_lane_browser.py` (Firefox↔Firefox direct, fallback,
+  Chromium↔Firefox direct).
+
 ### 2026-10-18 (night, later) · SadFrog's side (Claude) · branch `sadfrog/ltc-safety`
 - **A floor audit, chain by chain.** SadFrog asked whether the floor rule was carried over from
   Pepecoin without thought. Each chain's floor is its own (P main 1,208,000, P test 1,496,133,
