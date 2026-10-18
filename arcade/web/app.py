@@ -17406,12 +17406,39 @@ def create_app(state: AppState) -> FastAPI:
                              "number": found["number"], "traits": found["traits"]},
                             headers={"Cache-Control": "public, max-age=60"})
 
+    def _doge_address_for(address: str, h160: bytes) -> str:
+        """The Dogecoin address an address stands for. A Dogecoin address is itself. An account's Pepecoin address
+        (either net) is that account's Dogecoin address -- the one its wallet holds, at the MAINNET coin key
+        (coins.js COIN_TYPE doge = main = 3), not its testnet key's hash: six Doginals went to @apple's testnet key's
+        Dogecoin address on 2026-10-17 because the two were taken for the same. A Pepecoin mainnet address of no
+        account here is the same key on Dogecoin; a testnet one is not, so it names nothing."""
+        doge = state.doge
+        version = b58check_decode(address)[0]
+        if version == doge.params.pubkeyhash_version:
+            return address
+        settings = state.settings()
+        for name, value in settings.items():
+            if value != address or not name.startswith("address:") or name.count(":") > 2:
+                continue
+            pubkey = name.rsplit(":", 1)[1]
+            held = settings.get(f"address:doge:{pubkey}") or ""
+            main = settings.get(f"address:main:{pubkey}") or ""
+            if held:
+                return held
+            if main:
+                return b58check_encode(doge.params.pubkeyhash_version, b58check_decode(main)[1])
+            return ""
+        main_chain = next((c for c in state.all_chains if c.network == "main"), None)
+        if main_chain is not None and version == main_chain.params.pubkeyhash_version:
+            return b58check_encode(doge.params.pubkeyhash_version, h160)
+        return ""
+
     @app.get("/r/doginals/{address}")
     def r_doginals(address: str):
         """The Doginals a Dogecoin address holds that belong to a collection this node knows, with their numbers and
         traits (2026-10-17, for games: a holder of a collection's piece gets something for it in a game).
-        `address` is the Dogecoin address, or the same key's address on Pepecoin (an account's), which names the
-        same Dogecoin address. Coins not readable just now are counted in `unknown`, not guessed."""
+        `address` is the Dogecoin address, or an account's Pepecoin address (_doge_address_for). Coins not readable
+        just now are counted in `unknown`, not guessed."""
         from .. import doginals as doginalslib
         from ..script import b58check_decode
         doge = state.doge
@@ -17423,7 +17450,9 @@ def create_app(state: AppState) -> FastAPI:
             return JSONResponse({"detail": "that is not an address"}, status_code=400)
         if len(h160) != 20:
             return JSONResponse({"detail": "that is not a key's address"}, status_code=400)
-        there = b58check_encode(doge.params.pubkeyhash_version, h160)
+        there = _doge_address_for(str(address), h160)
+        if not there:
+            return JSONResponse({"detail": "no account on this arcade has that address"}, status_code=404)
         guard = fundinglib.guard_for(there) or fundinglib.GUARD
         if guard is None:
             return JSONResponse({"detail": "Doginals are not checked on this node"}, status_code=503)

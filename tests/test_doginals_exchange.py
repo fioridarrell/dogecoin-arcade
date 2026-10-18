@@ -201,8 +201,41 @@ def test_a_game_reads_which_collection_pieces_an_address_holds(doge):
     assert said["address"] == SELLER and said["unknown"] == 0
     assert said["items"] == [{"inscription": INSCRIPTION, "number": 3, "traits": {"Fur": "Red"},
                               "collection": {"root": root, "name": "Anti Doginal Dogs"}}]
-    pep = b58check_encode(111, b58check_decode(SELLER)[1])
-    assert app.get(f"/r/doginals/{pep}").json()["items"] == said["items"], "the same key on Pepecoin"
+    pubkey = _seat(app, state, SELLER)
+    tag_address = state.setting(f"address:{pubkey}")
+    assert app.get(f"/r/doginals/{tag_address}").json()["items"] == said["items"], "an account's Pepecoin address"
+    stranger = b58check_encode(111, b58check_decode(SELLER)[1])
+    assert app.get(f"/r/doginals/{stranger}").status_code == 404, "a testnet key is not the Dogecoin key"
     assert app.get(f"/r/doginals/{BUYER}").json()["items"] == []
     assert app.get(f"/r/collection-item/doge/{INSCRIPTION}").json()["number"] == 3
     assert app.get(f"/r/collection-item/doge/{'ef' * 32}i0").status_code == 404
+
+
+def test_every_account_s_dogecoin_address_is_watched_and_read_back(client, monkeypatch):
+    """2026-10-17: only 11 of 97 accounts had told the node their Dogecoin address, so Doginals sent to the
+    others were never filed. The watcher derives each from the account's Pepecoin MAINNET key and reads back once."""
+    import contextlib as cl
+    import threading
+    from arcade import utxos
+    from arcade.script import b58check_decode
+    from arcade.web.watcher import BlockWatcher
+    from test_dogecoin_network import _with_doge
+    app, state = client
+    doge = _with_doge(state, monkeypatch, ready=True)
+    main = b58check_encode(56, bytes(range(20)))                 # an account's Pepecoin mainnet address
+    state.set_setting("address:main:" + "ab" * 32, main)
+    state.set_setting("address:" + "ab" * 32, b58check_encode(111, bytes(range(1, 21))))   # its testnet key: not it
+    read = []
+    monkeypatch.setattr(utxos, "backfill_many", lambda index, rpc, params, addresses, start, end:
+                        read.append((set(addresses), start, end)) or 0)
+    monkeypatch.setattr(doge, "rpc", lambda: cl.nullcontext(None), raising=False)
+    monkeypatch.setattr(threading, "Thread", lambda target, **kw: type("T", (), {"start": lambda self: target()})())
+    watcher = BlockWatcher(state)
+    watcher._watch_doge_accounts()
+    want = b58check_encode(30, b58check_decode(main)[1])
+    with cl.closing(state.token_index(doge).open()) as db:
+        assert want in utxos.watching(db)
+    assert read and read[0][0] == {want}, "read back once, for the new address only"
+    watcher._doge_watch_at = 0
+    watcher._watch_doge_accounts()
+    assert len(read) == 1, "an address already watched is not read back again"

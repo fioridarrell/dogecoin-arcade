@@ -115,6 +115,15 @@ def backfill(index, rpc, params, address: str, start: int, end: int) -> int:
     see -- in a later block, or read by the indexer meanwhile -- cannot leave a
     coin counted that is gone. Returns how many coins it filed.
     """
+    return backfill_many(index, rpc, params, {address}, start, end)
+
+
+def backfill_many(index, rpc, params, addresses: set[str], start: int, end: int) -> int:
+    """`backfill` for several addresses in ONE pass over the blocks (2026-10-17: every account's Dogecoin address at
+    once, which read block by block per address would be thousands of reads each)."""
+    addresses = set(addresses)
+    if not addresses:
+        return 0
     found = []
     for height in range(int(start), int(end) + 1):
         block = rpc.get_block(rpc.get_block_hash(height), 2)
@@ -126,12 +135,12 @@ def backfill(index, rpc, params, address: str, start: int, end: int) -> int:
                 if not script:
                     continue
                 parsed = parse_output(script, 0, params)
-                if parsed.type in SPENDABLE and parsed.address == address:
-                    found.append((tx["txid"], int(out.get("n", 0)),
+                if parsed.type in SPENDABLE and parsed.address in addresses:
+                    found.append((tx["txid"], int(out.get("n", 0)), parsed.address,
                                   int(round(float(out.get("value", 0)) * 100_000_000)), height))
     filed = 0
     with index.open() as db:
-        for txid, vout, value, height in found:
+        for txid, vout, address, value, height in found:
             if value <= 0 or not rpc.call("gettxout", txid, vout, False):
                 continue
             db.conn.execute(
