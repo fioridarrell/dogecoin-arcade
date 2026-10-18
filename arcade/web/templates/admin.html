@@ -55,6 +55,30 @@
   </div>
 </section>
 
+{# 2026-10-17: Cores shared between arcades over the mesh (arcade/cores.py, mesh/coreshare.py),
+   and every arcade's index compared with the others' (index_digest.py, mesh/indexcheck.py). #}
+<section class="panel" id="chains">
+  <h2>Chains</h2>
+  <p class="muted" style="margin-top:0">Run a chain's Core on this machine, or borrow it from an arcade
+    that shares its Core through the mesh. Pepecoin testnet always runs here, and at least one more chain
+    must too. <b>Share</b> (on unless you untick it) lets other arcades use a Core that runs here: they can
+    read blocks and the mempool and send transactions people signed, never touch this node's wallet.</p>
+  <div class="tablewrap"><table class="admintable">
+    <thead><tr><th>Chain</th><th>Core</th><th>Share</th><th>Now</th></tr></thead>
+    <tbody id="chainrows"></tbody>
+  </table></div>
+  <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
+    <button type="button" class="small" id="savecores">Save chains</button>
+    <button type="button" class="small ghost" id="restartnow" hidden>Restart now</button>
+    <span class="muted" id="coresaid"></span>
+  </div>
+  <h3 style="margin:14px 0 6px">Same index as other arcades?</h3>
+  <p class="muted" style="margin-top:0;font-size:.84rem">Every arcade builds its index from the chain alone,
+    so they should all hold the same tokens, inscriptions, names and trades. Linked arcades compare
+    fingerprints of their indexes every minute; a difference is tracked down to the block it starts at.</p>
+  <div id="indexrows" class="muted" style="font-size:.86rem">Not linked to another arcade yet.</div>
+</section>
+
 <section class="panel">
   <h2>Faucet</h2>
   <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
@@ -227,6 +251,9 @@ section.panel h2{margin-top:0}
 .wallet .bal{font-weight:700}
 .wallet .addr{font-size:.8rem;word-break:break-all}
 .tunsteps{padding-left:22px;display:grid;gap:12px}
+#chainrows select{min-width:150px}
+.idx-bad{color:var(--bad, #c0392b)}
+.idx-rows{font-size:.76rem;white-space:pre-wrap;word-break:break-all;max-height:180px;overflow:auto;background:var(--code);padding:6px;border-radius:6px}
 .tunsteps li{line-height:2.2}
 .tunsteps button{margin-left:6px}
 </style>
@@ -349,6 +376,8 @@ section.panel h2{margin-top:0}
       sel.appendChild(o);
     });
 
+    drawChains(d.chains || {});
+
     // faucet + switches
     $('faucetgift').value = coins(d.faucet.gift);
     $('faucetdaily').value = d.faucet.daily ? coins(d.faucet.daily) : '';
@@ -414,6 +443,78 @@ section.panel h2{margin-top:0}
         + (d.operator.password_set ? ' — remote access has a password.' : ' — no remote password yet, so the panel only opens here.')
       : 'No operator account yet: sign up like anybody, then make that account the operator here.';
   }
+
+  var CORE_WORDS = {here: 'Runs here', borrow: 'Borrow a shared Core', off: 'Off'};
+  function drawChains(c) {
+    var tb = $('chainrows'); tb.textContent = '';
+    (c.rows || []).forEach(function (r) {
+      var tr = document.createElement('tr');
+      tr.appendChild(text('td', r.title + ' \u00b7 ' + r.label));
+      var td = document.createElement('td');
+      if (r.required) { td.textContent = 'Runs here (always)'; }
+      else {
+        var sel = document.createElement('select'); sel.dataset.net = r.net; sel.className = 'coremode';
+        ['here', 'borrow'].concat(r.optional ? ['off'] : []).forEach(function (m) {
+          var o = document.createElement('option'); o.value = m; o.textContent = CORE_WORDS[m];
+          o.selected = r.chosen === m; sel.appendChild(o);
+        });
+        td.appendChild(sel);
+      }
+      tr.appendChild(td);
+      var sh = document.createElement('td');
+      var box = document.createElement('input'); box.type = 'checkbox'; box.className = 'coreshare';
+      box.dataset.net = r.net; box.checked = !!r.share; box.disabled = r.now !== 'here';
+      sh.appendChild(box); tr.appendChild(sh);
+      var m = r.mesh || {}, bits = [];
+      if (r.now === 'borrow') bits.push(m.sharers ? 'borrowed from ' + m.sharers + ' arcade' + (m.sharers > 1 ? 's' : '')
+                                         : 'no sharing arcade linked yet');
+      if (r.now === 'here') bits.push('runs here');
+      if (r.now === 'off') bits.push('off');
+      if (m.sharing) bits.push('shared' + (m.borrowers ? ', ' + m.borrowers + ' borrowing' : ''));
+      if (m.disagree) bits.push('SHARERS DISAGREE about the chain tip');
+      if (r.chosen !== r.now) bits.push('becomes \u201c' + CORE_WORDS[r.chosen].toLowerCase() + '\u201d at the next restart');
+      tr.appendChild(text('td', bits.join(' \u00b7 '), m.disagree ? 'idx-bad' : 'muted'));
+      tb.appendChild(tr);
+    });
+    var ix = $('indexrows'); ix.textContent = '';
+    (c.rows || []).forEach(function (r) {
+      var i = r.index || {};
+      if (!i.compared) return;
+      var line = document.createElement('div');
+      var ok = i.agree === i.compared;
+      line.className = ok ? '' : 'idx-bad';
+      line.textContent = r.title + ': ' + (ok ? 'same as ' : i.agree + ' of ') + i.compared + ' linked arcade'
+        + (i.compared > 1 ? 's' : '') + (ok ? '' : ' agree') + (i.agree_upto ? ', up to block ' + Number(i.agree_upto).toLocaleString() : '');
+      ix.appendChild(line);
+      (i.differ || []).forEach(function (x) {
+        var why = x.error ? 'could not compare: ' + x.error
+          : x.differs_at ? 'reads block ' + Number(x.differs_at).toLocaleString() + ' differently'
+          : x.state === 'differs' ? 'same blocks, different balances' : 'differs';
+        ix.appendChild(text('div', '\u2014 arcade ' + x.peer + ' ' + why, 'idx-bad'));
+        if (x.differs_at) {
+          ix.appendChild(text('div', 'This arcade:\n' + ((x.ours || []).join('') || '(nothing)') +
+                                     '\nThat arcade:\n' + ((x.theirs || []).join('') || '(nothing)'), 'idx-rows'));
+        }
+      });
+    });
+    if (!ix.childNodes.length) ix.textContent = c.mesh ? 'Not linked to another arcade yet.' : 'The mesh is off on this arcade.';
+  }
+  $('savecores').onclick = function () {
+    var modes = {}, share = {};
+    document.querySelectorAll('.coremode').forEach(function (s) { modes[s.dataset.net] = s.value; });
+    document.querySelectorAll('.coreshare').forEach(function (b) { share[b.dataset.net] = b.checked; });
+    call('/admin/api/cores', {modes: modes, share: share}).then(function (j) {
+      $('coresaid').textContent = j.restart ? 'Saved. Which Cores run here changes when the arcade restarts.' : 'Saved.';
+      $('restartnow').hidden = !(j.restart && LOCAL && data && data.chains && data.chains.restart);
+      load();
+    }).catch(function (e) { say(e.message, 'err'); });
+  };
+  $('restartnow').onclick = function () {
+    call('/admin/api/restart', {}).then(function () {
+      $('coresaid').textContent = 'Restarting\u2026 this page comes back in a few seconds.';
+      setTimeout(function () { location.reload(); }, 15000);
+    }).catch(function (e) { say(e.message, 'err'); });
+  };
 
   function load() {
     return fetch('/admin/api/state', {credentials: 'same-origin', cache: 'no-store'})

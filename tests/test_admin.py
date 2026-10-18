@@ -163,3 +163,31 @@ def test_the_startup_window_points_at_the_panel_and_installs(tmp_path, monkeypat
     assert path == tmp_path / "autostart" / "dogecoinarcade-admin.desktop"
     assert "--port 8420" in path.read_text()
     assert adminwindow.uninstall() and not path.exists()
+
+
+def test_chains_run_here_or_borrowed_with_testnet_and_one_more_here(public, monkeypatch):
+    """2026-10-17: Cores shared between arcades. Testnet always runs here, and at least one more;
+    sharing is one box per chain that runs here; which Cores run here applies at a restart."""
+    app, state = public
+    got = app.get("/admin/api/state", headers=LOCAL).json()["chains"]
+    nets = {r["net"]: r for r in got["rows"]}
+    assert set(nets) == {state.messaging.network, "main", "doge"} and nets[state.messaging.network]["required"]
+    assert nets["main"]["share"] is True, "shared unless the operator unticks it (2026-10-18)"
+    app.post("/admin/api/cores", headers={**LOCAL, **WRITE}, json={"share": {"main": False}})
+    assert state.setting("share:main") is False
+    assert {r["net"]: r for r in app.get("/admin/api/state", headers=LOCAL).json()["chains"]["rows"]}["main"]["share"] is False
+    assert nets["main"]["now"] == "here" and nets["doge"]["now"] in ("here", "off")
+    refused = app.post("/admin/api/cores", headers={**LOCAL, **WRITE},
+                       json={"modes": {"main": "borrow", "doge": "borrow"}})
+    assert refused.status_code == 400 and "at least one more" in refused.json()["detail"]
+    ok = app.post("/admin/api/cores", headers={**LOCAL, **WRITE},
+                  json={"modes": {"doge": "borrow"}, "share": {"main": True, "doge": True}}).json()
+    assert ok["restart"] is (nets["doge"]["now"] != "borrow")
+    assert state.setting("core:doge") == "borrow" and state.setting("share:main") is True
+    assert not state.setting("share:doge"), "a borrowed chain is not shared onward"
+    rows = {r["net"]: r for r in app.get("/admin/api/state", headers=LOCAL).json()["chains"]["rows"]}
+    assert rows["doge"]["chosen"] == "borrow" and rows["main"]["share"] is True
+    assert app.post("/admin/api/cores", headers={**LOCAL, **WRITE}, json={"modes": {"main": "off"}}).status_code == 400
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
+    assert app.post("/admin/api/restart", headers={**LOCAL, **WRITE}).status_code == 409
+    assert 'id="chains"' in app.get("/admin", headers=LOCAL).text

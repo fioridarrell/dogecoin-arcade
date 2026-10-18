@@ -1,0 +1,316 @@
+"""Shared Cores (2026-10-17): an arcade borrows a chain from another arcade's Core over the mesh.
+
+The blocks are real: two Dogecoin, two Pepecoin mainnet and two Pepecoin testnet blocks with their raw
+bytes, headers and Core's own decoding (tests/data/rawchain/blocks.json.gz, read off the .25 nodes). A
+borrowed chain must read exactly as the node itself prints it, and a sharer that changes one byte
+must be caught.
+"""
+from __future__ import annotations
+
+import asyncio
+import gzip
+import json
+from pathlib import Path
+
+import pytest
+
+from arcade import cores, rawchain
+from arcade.config import NETWORKS
+from arcade.mesh import coreshare
+from arcade.mesh.coreshare import BorrowedRpc, CoreShare
+from arcade.rpc import RpcError
+
+from test_mesh import addr, fast, mk, run, started, until  # noqa: F401 -- fast is the shrunk-timing fixture
+
+DATA = json.loads(gzip.decompress((Path(__file__).parent / "data/rawchain/blocks.json.gz").read_bytes()))
+CHAIN_ID = {"doge": 0x62, "main": 0x3F, "test": None}
+
+
+def _blocks(net):
+    return [r for r in DATA[net] if "raw" in r]
+
+
+def _strip(v):
+    return {k: x for k, x in v.items() if k != "auxpow"}
+
+
+# ------------------------------------------------------------------------------------------- rawchain
+
+@pytest.mark.parametrize("net", ["doge", "main", "test"])
+def test_raw_blocks_read_as_core_prints_them_and_carry_their_work(net):
+    before = None
+    for row in _blocks(net):
+        block = rawchain.read_block(bytes.fromhex(row["raw"]), row["hash"])
+        rawchain.check_work(block, CHAIN_ID[net])
+        rawchain.check_link(block, before)
+        before = block
+        assert block.verbose(NETWORKS[net], height=row["height"], extra=row["verbose"]) == _strip(row["verbose"])
+        header = rawchain.read_header(bytes.fromhex(row["header"]), row["hash"])
+        rawchain.check_work(header, CHAIN_ID[net])
+    tx = next(r["tx"] for r in DATA[net] if "tx" in r)
+    mine = rawchain.read_tx(bytes.fromhex(tx["hex"]), tx["txid"]).verbose(NETWORKS[net])
+    assert mine == {k: v for k, v in tx.items() if k not in ("blockhash", "blocktime", "confirmations", "time")}
+
+
+def test_a_changed_byte_or_a_borrowed_name_is_caught():
+    row = _blocks("doge")[-1]
+    raw = bytearray(bytes.fromhex(row["raw"]))
+    raw[-10] ^= 1                                           # a byte of the last transaction
+    with pytest.raises(rawchain.RawError, match="merkle"):
+        rawchain.read_block(bytes(raw), row["hash"])
+    with pytest.raises(rawchain.RawError, match="hashes to"):
+        rawchain.read_block(bytes.fromhex(_blocks("doge")[0]["raw"]), row["hash"])
+    block = rawchain.read_block(bytes.fromhex(row["raw"]))
+    with pytest.raises(rawchain.RawError, match="chain id"):
+        rawchain.check_work(block, 0x3F)                    # a Dogecoin block passed off as Pepecoin's
+    test_block = rawchain.read_block(bytes.fromhex(_blocks("test")[-1]["raw"]))
+    test_block.bits = 0x1D00FFFF                             # a target its work does not meet
+    with pytest.raises(rawchain.RawError, match="work"):
+        rawchain.check_work(test_block)
+    # A difficulty that falls more than 4x in a block is refused -- on a test network, except a block at
+    # the easiest difficulty, which its rules allow after a long gap (Litecoin and Pepecoin testnet).
+    hard = 0x1B0404CB
+    assert rawchain.too_easy(0x1D00FFFF, hard) and rawchain.too_easy(0x1D00FFFF, hard, NETWORKS["main"])
+    assert not rawchain.too_easy(0x1E0FFFFF, hard, NETWORKS["test"])
+    assert rawchain.too_easy(0x1D00FFFF, hard, NETWORKS["test"]) is False  # easier than the limit: allowed
+    assert not rawchain.too_easy(hard, hard)
+    tx = next(r["tx"] for r in DATA["doge"] if "tx" in r)
+    with pytest.raises(rawchain.RawError, match="hashes to"):
+        rawchain.read_tx(bytes.fromhex(tx["hex"]), "00" * 32)
+
+
+# ------------------------------------------------------------------------------------------- the mesh
+
+class FakeCore:
+    """A sharer's Core for one chain, answering from the real blocks."""
+
+    def __init__(self, net, lie=False):
+        self.net, self.lie = net, lie
+        self.rows = _blocks(net)
+        self.tx = next(r["tx"] for r in DATA[net] if "tx" in r)
+        self.pool: dict[str, str] = {}
+        self.asked: list[str] = []
+        self.sent: list[str] = []
+
+    def serve(self, net, calls):
+        assert net == self.net
+        out = []
+        for method, params in calls:
+            self.asked.append(method)
+            out.append(self.one(method, params))
+        return out
+
+    def one(self, method, params):
+        by_hash = {r["hash"]: r for r in self.rows}
+        if method == "getblockchaininfo":
+            return {"r": {"chain": "main", "blocks": self.rows[-1]["height"], "headers": self.rows[-1]["height"],
+                          "initialblockdownload": False, "verificationprogress": 1.0}}
+        if method == "getblockhash":
+            if params[0] == 0:
+                return {"r": NETWORKS[self.net].genesis}
+            return {"r": next((r["hash"] for r in self.rows if r["height"] == params[0]), None)}
+        if method == "getblock":
+            row = by_hash.get(params[0])
+            if row is None:
+                return {"e": [-5, "Block not found"]}
+            raw = row["raw"]
+            if self.lie:
+                raw = raw[:-20] + ("0" if raw[-20] != "0" else "1") + raw[-19:]
+            return {"r": raw}
+        if method == "getblockheader":
+            row = by_hash[params[0]]
+            if params[1]:
+                v = dict(row["verbose"])
+                return {"r": {k: v[k] for k in ("hash", "height", "confirmations", "chainwork", "mediantime",
+                                                "version", "merkleroot", "time", "nonce", "bits",
+                                                "nextblockhash") if k in v}}
+            return {"r": row["header"]}
+        if method == "getrawtransaction":
+            if params[0] in self.pool:
+                return {"r": self.pool[params[0]]}
+            if params[0] == self.tx["txid"]:
+                return {"r": self.tx if params[1] else self.tx["hex"]}
+            return {"e": [-5, "No such mempool or blockchain transaction"]}
+        if method == "getrawmempool":
+            return {"r": sorted(self.pool)}
+        if method == "sendrawtransaction":
+            self.sent.append(params[0])
+            try:
+                return {"r": rawchain.read_tx(bytes.fromhex(params[0])).txid}
+            except rawchain.RawError:
+                return {"e": [-22, "TX decode failed"]}
+        return {"r": None}
+
+
+def _share(core, nets=("doge",)):
+    tips = {n: {"h": core.rows[-1]["height"], "b": core.rows[-1]["hash"]} for n in nets}
+    return CoreShare(core.serve, lambda: tips, pool_seconds=0.1)
+
+
+def _borrower(nets=("doge",)):
+    return CoreShare(None, lambda: {}, borrowing=set(nets))
+
+
+async def _linked(*pairs):
+    for a, b in pairs:
+        a.add_address(*addr(b))
+
+
+def test_a_borrowed_chain_reads_like_its_own_node_and_wallet_calls_fail_as_on_a_walletless_node():
+    core = FakeCore("doge")
+
+    async def go():
+        a, b = mk(), mk()
+        sa, sb = _share(core), _borrower()
+        a.add_extension(sa); b.add_extension(sb)
+        await started(a, b)
+        try:
+            await _linked((b, a))
+            await until(lambda: sb.sharers("doge"), what="b hears a's offer")
+            rpc = BorrowedRpc(sb, NETWORKS["doge"])
+            row = _blocks("doge")[-1]
+            got = await asyncio.to_thread(rpc.call, "getblock", row["hash"], 2)
+            assert got == _strip(row["verbose"])
+            assert await asyncio.to_thread(rpc.call, "getblock", row["hash"], 0) == row["raw"]
+            assert core.asked.count("getblock") == 2 and "getblock" in core.asked, "always asked raw"
+            tx = core.tx
+            said = await asyncio.to_thread(rpc.call, "getrawtransaction", tx["txid"], 1)
+            assert said == tx
+            with pytest.raises(RpcError) as exc:
+                await asyncio.to_thread(rpc.call, "getbalance")
+            assert exc.value.code == -32601 and "getbalance" not in core.asked
+            assert await asyncio.to_thread(rpc.call, "getconnectioncount") == 1
+            v = await asyncio.to_thread(rpc.call, "validateaddress", "D8AXXiGEZeZnMKTKnC9AWB3YUU4jfMAmYU")
+            assert v["isvalid"] and v["ismine"] is False and "validateaddress" not in core.asked
+            # A batch, as the indexer sends them
+            hashes = [r["hash"] for r in _blocks("doge")]
+            both = await asyncio.to_thread(rpc.batch, [("getblock", [h, 2]) for h in hashes])
+            assert [x["hash"] for x in both] == hashes
+            # A big signed transaction crosses in several frames
+            huge = "00" * 150_000
+            with pytest.raises(RpcError):
+                await asyncio.to_thread(rpc.call, "sendrawtransaction", huge)   # not a transaction: Core-side error
+            assert core.sent == [huge], "150 KB of calls arrived whole"
+        finally:
+            await a.stop(); await b.stop()
+    run(go())
+
+
+def test_a_sharer_that_changes_a_byte_is_caught_and_the_next_sharer_answers():
+    liar, honest = FakeCore("doge", lie=True), FakeCore("doge")
+
+    async def go():
+        a, c, b = mk(), mk(), mk()
+        sa, sc, sb = _share(liar), _share(honest), _borrower()
+        a.add_extension(sa); c.add_extension(sc); b.add_extension(sb)
+        await started(a, c, b)
+        try:
+            await _linked((b, a), (b, c))
+            await until(lambda: len(sb.sharers("doge")) == 2, what="two sharers")
+            rpc = BorrowedRpc(sb, NETWORKS["doge"])
+            row = _blocks("doge")[-1]
+            sb.failures[c.node_id] = 5                        # the liar is asked first ...
+            got = await asyncio.to_thread(rpc.call, "getblock", row["hash"], 2)
+            assert got["hash"] == row["hash"], "... caught, and the honest sharer asked instead"
+            assert sb.sharers("doge")[0] == c.node_id, "the liar goes to the back"
+            await c.stop()                                     # with only the liar left, its answer is refused
+            await until(lambda: sb.sharers("doge") == [a.node_id], what="only the liar left")
+            with pytest.raises(RpcError, match="did not check out"):
+                await asyncio.to_thread(rpc.call, "getblock", row["hash"], 2)
+            # ... and a sharer that does not answer at all is passed over
+            sa.serve = None
+            with pytest.raises(Exception, match="no arcade sharing doge answered"):
+                await asyncio.to_thread(rpc.call, "getblockcount")
+        finally:
+            for n in (a, b):
+                await n.stop()
+    run(go())
+
+
+def test_mempool_transactions_arrive_as_they_hit_and_leave_when_mined():
+    core = FakeCore("doge")
+    tx = core.tx
+
+    async def go():
+        a, b = mk(), mk()
+        sa, sb = _share(core), _borrower()
+        a.add_extension(sa); b.add_extension(sb)
+        await started(a, b)
+        try:
+            await _linked((b, a))
+            await until(lambda: sb.sharers("doge"), what="offer")
+            core.pool[tx["txid"]] = tx["hex"]
+            await until(lambda: tx["txid"] in sb.pools.get("doge", {}), what="the pushed transaction")
+            rpc = BorrowedRpc(sb, NETWORKS["doge"])
+            core.asked.clear()
+            said = await asyncio.to_thread(rpc.call, "getrawtransaction", tx["txid"], 1)
+            assert said["txid"] == tx["txid"] and "getrawtransaction" not in core.asked, "answered from memory"
+            assert sa.status()["doge"]["borrowers"] == 1
+            del core.pool[tx["txid"]]                           # mined
+            await until(lambda: tx["txid"] not in sb.pools.get("doge", {}), what="forgotten once it left")
+        finally:
+            await a.stop(); await b.stop()
+    run(go())
+
+
+def test_a_sharer_answers_only_what_it_shares():
+    core = FakeCore("doge")
+
+    async def go():
+        a, b = mk(), mk()
+        sa, sb = _share(core), CoreShare(None, lambda: {}, borrowing={"doge", "main"})
+        a.add_extension(sa); b.add_extension(sb)
+        await started(a, b)
+        try:
+            await _linked((b, a))
+            await until(lambda: sb.sharers("doge"), what="offer")
+            assert sb.sharers("main") == []
+            got = await asyncio.to_thread(sb.call, "doge", [("dumpprivkey", ["D8AXXiGEZeZnMKTKnC9AWB3YUU4jfMAmYU"]),
+                                                           ("getblockcount", [])])
+            assert got[0]["e"][0] == -32601 and "dumpprivkey" not in core.asked
+            sa.shared = lambda: {}                              # the box is unticked
+            await sa.rebalance()
+            await until(lambda: not sb.sharers("doge"), what="the offer withdrawn")
+        finally:
+            await a.stop(); await b.stop()
+    run(go())
+
+
+# ------------------------------------------------------------------------------------------- the rules
+
+def test_testnet_and_one_more_core_run_here():
+    cores.check({"test": "here", "main": "here", "doge": "borrow"})
+    cores.check({"test": "here", "main": "borrow", "doge": "here"})
+    with pytest.raises(cores.CoreRule, match="at least one more"):
+        cores.check({"test": "here", "main": "borrow", "doge": "borrow"})
+    with pytest.raises(cores.CoreRule, match="testnet"):
+        cores.check({"test": "borrow", "main": "here"})
+    with pytest.raises(cores.CoreRule, match="cannot be off"):
+        cores.check({"test": "here", "main": "off", "doge": "here"})
+    assert cores.mode({"core:test": "borrow"}, "test") == "here"
+
+
+def test_a_borrowed_chain_context_reads_through_the_running_mesh(monkeypatch):
+    from arcade.web.state import ChainContext
+    core = FakeCore("doge")
+
+    async def go():
+        a, b = mk(), mk()
+        sa, sb = _share(core), _borrower()
+        a.add_extension(sa); b.add_extension(sb)
+        await started(a, b)
+        monkeypatch.setattr(coreshare, "CURRENT", sb)
+        try:
+            await _linked((b, a))
+            await until(lambda: sb.sharers("doge"), what="offer")
+            chain = ChainContext(network="doge", role="ledger", label="Dogecoin", borrowed=True)
+
+            def read():
+                with chain.rpc() as rpc:
+                    return rpc.get_block_count() if False else rpc.call("getblockhash", _blocks("doge")[-1]["height"])
+            assert await asyncio.to_thread(read) == _blocks("doge")[-1]["hash"]
+            status = await asyncio.to_thread(chain._status)
+            assert status["online"] and status["borrowed"] and status["wallet"] is None and status["peers"] == 1
+        finally:
+            await a.stop(); await b.stop()
+    run(go())

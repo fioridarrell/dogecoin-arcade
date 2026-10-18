@@ -67,6 +67,8 @@ ORDER = (
      "Conditions, charges and counts that travel with a piece, written only by its game: arcade.state."),
     ("broadcasts.md", "Broadcasts: one node telling every node",
      "Public machine talk under a topic, and the sensitive-material flags it carries."),
+    ("shared-cores.md", "Shared Cores: running some chains, borrowing the rest",
+     "Share a chain's Core with other arcades, borrow the chains you do not run, and compare indexes."),
     ("inscription-api.md", "The inscription API",
      "What an inscribed page may ask the wallet, and what it is refused."),
     ("bot-rpc.md", "The bot RPC",

@@ -136,6 +136,10 @@ def main(argv: list[str] | None = None) -> int:
 
     home = Path(args.home).expanduser()
     home.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # Which Cores run here and which are borrowed from arcades that share theirs (arcade/cores.py).
+    from .. import cores as coreslib
+    chosen = coreslib.read_settings(home)
+    ledger_borrowed = coreslib.mode(chosen, "main") == coreslib.BORROW
 
     state = AppState(
         home=home,
@@ -157,8 +161,9 @@ def main(argv: list[str] | None = None) -> int:
             # Determined at runtime from whether the node answers getwalletinfo,
             # rather than assumed here.
             can_spend=True,
+            borrowed=ledger_borrowed,
         ),
-        doge=_doge_context(args),
+        doge=_doge_context(args, coreslib.mode(chosen, "doge", "")),
     )
 
     # Bots authenticate to /rpc/main and /rpc/test with this file's contents.
@@ -170,10 +175,17 @@ def main(argv: list[str] | None = None) -> int:
     # Report what was found, so a silent misconfiguration is visible at startup
     # rather than as an empty panel later.
     from ..discovery import best
-    if state.doge is not None:
+    borrowed = [c for c in (state.ledger, state.doge) if c is not None and c.borrowed]
+    for context in borrowed:
+        print(f"  {context.label:8s} {context.network:10s} borrowed from arcades that share it, through the mesh")
+    if borrowed and args.no_mesh:
+        print("  WARNING: --no-mesh, so the borrowed chains above cannot be reached")
+    if state.doge is not None and not state.doge.borrowed:
         print(f"  {state.doge.label:8s} {state.doge.network:10s} "
               f"{state.doge.conf or state.doge.datadir}  (shown grayed out until it has synced)")
     for context in (state.messaging, state.ledger):
+        if context.borrowed:
+            continue
         if context.datadir or context.conf:
             where = context.datadir or context.conf
             print(f"  {context.label:8s} {context.network:10s} {where}")
@@ -263,13 +275,17 @@ def main(argv: list[str] | None = None) -> int:
 
 
 
-def _doge_context(args) -> "ChainContext | None":
+def _doge_context(args, mode: str = "") -> "ChainContext | None":
     """The Dogecoin chain, when this machine runs a Dogecoin node: named on the
     command line, or the installer's ~/.dogecoin/dogecoin.conf (or a datadir
     with a readable .cookie). None when there is none -- the arcade then simply
-    has its two Pepecoin chains, as before."""
-    if args.no_doge:
+    has its two Pepecoin chains, as before. `mode` is the operator's choice in
+    Admin -> Chains (arcade/cores.py): "borrow" reads it through an arcade that
+    shares its Dogecoin Core, "off" leaves it out, "here" or none finds the node."""
+    if args.no_doge or mode == "off":
         return None
+    if mode == "borrow":
+        return ChainContext(network="doge", role="ledger", label="Dogecoin", can_spend=True, borrowed=True)
     conf = Path(args.doge_conf).expanduser() if args.doge_conf else None
     datadir = Path(args.doge_datadir).expanduser() if args.doge_datadir else None
     if conf is None and datadir is None:

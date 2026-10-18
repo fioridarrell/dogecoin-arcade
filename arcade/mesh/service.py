@@ -203,6 +203,8 @@ class MeshService:
         # The cloudflared program to run a quick tunnel with, or None (wsock.py, notes above).
         self.tunnel_cmd = tunnel
         self.core = None                        # corelink.CoreBridge, when Core rides the mesh
+        self.coreshare = None                   # coreshare.CoreShare: Cores shared with, and borrowed from, other arcades
+        self.indexcheck = None                  # indexcheck.IndexCheck: indexes compared with other arcades'
         self.tunnel_url: str | None = None
         self._tunnel_said: str | None = None    # the tunnel address last announced successfully
         self._announcing = threading.Lock()     # one announcement at a time: two at once spend the same coin
@@ -686,6 +688,8 @@ def for_state(state, *, listen_host: str | None = None, listen_port: int | None 
         by_name = {"main": state.ledger, "test": state.messaging}
         chains = {}
         for name, chain in by_name.items():
+            if getattr(chain, "borrowed", False):          # no Core here to peer with
+                continue
             try:
                 chains[name] = int(chain.params.p2p_port)
             except Exception:                              # noqa: BLE001 -- a chain this node does not run
@@ -696,4 +700,63 @@ def for_state(state, *, listen_host: str | None = None, listen_port: int | None 
                 return rpc.call("addnode", hostport, op)
         service.core = CoreBridge(chains, addnode)
         service.node.add_extension(service.core)
+    service.coreshare = shared_cores(state)
+    service.node.add_extension(service.coreshare)
+    # Indexes compared with every linked arcade's (indexcheck.py, index_digest.py).
+    from ..index_digest import Fingerprints
+    from .indexcheck import IndexCheck
+    prints: dict = {}
+
+    def fingerprints() -> dict:
+        for chain in state.token_chains:
+            fp = prints.get(chain.network)
+            if fp is None or fp.index is not state.token_index(chain):
+                prints[chain.network] = Fingerprints(state.token_index(chain), chain.params.index_start)
+        return dict(prints)
+    service.indexcheck = IndexCheck(fingerprints)
+    service.node.add_extension(service.indexcheck)
+    from . import coreshare
+    coreshare.CURRENT = service.coreshare
     return service
+
+
+def shared_cores(state):
+    """Shared Cores (coreshare.py) for an arcade node: it answers for each chain whose Core runs on
+    this machine unless its box is unticked in Admin -> Chains (`share:<net>`, on when not set), and
+    borrows the chains it was told to (`core:<net>` = borrow, read at start)."""
+    from .. import cores as coreslib
+    from ..rpc import RpcError
+    from .coreshare import CoreShare
+
+    def local(net: str):
+        return next((c for c in state.all_chains if c.network == net and not c.borrowed), None)
+
+    def serve(net: str, calls: list) -> list:
+        chain = local(net)
+        if chain is None:
+            raise RuntimeError(f"{net} does not run here")
+        out = []
+        with chain.rpc() as rpc:
+            for method, params in calls:
+                try:
+                    out.append({"r": rpc.call(method, *params)})
+                except RpcError as exc:
+                    out.append({"e": [exc.code, exc.message]})
+        return out
+
+    def shared() -> dict:
+        nets = {}
+        for chain in state.all_chains:
+            if chain.borrowed or not coreslib.sharing(state.settings(), chain.network):
+                continue
+            if not state.chain_ready(chain):
+                continue
+            try:
+                with chain.rpc() as rpc:
+                    best = rpc.call("getbestblockhash")
+                    nets[chain.network] = {"h": int(rpc.call("getblockheader", best, True)["height"]), "b": best}
+            except Exception:                              # noqa: BLE001 -- not shared until it answers
+                continue
+        return nets
+
+    return CoreShare(serve, shared, borrowing={c.network for c in state.all_chains if c.borrowed})

@@ -88,6 +88,42 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-18 · the operator's side (Claude) · branch `claude/shared-core`
+- **New: shared Cores.** An operator can let other arcades use a Core that runs on their machine, and
+  any arcade can borrow the chains it does not run, through the mesh. This is the remote "read it
+  through a node that hosts it" from your Litecoin notes, done for every chain at once.
+  - **Rule:** Pepecoin testnet always runs locally, plus at least one more Core (`arcade/cores.py`).
+    Each other chain is `core:<net>` = `here` | `borrow` | `off`. `share:<net>` is a checkbox,
+    **on by default** (the operator): every Core that runs here is shared unless the operator unticks it.
+    Admin → Chains has both, plus "Restart now".
+  - **Wire:** `arcade/mesh/coreshare.py`, frames of kind `cr`.
+    - A sharer answers only `SERVED` (block, transaction, mempool and coin reads, fee estimates,
+      `sendrawtransaction`). Never a wallet call.
+    - It pushes each new mempool transaction raw to borrowers, and sends `gone` when one leaves.
+  - **Checks:** `BorrowedRpc` fetches blocks and transactions raw. `arcade/rawchain.py` proves the
+    txid, block hash and merkle root, then checks proof of work: scrypt, or AuxPoW with the chain id
+    (`Params.auxpow_chain_id`), plus a 4x-per-block difficulty floor. It decodes into Core's JSON
+    shape byte-for-byte; `tests/data/rawchain` holds real DOGE, PEP and PEP-test blocks. SegWit is
+    decoded, so Litecoin works.
+  - **Index cross-check:** `arcade/index_digest.py` and `arcade/mesh/indexcheck.py`, kind `ix`.
+    - Each arcade fingerprints the rows each block wrote to the consensus tables.
+    - Linked arcades compare floor..checkpoint (multiples of 100, 6 under the tip) and halve the
+      range to the first block that differs. Both sides' rows show in the admin panel.
+  - Doc: `arcade/web/docs/shared-cores.md`. Tests: `test_coreshare.py`, `test_indexcheck.py`, and
+    `test_admin.py`'s chains test.
+- **Asked of SadFrog's side:**
+  1. **Litecoin on top of this:** a Litecoin `Params` with `auxpow_chain_id=None` (scrypt, not
+     merge-mined). Then put `ltc` in `cores.OPTIONAL` and in the launcher like `_doge_context`.
+     Please use `core:<net>` rather than a second `chains:<key>` switch, so one setting says
+     whether a chain runs here, is borrowed, or is off.
+     **Litecoin testnet (`ltctest`, your "L test") the same way:** `auxpow_chain_id=None`,
+     `min_difficulty_blocks=True` and `pow_limit_bits=0x1E0FFFFF`. Testnet's 20-minute rule lets a
+     block fall to the easiest difficulty; without this flag the borrower's one-block difficulty
+     check would refuse it. Put `ltctest` in `cores.OPTIONAL` too.
+  2. When it's on `main`, leave **Share** on for Litecoin and Litecoin testnet on your node (it is on
+     by default). The operator's arcade will borrow it,
+     and yours can borrow Dogecoin and Pepecoin mainnet from the operator's.
+
 ### 2026-10-17 · the operator's side (Claude) · branch `claude/broadcasts`
 - **New: public machine talk, one node to every node** (`arcade/messaging/broadcast.py`, envelope
   type 12, doc `arcade/web/docs/broadcasts.md`).

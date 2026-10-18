@@ -110,7 +110,7 @@ from . import door as doorlib
 from .. import bootstrap as bootstraplib
 from . import watcher as watcherlib
 from . import rpc as botrpc
-from .state import AppState
+from .state import AppState, ChainContext
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 TEMPLATES = Jinja2Templates(directory=str(TEMPLATE_DIR))
@@ -21964,6 +21964,7 @@ def create_app(state: AppState) -> FastAPI:
             "xchain": _admin_xchain(),
             "swap_big": {k: v / COIN for k, v in _swap_big_lines().items()},
             "flags": _admin_flags(),
+            "chains": _admin_chains(),
         }, headers={"Cache-Control": "no-store"})
 
     @app.get("/admin/api/swaps")
@@ -22145,6 +22146,71 @@ def create_app(state: AppState) -> FastAPI:
                     state.set_setting("moderation", None)
         except (ValueError, walletlib.WalletError) as exc:
             return JSONResponse({"detail": str(exc)}, status_code=400)
+        return JSONResponse({"ok": True})
+
+    def _admin_chain_list() -> list:
+        """Every chain the arcade knows, run here, borrowed or off: Dogecoin is listed even when off,
+        so it can be switched back on."""
+        chains = [state.messaging, state.ledger]
+        chains.append(state.doge if state.doge is not None else
+                      ChainContext(network="doge", role="ledger", label="Dogecoin"))
+        return chains
+
+    def _admin_chains() -> dict:
+        """Admin -> Chains (arcade/cores.py): which Cores run here, which are borrowed through the
+        mesh, which are shared, and how this arcade's indexes compare with other arcades'."""
+        from .. import cores as coreslib
+        mesh = state.mesh
+        share = getattr(mesh, "coreshare", None)
+        check = getattr(mesh, "indexcheck", None)
+        rows = coreslib.rows(state.settings(), _admin_chain_list(), share.status() if share else {},
+                             required=state.messaging.network)
+        if state.doge is None:
+            rows[-1]["now"] = coreslib.OFF
+            rows[-1]["chosen"] = coreslib.mode(state.settings(), "doge", coreslib.OFF)
+        index = check.status() if check else {}
+        for row in rows:
+            row["index"] = index.get(row["net"], {})
+        return {"rows": rows, "mesh": mesh is not None,
+                "restart": bool(os.environ.get("INVOCATION_ID"))}
+
+    @app.post("/admin/api/cores")
+    def admin_cores(request: Request, payload: Any = Body(None)):
+        """Which Cores run here, are borrowed, or are off (applies at the next start), and which are
+        shared with other arcades (applies within a minute). Pepecoin testnet and one more run here."""
+        from .. import cores as coreslib
+        _admin_check(request, write=True)
+        said = payload if isinstance(payload, dict) else {}
+        current = {r["net"]: r["chosen"] for r in _admin_chains()["rows"]}
+        modes = dict(current)
+        for net, m in (said.get("modes") or {}).items():
+            if net in modes:
+                modes[net] = str(m)
+        try:
+            coreslib.check(modes, required=state.messaging.network)
+        except coreslib.CoreRule as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        for net, m in modes.items():
+            if net != state.messaging.network and m != current.get(net):
+                state.set_setting(f"core:{net}", m)
+        for net, on in (said.get("share") or {}).items():
+            if net in modes:
+                state.set_setting(f"share:{net}", bool(on) and modes[net] == coreslib.HERE)
+        running = {r["net"]: r["now"] for r in _admin_chains()["rows"]}
+        return JSONResponse({"ok": True, "restart": any(modes[n] != running.get(n) for n in modes)})
+
+    @app.post("/admin/api/restart")
+    def admin_restart(request: Request):
+        """Restart the arcade so a change of Cores applies. Only at the node machine, and only when a
+        service manager will start it again (systemd sets INVOCATION_ID)."""
+        who = _admin_check(request, write=True)
+        if not who["local"]:
+            return JSONResponse({"detail": "the arcade is restarted at the node machine"}, status_code=403)
+        if not os.environ.get("INVOCATION_ID"):
+            return JSONResponse({"detail": "this arcade is not run by a service that would start it again; "
+                                           "restart it yourself"}, status_code=409)
+        import signal
+        threading.Timer(1.0, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
         return JSONResponse({"ok": True})
 
     @app.post("/admin/api/moderation/test")

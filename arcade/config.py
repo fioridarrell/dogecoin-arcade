@@ -184,6 +184,15 @@ class Params:
     #: Block 0's hash, where it tells this chain from another that answers to
     #: the same "main" in getblockchaininfo (Dogecoin and Pepecoin both do).
     genesis: str = ""
+    #: The chain id merge-mined blocks carry in the top half of their version (AuxPoW), so a block
+    #: borrowed from another arcade (arcade/rawchain.py) cannot be another merge-mined coin's. None:
+    #: not checked (a chain that is not merge-mined, or regtest).
+    auxpow_chain_id: int | None = None
+    #: A test network's rule that a block found after a long gap may be at the easiest difficulty
+    #: (`pow_limit_bits`) whatever the block before it was. rawchain's one-block difficulty check lets
+    #: such a block through on these chains instead of refusing it.
+    min_difficulty_blocks: bool = False
+    pow_limit_bits: int = 0x1E0FFFFF
 
     @property
     def index_start(self) -> int | None:
@@ -228,10 +237,12 @@ MAINNET = Params(
     scripthash_version=22,
     other_pubkeyhash_version=113,   # its own testnet
     marker_address=None,     # derived and fixed before launch
+    auxpow_chain_id=0x3F,
 )
 
 TESTNET = Params(
     name="test",
+    min_difficulty_blocks=True,
     rpc_port=44873,
     p2p_port=44874,
     # --- one floor, for everything (D-106) -------------------------------------
@@ -322,6 +333,8 @@ TESTNET = Params(
 
 REGTEST = Params(
     name="regtest",
+    min_difficulty_blocks=True,
+    pow_limit_bits=0x207FFFFF,
     rpc_port=18332,
     p2p_port=18444,
     activation_height=0,
@@ -392,6 +405,7 @@ DOGECOIN = dataclasses.replace(
     coin="DOGE",
     label="Dogecoin",
     genesis="1a91e3dace36e2be3bf030a65679fe821aa1d6ef92e7c9902eb318182c355691",
+    auxpow_chain_id=0x62,
 )
 
 NETWORKS = {p.name: p for p in (MAINNET, TESTNET, REGTEST, DOGECOIN)}

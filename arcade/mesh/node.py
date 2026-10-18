@@ -329,8 +329,9 @@ class MeshNode:
             entry["id"] = node_id
 
     def add_extension(self, ext) -> None:
-        """Something riding on the links (corelink.CoreBridge): link_up(link), link_down(peer_id),
-        on_frame(link, header, blob) for frames of its kind ("cs"), rebalance() every minute."""
+        """Something riding on the links (corelink.CoreBridge, coreshare.CoreShare): link_up(link),
+        link_down(peer_id), on_frame(link, header, blob) for frames of its `kinds` ("cs" when it names
+        none), rebalance() every minute."""
         ext.node = self
         self.extensions.append(ext)
 
@@ -985,10 +986,12 @@ class MeshNode:
         if kind == "pong":
             self._pong(link, str(header.get("n", "")))
             return
-        if kind == "cs":
-            for ext in self.extensions:
-                if hasattr(ext, "on_frame"):
-                    await ext.on_frame(link, header, blob)
+        # Extensions name the frame kinds they ride on: Core peering "cs" (corelink), shared Cores
+        # "cr" (coreshare).
+        riders = [e for e in self.extensions if kind in getattr(e, "kinds", ("cs",)) and hasattr(e, "on_frame")]
+        if riders:
+            for ext in riders:
+                await ext.on_frame(link, header, blob)
             return
         if kind == "addrs":
             for a in header.get("a", [])[:50] if isinstance(header.get("a"), list) else []:

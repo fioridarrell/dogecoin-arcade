@@ -137,6 +137,9 @@ class ChainContext:
     #: (Phase 0), so it is read-only until the operator deliberately enables a wallet
     #: that holds real money.
     can_spend: bool = True
+    #: Read through another arcade's Core over the mesh instead of a node on this machine (the operator
+    #: 2026-10-17, arcade/mesh/coreshare.py): Admin -> Chains -> "Use a shared Core".
+    borrowed: bool = False
 
     @property
     def params(self) -> Params:
@@ -200,11 +203,23 @@ class ChainContext:
         return found.credentials
 
     def rpc(self) -> RpcClient:
+        if self.borrowed:
+            return self._borrowed_rpc()
         creds = self.credentials()
         client = RpcClient(creds)
         # Checks reality, not intent: a stray config must not silently point us
         # at the other chain. With two nodes in play this matters more, not less.
         verify_connected_chain(client, self.params)
+        return client
+
+    def _borrowed_rpc(self) -> RpcClient:
+        """The chain through an arcade that shares its Core. Which chain the sharers are on is checked
+        the way a local node's is (block 0 and the chain name), once every five minutes."""
+        from ..mesh import coreshare
+        client = coreshare.BorrowedRpc(coreshare.CURRENT, self.params)
+        if _BORROWED_SEEN.get(self.network, 0) < time.time():
+            verify_connected_chain(client, self.params)
+            _BORROWED_SEEN[self.network] = time.time() + 300
         return client
 
     #: How long one node's status is kept (2026-10-13: pages felt slow tab to tab; the
@@ -234,6 +249,7 @@ class ChainContext:
                     "synced": info.get("blocks") == info.get("headers"),
                     "peers": rpc.call("getconnectioncount"),
                     "wallet": None,
+                    "borrowed": self.borrowed,
                 }
                 try:
                     wallet = rpc.call("getwalletinfo")
@@ -251,6 +267,8 @@ class ChainContext:
 
 #: ChainContext.status answers, by node, until they go stale.
 _STATUS_KEPT: dict = {}
+#: Borrowed chains checked lately: network -> until when (ChainContext._borrowed_rpc).
+_BORROWED_SEEN: dict = {}
 
 
 @dataclass
@@ -1227,7 +1245,7 @@ class AppState:
         Dogecoin node is ready when it is out of its initial download, its blocks
         have reached its headers and it says it is all but done -- a node that is
         merely reachable is not one to take money on."""
-        if not chain.is_doge:
+        if not chain.is_doge and not chain.borrowed:
             return {"ready": True, "progress": 1.0, "online": True}
         now = time.time()
         kept = self._sync.get(chain.network)
