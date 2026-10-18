@@ -277,3 +277,15 @@ def test_doginals_at_the_testnet_key_s_dogecoin_address_move_home(doge, monkeypa
                                                             "pubkey": _pubkey(SELLER_KEY).hex()})
     assert done.status_code == 200, done.text
     assert len(node.sent) == 1 and sigs[0] in node.sent[0] and done.json()["moved"] == 1
+
+
+def test_a_collection_page_loads_its_pieces_one_at_a_time(doge):
+    """2026-10-17: "The collection page should load one piece at a time": no frame has a src when the page
+    arrives; the page's script gives them one after another."""
+    import re
+    app, state, chain, node = doge
+    root = _collection(state, [f"{k:064x}i0" for k in range(1, 30)])
+    page = app.get(f"/exchange/ord/{root}").text
+    frames = re.findall(r"<iframe[^>]*>", page)
+    assert len(frames) == 25 and all("data-src=" in f and " src=" not in f for f in frames), frames[:2]
+    assert 'querySelectorAll("iframe[data-src]")' in page
