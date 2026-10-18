@@ -4551,6 +4551,12 @@ def create_app(state: AppState) -> FastAPI:
                 mine = False
             if mine:
                 return wanted
+        # The page API a game's frame calls carries no cookie, so it reads the node's own chain -- the operator's
+        # view. With that view on an add-on chain (2026-10-18: L main tapped in the operator's Wallet), ASHVALE read
+        # @apple's GOLD and gear from the Litecoin index and showed an empty pack. A page is read on the tag chain
+        # unless its own chain is asked for; the operator's view of the Tokens page moves nothing a page reads.
+        if request.url.path.startswith("/r/") and not wanted and state.token_chain.is_addon:
+            return state.messaging.network
         return None
 
     app.add_middleware(_BrowserChain, pick=_per_browser_chain)
@@ -5974,6 +5980,26 @@ def create_app(state: AppState) -> FastAPI:
         _, index = _token_chain()
         return index
 
+    def _address_index(address: str):
+        """The index of the chain an address belongs to, by its version byte: the viewer's chain when it is that
+        chain's (two chains can share a version: Pepecoin and Litecoin testnet both write "n..."), else the first
+        chain whose it is, the tag chain before the add-ons. The viewer's index when the address is nobody's."""
+        chain, index = _token_chain()
+        try:
+            version = b58check_decode(str(address))[0]
+        except Exception:                                  # noqa: BLE001
+            return index
+
+        def ours(c) -> bool:
+            p = c.params
+            return version in (p.pubkeyhash_version, p.scripthash_version)
+        if ours(chain):
+            return index
+        for other in [state.messaging] + list(state.token_chains):
+            if ours(other):
+                return state.token_index(other)
+        return index
+
     def _other_indexes() -> list[tuple[Any, Any]]:
         """Every indexed chain but the viewer's, with its index (for an address or a piece of another chain)."""
         chain, _ = _token_chain(); out, seen = [], {id(chain)}
@@ -6458,7 +6484,7 @@ def create_app(state: AppState) -> FastAPI:
         from the mempool, and a row for a token that is only arriving. `units`
         is still what the blocks say."""
         try:
-            held = _content_index().balances([address])
+            held = _address_index(address).balances([address])
         except Exception:
             held = []
         out = [contentlib.holding(row) for row in held]

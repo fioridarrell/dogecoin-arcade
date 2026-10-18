@@ -243,3 +243,22 @@ def test_the_wallet_names_litecoin_testnet_test_and_mines_it_here(client, monkey
     assert 'L test' in switch and '>test<' in switch.split("L test", 1)[1][:200]
     assert "addr-ltctest" in page and 'data-net="ltctest"' in page, "mined here"
     assert 'data-net="ltc"' not in page, "real coins are never mined"
+
+
+def test_a_page_reads_the_tag_chain_whatever_the_operators_view(client, monkeypatch):
+    """2026-10-18, playing ASHVALE as @apple: "None of my inventory is showing up". The operator had tapped
+    L main in the Wallet, which moves the node's own view, and a game's frame (no cookie) read @apple's GOLD and gear
+    from the Litecoin index. The page API stays on the tag chain, and an address's balances are read on its chain."""
+    app, state = client
+    ltc = _with_ltc(state, monkeypatch, ready=True)
+    state.switch_token_chain("ltc")
+    assert state.token_chain is ltc
+    asked = []
+    real = state.token_index
+    monkeypatch.setattr(state, "token_index", lambda chain: (asked.append(chain.network), real(chain))[1])
+    home = b58check_encode(state.messaging.params.pubkeyhash_version, bytes(range(20)))
+    assert app.get(f"/r/balances/{home}").status_code == 200
+    assert asked and set(asked) == {state.messaging.network}, asked
+    asked.clear()
+    app.get(f"/r/balances/{LTC_L}")
+    assert "ltc" in asked, "a Litecoin address is read on Litecoin"
