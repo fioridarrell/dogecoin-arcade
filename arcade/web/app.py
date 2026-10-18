@@ -413,6 +413,14 @@ class _BrowserChain:
 #: (`mainnet_create_fee_permille` in settings.json): 0.5%, the exchange's own cut.
 MAINNET_CREATE_FEE_PERMILLE = 5
 
+#: What the arcade whose Core a chain is borrowed from is paid of the revenue made on it: a tenth of an
+#: operator's fee, and a tenth of a block mined with its work (2026-10-18; blockminer.SHARE_PERCENT).
+SHARER_PERCENT = 10
+
+#: What /rpc/work/<chain> answers besides getworkshare: a miner's calls, nothing else.
+MINING_CALLS = frozenset({"getblocktemplate", "submitblock", "getbestblockhash", "getblockcount",
+                          "getdifficulty", "getmininginfo"})
+
 NAV = [
     ("/",             "Overview",     None,        True),
     # Every inscribed game (arcade/games.py), where an account's sits.
@@ -707,6 +715,30 @@ DUST_READS = 200
 #: When a request counts as stalled, and how often the stacks of a stall are logged (_request_timer).
 STALL_AFTER = 45
 STALL_EVERY = 120
+
+
+def _sharer_cut(chain, sats: int) -> tuple[int, str]:
+    """The tenth of an operator's fee owed to the arcade whose Core this chain is borrowed from (the operator
+    2026-10-18: "If a node operator is using a shared node 10% of the revenue should go to the operator of the
+    shared node"): (satoshis, its address), or (0, "") on a chain that runs here, when no sharer names an
+    address, or when a tenth -- or what it leaves -- would be under the dust limit no node relays."""
+    if not getattr(chain, "borrowed", False):
+        return 0, ""
+    from ..mesh import coreshare
+    share = coreshare.CURRENT
+    if share is None:
+        return 0, ""
+
+    def ours(address: str) -> bool:
+        try:
+            return b58check_decode(address)[0] == chain.params.pubkeyhash_version
+        except Exception:                              # noqa: BLE001
+            return False
+    payee = share.payee(chain.network, ours) or ""
+    cut = int(sats) * SHARER_PERCENT // 100
+    if not payee or cut < fees.DUST_LIMIT or int(sats) - cut < fees.DUST_LIMIT:
+        return 0, ""
+    return cut, payee
 
 
 def _request_timer():
@@ -10742,9 +10774,13 @@ def create_app(state: AppState) -> FastAPI:
             return [], None
         share = -(-max(0, int(cost)) * permille // 1000)
         sats = max(share, fees.DUST_LIMIT)
-        return ([(sats, txbuild.p2pkh_script(to))],
-                {"address": to, "value": sats, "permille": permille,
-                 "minimum": fees.DUST_LIMIT, "at_minimum": share < fees.DUST_LIMIT})
+        said = {"address": to, "value": sats, "permille": permille,
+                "minimum": fees.DUST_LIMIT, "at_minimum": share < fees.DUST_LIMIT}
+        cut, payee = _sharer_cut(chain, sats)
+        if cut:
+            said["sharer"] = {"address": payee, "value": cut, "percent": SHARER_PERCENT}
+            return ([(sats - cut, txbuild.p2pkh_script(to)), (cut, txbuild.p2pkh_script(payee))], said)
+        return ([(sats, txbuild.p2pkh_script(to))], said)
 
     def _set_pictures(run, chain, piece) -> set[str]:
         """The digests this run's collection already holds, read once per run.
@@ -22399,6 +22435,77 @@ def create_app(state: AppState) -> FastAPI:
         running = {r["net"]: r["now"] for r in _admin_chains()["rows"]}
         return JSONResponse({"ok": True, "restart": any(modes[n] != running.get(n) for n in modes)})
 
+    # --- mining test coins on this machine's CPU (arcade/blockminer.py, 2026-10-18) ---------------
+    _cpu_mining: dict[str, Any] = {}
+
+    def _minable(chain) -> bool:
+        return (chain is not None and not chain.params.real_coins and chain.params.auxpow_chain_id is None)
+
+    def _mining_status() -> dict:
+        m = _cpu_mining
+        if not m:
+            return {"running": False}
+        p = m["progress"]
+        return {"running": m["thread"].is_alive(), "net": m["net"], "address": m["address"], "workers": m["workers"],
+                "tries": p.tries, "rate": round(p.rate), "height": p.height, "bits": p.bits, "note": p.note,
+                "found": p.found[-5:], "blocks": len(p.found), "seconds": int(time.time() - p.started),
+                "share_to": _work_share(m["chain"])}
+
+    @app.get("/admin/api/mine")
+    def admin_mine_status(request: Request):
+        _admin_check(request)
+        chains = [{"net": c.network, "label": c.label, "address": state.key_address(c),
+                   "borrowed": bool(c.borrowed)} for c in state.all_chains if _minable(c)]
+        return JSONResponse({**_mining_status(), "chains": chains, "cpus": os.cpu_count() or 1,
+                             "percent": SHARER_PERCENT})
+
+    @app.post("/admin/api/mine")
+    def admin_mine(request: Request, payload: Any = Body(None)):
+        """Mine a test-coin chain on this machine's CPU until stopped. A borrowed chain's sharer is paid a
+        tenth of each block in its coinbase."""
+        from .. import blockminer
+        _admin_check(request, write=True)
+        said = payload if isinstance(payload, dict) else {}
+        if said.get("stop"):
+            if _cpu_mining:
+                _cpu_mining["stop"] = True
+            return JSONResponse({"ok": True, **_mining_status()})
+        if _cpu_mining and _cpu_mining["thread"].is_alive():
+            return JSONResponse({"detail": "already mining; stop it first"}, status_code=409)
+        chain = next((c for c in state.all_chains if c.network == str(said.get("net", ""))), None)
+        if not _minable(chain):
+            return JSONResponse({"detail": "only a test-coin chain that is not merge-mined is mined here"},
+                                status_code=400)
+        address = str(said.get("address") or state.key_address(chain)).strip()
+        try:
+            blockminer.output_script(address, chain.params)
+        except Exception as exc:                           # noqa: BLE001
+            return JSONResponse({"detail": f"that address: {exc}"}, status_code=400)
+        # Half the CPUs unless asked: the arcade's own pages run on the rest.
+        workers = max(1, min(int(said.get("workers") or max(1, (os.cpu_count() or 2) // 2)), os.cpu_count() or 1))
+        progress = blockminer.Progress()
+
+        def call(method, args):
+            with chain.rpc() as rpc:
+                return rpc.call(method, *args)
+
+        def found(block: dict) -> None:
+            log.info("mined %s block %s at %s: %s", chain.network, block["hash"], block["height"], block["result"])
+            state.bump_generation()
+
+        def run() -> None:
+            try:
+                blockminer.mine(call, chain.params, address, share_to=lambda: _work_share(chain), workers=workers,
+                                stop=lambda: bool(_cpu_mining.get("stop")), progress=progress, on_found=found)
+            except Exception as exc:                       # noqa: BLE001 -- said in the panel
+                progress.note = str(exc)[:300]
+                log.warning("mining %s stopped: %s", chain.network, exc)
+        _cpu_mining.clear()
+        _cpu_mining.update(net=chain.network, chain=chain, address=address, workers=workers, progress=progress,
+                           stop=False, thread=threading.Thread(target=run, name="arcade-cpu-miner", daemon=True))
+        _cpu_mining["thread"].start()
+        return JSONResponse({"ok": True, **_mining_status()})
+
     @app.post("/admin/api/restart")
     def admin_restart(request: Request):
         """Restart the arcade so a change of Cores applies. Only at the node machine, and only when a
@@ -22853,6 +22960,53 @@ def create_app(state: AppState) -> FastAPI:
                            "message": "no such chain: use /rpc/main or /rpc/test"}},
                 status_code=404)
         return botrpc.handle(state, request, payload, chain)
+
+    @app.post("/rpc/work/{net}")
+    def mining_rpc(request: Request, net: str, payload: Any = Body(None)):
+        """Work for a miner on another machine (arcade/blockminer.py; 2026-10-18, mining testnet LTC with
+        a shared Core): the chain's own Core, or the one it borrows, answers the few calls mining needs -- and
+        `getworkshare`, the address a tenth of each block is owed to when the chain is borrowed. Test coins only,
+        and the RPC cookie, like /rpc/<chain>."""
+        from .. import blockminer
+        rid = payload.get("id") if isinstance(payload, dict) else None
+
+        def answer(result=None, code=0, message="", status=200):
+            error = {"code": code, "message": message} if code else None
+            return JSONResponse({"result": result, "error": error, "id": rid}, status_code=status)
+        if not botrpc.authorised(request, state.rpc_secret):
+            return answer(code=-32600, message="send the RPC cookie as basic auth", status=401)
+        chain = next((c for c in state.all_chains if c.network == net), None)
+        if chain is None or chain.params.real_coins:
+            return answer(code=-32600, message=f"no test-coin chain {net} here", status=404)
+        method = str(payload.get("method", "")) if isinstance(payload, dict) else ""
+        params = payload.get("params") if isinstance(payload, dict) and isinstance(payload.get("params"), list) else []
+        if method == "getworkshare":
+            return answer({"address": _work_share(chain), "percent": blockminer.SHARE_PERCENT})
+        if method not in MINING_CALLS:
+            return answer(code=-32601, message=f"{method} is not a mining call", status=404)
+        try:
+            with chain.rpc() as rpc:
+                return answer(rpc.call(method, *params))
+        except RpcError as exc:
+            return answer(code=exc.code, message=exc.message, status=500)
+        except Exception as exc:                           # noqa: BLE001
+            return answer(code=-1, message=str(exc)[:300], status=500)
+
+    def _work_share(chain) -> str | None:
+        """Where a tenth of a block mined on `chain` is owed: the sharer of a borrowed chain, else nobody."""
+        if not chain.borrowed:
+            return None
+        from ..mesh import coreshare
+        from .. import blockminer
+        share = coreshare.CURRENT
+
+        def valid(address: str) -> bool:
+            try:
+                blockminer.output_script(address, chain.params)
+                return True
+            except Exception:                              # noqa: BLE001
+                return False
+        return share.payee(chain.network, valid) if share is not None else None
 
     @app.exception_handler(RequestValidationError)
     def unreadable(request: Request, exc: RequestValidationError):

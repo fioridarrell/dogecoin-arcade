@@ -1583,8 +1583,23 @@ class AppState:
             found = self.derived_address
             if found:
                 return found
+        if getattr(chain, "borrowed", False):
+            # A borrowed chain has no Core wallet here to keep an address (2026-10-18: its operator fee was
+            # silently not taken): the identity's own key, written as that chain writes an address.
+            found = self.key_address(chain)
+            if found:
+                return found
         with chain.rpc() as rpc:
             return str(rpc.call("getaccountaddress", "arcade-identity"))
+
+    def key_address(self, chain: Any) -> str:
+        """This arcade's identity key as an address on `chain` ("" before it has one): where it is paid on a
+        chain whose Core wallet it does not have -- a borrowed chain, or its tenth as a sharer (2026-10-18)."""
+        from ..script import b58check_decode, b58check_encode
+        derived = self.derived_address
+        if not derived:
+            return ""
+        return b58check_encode(chain.params.pubkeyhash_version, b58check_decode(derived)[1])
 
     def use_derived_identity(self, address: str) -> Identity:
         """Adopt the identity that belongs to `address`, and remember which.

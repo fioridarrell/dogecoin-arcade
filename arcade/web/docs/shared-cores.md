@@ -85,3 +85,38 @@ arcades on the same rules hold the same index. Linked arcades check that they do
 
 This applies to borrowed chains too: an index built from a borrowed Core's blocks is compared with the
 indexes other arcades built from their own Cores.
+
+## A tenth to the arcade that shares
+
+An arcade that borrows a chain pays the arcade whose Core it uses a tenth of what it earns on that chain:
+
+- **Operator fees.** The operator's fee on a borrowed chain is split in the same transaction: nine tenths to
+  this arcade and one tenth to the sharer. A tenth too small for the network to carry (under the dust
+  limit) is not paid; the whole fee then stays with this arcade.
+- **Mined blocks.** A block mined with a borrowed Core's work pays the sharer a tenth of its reward in its
+  own coinbase.
+
+Each sharing arcade names the address it is paid at for every chain it shares. That is its Core wallet's
+address, or its identity key's address on that chain when the wallet has none. On a borrowed chain, this
+arcade is paid at its identity key's address too.
+
+## Mining test coins
+
+**Admin → Chains → Mine test coins** mines blocks on a test-coin chain with this machine's CPU, using work
+from that chain's Core, whether it runs here or is borrowed. Chains of real coins and merge-mined chains are
+never mined this way. A testnet lets anyone mine its next block at the lowest difficulty once none has been
+found for a while. That is when a CPU wins a block.
+
+A sharing arcade answers mining calls (`getblocktemplate`, `submitblock`) for test-coin chains only, and no
+more often than once every couple of seconds per borrower.
+
+To mine on another machine, run the miner there against this arcade's `/rpc/work/<chain>`, with the
+arcade's RPC cookie (`~/.dogecoinarcade/rpc.cookie`):
+
+```
+python -m arcade.blockminer --url http://127.0.0.1:8420/rpc/work/ltctest \
+    --cookie ~/.dogecoinarcade/rpc.cookie --chain ltctest --address <yours> --workers 16
+```
+
+The arcade listens on its own machine only, so reach it from another one through an SSH tunnel
+(`ssh -L 8420:localhost:8420 <arcade machine>`).

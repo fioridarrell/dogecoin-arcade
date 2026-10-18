@@ -755,6 +755,14 @@ def shared_cores(state):
                 with chain.rpc() as rpc:
                     best = rpc.call("getbestblockhash")
                     nets[chain.network] = {"h": int(rpc.call("getblockheader", best, True)["height"]), "b": best}
+                # Where those who use it pay its tenth: its Core wallet's address, which it can spend from;
+                # the identity key's address where that wallet gives none (litecoind 0.21 has no accounts).
+                try:
+                    pay = state.home_address(chain)
+                except Exception:                          # noqa: BLE001
+                    pay = state.key_address(chain)
+                if pay:
+                    nets[chain.network]["p"] = pay
             except Exception:                              # noqa: BLE001 -- not shared until it answers
                 continue
         return nets
