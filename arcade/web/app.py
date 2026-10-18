@@ -17702,6 +17702,142 @@ def create_app(state: AppState) -> FastAPI:
         finally:
             state.end_send(lane)
 
+    # --- coins at the account's testnet key's Dogecoin address, moved home (arcade/doge_stray.py) ------------------
+
+    _stray_reading: set = set()
+
+    def _stray_of(account) -> tuple[Any, str, str]:
+        """(Dogecoin chain, the stray address, the account's real Dogecoin address)."""
+        from .. import doge_stray
+        doge = state.doge
+        if doge is None or not state.chain_ready(doge):
+            raise ValueError("this arcade's Dogecoin node is not ready")
+        tag_address = state.setting(f"address:{account.pubkey}") or ""
+        home = _doge_address_for(tag_address, b58check_decode(tag_address)[1]) if tag_address else ""
+        if not tag_address or not home:
+            raise ValueError("this account has no Dogecoin address yet")
+        return doge, doge_stray.stray_address(tag_address, doge.params.pubkeyhash_version), home
+
+    def _stray_coins(doge, stray: str) -> tuple[list[dict], list[dict]] | None:
+        """(inscribed, plain) coins at `stray`; None while it is first being read back."""
+        from .. import doginals as doginalslib
+        index = state.token_index(doge)
+        with contextlib.closing(index.open()) as db:
+            if stray not in utxoslib.watching(db):
+                tip = index.indexed_height() or 0
+                utxoslib.watch(db, stray, tip, "testnet key's Dogecoin address")
+                first = db.conn.execute("SELECT MIN(height) FROM block").fetchone()[0] or tip
+                db.conn.commit()
+                if stray not in _stray_reading:
+                    _stray_reading.add(stray)
+
+                    def back():
+                        try:
+                            with doge.rpc() as rpc:
+                                utxoslib.backfill_many(index, rpc, doge.params, {stray}, int(first), tip)
+                        except Exception:                      # noqa: BLE001
+                            log.warning("stray read-back failed", exc_info=True)
+                        finally:
+                            _stray_reading.discard(stray)
+                    threading.Thread(target=back, name="arcade-stray-backfill", daemon=True).start()
+                return None
+            if stray in _stray_reading:
+                return None
+            coins = utxoslib.unspent(db, stray)
+        guard = fundinglib.GUARD
+        inscribed, plain = [], []
+        for c in coins:
+            on = []
+            if int(c["value"]) <= doginalslib.POSTAGE_MAX:
+                if guard is None:
+                    raise doginalslib.Unknown("Doginals are not checked on this node")
+                on = guard.held(c["txid"]).get(int(c["vout"])) or []
+            row = {"txid": c["txid"], "vout": int(c["vout"]), "value": int(c["value"]),
+                   "inscriptions": [str(i.get("id")) for i in on]}
+            (inscribed if on else plain).append(row)
+        return inscribed, plain
+
+    @app.get("/account/doge-stray")
+    def account_doge_stray(request: Request):
+        """What sits at this account's testnet key's Dogecoin address, and what moving it home costs."""
+        from .. import doge_stray, doginals as doginalslib
+        account = _signed_in_account(request)
+        try:
+            doge, stray, home = _stray_of(account)
+            found = _stray_coins(doge, stray)
+        except doginalslib.Unknown as exc:
+            return JSONResponse({"detail": f"Doginals can't be checked right now: {exc}"}, status_code=503)
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        said = {"stray": stray, "home": home, "checking": found is None, "doginals": [], "fee_short": 0}
+        if found:
+            inscribed, plain = found
+            said["doginals"] = [{**c, "names": [_collection_name(i) for i in c["inscriptions"]]} for c in inscribed]
+            if inscribed:
+                try:
+                    said["fee"] = doge_stray.build_move(stray, home, inscribed, plain, fees.MIN_FEE_PER_KB).fee
+                except doge_stray.NeedFee as exc:
+                    said["fee_short"] = exc.short + fees.MIN_FEE_PER_KB      # a little over, for the top-up's own size
+        return JSONResponse(said, headers={"Cache-Control": "no-store"})
+
+    def _collection_name(inscription: str) -> str:
+        found = state.collection_registry().item("doge", inscription)
+        return f"{found['name']} #{found['number']}" if found else ""
+
+    def _stray_move(account):
+        from .. import doge_stray
+        doge, stray, home = _stray_of(account)
+        found = _stray_coins(doge, stray)
+        if not found:
+            raise ValueError("that address is still being read; try again in a few minutes")
+        return doge, stray, doge_stray.build_move(stray, home, found[0], found[1], fees.MIN_FEE_PER_KB)
+
+    @app.post("/account/doge-stray/move")
+    def account_doge_stray_move(request: Request):
+        """The move, unsigned: the tab signs every input with the account's testnet coin key."""
+        from .. import doge_stray, doginals as doginalslib
+        account = _signed_in_account(request)
+        try:
+            _, stray, move = _stray_move(account)
+        except doginalslib.Unknown as exc:
+            return JSONResponse({"detail": f"Doginals can't be checked right now: {exc}"}, status_code=503)
+        except doge_stray.NeedFee as exc:
+            return JSONResponse({"detail": str(exc), "fee_short": exc.short}, status_code=402)
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        return JSONResponse({"stray": stray, **move.as_json()})
+
+    @app.post("/account/doge-stray/move/sign")
+    def account_doge_stray_move_sign(request: Request, payload: Any = Body(None)):
+        """Built again, checked to be the bytes the tab signed, the key checked to be the stray address's, sent."""
+        from .. import doge_stray, doginals as doginalslib
+        account = _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        lane = f"account {account.pubkey}"
+        if not state.begin_send(lane):
+            return JSONResponse({"detail": "one of your transactions is still going; try again in a moment"},
+                                status_code=409)
+        try:
+            doge, stray, move = _stray_move(account)
+            if str(said.get("raw") or "") != move.raw:
+                return JSONResponse({"detail": "the coins there changed since you signed; ask again"}, status_code=409)
+            pubkey = bytes.fromhex(str(said.get("pubkey") or ""))
+            if not pubkey or hash160(pubkey) != b58check_decode(stray)[1]:
+                raise ValueError("that key is not the one behind that address")
+            raw = doge_stray.assemble(move, [str(x) for x in (said.get("signatures") or [])], pubkey)
+            with doge.rpc() as rpc:
+                txid = rpc.call("sendrawtransaction", raw)
+        except doginalslib.Unknown as exc:
+            return JSONResponse({"detail": f"Doginals can't be checked right now: {exc}"}, status_code=503)
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        except Exception as exc:                              # noqa: BLE001
+            return JSONResponse({"detail": f"the node refused it: {exc}"}, status_code=409)
+        finally:
+            state.end_send(lane)
+        log.info("stray Dogecoin coins moved home for %s: %s", account.pubkey[:12], txid)
+        return JSONResponse({"txid": txid, "moved": len(move.carried)})
+
     @app.post("/account/doginals/cancel")
     def account_doginals_cancel(request: Request, payload: Any = Body(None)):
         """Take a Doginal listing back: send the coin to this account's own address (funding.build_doginal_send),

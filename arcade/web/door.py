@@ -69,6 +69,7 @@ PUBLIC_PAGES = frozenset({
     "/games",                 # every inscribed game (arcade/games.py)
     "/account/escrows",       # an account's own escrows (needs a session)
     "/account/doginals",      # this account's own Doginals on Dogecoin, to list (needs a session)
+    "/account/doge-stray",    # coins at the account's testnet key's Dogecoin address, to move home (2026-10-17)
     "/doginals/listings",     # Doginals listed for DOGE (the Exchange's Doginals tab)
     "/launch",
     "/launches",
@@ -354,6 +355,7 @@ PUBLIC_POST = ("/auth/challenge", "/auth/login", "/auth/logout",
                # pairs, for a listing whose seller signs one input and a buyer who completes it here.
                "/account/doginals/list", "/account/doginals/list/sign",
                "/account/doginals/buy", "/account/doginals/buy/sign", "/account/doginals/cancel",
+               "/account/doge-stray/move", "/account/doge-stray/move/sign",
                "/account/fill", "/account/fill/sign", "/account/fill/check",
                # the pair that answers one of those offers with the piece: the
                # first shows the leg at the buyer's price, the second checks the

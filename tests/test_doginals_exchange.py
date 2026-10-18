@@ -239,3 +239,41 @@ def test_every_account_s_dogecoin_address_is_watched_and_read_back(client, monke
     watcher._doge_watch_at = 0
     watcher._watch_doge_accounts()
     assert len(read) == 1, "an address already watched is not read back again"
+
+
+def test_doginals_at_the_testnet_key_s_dogecoin_address_move_home(doge, monkeypatch):
+    """2026-10-17: six ADDs went to @apple's testnet key's Dogecoin address. The wallet moves them home in one
+    transaction, each inscribed coin whole to the account's real Dogecoin address, signed with the testnet coin key."""
+    import contextlib as cl
+    from arcade import utxos as U
+    from arcade.script import b58check_decode
+    from arcade.txbuild import p2pkh_script
+    app, state, chain, node = doge
+    pubkey = _seat(app, state, BUYER)                         # home: the account's own Dogecoin address
+    state.set_setting(f"address:{pubkey}", b58check_encode(111, b58check_decode(SELLER)[1]))   # its testnet key
+    with cl.closing(state.token_index(chain).open()) as db:
+        U.watch(db, SELLER, 0, "test")
+        db.conn.commit()
+    coins = {SELLER: [{"txid": INS_TX, "vout": 0, "value": 100_000}]}
+    monkeypatch.setattr(U, "unspent", lambda db, address: [dict(c, address=address) for c in coins.get(address, [])])
+    root = _collection(state, [INSCRIPTION])
+
+    said = app.get("/account/doge-stray").json()
+    assert said["stray"] == SELLER and said["home"] == BUYER and said["fee_short"] > 0
+    assert said["doginals"][0]["names"] == ["Anti Doginal Dogs #1"]
+    assert app.post("/account/doge-stray/move", json={}).status_code == 402, "no DOGE there for the fee yet"
+
+    coins[SELLER].append({"txid": CLEAN_TX, "vout": 5, "value": 5 * COIN})       # the top-up landed
+    node.coins[(CLEAN_TX, 5)] = (5 * COIN, p2pkh_script(SELLER))
+    move = app.post("/account/doge-stray/move", json={}).json()
+    assert [(i["txid"], i["value"]) for i in move["inputs"]] == [(INS_TX, 100_000), (CLEAN_TX, 5 * COIN)]
+    assert move["outputs"][0] == {"value": 100_000, "script": p2pkh_script(BUYER).hex()}, "the dog, whole, at offset 0"
+    assert all(o["script"] == p2pkh_script(BUYER).hex() for o in move["outputs"])
+    sigs = [_sign(SELLER_KEY, bytes.fromhex(h)).hex() for h in move["sighashes"]]
+    wrong = app.post("/account/doge-stray/move/sign", json={"raw": move["raw"], "signatures": sigs,
+                                                             "pubkey": _pubkey(BUYER_KEY).hex()})
+    assert wrong.status_code == 400, "only the testnet key behind that address"
+    done = app.post("/account/doge-stray/move/sign", json={"raw": move["raw"], "signatures": sigs,
+                                                            "pubkey": _pubkey(SELLER_KEY).hex()})
+    assert done.status_code == 200, done.text
+    assert len(node.sent) == 1 and sigs[0] in node.sent[0] and done.json()["moved"] == 1

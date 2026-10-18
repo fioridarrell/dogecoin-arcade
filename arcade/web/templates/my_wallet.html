@@ -1378,6 +1378,76 @@ function doginalPic(g) {
   box.append(frame);
   return box;
 }
+/** Doginals sent to this account's TESTNET key's Dogecoin address (2026-10-17: six Anti Doginal Dogs went to
+ * @apple's that way) -- the account's own coins, signed for with the testnet coin key, moved home in one transaction.
+ * The browser checks the bytes itself: every output pays this wallet's own Dogecoin address, and every hash it signs it
+ * worked out from the transaction, not from what the node said. */
+async function strayDoginals(box) {
+  const r = await fetch("/account/doge-stray", {cache: "no-store"});
+  const said = await r.json().catch(() => ({}));
+  if (!r.ok || !said.doginals || !said.doginals.length) {
+    if (r.ok && said.checking) box.append(el("p", "wl-note", "Checking your other Dogecoin address for Doginals…"));
+    return;
+  }
+  const panel = el("div", "msg");
+  panel.style.marginTop = "12px";
+  const names = said.doginals.flatMap((d) => d.names.filter(Boolean));
+  const n = said.doginals.length;
+  panel.append(el("p", "", `${n} Doginal${n === 1 ? " was" : "s were"} sent to ${said.stray} -- an address of yours `
+    + "made from your testnet key, which this wallet does not show. "
+    + (names.length ? names.join(", ") + ". " : "") + "Move them here with one transaction."));
+  const go = el("button", "btn small", said.fee_short ? "Add the fee, then move them" : `Move ${n === 1 ? "it" : "them"} to my wallet`);
+  go.type = "button";
+  const note = el("p", "wl-note", "");
+  panel.append(go, note);
+  box.append(panel);
+  go.onclick = async () => {
+    go.disabled = true; note.style.color = ""; note.textContent = "";
+    try {
+      const wallet = await import("/wallet.js"), coins = await import("/coins.js");
+      const DOGE = {network: "doge", version: 30};
+      const held = (await wallet.opened(DOGE)) || await arcadeKeys(DOGE);
+      const test = held.on && held.on.test, home = held.on && held.on.doge;
+      if (!test || !home) throw new Error("this wallet has no testnet or Dogecoin key open here");
+      const testHash = await coins.hash160(test.pubkey), homeHash = await coins.hash160(home.pubkey);
+      if (home.address !== said.home) throw new Error("the node named another home address. Nothing was signed.");
+      if (said.fee_short) {
+        const offer = await wallet.offerSend(said.stray, String(said.fee_short / 1e8), "doge");
+        const shown = await wallet.checked(offer, held);
+        const ok = await arcadeAsk("First, the network fee",
+          `The address holding them has no DOGE to pay the fee. This sends ${said.fee_short / 1e8} DOGE there from your `
+          + `wallet (${shown.says}). Press Move again once its block lands, about a minute.`, "Send the fee");
+        if (ok) { await wallet.confirm(held, offer); note.textContent = "Fee sent. Press Move again in a minute or two."; }
+        go.disabled = false; go.textContent = `Move ${n === 1 ? "it" : "them"} to my wallet`;
+        return;
+      }
+      const asked = await fetch("/account/doge-stray/move", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});
+      const move = await asked.json();
+      if (!asked.ok) throw new Error(move.detail || "the node would not build it");
+      const tx = coins.parseTx(move.raw);
+      const mine = coins.p2pkh(homeHash);
+      const same = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+      if (!tx.outputs.every((o) => same(o.script, mine))) throw new Error("that transaction pays somewhere else. Nothing was signed.");
+      if (tx.inputs.length !== move.inputs.length) throw new Error("the node's inputs do not match. Nothing was signed.");
+      const ok = await arcadeAsk(`Move ${n} Doginal${n === 1 ? "" : "s"} to your wallet?`,
+        `${n === 1 ? "It goes" : "Each goes"} whole to ${said.home}, your Dogecoin address here. Network fee ${move.fee / 1e8} DOGE.`,
+        "Move them");
+      if (!ok) { go.disabled = false; return; }
+      const from = coins.p2pkh(testHash), signatures = [];
+      for (let i = 0; i < tx.inputs.length; i++) {
+        signatures.push(coins.hex(await coins.signInput(test.key, await coins.sighashAll(tx, i, from))));
+      }
+      const sent = await fetch("/account/doge-stray/move/sign", {method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({raw: move.raw, signatures, pubkey: coins.hex(test.pubkey)})});
+      const done = await sent.json();
+      if (!sent.ok) throw new Error(done.detail || "the node refused it");
+      panel.replaceChildren(el("p", "", `Moved. They show here once the block lands (transaction ${done.txid.slice(0, 16)}…).`));
+    } catch (e) {
+      go.disabled = false; note.textContent = String(e.message || e); note.style.color = "var(--bad)";
+    }
+  };
+}
+
 async function drawDoginals() {
   const box = $("doginals");
   const c = chainNow();
@@ -1424,6 +1494,11 @@ async function drawDoginals() {
   }
   if (!left.length && !dg.failed && !found.length) {
     box.append(el("div", "wl-empty", `No ${W}s on your ${doge ? "Dogecoin" : "PEP"} coins.`));
+  }
+  // Kept across redraws: this box is drawn again as each transaction is read.
+  if (doge) {
+    if (!dg.stray) { dg.stray = el("div", ""); strayDoginals(dg.stray).catch(() => {}); }
+    box.append(dg.stray);
   }
   // Moving a Doginal costs Dogecoin on top of it (2026-10-15: "grayed out unless they have a balance of Dogecoin on
   // top of their asset"): the send's fee, or the swap lock's fee and reserve. `spendable` already leaves the Doginals out.
