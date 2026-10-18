@@ -87,6 +87,11 @@
 .wl-seg button{padding:5px 12px;border-radius:999px;font-size:.8rem;font-weight:650;color:var(--muted);
   background:none;box-shadow:none;border:0}
 .wl-seg button[aria-pressed="true"]{background:var(--panel);color:var(--fg);box-shadow:var(--shadow)}
+/* A chain as its coin (2026-10-18): the picked one full colour and ringed, the others dimmed. */
+.wl-seg button.neticon-btn{padding:6px 10px;display:flex;align-items:center;justify-content:center}
+.wl-seg button.neticon-btn .neticon{width:30px;height:30px;opacity:.55;transition:opacity .15s}
+.wl-seg button.neticon-btn[aria-pressed="true"] .neticon{opacity:1;box-shadow:0 0 0 2px var(--accent,#d4a72c)}
+.wl-seg button.neticon-btn.chain-off .neticon{opacity:.25;filter:grayscale(1)}
 .wl-bal{margin:12px 0 0;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
 .wl-bal b{font-size:2.4rem;font-weight:750;letter-spacing:-.03em;font-variant-numeric:tabular-nums;line-height:1.1}
 .wl-bal span{font-weight:650;color:var(--muted)}
@@ -298,7 +303,19 @@ import * as mail from "/messaging.js";
 const $ = (id) => document.getElementById(id);
 /* A network's button, said the way every page says it (2026-10-13: "Should say
  * 'P test' 'P main' 'D main' like in the other pages"): the coin's letter in its color. */
+// Each chain as its coin (2026-10-18: "Use the icons ... rather than text badges").
+const COIN_ICONS = {{ coin_icons()|tojson }};
 const netButton = (one, cls) => {
+  const icon = COIN_ICONS[one.network];
+  if (icon) {
+    const b = el("button", (cls ? cls + " " : "") + "neticon-btn");
+    const img = el("img", "neticon");
+    img.src = icon; img.alt = one.coin || one.label || one.network;
+    b.append(img);
+    b.title = one.title || one.label || "";
+    b.setAttribute("aria-label", one.title || one.label || one.network);
+    return b;
+  }
   const doge = one.network === "doge" || one.doge;
   const ltctest = one.network === "ltctest" || one.ltctest;  // Litecoin testnet, "L test"
   const ltc = one.network === "ltc" || one.ltc || ltctest;   // Litecoin (2026-10-17)

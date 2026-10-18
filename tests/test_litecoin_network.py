@@ -195,7 +195,7 @@ def test_the_exchange_offers_an_l_main_chip(client, monkeypatch):
     assert 'title="L main opens when its node has synced (91.2% so far)"' in page, "grayed while syncing"
     _with_ltc(state, monkeypatch, ready=True)
     page = app.get("/exchange").text
-    assert "show=litecoin" in page and '<b class="netl litecoin">L</b> main' in page
+    assert "show=litecoin" in page and 'src="/coin-ltc.png" alt="LTC"' in page
     assert app.get("/exchange?show=litecoin").status_code == 200
 
 
@@ -240,7 +240,7 @@ def test_the_wallet_names_litecoin_testnet_test_and_mines_it_here(client, monkey
     page = app.get("/wallet").text
     switch = page.split('class="chainswitch"', 1)[1].split("</h1>", 1)[0]
     assert switch.count('title="Switch to L main"') + switch.count("Showing L main") <= 1
-    assert 'L test' in switch and '>test<' in switch.split("L test", 1)[1][:200]
+    assert 'L test' in switch and 'src="/coin-ltctest.png" alt="LTC TEST"' in switch.split("L test", 1)[1][:200]
     assert "addr-ltctest" in page and 'data-net="ltctest"' in page, "mined here"
     assert 'data-net="ltc"' not in page, "real coins are never mined"
 

@@ -5934,33 +5934,33 @@ def create_app(state: AppState) -> FastAPI:
                      'stroke="currentColor" stroke-width="1.8" stroke-linecap="round">'
                      '<path d="M8 2.5v11M2.5 8h11"/></svg>')
 
+    def _badge_network(where: Any) -> str:
+        """The network a badge is for: a chain, a network name, a chain's word, or a bool meaning Pepecoin mainnet."""
+        if isinstance(where, bool) or where is None:
+            return "main" if where else "test"
+        if not isinstance(where, str):
+            return str(getattr(where, "network", "") or ("main" if getattr(where, "is_mainnet", False) else "test"))
+        w = where.lower()
+        return {"mainnet": "main", "testnet": "test", "dogecoin": "doge", "litecoin": "ltc"}.get(w, w)
+
     def _net_badge(where: Any = None) -> Markup:
-        """TESTNET or MAINNET, with its icon. `where` is a chain, a network name, or
-        a bool meaning mainnet."""
-        # Dogecoin, by its chain or its network name (2026-10-13), in yellow.
-        if getattr(where, "is_ltc_test", False) or where == "ltctest":
-            return Markup('<span class="netbadge ltc" title="Litecoin testnet: test LTC, worth nothing">'
-                          '<b class="netl">L</b> TEST</span>')
-        if getattr(where, "is_ltc", False) or where in ("ltc", "litecoin"):
-            return Markup('<span class="netbadge ltc" title="Litecoin mainnet: real LTC">'
-                          '<b class="netl">L</b> MAIN</span>')
-        if getattr(where, "is_doge", False) or where in ("doge", "dogecoin"):
-            return Markup('<span class="netbadge doge" title="Dogecoin mainnet: real DOGE">'
-                          '<b class="netl">D</b> MAIN</span>')
-        if isinstance(where, bool):
-            main = where
-        elif isinstance(where, str):
-            main = where.lower() in ("main", "mainnet")
-        else:
-            main = bool(getattr(where, "is_mainnet", False))
-        if main:
-            return Markup('<span class="netbadge main" title="Pepecoin mainnet: real PEP">'
-                          '<b class="netl">P</b> MAIN</span>')
-        # Which coin as well as which net (2026-10-13: "Wherever it says
-        # testnet or mainnet it should also indicate pep or doge ... an uppercase
-        # P or D in the correct color"): P blue, P green, D yellow.
-        return Markup('<span class="netbadge test" title="Pepecoin testnet: test assets, no '
-                      'guaranteed value; the chain can be reset"><b class="netl">P</b> TEST</span>')
+        """Which chain, as that chain's own coin (2026-10-18: "Use the icons in these places rather than text
+        badges"): the coin icon, named in full on hover and to a screen reader. A chain with no icon yet keeps the
+        lettered badge (2026-10-13: P blue, P green, D yellow)."""
+        net = _badge_network(where)
+        params = NETWORKS.get(net)
+        if params is None:
+            net, params = "test", NETWORKS["test"]
+        real = params.real_coins
+        title = f"{params.label}: {'real ' + params.coin if real else 'test coins, worth nothing'}"
+        src = _coin_icon(net)
+        if src:
+            return Markup(f'<span class="netbadge icon" title="{html.escape(title)}">'
+                          f'<img class="neticon" src="{src}" alt="{html.escape(params.coin)}"></span>')
+        kind = "main" if real and params.family == "PEP" else ("test" if params.family == "PEP" else
+                                                               str(params.family or "").lower())
+        return Markup(f'<span class="netbadge {html.escape(kind)}" title="{html.escape(title)}">'
+                      f'<b class="netl">{html.escape(params.letter or "?")}</b> {"MAIN" if real else "TEST"}</span>')
 
     def _supply_badge(prop: Any) -> Markup:
         """Fixed supply, or managed (the issuer can mint more whenever it likes)."""
@@ -9067,6 +9067,8 @@ def create_app(state: AppState) -> FastAPI:
         return f"/coin-{name}.png" if (TEMPLATE_DIR / f"coin-{name}.png").is_file() else ""
 
     TEMPLATES.env.globals["coin_icon"] = _coin_icon
+    # {network: icon} for pages that draw chains in script (the Wallet's chain picker, 2026-10-18).
+    TEMPLATES.env.globals["coin_icons"] = lambda: {n: _coin_icon(n) for n in NETWORKS if _coin_icon(n)}
 
     @app.get("/icon-32.png")
     @app.get("/icon-180.png")
