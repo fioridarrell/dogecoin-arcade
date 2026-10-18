@@ -361,11 +361,20 @@ def content(rpc, inscription: str, look: int = 30) -> tuple[str, bytes]:
 
 
 def _spender(rpc, txid: str, height: int, look: int):
-    """The transaction spending `txid`:0, searched block by block from `height`, and the height it was found at."""
+    """The transaction spending `txid`:0, searched block by block from `height`, and the height it was found at.
+
+    Each block is fetched raw and searched for the outpoint's own 36 bytes; only the block that holds them is decoded
+    (2026-10-17: decoding every transaction of every block walked -- one call each -- took 90 s for one Doginal Dog
+    and held all of dogecoind's RPC workers, so a wallet took 17 s to unlock)."""
+    outpoint = bytes.fromhex(txid)[::-1].hex() + "00000000"
     for h in range(height, height + look):
-        block = rpc.call("getblock", rpc.call("getblockhash", h))
-        for tid in block.get("tx") or []:
-            t = rpc.call("getrawtransaction", tid, 1)
+        block_hash = rpc.call("getblockhash", h)
+        if outpoint not in str(rpc.call("getblock", block_hash, 0)):
+            continue
+        block = rpc.call("getblock", block_hash, 2)
+        for t in block.get("tx") or []:
+            if not isinstance(t, dict):                        # a node whose getblock takes a bool: txids only
+                t = rpc.call("getrawtransaction", t, 1)
             if any(v.get("txid") == txid and v.get("vout") == 0 for v in t.get("vin") or []):
                 return t, h
     return None, None

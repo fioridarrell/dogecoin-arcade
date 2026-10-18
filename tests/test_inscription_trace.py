@@ -32,7 +32,12 @@ class Node:
         if method == "getblockhash":
             return f"h{a[0]}"
         if method == "getblock":
-            return {"tx": self.blocks.get(int(a[0][1:]), [])}
+            ids = self.blocks.get(int(a[0][1:]), [])
+            if len(a) > 1 and a[1] == 0:
+                # The raw block, as far as the reader looks at it: every input's outpoint, serialised.
+                return "".join(bytes.fromhex(v["txid"])[::-1].hex() + int(v.get("vout", 0)).to_bytes(4, "little").hex()
+                               for t in ids for v in self.txs[t].get("vin") or [] if "txid" in v)
+            return {"tx": ids}
         if method == "getblockheader":
             return {"height": int(a[0][1:])}
         raise AssertionError(method)
