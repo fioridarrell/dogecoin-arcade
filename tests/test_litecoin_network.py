@@ -233,6 +233,10 @@ def test_the_wallet_names_litecoin_testnet_test_and_mines_it_here(client, monkey
                         if chain.is_litecoin else real(self, chain))
     monkeypatch.setattr(keywallet, "balance", lambda st, c: {"spendable": "0.5", "balance": "0.5",
                                                             "address": f"addr-{c.network}"})
+    # An imported macro template keeps the globals of the app that first rendered it (Jinja caches the module);
+    # a fresh one sees this app's chain_menu.
+    from arcade.web import app as appmod
+    appmod.TEMPLATES.env.cache.clear()
     page = app.get("/wallet").text
     switch = page.split('class="chainswitch"', 1)[1].split("</h1>", 1)[0]
     assert switch.count('title="Switch to L main"') + switch.count("Showing L main") <= 1

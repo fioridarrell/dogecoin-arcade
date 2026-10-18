@@ -238,6 +238,8 @@ LINKED_FROM_PUBLIC = ("/content/", "/collections", "/feed", "/u/", "/docs",
 #: equally correct; it is named so that nobody reads that 405 as the door having
 #: opened something. (the door census, 2026-09-27)
 PUBLIC_POST = ("/auth/challenge", "/auth/login", "/auth/logout",
+               # which chains' wallets an account's Wallet tab shows (2026-10-18)
+               "/account/wallets",
                # a tab's own lock-script trades (2026-10-13)
                "/account/trade/spend", "/account/trade/spend/sign", "/account/trade/facts",
                "/account/trade/lock", "/account/trade/watch",

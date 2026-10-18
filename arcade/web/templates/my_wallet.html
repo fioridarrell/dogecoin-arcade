@@ -346,7 +346,9 @@ let asset = null;
 const coinOf = (c) => !c ? "PEP TEST" : c.network === "doge" ? "DOGE" : c.network === "ltc" ? "LTC" : c.network === "ltctest" ? "LTC TEST" : c.mainnet ? "PEP" : "PEP TEST";
 const COIN = () => coinOf(chainNow());
 // Chains this node has that are not open yet: Dogecoin while it syncs (2026-10-13).
-const WAITING = {{ chain_menu(account_side=True)|rejectattr("ready")|list|tojson }};
+// Wallets this account hides (Your arcade -> Your wallets, 2026-10-18): kept, announced and watched, not shown.
+const HIDDEN = {{ (hidden or [])|tojson }};
+const WAITING = {{ chain_menu(account_side=True)|rejectattr("ready")|list|tojson }}.filter((c) => !HIDDEN.includes(c.network));
 /** A token amount in its own units: divisible ones have 8 places, the rest are whole. */
 const tokenAmt = (raw, t) => t && t.divisible ? coinsOf(raw) : Number(raw || 0).toLocaleString();
 /** Raw units from what was typed, by the digits: 8 places for a divisible token, whole otherwise. */
@@ -355,7 +357,7 @@ function rawOf(text, t) {
   return /^\d+$/.test(String(text).trim()) ? Number(String(text).trim()) : null;
 }
 
-const chains = () => (said.chains || []).filter((c) => c.address);
+const chains = () => (said.chains || []).filter((c) => c.address && !HIDDEN.includes(c.network));
 const chainNow = () => chains().find((c) => c.network === net) || chains()[0] || null;
 const mine = (address) => (said.chains || []).some((c) => c.address && c.address === address);
 
