@@ -812,7 +812,7 @@ async function offerFor(what, to, amount, network) {
   const [route, body] = what.kind === "token"
     ? [`${API}/token/send`, {property_id: what.property_id, to, amount, chain: network}]
     : [`${API}/nft/send`, {piece: what.piece.txid, to, chain: network}];
-  const asked = await fetch(route, {method: "POST", headers: {"Content-Type": "application/json", "X-Arcade-Admin": "1"},
+  const asked = await fetch(route, {method: "POST", headers: {"Content-Type": "application/json"{% if node_side %}, "X-Arcade-Admin": "1"{% endif %}},
                                     body: JSON.stringify(body)});
   const offer = await asked.json();
   if (!asked.ok) throw new Error(offer.detail || "that cannot be sent");

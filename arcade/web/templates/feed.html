@@ -1282,7 +1282,7 @@ new MutationObserver((changes) => {
   requestAnimationFrame(() => { queued = false; sift(); });
 }).observe(document.querySelector("main") || document.body, {childList: true, subtree: true});
 </script>
-{% if public and mine and mine.tag %}
+{% if (public and mine and mine.tag) or not public %}
 {# @-names as you type (2026-09-28): only the names in THIS person's
    own address book, which lives in their browser (messaging.js book()), so
    the node never sees the list and never suggests a stranger. Works in the
@@ -1303,7 +1303,8 @@ let names = null;
 async function book() {
   if (names) return names;
   try {
-    const mail = await import("/messaging.js");
+    // The operator's names come from the node's own address book (2026-10-19).
+    const mail = await import({{ ('/messaging.js' if public else '/node-mail.js')|tojson }});
     names = [...new Set((await mail.book()).map((e) => String(e.tag || "").toLowerCase())
                                            .filter(Boolean))].sort();
   } catch (e) { names = []; }

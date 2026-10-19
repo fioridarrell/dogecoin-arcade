@@ -5272,7 +5272,13 @@ def create_app(state: AppState) -> FastAPI:
             state.flash("Litecoin is not open yet: its node is still syncing.", "err")
         if chosen is None and getattr(state, "ltc_test", None) is not None and to == "ltctest":
             state.flash("Litecoin testnet is not open yet: its node is still syncing.", "err")
-        if chosen is not None:
+        if chosen is not None and not _account_view(request):
+            # The operator's Create picks the node's token chain, with the same cards an account has (2026-10-19).
+            try:
+                state.switch_token_chain(chosen.network)
+            except ValueError as exc:
+                state.flash(str(exc), "err")
+        elif chosen is not None:
             answer.set_cookie(CHAIN_COOKIE, chosen.network, max_age=365 * 86400,
                               samesite="lax", secure=_over_https(request), path="/")
         return answer

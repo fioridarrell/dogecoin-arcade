@@ -410,7 +410,7 @@ document.addEventListener('click', function (ev) {
     if (!b) return;
     b.disabled = true;
     var r = await fetch("/account/token-bid/decline", {method: "POST",
-      headers: {"Content-Type": "application/json", "X-Arcade-Admin": "1"}, body: JSON.stringify({key: b.dataset.bidDecline})});
+      headers: {"Content-Type": "application/json"{% if viewer != 'account' %}, "X-Arcade-Admin": "1"{% endif %}}, body: JSON.stringify({key: b.dataset.bidDecline})});
     if (r.ok) { var row = b.closest(".offerrow"); if (row) row.remove(); } else { b.disabled = false; }
   });
   </script>
@@ -863,6 +863,8 @@ document.addEventListener('click', function (ev) {
     {# A tab's own swaps (2026-10-13): run here while this tab is open, settled by the locks; shown on
        Trade history (2026-10-17), so only their machinery is here. #}
     <div hidden>{% include "_tab_swaps.html" %}</div>
+    {% endif %}
+    {% if viewer != 'nobody' %}
     <p style="margin:6px 0 0;font-size:.84rem"><a href="/exchange/history">Your swaps and trade history &rarr;</a></p>
     {% endif %}
     {% if can_trade_orders %}

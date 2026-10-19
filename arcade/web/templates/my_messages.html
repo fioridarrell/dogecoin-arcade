@@ -99,7 +99,7 @@
           <div class="convo-name" id="convo-name">—</div>
           <div class="convo-sub" id="convo-sub"></div>
           <div class="convo-sub" id="group-admin" hidden style="margin-top:4px">
-            <select id="group-drop" style="width:auto;padding:3px 6px;font-size:16px"></select>
+            <select id="group-drop" style="width:auto;padding:3px 6px;font-size:{{ '16px' if node_side else '.78rem' }}"></select>
             <button type="button" class="ghost small" id="group-remove">Remove from the group</button>
           </div>
         </div>
