@@ -26260,6 +26260,23 @@ def create_app(state: AppState) -> FastAPI:
                         "no such offer on anything of yours -- it may have been "
                         "made for a piece that has since moved")
                 found = standing[0]
+                if decision == "decline":
+                    # Decline, as an account can (2026-10-19: the operator's tabs should match the client's):
+                    # gone from both lists at once, and the buyer's node told, as a courtesy that may fail.
+                    bid = _bids.get(offer_txid)
+                    if bid and bid["status"] == bidslib.OPEN:
+                        _bids.close(offer_txid, "declined")
+                    else:
+                        _bids.end(offer_txid, "declined")
+                    try:
+                        _page_send(found["inscription"], chain, _key_at(found["buyer"]),
+                                   json.dumps({"swap": "bid", "swapv": swaplib.PROTOCOL, "id": offer_txid,
+                                               "ok": False, "error": "refused"}).encode())
+                    except Exception:                      # noqa: BLE001 -- the decline stands; the note is a courtesy
+                        pass
+                    state.flash("Declined. The offer stays on the chain until their block is spent, so nothing here "
+                                "stops them asking again.", "ok")
+                    return RedirectResponse("/exchange?tab=offers", status_code=303)
                 # The buyer has to be reachable for this to finish: the
                 # seller's half goes back to them as a message. The wallet
                 # refuses to MAKE an offer without a published key for the

@@ -209,6 +209,7 @@ document.addEventListener('click', function (ev) {
           <form method="post" action="/exchange/offers/{{ b.txid }}" style="margin:0">
             <input type="hidden" name="csrf_token" value="{{ csrf }}">
             <button type="submit" name="decision" value="accept" class="small">Accept</button>
+            <button type="submit" name="decision" value="decline" class="ghost small">Decline</button>
           </form>
         {% endif %}
       </div>
