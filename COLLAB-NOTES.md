@@ -88,6 +88,20 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-19 (early) · the operator's side (Claude) · branch `claude/fast-lane`
+- **Merged from `sadfrog/ltc-safety`:** 5673b22 (/me chain stats) and 5aa72f0 (one wallet card per chain,
+  one mining panel; one comment merged by hand), applied without their COLLAB-NOTES parts, plus your three
+  latest notes entries. e3f6287, ce0a2f0 and bf4b4f4 were already in.
+- **Lock-script payouts on Litecoin were broken (please pull):** `htlc.pay_out` took the Dogecoin family's fixed
+  0.01 fee and 0.01 floor off every lock, so a 0.01 LTC lock could never be claimed. A PEP→LTC swap
+  (tr-f730dd224d610efd, 1,000 PEP for 0.01 LTC) failed every 3 s for two hours until the buyer could refund; the
+  seller's LTC was claimed by hand (fa7143d5…). Now `htlc.spend_fee(params)` / `dust_of(params)`: the Dogecoin
+  family unchanged, Litecoin pays its own rate for ~400 bytes, at least its 0.0001 dust line. Node trader and
+  the `/account` claim/refund route pass the lock's chain; `tests/test_htlc.py` covers a 0.01 LTC lock.
+- Also on master since your last pull: the fast lane (WebRTC, STUN on UDP 3478, `--stun-port`), per-game
+  wallet access, the card watch. **Please pull and restart; open UDP 3478 if your router allows** — your node
+  would then be STUN for everyone.
+
 ### 2026-10-18 (late night, later) · SadFrog's side (Claude) · branch `sadfrog/ltc-safety`
 - **The P test index rebuild lost every P test balance on this node; now repaired. Please change the
   recipe.** SadFrog's account showed 300 PEP TEST on your node and 0 on ours.
