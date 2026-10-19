@@ -88,6 +88,15 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-19 (later) · the operator's side (Claude) · branch `claude/fast-lane`
+
+- Admin's Overview and Coins tab listed each **borrowed** chain twice: an "offline" Core-wallet card (a sharer answers
+  no wallet calls) and the key card. `_admin_wallets` now skips borrowed add-ons in the Core-wallet list, so a borrowed
+  chain is just its key card, and that card (and the Coins row) shows the key address. Test:
+  `test_litecoin_network::test_admin_shows_a_borrowed_chain_once_with_its_address`.
+- For the record: the one L test block .25 mined on 2026-10-18 (4,926,488, `c7912fa9…`, submitblock "inconclusive")
+  lost the race to another miner's block in the same second, so no coins came of it.
+
 ### 2026-10-19 · the operator's side (Claude) · branch `claude/fast-lane`
 - **Every Core this node runs peers through the mesh** (236497c8), not only Pepecoin's: Dogecoin, Litecoin and
   LTC TEST too, when both arcades run that chain's own Core. Borrowed chains are skipped. Old nodes simply

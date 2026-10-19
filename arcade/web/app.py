@@ -22676,7 +22676,9 @@ def create_app(state: AppState) -> FastAPI:
         out = []
         wallets = [("messaging", state.messaging), ("ledger", state.ledger)]
         # Every add-on chain's node wallet, Dogecoin's first as before (2026-10-18: L main, L test).
-        wallets += [(c.network, c) for c in getattr(state, "addons", [])]
+        # A borrowed chain has no Core wallet here (a sharer answers no wallet calls), so it gets only its key card
+        # below -- not an "offline" card besides it (2026-10-19).
+        wallets += [(c.network, c) for c in getattr(state, "addons", []) if not c.borrowed]
         for which, ctx in wallets:
             row = {"which": which, "label": ctx.title, "network": ctx.network,
                    "net": ctx.net, "coin": ctx.params.coin}

@@ -248,6 +248,28 @@ def test_the_wallet_names_litecoin_testnet_test_and_mines_it_here(client, monkey
     assert 'data-net="ltc"' not in page, "real coins are never mined"
 
 
+def test_admin_shows_a_borrowed_chain_once_with_its_address(client, monkeypatch):
+    """2026-10-19: Admin's Overview read "offline" for L main and L test, and again 0 beside them. A borrowed
+    chain has no Core wallet here, so it is only its key card, and that card names the address."""
+    from arcade.web.state import ChainContext
+    from arcade import keywallet
+    app, state = client
+    ltc = ChainContext(network="ltc", role="ledger", label="Litecoin", conf=pathlib.Path("/x"), borrowed=True)
+    ltctest = ChainContext(network="ltctest", role="ledger", label="Litecoin testnet", conf=pathlib.Path("/x"),
+                           borrowed=True)
+    monkeypatch.setattr(state, "ltc", ltc, raising=False)
+    monkeypatch.setattr(state, "ltc_test", ltctest, raising=False)
+    real = type(state).chain_sync
+    monkeypatch.setattr(type(state), "chain_sync", lambda self, chain: {"ready": True, "progress": 1.0, "online": True}
+                        if chain.is_litecoin else real(self, chain))
+    monkeypatch.setattr(keywallet, "balance", lambda st, c: {"spendable": "0", "balance": "0",
+                                                            "address": f"addr-{c.network}"})
+    wallets = app.get("/admin/api/state").json()["wallets"]
+    lit = [w for w in wallets if w["network"] in ("ltc", "ltctest")]
+    assert sorted(w["which"] for w in lit) == ["key:ltc", "key:ltctest"], "no Core wallet card for a borrowed chain"
+    assert all(w["address"] == f"addr-{w['network']}" and "error" not in w for w in lit)
+
+
 def test_a_page_reads_the_tag_chain_whatever_the_operators_view(client, monkeypatch):
     """2026-10-18, playing ASHVALE as @apple: "None of my inventory is showing up". The operator had tapped
     L main in the Wallet, which moves the node's own view, and a game's frame (no cookie) read @apple's GOLD and gear
