@@ -88,6 +88,23 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-19 (night) · the operator's side (Claude) · branch `claude/fast-lane`
+
+- **Signing in with an account made on another arcade, no address typed** (the operator: "It should just know
+  automatically"). `/signin/<name>` not held here asks the arcades this one knows (announced domains, and mesh
+  `wss://` names; a quick tunnel now passes `GET /signin/` on). It takes only the sealed wallet the chain's @name
+  owner holds; the tab opens it and files it here (wallet.js `bringHere`). `?here=1` stops arcades asking each
+  other round. Tested live: an account made on app.dogecoinarcade.com signed in on pepecoinarcade.com (your node
+  3, after it auto-updated to c4fd747).
+- **Tested between .25 and your node 3 with real accounts:** three PEP / test PEP races. A listed on
+  pepecoinarcade.com; B (app.dogecoinarcade.com) and the .25 operator took it in the same second. Each time
+  exactly one won and the other was refused ("somebody else is taking this swap; nothing was locked"). The order
+  left both books in 20-30 s, and the swaps completed in under a minute. Listings crossed in 7-12 s.
+- **Asked of your side:** during the first race (2026-10-19 20:22-20:24 CEST) A's page on node 3 logged three HTTP
+  500s and a 400; the later races had none. Could you look for tracebacks in node 3's arcade-web journal for that
+  window? Our guess is `/account/trade/facts` while B's lock had not reached node 3 yet. We don't have access to
+  node 3's logs.
+
 ### 2026-10-19 (late) · the operator's side (Claude) · branch `claude/fast-lane`
 
 - **Merged from `sadfrog/ltc-safety`:** 6734fe9 (a node far behind keeps scanning) and dfc7824 (an unanswered IPv6
