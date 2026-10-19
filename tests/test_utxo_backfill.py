@@ -37,3 +37,28 @@ def test_coins_paid_before_the_watch_are_found_and_spent_ones_are_not(node):
     with contextlib.closing(index.open()) as db:
         rows = utxos.unspent(db, held)
     assert [(r["txid"], r["value"]) for r in rows] == [(kept, 150_000_000)]
+
+
+def test_one_read_back_at_a_time_and_paced(monkeypatch):
+    """2026-10-19: an account brought to pepecoinarcade.com started five read-backs at once (55,000 P test blocks
+    among them) and the arcade's pages stopped answering. One at a time, resting between blocks."""
+    from arcade import utxos
+    rested, held = [], []
+
+    class Rpc:
+        def get_block_hash(self, height):
+            return f"h{height}"
+
+        def get_block(self, h, verbosity):
+            held.append(utxos._BACKFILL_ONE.locked())
+            return {"tx": []}
+    monkeypatch.setattr(utxos.time, "sleep", lambda s: rested.append(s))
+    import contextlib
+
+    class Index:
+        def open(self):
+            return contextlib.nullcontext(None)
+    assert utxos.backfill_many(Index(), Rpc(), None, {"nSomebody"}, 1, 5) == 0
+    assert held == [True] * 5, "the lock is held for the whole pass"
+    assert len(rested) == 5 and all(0 <= s <= 1.0 for s in rested), "a rest after every block"
+    assert not utxos._BACKFILL_ONE.locked()
