@@ -1259,6 +1259,25 @@ def create_app(state: AppState) -> FastAPI:
             # ?next=, so they end on the feed too; the feed shows a stranger
             # the Join bar, and /me is one tap away in the nav.
             return RedirectResponse("/feed", status_code=303)
+        # The accounts' "Your arcade", about the node's own identity (2026-10-19: "Everything should look
+        # the same as it looks on the client side on the operator side"). The old dashboard is /overview.
+        if not state.unlocked:
+            try:
+                state.ensure_identity()
+            except Exception:                              # noqa: BLE001 -- the page says nobody yet
+                pass
+        chain = _account_chain()
+        register = state.accounts()
+        return render(request, "me.html", chain=chain, hidden=_wallets_hidden("node"), node_side=True,
+                      me_tag=state.my_tag() or "", node=chain.status(), when=_when,
+                      messaging=messaging_status(), ledger=ledger_status(),
+                      seats_free=register.free(), seats_total=register.seats)
+
+    @app.get("/overview", response_class=HTMLResponse)
+    def overview_dashboard(request: Request):
+        """The node's dashboard Overview was (chain cards, counts, contact code, scan)."""
+        if _account_view(request):
+            return RedirectResponse("/feed", status_code=303)
         stats = {}
         if state.store_path.exists():
             with state.store() as store:
@@ -4373,9 +4392,56 @@ def create_app(state: AppState) -> FastAPI:
                 row.setdefault("address", "")
                 row["error"] = str(exc)[:200]
             chains.append(row)
+        return JSONResponse({"pubkey": None, "node": True, "chains": chains, **_node_identity()})
+
+    def _node_identity() -> dict[str, Any]:
+        """What /account says of who an account is, said of the node (the Overview drawn as an account's "Your
+        arcade", 2026-10-19): its @tag, its address, whether its key is out, its published profile, its contact code."""
+        out: dict[str, Any] = {"tag": "", "name": "", "claiming": "", "address": "", "announced": False,
+                               "announcing": False, "profile": {"pfp": "", "bio": "", "url": ""}, "contact": "",
+                               "identity": ""}
+        try:
+            if not state.unlocked:
+                state.ensure_identity()
+        except Exception:                                   # noqa: BLE001 -- said as nobody yet
+            return out
         me = state.derived_address or ""
-        return JSONResponse({"pubkey": None, "node": True, "chains": chains,
-                             "name": (_name_of(me) or "").lstrip("@") if me else ""})
+        out.update(tag=state.my_tag() or "", address=me, identity=state.identity.public_bytes.hex(),
+                   contact=contact.encode(state.messaging.network, state.identity.public_bytes))
+        out["name"] = out["tag"]
+        if not out["tag"]:
+            for item in reversed(state.pending_tokens):
+                what = str(item.get("what") or "")
+                if item.get("network") == state.messaging.network and what.startswith("claim @"):
+                    out["claiming"] = out["name"] = what[len("claim @"):]
+                    break
+        if me and state.store_path.exists():
+            with state.store() as store:
+                out["announced"] = store.confirmed_key_for(me) is not None
+                out["announcing"] = store.key_for(me) is not None
+            try:
+                profile = _profile_of(me)
+                out["profile"] = {k: str(profile.get(k) or "") for k in ("pfp", "bio", "url")}
+            except Exception:                               # noqa: BLE001
+                pass
+        return out
+
+    @app.get("/node/me/nfts")
+    def node_me_nfts(request: Request):
+        """/account/nfts for the node's face picker: the pieces its addresses hold, by chain."""
+        _node_side(request)
+        out = []
+        for ctx, which in _node_wallets():
+            token_ctx = next((c for c in state.token_chains if c.network == ctx.network), None)
+            if token_ctx is None or which.startswith("key:"):
+                continue
+            try:
+                pieces = state.token_index(token_ctx).inscriptions(
+                    pieces_only=True, owners=_node_addresses(ctx, which), limit=200)
+            except Exception:                               # noqa: BLE001
+                pieces = []
+            out.append({"network": ctx.network, "pieces": pieces})
+        return JSONResponse({"chains": out})
 
     @app.get("/node/wallet/activity")
     def node_wallet_activity(request: Request, chain: str = "", before: int | None = None, limit: int = 50):
@@ -4604,7 +4670,7 @@ def create_app(state: AppState) -> FastAPI:
     @app.get("/wallet", response_class=HTMLResponse)
     def wallet(request: Request):
         # The accounts' Wallet page, answered by the node's wallets (2026-10-19, see _node_wallets).
-        return render(request, "my_wallet.html", chain=_account_chain(), hidden=[], node_side=True)
+        return render(request, "my_wallet.html", chain=_account_chain(), hidden=_wallets_hidden("node"), node_side=True)
 
     @app.get("/wallet/tools", response_class=HTMLResponse)
     def wallet_tools(request: Request):
@@ -9889,6 +9955,13 @@ def create_app(state: AppState) -> FastAPI:
     def node_wallet_js():
         """The node's wallet behind the accounts' Wallet page (templates/node_wallet_js.js, 2026-10-19)."""
         return Response((TEMPLATE_DIR / "node_wallet_js.js").read_text(),
+                        media_type="application/javascript",
+                        headers={"Cache-Control": "no-store"})
+
+    @app.get("/node-mail.js")
+    def node_mail_js():
+        """The node's identity behind the accounts' Your arcade page (templates/node_mail_js.js, 2026-10-19)."""
+        return Response((TEMPLATE_DIR / "node_mail_js.js").read_text(),
                         media_type="application/javascript",
                         headers={"Cache-Control": "no-store"})
 
@@ -20943,19 +21016,23 @@ def create_app(state: AppState) -> FastAPI:
     def account_wallets(request: Request, payload: Any = Body(None)):
         """Show or hide one chain's wallet in this account's Wallet tab. Only what is SHOWN: the address stays, is
         still announced, is still watched, and coins sent to it still arrive. At least one wallet stays shown."""
-        account = _signed_in_account(request)
+        if _account_view(request):
+            whose = _signed_in_account(request).pubkey
+        else:
+            _admin_check(request, write=True)              # the node's own Wallet (2026-10-19)
+            whose = "node"
         said = payload if isinstance(payload, dict) else {}
         net = str(said.get("network", ""))
         if not any(c.network == net for c in state.all_chains):
             return JSONResponse({"detail": "no such chain here"}, status_code=400)
-        hidden = set(_wallets_hidden(account.pubkey))
+        hidden = set(_wallets_hidden(whose))
         if said.get("shown"):
             hidden.discard(net)
         else:
             hidden.add(net)
         if not [c for c in state.all_chains if c.network not in hidden]:
             return JSONResponse({"detail": "keep at least one wallet shown"}, status_code=400)
-        state.set_setting(f"wallets_hidden:{account.pubkey}", sorted(hidden))
+        state.set_setting(f"wallets_hidden:{whose}", sorted(hidden))
         return JSONResponse({"hidden": sorted(hidden)})
 
     _chain_stats_kept: dict = {}
@@ -21009,7 +21086,8 @@ def create_app(state: AppState) -> FastAPI:
     @app.get("/account/chain-stats")
     def account_chain_stats(request: Request):
         """Every chain's numbers for the Your wallets panel, by network."""
-        _signed_in_account(request)
+        if _account_view(request):
+            _signed_in_account(request)
         return JSONResponse({c.network: _chain_stats(c) for c in state.all_chains})
 
     @app.get("/me/wallet/tokens", response_class=HTMLResponse)

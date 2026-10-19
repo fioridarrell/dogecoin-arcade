@@ -60,7 +60,7 @@ def test_a_syncing_litecoin_is_shown_and_never_used(client, monkeypatch):
     assert ltc in state.all_chains, "shown"
     assert ltc not in state.token_chains, "but nothing works on it yet"
     assert state.rpc_chain("ltc") is None
-    page = app.get("/").text
+    page = app.get("/overview").text
     assert "Litecoin" in page and "Opens when its node has synced: 91.2% so far." in page
 
 

@@ -74,7 +74,7 @@ def test_offline_node_is_explained_not_hidden(client):
     to be unavailable on the machine running it. BOXA had it fail there and pass
     here for exactly that reason.
     """
-    body = client[0].get("/").text
+    body = client[0].get("/overview").text
     assert "offline" in body
     assert "Start the node" in body, "it should say what to do about it"
 
@@ -159,7 +159,7 @@ def test_setup_without_a_node_says_so_rather_than_failing(client):
 
 
 def test_the_overview_explains_that_the_wallet_is_the_backup(client):
-    body = client[0].get("/").text
+    body = client[0].get("/overview").text
     assert "wallet.dat" in body
 
 
@@ -3056,13 +3056,13 @@ def test_a_wallet_with_no_name_is_asked_for_one(client, monkeypatch):
 
     state.identity = Identity.generate()
     monkeypatch.setattr(type(state), "my_tag", lambda self: "")
-    page = app.get("/").text
+    page = app.get("/overview").text
     assert "What should people call you?" in page
     assert 'name="tag"' in page and 'action="/publish"' in page
     assert "first claim wins" in page
 
     monkeypatch.setattr(type(state), "my_tag", lambda self: "robin")
-    page = app.get("/").text
+    page = app.get("/overview").text
     assert "What should people call you?" not in page, \
         "asked once, not every visit"
 
@@ -3077,7 +3077,7 @@ def test_a_claim_on_its_way_says_so_instead_of_asking_again(client, monkeypatch)
     monkeypatch.setattr(type(state), "my_tag", lambda self: "")
     state.pending_tokens.append({"txid": "a" * 64, "what": "claim @robin",
                                  "at": 0, "network": state.messaging.network})
-    page = app.get("/").text
+    page = app.get("/overview").text
     assert "Claiming <strong>@robin</strong>" in page
     assert 'name="tag"' not in page, "nothing to fill in while one is in flight"
 

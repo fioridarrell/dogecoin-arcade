@@ -43,3 +43,16 @@ export async function confirm(keys, offer) {
     return call("/admin/api/send/confirm", {ticket: offer.ticket, password});
   }
 }
+
+/** Claim the @name typed on the page (me.html's claim panel), with the key, in one announcement. */
+export async function claim() {
+  const box = document.getElementById("claim-name");
+  const tag = ((box && box.value) || "").trim().replace(/^@/, "");
+  if (!tag) throw new Error("type the name first");
+  const body = new URLSearchParams({csrf_token: (window.ARCADE_CSRF || ""), tag});
+  const r = await fetch("/publish", {method: "POST", credentials: "same-origin", body});
+  if (!r.ok) throw new Error(`refused (${r.status})`);
+  return {txid: "on its way"};
+}
+
+export async function tellTheNode() {}
