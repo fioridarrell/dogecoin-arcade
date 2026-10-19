@@ -271,6 +271,10 @@ async function _signIn(tag, password, {network, version}) {
     throw new Error("that wallet does not match this name. Nothing was opened.");
   }
   const result = await seatWith(wallet);
+  // Any chain whose coins were never read back here (a read-back cut short by a restart): finished now. A chain
+  // already done costs the node nothing (2026-10-19).
+  fetch("/account/coins/backfill", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"})
+    .catch(() => {});
   return {...result, tag: said.tag, address: said.address, wallet};
 }
 

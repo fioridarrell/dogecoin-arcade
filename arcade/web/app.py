@@ -11194,6 +11194,13 @@ def create_app(state: AppState) -> FastAPI:
         source = str(said.get("from") or "").rstrip("/")
         if source and source.removeprefix("https://") not in _arcade_hosts():
             source = ""
+        # Remembered, so a read-back cut short (a restart: 2026-10-19, the operator's balances read zero on
+        # pepecoinarcade.com but for Litecoin) is finished from the same arcade at the next sign-in or Wallet visit.
+        if source:
+            state.set_setting(f"came_from:{account.pubkey}", source)
+        else:
+            source = str(state.setting(f"came_from:{account.pubkey}", "") or "")
+        sources = [source] if source else [f"https://{h}" for h in _arcade_hosts()]
         mine = state.vault().by_pubkey(account.pubkey) or {}
         started = []
         for chain in _account_chains():
@@ -11214,12 +11221,12 @@ def create_app(state: AppState) -> FastAPI:
 
             def run(chain=chain, address=address, key=key, start=start, end=end, index=index):
                 try:
-                    if source and mine.get("tag"):
-                        filed = _coins_from(state, source, mine["tag"], chain, address)
+                    for asked in (sources if mine.get("tag") else []):
+                        filed = _coins_from(state, asked, mine["tag"], chain, address)
                         if filed is not None:
                             state.set_setting(key, filed)
                             state.bump_generation()
-                            log.info("backfill: %s holds %d coins, as %s knew them", address, filed, source)
+                            log.info("backfill: %s holds %d coins, as %s knew them", address, filed, asked)
                             return
                     with chain.rpc() as rpc:
                         # The Core's coin set first (2026-10-18): coins below the floor too. A Core without
@@ -29026,15 +29033,24 @@ async def _mesh_bridge(state, socket) -> None:
             pass
 
 
+_COINS_ASKED: dict[tuple[str, str], tuple[float, Any]] = {}
+
+
 def _coins_from(state, source: str, tag: str, chain, address: str) -> int | None:
     """An account's coins on `chain` as the arcade it came from knows them, each checked against this arcade's
     own chain and filed; how many, or None when that arcade could not say (the blocks are read instead)."""
-    try:
-        got = requests.get(f"{source}/signin/{urllib.parse.quote(tag)}/coins", timeout=15,
-                           headers={"User-Agent": "arcade-node"})
-        said = (got.json().get("chains") or {}).get(chain.network) if got.status_code == 200 else None
-    except Exception:                                   # noqa: BLE001
-        return None
+    kept = _COINS_ASKED.get((source, tag))
+    if kept is None or time.time() - kept[0] > 60:
+        # One question per arcade for every chain (a minute's keep): five in a row tripped nobody's limit yet, but
+        # the answer is the same for all of them.
+        try:
+            got = requests.get(f"{source}/signin/{urllib.parse.quote(tag)}/coins", timeout=15,
+                               headers={"User-Agent": "arcade-node"})
+            kept = (time.time(), got.json().get("chains") if got.status_code == 200 else None)
+        except Exception:                               # noqa: BLE001
+            kept = (time.time(), None)
+        _COINS_ASKED[(source, tag)] = kept
+    said = (kept[1] or {}).get(chain.network) if isinstance(kept[1], dict) else None
     if not isinstance(said, dict) or said.get("address") != address:
         return None
     filed = 0

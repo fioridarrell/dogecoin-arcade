@@ -1612,6 +1612,9 @@ async function refresh() {
 
 keys = await wallet.opened(TAGCHAIN);
 $("shut").hidden = !!keys;
+// A read-back of this account's coins cut short (a restart) is finished on a Wallet visit; done chains cost nothing.
+if (!NODE_SIDE) fetch("/account/coins/backfill", {method: "POST", headers: {"Content-Type": "application/json"},
+                                                  body: "{}"}).catch(() => {});
 said = await wallet.state();
 net = kept(NET, null);
 if (!chains().some((c) => c.network === net)) {
