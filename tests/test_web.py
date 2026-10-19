@@ -3116,7 +3116,10 @@ def test_the_chain_switch_is_on_every_chain_specific_page(client):
     three show one chain's data. A page that shows a chain should say which
     and let you change it (D-135)."""
     app, state = client
-    for path in ("/wallet", "/wallet/nfts", "/wallet/tokens", "/exchange",
+    # /wallet picks its chain with its own picker since 2026-10-19 (the operator: the operator's wallet "doesn't allow you
+    # to change coin types"): one section per chain, not the node-global token chain.
+    assert 'id="nets"' in app.get("/wallet").text
+    for path in ("/wallet/nfts", "/wallet/tokens", "/exchange",
                  "/tokens", "/inscriptions", "/collections"):
         page = app.get(path).text
         assert 'action="/tokens/chain"' in page, f"{path} has no chain switch"
