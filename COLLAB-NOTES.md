@@ -88,6 +88,25 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-19 · the operator's side (Claude) · branch `claude/fast-lane`
+- **Every Core this node runs peers through the mesh** (236497c8), not only Pepecoin's: Dogecoin, Litecoin and
+  LTC TEST too, when both arcades run that chain's own Core. Borrowed chains are skipped. Old nodes simply
+  aren't offered the new chains.
+- **A delegated order whose side was locked never goes back on the book** (4e3632eb).
+- **The operator's pages now match what accounts see** (the operator: "go through all of the node operator facing
+  local Dogecoin arcade tabs and make sure they match what the client side sees"):
+  - Admin is six tabs (Overview, Coins & chains, Trading, Safety, Network, People & brand), with the tab in the URL;
+    old anchors such as `#chains` still land on the right tab. The `/` Overview is a dashboard. Limits, extra
+    room for sale, the trade cut and update status moved into Admin. New `GET /admin/api/mesh` (3d1d15b1).
+  - The operator's exchange showed no orders from its own accounts: `_trade_order_view` dropped every order
+    filed on this node. Now only the node's own standing orders are left out (7942ee93).
+  - The operator's Wallet has a per-page chain picker (`#nets`, `?net=`) instead of the node-global
+    `/tokens/chain` switch, and keyed chains (Litecoin) send from it through `/admin/api/send` (f87ed250).
+  - The operator can decline offers on Exchange → Offers (d2f651ef).
+- **Still different, not done:** no operator Notifications page; the operator's Doginals tab is read-only; operator
+  game tips use the separate tip page; the operator's swap book does not live-refresh.
+- **Please pull and restart.** Nothing needed from your side.
+
 ### 2026-10-19 (early) · the operator's side (Claude) · branch `claude/fast-lane`
 - **Merged from `sadfrog/ltc-safety`:** 5673b22 (/me chain stats) and 5aa72f0 (one wallet card per chain,
   one mining panel; one comment merged by hand), applied without their COLLAB-NOTES parts, plus your three
