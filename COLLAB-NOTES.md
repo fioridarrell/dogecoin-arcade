@@ -120,6 +120,32 @@ coding agent, so it is written for agents first and people second.
           }
       }
 
+  **Migration from the Cloudflare tunnel, step by step** (the operator: node 3 is a live server on the internet with its own
+  address, so nginx should serve it rather than a tunnel):
+  1. *See what serves it now.* `sudo ss -ltnp | grep -E ':(80|443|8420)\b'`; `systemctl list-units --all | grep -i -E
+     "cloudflared|nginx|caddy"`; in Cloudflare → DNS, note whether pepecoinarcade.com is a tunnel CNAME
+     (`<id>.cfargotunnel.com`) or an A record. From outside we only see Cloudflare's addresses (104.21.30.160).
+  2. *Open the web ports.* `sudo ufw allow 80,443/tcp` (8421/tcp, the mesh, is already open). Keep 8420 closed
+     to the internet: the arcade listens on 127.0.0.1 only.
+  3. *Install nginx and certbot.* `sudo apt install -y nginx certbot python3-certbot-nginx`; put the server block
+     above in `/etc/nginx/sites-available/pepecoinarcade`, link it into `sites-enabled`, remove `default`;
+     `sudo nginx -t`.
+  4. *DNS, in Cloudflare.* Replace the tunnel CNAMEs with A records (and AAAA if the VPS has IPv6) for
+     pepecoinarcade.com, www and **pages**, all → 156.67.28.112. Grey cloud (DNS only) is simplest: nginx then sees
+     the visitor directly. Orange cloud also works: Cloudflare adds `X-Forwarded-For` and `Cf-Ray`, and the door reads
+     either, but WebSockets (`/mesh`, live pages) must stay enabled in Cloudflare's Network settings.
+  5. *Certificate.* Once DNS points at the VPS: `sudo certbot --nginx -d pepecoinarcade.com -d www.pepecoinarcade.com
+     -d pages.pepecoinarcade.com` (renews itself by timer). With orange cloud, set SSL/TLS to "Full (strict)".
+  6. *Check before retiring the tunnel.* `curl -I https://pepecoinarcade.com/` → 200 or 303;
+     `curl -s https://pepecoinarcade.com/admin` → refused, *not* the Admin page (if it is the Admin page, nginx is
+     not passing Host or X-Forwarded-For: stop and fix that first); a game opens from pages.pepecoinarcade.com; and
+     `wss://pepecoinarcade.com/mesh` links (node 3's mesh announces that name by itself once `public_hosts` lists it).
+  7. *Retire the tunnel.* `sudo systemctl disable --now cloudflared` (or the arcade user's tunnel service), and
+     delete the tunnel and its routes in Cloudflare Zero Trust. Leave `--mesh-tunnel off` as it is.
+  8. *Settings stay.* `public_hosts` keeps pepecoinarcade.com (and www); `pages_host` stays pages.pepecoinarcade.com.
+     Until the pages record exists, the arcade frames games from itself (9cffcb3), so nothing breaks in between.
+  *Rollback:* point DNS back at the tunnel and `systemctl enable --now cloudflared`; nothing in the arcade changes.
+
   Plus a DNS A/AAAA record for `pages.pepecoinarcade.com` pointing at 156.67.28.112. Keep `public_hosts` listing
   pepecoinarcade.com (and www) and `pages_host` = pages.pepecoinarcade.com. Then check from outside that
   https://pepecoinarcade.com/admin is refused, and that a game loads from pages.pepecoinarcade.com.
