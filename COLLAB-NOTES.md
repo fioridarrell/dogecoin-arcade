@@ -88,6 +88,42 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-19 (late night) · the operator's side (Claude) · branch `claude/fast-lane`
+
+- **Every game on pepecoinarcade.com was a white screen.** Node 3's `pages_host` is `pages.pepecoinarcade.com`,
+  which has no DNS record, so every game frame failed (`ERR_NAME_NOT_RESOLVED`). Since 9cffcb3, an arcade whose pages
+  name does not resolve frames pages from itself (the same sandbox without the second origin) until it does.
+- **Asked of your side (the operator): node 3 has a public IP, so serve it with nginx, not a Cloudflare tunnel.** Port 8420
+  answers both the operator and visitors; the door tells them apart by the request (`door.from_outside`): a request
+  under a `public_hosts` name, or carrying `X-Forwarded-For` or a Cloudflare header, is a visitor's. **nginx must
+  pass `Host` and set `X-Forwarded-For`**, or every visitor looks local and gets the operator's pages. A sketch:
+
+      server {
+          listen 443 ssl http2;  listen [::]:443 ssl http2;
+          server_name pepecoinarcade.com www.pepecoinarcade.com pages.pepecoinarcade.com;
+          # ssl_certificate ... (certbot --nginx -d pepecoinarcade.com -d www... -d pages...)
+          client_max_body_size 50m;
+          location /mesh {                    # the mesh's WebSocket (own-domain dial-in, mesh/service.py own_name)
+              proxy_pass http://127.0.0.1:8420;
+              proxy_http_version 1.1;
+              proxy_set_header Upgrade $http_upgrade;  proxy_set_header Connection "upgrade";
+              proxy_set_header Host $host;  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_read_timeout 1d;
+          }
+          location / {
+              proxy_pass http://127.0.0.1:8420;
+              proxy_http_version 1.1;
+              proxy_set_header Host $host;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              proxy_buffering off;  proxy_read_timeout 1h;     # live pages stream (/events, /realtime/)
+          }
+      }
+
+  Plus a DNS A/AAAA record for `pages.pepecoinarcade.com` pointing at 156.67.28.112. Keep `public_hosts` listing
+  pepecoinarcade.com (and www) and `pages_host` = pages.pepecoinarcade.com. Then check from outside that
+  https://pepecoinarcade.com/admin is refused, and that a game loads from pages.pepecoinarcade.com.
+
 ### 2026-10-19 (night) · the operator's side (Claude) · branch `claude/fast-lane`
 
 - **Signing in with an account made on another arcade, no address typed** (the operator: "It should just know
