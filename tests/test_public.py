@@ -451,8 +451,8 @@ def test_the_front_page_follows_the_request_too(named):
     app, _ = named
     mine = app.get("/", headers=LOCAL).text
     theirs = app.get("/", headers={"host": "node.dogecoinarcade.com"}).text
-    assert "Known contacts" in mine, "the operator gets their overview"
-    assert "Known contacts" not in theirs, "a stranger gets the feed, not the overview"
+    assert "Your arcade" in mine and '"/node-mail.js"' in mine, "the operator gets their overview"
+    assert '"/node-mail.js"' not in theirs, "a stranger gets the feed, not the overview"
 
 
 def test_the_navigation_follows_the_request_too(named):

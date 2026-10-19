@@ -2135,7 +2135,13 @@ def create_app(state: AppState) -> FastAPI:
     # while the identity is locked, because it holds no secrets.
 
     @app.get("/contacts", response_class=HTMLResponse)
-    def contacts_page(request: Request, edit: int | None = None, find: str = ""):
+    def contacts_page(request: Request):
+        # The accounts' Address book, over the node's contacts (2026-10-19). The old page is /contacts/more.
+        return render(request, "my_contacts.html", chain=_account_chain(), node_side=True)
+
+    @app.get("/contacts/more", response_class=HTMLResponse)
+    def contacts_more(request: Request, edit: int | None = None, find: str = ""):
+        """The node's older Address book: contact codes, the chain scan, notes by hand."""
         return _contacts_view(request, edit, find=find)
 
     def _contacts_view(request: Request, edit: int | None = None, find: str = "",
@@ -2257,13 +2263,13 @@ def create_app(state: AppState) -> FastAPI:
             raise          # a rejected form is a 400, not an error page
         except ValueError as exc:
             state.flash(str(exc), "err")
-            return RedirectResponse("/contacts", status_code=303)
+            return RedirectResponse("/contacts/more", status_code=303)
         name = name.strip()
         testnet_address = testnet_address.strip()
         mainnet_address = mainnet_address.strip()
         if not name:
             state.flash("Give the contact a name.", "err")
-            return RedirectResponse("/contacts", status_code=303)
+            return RedirectResponse("/contacts/more", status_code=303)
 
         # Reject an address that belongs to the wrong chain now, rather than
         # letting it sit in the book until someone pays it.
@@ -2281,12 +2287,12 @@ def create_app(state: AppState) -> FastAPI:
                     value = _tag_address(state, value, mainnet=want_mainnet)
                 except ValueError as exc:
                     state.flash(f"{label} address: {exc}", "err")
-                    return RedirectResponse("/contacts", status_code=303)
+                    return RedirectResponse("/contacts/more", status_code=303)
                 resolved[want_mainnet] = value
                 problem = _check_address(value, mainnet=want_mainnet)
                 if problem:
                     state.flash(f"{label} address: {problem}", "err")
-                    return RedirectResponse("/contacts", status_code=303)
+                    return RedirectResponse("/contacts/more", status_code=303)
         testnet_address = resolved.get(False, testnet_address)
         mainnet_address = resolved.get(True, mainnet_address)
 
@@ -2315,7 +2321,7 @@ def create_app(state: AppState) -> FastAPI:
                     "could check. Ask them to publish one from their own "
                     "address book -- one button, and then they can be added "
                     "by searching for it.", "err")
-                return RedirectResponse("/contacts", status_code=303)
+                return RedirectResponse("/contacts/more", status_code=303)
 
         # What the tag itself says: a published announcement carries the
         # key and the OTHER chain's address beside the name, so adding
@@ -2337,12 +2343,12 @@ def create_app(state: AppState) -> FastAPI:
                 raise          # a rejected form is a 400, not an error page
             except Exception as exc:
                 state.flash(f"Contact code: {exc}", "err")
-                return RedirectResponse("/contacts", status_code=303)
+                return RedirectResponse("/contacts/more", status_code=303)
             if network != state.messaging.network:
                 state.flash(
                     f"That contact code is for {network}, but the Messenger runs "
                     f"on {state.messaging.network}.", "err")
-                return RedirectResponse("/contacts", status_code=303)
+                return RedirectResponse("/contacts/more", status_code=303)
 
         with state.store() as store:
             store.save_contact(
@@ -2350,7 +2356,7 @@ def create_app(state: AppState) -> FastAPI:
                 pubkey=pubkey, name=name, testnet_address=testnet_address,
                 mainnet_address=mainnet_address, notes=notes.strip())
         state.flash(f"Saved {wall_plain(name, 'that contact')}.", "ok")
-        return RedirectResponse("/contacts", status_code=303)
+        return RedirectResponse("/contacts/more", status_code=303)
 
     @app.post("/contacts/{contact_id}/delete")
     def delete_contact(request: Request, contact_id: int, csrf_token: str = Form("")):
@@ -2360,12 +2366,12 @@ def create_app(state: AppState) -> FastAPI:
             raise          # a rejected form is a 400, not an error page
         except ValueError as exc:
             state.flash(str(exc), "err")
-            return RedirectResponse("/contacts", status_code=303)
+            return RedirectResponse("/contacts/more", status_code=303)
         with state.store() as store:
             row = store.contact_by_id(contact_id)
             store.delete_contact(contact_id)
         state.flash(f"Removed {row['name'] if row else 'the contact'}.", "ok")
-        return RedirectResponse("/contacts", status_code=303)
+        return RedirectResponse("/contacts/more", status_code=303)
 
     # --- backup and restore ---------------------------------------------------
     # The whole security model in one page: the wallet is the only thing a user
@@ -3679,7 +3685,7 @@ def create_app(state: AppState) -> FastAPI:
             raise
         except Exception as exc:
             state.flash(str(exc), "err")
-            return RedirectResponse("/contacts", status_code=303)
+            return RedirectResponse("/contacts/more", status_code=303)
         # The same announcement the Publish button makes, with the tag left
         # exactly as it is: `publish_key` reads the picture itself.
         return publish_key(request, csrf_token=csrf_token, confirmed="yes",
@@ -3950,7 +3956,7 @@ def create_app(state: AppState) -> FastAPI:
             raise
         except Exception as exc:
             state.flash(str(exc), "err")
-            return RedirectResponse("/contacts", status_code=303)
+            return RedirectResponse("/contacts/more", status_code=303)
         return publish_key(request, csrf_token=csrf_token, confirmed="yes",
                            say_tag=(_my_tag()["tag"] or None))
 
@@ -4097,7 +4103,7 @@ def create_app(state: AppState) -> FastAPI:
             raise          # a rejected form is a 400, not an error page
         except Exception as exc:
             state.flash(f"Scan failed: {exc}", "err")
-        return RedirectResponse("/contacts", status_code=303)
+        return RedirectResponse("/contacts/more", status_code=303)
 
     @app.post("/contacts/add-published")
     def add_published(request: Request, pubkey: str = Form(""),
@@ -4129,7 +4135,7 @@ def create_app(state: AppState) -> FastAPI:
             raise          # a rejected form is a 400, not an error page
         except Exception as exc:
             state.flash(f"Could not add that: {exc}", "err")
-        return RedirectResponse("/contacts", status_code=303)
+        return RedirectResponse("/contacts/more", status_code=303)
 
     @app.post("/publish", response_class=HTMLResponse)
     def publish_identity(request: Request, tag: str = Form(""),
@@ -4425,6 +4431,79 @@ def create_app(state: AppState) -> FastAPI:
             except Exception:                               # noqa: BLE001
                 pass
         return out
+
+    # --- the node's Address book, in the shape an account's book has (messaging.js book(); 2026-10-19) ---------------
+
+    def _node_book_entry(row) -> dict[str, Any]:
+        address = row["testnet_address"] or row["address"] or ""
+        tag = ""
+        try:
+            tag = state.token_index(_account_chain()).tag_of(address) or "" if address else ""
+        except Exception:                                   # noqa: BLE001
+            pass
+        favs = set(state.setting("contacts_fav:node", []) or [])
+        return {"id": row["id"], "tag": tag or row["name"] or (address[:10] if address else f"contact {row['id']}"),
+                "claimed": bool(tag), "name": row["name"] or "", "address": address,
+                "key": bytes(row["pubkey"]).hex() if row["pubkey"] else "", "note": row["notes"] or "",
+                "fav": row["id"] in favs, "face": _face_for(address) if address else "",
+                "added": int(row["added"] or 0) * 1000}
+
+    def _node_contact(tag: str):
+        wanted = str(tag or "").lstrip("@").lower()
+        with state.store() as store:
+            for row in store.contacts():
+                if _node_book_entry(row)["tag"].lower() == wanted:
+                    return row
+        raise HTTPException(404, f"@{wanted} is not in the address book")
+
+    @app.get("/node/contacts")
+    def node_contacts(request: Request):
+        _node_side(request)
+        with state.store() as store:
+            rows = store.contacts()
+        return JSONResponse({"book": [_node_book_entry(r) for r in rows]})
+
+    @app.post("/node/contacts/add")
+    def node_contacts_add(request: Request, payload: Any = Body(None)):
+        """Add somebody by @name: their address and published key, as the chain says them now."""
+        _admin_check(request, write=True)
+        said = payload if isinstance(payload, dict) else {}
+        found = account_who(request, str(said.get("tag", "")))
+        them = json.loads(found.body)
+        if found.status_code != 200:
+            return JSONResponse({"detail": them.get("detail", "nobody by that name")}, status_code=found.status_code)
+        with state.store() as store:
+            other = store.key_for(them["address"])
+            cid = store.save_contact(pubkey=bytes.fromhex(them["key"]), name=them["tag"],
+                                     testnet_address=them["address"],
+                                     mainnet_address=(other["other_address"] or "") if other is not None
+                                     and "other_address" in other.keys() else "")
+            row = store.contact_by_id(cid)
+        return JSONResponse(_node_book_entry(row))
+
+    @app.post("/node/contacts/update")
+    def node_contacts_update(request: Request, payload: Any = Body(None)):
+        _admin_check(request, write=True)
+        said = payload if isinstance(payload, dict) else {}
+        row = _node_contact(str(said.get("tag", "")))
+        if "fav" in said:
+            favs = [i for i in (state.setting("contacts_fav:node", []) or []) if i != row["id"]]
+            state.set_setting("contacts_fav:node", favs + ([row["id"]] if said["fav"] else []))
+        if "note" in said:
+            with state.store() as store:
+                store.save_contact(contact_id=row["id"], name=row["name"], testnet_address=row["testnet_address"],
+                                   mainnet_address=row["mainnet_address"], notes=str(said["note"])[:500])
+        with state.store() as store:
+            return JSONResponse(_node_book_entry(store.contact_by_id(row["id"])))
+
+    @app.post("/node/contacts/remove")
+    def node_contacts_remove(request: Request, payload: Any = Body(None)):
+        _admin_check(request, write=True)
+        said = payload if isinstance(payload, dict) else {}
+        row = _node_contact(str(said.get("tag", "")))
+        with state.store() as store:
+            store.delete_contact(row["id"])
+        return JSONResponse({"removed": True})
 
     @app.get("/node/me/nfts")
     def node_me_nfts(request: Request):
@@ -11302,7 +11381,8 @@ def create_app(state: AppState) -> FastAPI:
         same way: from the index, so a name in somebody's book is a name
         that exists on the chain rather than one they typed.
         """
-        _signed_in_account(request)
+        if _account_view(request):                         # the node's Address book asks too (2026-10-19)
+            _signed_in_account(request)
         raw = (q or "").strip()
         wanted = raw.lstrip("@").lower()
         if not wanted:
@@ -21289,7 +21369,8 @@ def create_app(state: AppState) -> FastAPI:
         published no key cannot be written to, and this says so rather than
         letting a message be sealed to nothing.
         """
-        _signed_in_account(request)
+        if _account_view(request):                         # the node's Address book asks too (2026-10-19)
+            _signed_in_account(request)
         chain = _account_chain()
         wanted = (name or "").strip().lstrip("@")
         address, tag = "", ""

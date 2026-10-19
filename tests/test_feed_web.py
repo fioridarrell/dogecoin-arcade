@@ -178,7 +178,7 @@ def test_a_profile_picture_is_a_piece_you_hold(client):
     # Whitespace-insensitive: the sentences are wrapped in the template, and a
     # test that breaks when somebody re-wraps a paragraph teaches nobody
     # anything.
-    body = " ".join(app.get("/contacts").text.split())
+    body = " ".join(app.get("/contacts/more").text.split())
     assert "Profile picture" in body
 
     # An id, not a picker: the same answer token icons and collection
@@ -195,7 +195,7 @@ def test_a_profile_picture_is_a_piece_you_hold(client):
     # saved and not published does nothing for anybody, because it is the
     # announcement that carries it (Robin).
     assert "publishes your tag again with the new picture" in \
-        " ".join(app.get("/contacts").text.split())
+        " ".join(app.get("/contacts/more").text.split())
 
 
 def test_a_picture_that_is_not_an_inscription_is_refused(client):
@@ -205,7 +205,7 @@ def test_a_picture_that_is_not_an_inscription_is_refused(client):
              follow_redirects=False)
     assert not state.setting("pfp")
     assert "an inscription on one of these chains" in \
-        " ".join(app.get("/contacts").text.split())
+        " ".join(app.get("/contacts/more").text.split())
 
 
 def test_a_tip_page_says_where_the_money_would_go(client):
@@ -283,7 +283,7 @@ def test_a_book_saved_before_that_repairs_itself(client):
                                    b"\x22" * 32, "ee", 10, 10, stated=True,
                                    other_address="PSomethingElseAAAAAAAAAAAAAAAAAAAA")
 
-    app.get("/contacts")
+    app.get("/contacts/more")
 
     with state.store() as store:
         found = {r["name"]: r["mainnet_address"] for r in store.contacts()}
@@ -450,7 +450,7 @@ def test_a_bio_and_a_link_are_published_with_the_tag(client):
     assert state.setting("bio") == "builds chain things"
     assert state.setting("url") == "https://dogecoinarcade.com"
 
-    body = " ".join(app.get("/contacts").text.split())
+    body = " ".join(app.get("/contacts/more").text.split())
     assert "builds chain things" in body
 
 
@@ -461,7 +461,7 @@ def test_a_link_that_is_not_a_link_is_refused(client):
              data={"csrf_token": state.csrf_token, "bio": "",
                    "url": "javascript:alert(1)"}, follow_redirects=False)
     assert not state.setting("url")
-    assert "a link starts with https://" in " ".join(app.get("/contacts").text.split())
+    assert "a link starts with https://" in " ".join(app.get("/contacts/more").text.split())
 
 
 def test_a_bio_too_long_is_refused_rather_than_trimmed(client):
@@ -470,7 +470,7 @@ def test_a_bio_too_long_is_refused_rather_than_trimmed(client):
              data={"csrf_token": state.csrf_token, "bio": "x" * 200, "url": ""},
              follow_redirects=False)
     assert not state.setting("bio")
-    assert "at most 160 characters" in " ".join(app.get("/contacts").text.split())
+    assert "at most 160 characters" in " ".join(app.get("/contacts/more").text.split())
 
 
 def test_looking_at_the_feed_clears_its_badge(client):
@@ -552,7 +552,7 @@ def test_blocking_is_offered_on_a_profile_and_listed_in_the_book(client):
     """A Block button on somebody's page, and the Blocked list at the bottom of
     the address book, shut until opened (2026-09-25)."""
     app, state = client
-    book = app.get("/contacts").text
+    book = app.get("/contacts/more").text
     assert '<details class="panel" id="blocked-box"' in book
     assert book.index("blocked-box") > book.index("Address book"), \
         "below everything else"

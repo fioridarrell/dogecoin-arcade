@@ -242,14 +242,14 @@ def _save(app, state, **fields):
 
 
 def test_address_book_starts_empty_and_says_so(client):
-    assert "address book is empty" in client[0].get("/contacts").text
+    assert "address book is empty" in client[0].get("/contacts/more").text
 
 
 def test_address_book_round_trip(client):
     app, state = client
     assert _save(app, state, name="The BOXA", testnet_address=TEST_ADDRESS,
                  mainnet_address=MAIN_ADDRESS, notes="Other room.").status_code == 303
-    body = app.get("/contacts").text
+    body = app.get("/contacts/more").text
     assert "The BOXA" in body and TEST_ADDRESS in body
     assert MAIN_ADDRESS in body and "Other room." in body
 
@@ -331,7 +331,7 @@ def test_editing_a_contact_updates_rather_than_duplicating(client):
     _save(app, state, name="Before", mainnet_address=MAIN_ADDRESS)
     with state.store() as store:
         (row,) = store.contacts()
-    assert 'value="Before"' in app.get(f"/contacts?edit={row['id']}").text
+    assert 'value="Before"' in app.get(f"/contacts/more?edit={row['id']}").text
     _save(app, state, contact_id=str(row["id"]), name="After", notes="changed")
     with state.store() as store:
         rows = store.contacts()
@@ -466,7 +466,7 @@ def test_a_missing_attachment_does_not_500(client):
 
 
 def test_the_address_book_offers_a_scan(client):
-    body = client[0].get("/contacts").text
+    body = client[0].get("/contacts/more").text
     assert "Scan for published addresses" in body
 
 
@@ -479,7 +479,7 @@ def test_only_somebody_with_a_tag_is_offered_for_adding(client):
         store.add_key_announcement("tx1", "nPublishedAddress", b"\x21" * 32,
                                    "aaaa bbbb cccc dddd", 500, 1000)
 
-    body = app.get("/contacts").text
+    body = app.get("/contacts/more").text
     assert "nPublishedAddress" not in body, "no address without a name to it"
     assert "Seen on the chain" not in body, "and nothing to offer, so no panel"
 
@@ -508,7 +508,7 @@ def test_someone_already_in_the_book_is_not_offered_again(client):
         store.add_key_announcement("tx1", "nKnown", b"\x22" * 32, "ffff", 500, 1000)
         store.save_contact(pubkey=b"\x22" * 32, name="Known", testnet_address="nKnown")
 
-    body = app.get("/contacts").text
+    body = app.get("/contacts/more").text
     assert "/contacts/add-published" not in body
 
 
@@ -518,7 +518,7 @@ def test_the_page_says_an_announcement_proves_nothing_about_identity(client):
     with state.store() as store:
         store.add_key_announcement("tx1", "nAnyone", b"\x23" * 32, "gggg", 500, 1000)
 
-    body = app.get("/contacts").text
+    body = app.get("/contacts/more").text
     assert "nothing about who they are" in body
 
 
@@ -2691,7 +2691,7 @@ def test_the_tag_card_says_what_letting_go_of_a_tag_costs(client):
     # Whitespace-insensitive: the sentences are wrapped in the template, and a
     # test that breaks when somebody re-wraps a paragraph teaches nobody
     # anything.
-    card = " ".join(page.get("/contacts").text.split())
+    card = " ".join(page.get("/contacts/more").text.split())
     assert "points where its holder points it" in card
     assert "Nobody can move" in card, "say plainly that it cannot be taken"
     assert "next person to claim it" in card
@@ -2725,17 +2725,17 @@ def test_a_contact_follows_the_tag_its_address_holds(client, monkeypatch):
             return None
 
     monkeypatch.setattr(type(state), "token_index", lambda self, chain: Index())
-    assert "@bigchiefenergy" in page.get("/contacts").text
+    assert "@bigchiefenergy" in page.get("/contacts/more").text
 
     # They claim a different one. Nothing in the book changed; the page follows.
     tags["nChiefTestAddress"] = "chief2"
-    body = page.get("/contacts").text
+    body = page.get("/contacts/more").text
     assert "@chief2" in body and "@bigchiefenergy" not in body
 
     # And if they let go of it entirely, the card shows the address alone
     # rather than a name the chain no longer agrees with.
     tags.clear()
-    assert "@chief2" not in page.get("/contacts").text
+    assert "@chief2" not in page.get("/contacts/more").text
 
 
 def test_a_contact_saved_by_mainnet_address_is_named_too(client, monkeypatch):
@@ -2759,7 +2759,7 @@ def test_a_contact_saved_by_mainnet_address_is_named_too(client, monkeypatch):
             return None
 
     monkeypatch.setattr(type(state), "token_index", lambda self, chain: Index())
-    assert "@payee" in page.get("/contacts").text
+    assert "@payee" in page.get("/contacts/more").text
 
 
 def test_nothing_on_the_address_book_warns_about_a_fee(client):
@@ -2770,7 +2770,7 @@ def test_nothing_on_the_address_book_warns_about_a_fee(client):
     warning stops being read (D-075).
     """
     page, _ = client
-    book = " ".join(page.get("/contacts").text.split())
+    book = " ".join(page.get("/contacts/more").text.split())
     for phrase in ("small fee", "costs a fee", "a few test coins"):
         assert phrase not in book, f"the address book still says {phrase!r}"
     # And the thing that IS worth saying is still said. Which panels render
@@ -2806,14 +2806,14 @@ def test_somebody_can_be_found_and_added_by_tag(client, monkeypatch):
 
     monkeypatch.setattr(type(state), "token_index", lambda self, chain: Index())
 
-    found = page.get("/contacts?find=rob").text
+    found = page.get("/contacts/more?find=rob").text
     assert "@robin" in found and "Add" in found
     # With or without the @, and in any case: the sigil is punctuation
     # (D-112).
     for typed in ("@robin", "ROBIN", "robin"):
-        assert "@robin" in page.get(f"/contacts?find={typed}").text, typed
+        assert "@robin" in page.get(f"/contacts/more?find={typed}").text, typed
 
-    assert "Nothing claimed" in page.get("/contacts?find=nobodyatall").text
+    assert "Nothing claimed" in page.get("/contacts/more?find=nobodyatall").text
 
     # Adding one saves the address the name points at.
     page.post("/contacts/save", data={"csrf_token": state.csrf_token,
@@ -2821,7 +2821,7 @@ def test_somebody_can_be_found_and_added_by_tag(client, monkeypatch):
     with state.store() as store:
         saved = [dict(r) for r in store.contacts()]
     assert saved[0]["testnet_address"] == "mgA7SfyBBrVGVSpQ7oqGHPhxpp2gUZWtfc"
-    assert "already in your book" in page.get("/contacts?find=robin").text
+    assert "already in your book" in page.get("/contacts/more?find=robin").text
 
 
 def test_somebody_with_no_tag_cannot_be_added(client):
@@ -2992,7 +2992,7 @@ def test_a_tag_is_a_name(client):
         store.conn.commit()
     _tag_on_chain(state, TEST_ADDRESS, "boxa")
 
-    body = app.get("/contacts").text
+    body = app.get("/contacts/more").text
     card = body[body.index('class="cards"'):]
     assert "@boxa" in card
     assert "Unnamed" not in card, "the chain named them; the page should say so"
@@ -3002,7 +3002,7 @@ def test_a_tag_is_a_name(client):
         store.save_contact(contact_id=row["id"], name="The BOXA",
                            testnet_address=TEST_ADDRESS)
         store.conn.commit()
-    card = app.get("/contacts").text
+    card = app.get("/contacts/more").text
     card = card[card.index('class="cards"'):]
     assert "The BOXA" in card and "@boxa" in card, \
         "a name of your own wins, and the tag is shown beside it"
@@ -3030,7 +3030,7 @@ def test_your_own_tag_is_shown_with_your_own_address(client):
 
     app, state = client
     state.identity = Identity.generate()          # the card needs a wallet
-    body = app.get("/contacts").text
+    body = app.get("/contacts/more").text
     panel = body[body.index("You are"):body.index("Add somebody by @tag")]
     assert "nobody yet" in panel, "it says so plainly when you have no name"
     assert "not published" in panel, "and whether the chain has your key"

@@ -41,4 +41,31 @@ export async function publishProfile(keys, me, profile) {
 }
 
 export async function inbox() { return []; }
-export async function book() { return []; }
+
+/* The node's Address book (its contacts table), in the shape messaging.js keeps an account's book. */
+async function call(path, body) {
+  const r = await fetch(path, {method: "POST", credentials: "same-origin",
+    headers: {"Content-Type": "application/json", "X-Arcade-Admin": "1"}, body: JSON.stringify(body || {})});
+  const said = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(said.detail || `refused (${r.status})`);
+  return said;
+}
+export async function book() {
+  try { return ((await (await fetch("/node/contacts", {cache: "no-store"})).json()).book || [])
+    .sort((a, b) => a.tag.localeCompare(b.tag)); } catch (e) { return []; }
+}
+export async function addToBook(tag) { return call("/node/contacts/add", {tag}); }
+export async function updateBookEntry(tag, fields) { return call("/node/contacts/update", {tag, ...fields}); }
+export async function removeFromBook(tag) { return call("/node/contacts/remove", {tag}); }
+export async function findNames(text) {
+  const answer = await fetch(`/account/find?q=${encodeURIComponent(text)}`);
+  if (!answer.ok) return [];
+  return (await answer.json()).matches;
+}
+export async function lookUp(name) {
+  const answer = await fetch(`/account/who/${encodeURIComponent(name)}`);
+  const said = await answer.json();
+  if (!answer.ok) throw new Error(said.detail || "nobody by that name");
+  return said;
+}
+export async function syncMailbox() { return false; }
