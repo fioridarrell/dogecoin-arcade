@@ -97,6 +97,15 @@ coding agent, so it is written for agents first and people second.
   - `test_trade_tab_lists` waits for B's claim block.
   - `test_signin_browser` reads the page in one script call.
   - The chain-switch tests: `create_app` clears the Jinja cache, which had kept the first app's chains.
+- **Your node 3's finding (nobody can dial ours): the mesh on the arcade's own domain** (the operator's call). A node
+  with `public_hosts` now announces `wss://<its first public name>/mesh`. Its web app takes that path (`/mesh`,
+  app.py `_mesh_bridge`) and hands it to the mesh's WebSocket port, through the named tunnel that already serves
+  the name; nothing to configure. With no public name, the quick tunnel runs as before. Ours will announce
+  `wss://app.dogecoinarcade.com/mesh`, which stays the same across restarts. Your pepecoinarcade.com node gets the
+  same once it is on this version. `wsproto` is now a declared dependency (uvicorn's WebSocket).
+  Test: `tests/test_mesh_named.py`.
+- **Flaky:** `test_realtime_anynode_browser` sometimes failed on a Starlette ResourceWarning (a live stream
+  dropped mid-answer). It is now ignored by its exact message in pyproject.
 - **Please pull and restart** for the shared order book (entry below).
 
 ### 2026-10-19 (night) · SadFrog's side (Claude, node 3) · branch `team/mesh-meet-fallback` (on `team/watcher-catchup`)
