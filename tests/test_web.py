@@ -1744,7 +1744,7 @@ def test_a_page_title_is_only_a_title(client, path):
 def test_the_wallet_split_form_is_in_the_body(client):
     """The specific feature that was lost, asserted where a user can reach it."""
     app, _ = client
-    html = app.get("/wallet").text
+    html = app.get("/wallet/tools").text
     head, _, body = html.partition("</head>")
 
     assert "Fast sending" not in head, "the panel is back inside <head>"
@@ -2433,12 +2433,12 @@ def test_mine_one_block_is_always_offered_and_says_when_it_is_at_it(client, monk
     monkeypatch.setattr("arcade.messaging.miner.require_messaging_network", lambda params: None)
     monkeypatch.setattr(type(state), "derived_address", property(lambda self: "nMine"))
 
-    page = http.get("/wallet").text
+    page = http.get("/wallet/tools").text
     assert "Mine one block" in page, "funded, and still offered"
 
     http.post("/fund", data={"csrf_token": state.csrf_token})
     assert state.mining is not None and state.mining["address"] == "nMine"
-    page = http.get("/wallet").text
+    page = http.get("/wallet/tools").text
     assert "Mining a block on this machine" in page
     assert "Mine one block" not in page, "no button to press twice"
     assert http.get("/wallet/mining").json()["mining"] is True
@@ -2454,7 +2454,7 @@ def test_mine_one_block_is_always_offered_and_says_when_it_is_at_it(client, monk
     assert watched["tries"] >= minerlib.FIRST_TRIES and watched["rate"] > 0
     assert watched["expected"] == int(0.0005 * 2 ** 32) and watched["expected_seconds"] > 0
     assert batches[0] == minerlib.FIRST_TRIES and batches[1] >= minerlib.TRIES_PER_CALL[0]
-    assert "Stop mining" in http.get("/wallet").text
+    assert "Stop mining" in http.get("/wallet/tools").text
 
     finding.set()
     for _ in range(100):
@@ -2463,7 +2463,7 @@ def test_mine_one_block_is_always_offered_and_says_when_it_is_at_it(client, monk
         time.sleep(0.05)
     assert state.mining is None
     assert http.get("/wallet/mining").json()["mining"] is False
-    page = http.get("/wallet").text
+    page = http.get("/wallet/tools").text
     assert "Mined block abababababababab" in page and "12.50 PEP spendable" in page, page
     assert "Mine one block" in page, "and it can be pressed again"
 
@@ -2476,7 +2476,7 @@ def test_mine_one_block_is_always_offered_and_says_when_it_is_at_it(client, monk
         if state.mining is None:
             break
         time.sleep(0.05)
-    page = http.get("/wallet").text
+    page = http.get("/wallet/tools").text
     assert "Stopped mining after" in page and "no block" in page, page
     assert "Not mining" in http.post("/fund/stop", data={"csrf_token": state.csrf_token}).text
 

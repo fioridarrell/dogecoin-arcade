@@ -4282,8 +4282,315 @@ def create_app(state: AppState) -> FastAPI:
             out.append(row)
         return out
 
+    # --- the node's Wallet, drawn by the account's own page (my_wallet.html) ------------------------------------
+    # 2026-10-19: "the wallet should look the same as the wall looks on the client side. Everything should look
+    # the same as it looks on the client side on the operator side." The operator's /wallet is my_wallet.html with
+    # node_side on: the same page, reading these instead of /account/*, and sending through the node's own wallets
+    # (node-wallet.js stands in for wallet.js) -- the chain's Core wallet here, or the identity key on a borrowed chain.
+
+    def _node_side(request: Request) -> None:
+        if _account_view(request):
+            raise HTTPException(403, "the node's wallet is the operator's")
+
+    def _node_wallets() -> list[tuple[Any, str]]:
+        """Each chain the node holds coins on, with its `which` for /admin/api/send: the Core wallet here, or
+        `key:<net>` on a borrowed add-on chain. Chains still syncing are left out (the page shows them waiting)."""
+        out: list[tuple[Any, str]] = []
+        for ctx in [state.messaging, state.ledger] + list(getattr(state, "addons", None) or []):
+            if ctx is None or any(c.network == ctx.network for c, _ in out) or not state.chain_ready(ctx):
+                continue
+            if getattr(ctx, "borrowed", False):
+                out.append((ctx, f"key:{ctx.network}"))
+            else:
+                out.append((ctx, "messaging" if ctx is state.messaging else "ledger" if ctx is state.ledger
+                            else ctx.network))
+        return out
+
+    def _node_wallet(network: str) -> tuple[Any, str]:
+        found = next(((c, w) for c, w in _node_wallets() if c.network == network), None)
+        if found is None:
+            raise HTTPException(404, f"no wallet on {network} here")
+        return found
+
+    def _node_address(ctx, which: str) -> str:
+        """The one address the page shows for a chain (its card, Receive): the identity's on the messaging chain,
+        the Core wallet's kept "arcade-identity" address elsewhere, the identity key's on a borrowed chain."""
+        if which.startswith("key:"):
+            return state.key_address(ctx)
+        if ctx is state.messaging and state.derived_address:
+            return state.derived_address
+        with ctx.rpc() as rpc:
+            return str(rpc.call("getaccountaddress", "arcade-identity"))
+
+    def _node_addresses(ctx, which: str) -> list[str]:
+        if which.startswith("key:"):
+            return [a for a in [state.key_address(ctx)] if a]
+        return _own_addresses(ctx)
+
+    @app.get("/node/wallet/state")
+    def node_wallet_state(request: Request):
+        """What /account says of an account's chains, said of the node's wallets."""
+        _node_side(request)
+        chains = []
+        for ctx, which in _node_wallets():
+            row: dict[str, Any] = {"network": ctx.network, "label": ctx.label, "title": ctx.title,
+                                   "coin": ctx.params.coin, "mainnet": bool(ctx.is_mainnet),
+                                   "version": ctx.params.pubkeyhash_version, "which": which,
+                                   "doge": bool(ctx.is_doge), "ltc": bool(ctx.is_ltc),
+                                   "ltctest": bool(ctx.is_ltc_test)}
+            try:
+                row["address"] = _node_address(ctx, which)
+                if which.startswith("key:"):
+                    got = keywalletlib.balance(state, ctx)
+                    sats = int(round(float(got.get("balance") or 0) * 1e8))
+                    row.update(balance=sats, spendable=sats)
+                else:
+                    with ctx.rpc() as rpc:
+                        got = walletlib.balance(rpc)
+                    row.update(balance=int(got["spendable"] * COIN), spendable=int(got["spendable"] * COIN),
+                               arriving=max(0, int(got["unconfirmed"] * COIN)),
+                               leaving=max(0, -int(got["unconfirmed"] * COIN)),
+                               immature=int(got["immature"] * COIN))
+            except Exception as exc:                        # noqa: BLE001 -- a node away: shown, without a balance
+                row.setdefault("address", "")
+                row["error"] = str(exc)[:200]
+            chains.append(row)
+        me = state.derived_address or ""
+        return JSONResponse({"pubkey": None, "node": True, "chains": chains,
+                             "name": (_name_of(me) or "").lstrip("@") if me else ""})
+
+    @app.get("/node/wallet/activity")
+    def node_wallet_activity(request: Request, chain: str = "", before: int | None = None, limit: int = 50):
+        """A chain's history in /account/activity's rows: the Core wallet's own transactions, or what the index
+        filed for the identity key's address on a borrowed chain."""
+        _node_side(request)
+        ctx, which = _node_wallet(chain or state.messaging.network)
+        limit = max(1, min(int(limit), 200))
+        address = _node_address(ctx, which)
+        said: dict[str, Any] = {"chain": ctx.network, "label": ctx.label, "address": address, "since": None,
+                                "tip": 0, "rows": [], "more": False}
+        if which.startswith("key:"):
+            index = state.token_index(ctx)
+            with contextlib.closing(index.open()) as db:
+                said["since"] = utxoslib.since(db, address)
+                tip = db.conn.execute("SELECT MAX(height) FROM block").fetchone()
+                said["tip"] = int((tip and tip[0]) or 0)
+                rows = utxoslib.activity(db, [address], before, limit + 1)
+            for r in rows:
+                r["confirmations"] = max(0, said["tip"] - r["height"] + 1)
+        else:
+            with ctx.rpc() as rpc:
+                tip = int(rpc.get_block_count())
+                listed = rpc.call("listtransactions", "*", 1000, 0, True) or []
+            said["tip"] = tip
+            by: dict[str, dict[str, Any]] = {}
+            for t in listed:
+                if t.get("category") == "orphan" or int(t.get("confirmations", 0)) < 0:
+                    continue
+                txid = str(t.get("txid", ""))
+                conf = int(t.get("confirmations", 0))
+                r = by.setdefault(txid, {"txid": txid, "height": tip - conf + 1 if conf else tip + 1,
+                                         "time": int(t.get("blocktime") or t.get("time") or 0), "received": 0,
+                                         "spent": 0, "net": 0, "fee": 0, "other": "", "confirmations": conf})
+                sats = int(round(float(t.get("amount", 0)) * 1e8))
+                if sats >= 0:
+                    r["received"] += sats
+                else:
+                    r["spent"] += -sats
+                    r["other"] = r["other"] or str(t.get("address", ""))
+                if t.get("fee") is not None and not r["fee"]:
+                    r["fee"] = abs(int(round(float(t["fee"]) * 1e8)))
+            rows = sorted(by.values(), key=lambda r: (-r["height"], r["txid"]))
+            for r in rows:
+                r["spent"] += r["fee"]
+                r["net"] = r["received"] - r["spent"]
+            if before is not None:
+                rows = [r for r in rows if r["height"] < int(before)]
+            rows = rows[:limit + 1]
+        said["more"] = len(rows) > limit
+        rows = rows[:limit]
+        names: dict[str, str] = {}
+        for r in rows:
+            other = r.get("other") or ""
+            if other and other not in names:
+                names[other] = _name_for_address(other, ctx)
+            r["other_tag"] = names.get(other, "") if other else ""
+        said["rows"] = rows
+        return JSONResponse(said)
+
+    @app.get("/node/wallet/tokens")
+    def node_wallet_tokens(request: Request):
+        """/account/tokens for the node: what its addresses hold on each chain."""
+        _node_side(request)
+        out: list[dict[str, Any]] = []
+        for ctx, which in _node_wallets():
+            ctx = next((c for c in state.token_chains if c.network == ctx.network), None) or ctx
+            if not any(c is ctx for c in state.token_chains):
+                continue
+            try:
+                addresses = _node_addresses(ctx, which)
+                index = state.token_index(ctx)
+                held = index.balances(addresses)
+                mine = set(addresses)
+                managed = {p["property_id"] for p in index.properties() if p.get("managed")}
+            except Exception:                                # noqa: BLE001 -- a chain with no index here
+                continue
+            out.append({"network": ctx.network, "label": ctx.label, "mainnet": bool(ctx.is_mainnet),
+                        "address": _node_address(ctx, which),
+                        "tokens": [{"property_id": r["property_id"], "name": r["name"],
+                                    "sensitive": bool(_verdict_of(r["name"] or "")), "issuer": r["issuer"],
+                                    "divisible": r["divisible"], "balance": r["balance"], "display": r["display"],
+                                    "issuer_is_me": r["issuer"] in mine, "managed": r["property_id"] in managed}
+                                   for r in held]})
+        return JSONResponse({"chains": out})
+
+    @app.get("/node/wallet/nfts/collections")
+    def node_wallet_nft_collections(request: Request, chain: str = ""):
+        _node_side(request)
+        ctx, which = _node_wallet(chain or state.messaging.network)
+        ctx = next((c for c in state.token_chains if c.network == ctx.network), None) or ctx
+        groups: list = []
+        try:
+            index = state.token_index(ctx)
+            for address in _node_addresses(ctx, which):
+                groups += index.held_collections(address)
+        except Exception:                                    # noqa: BLE001
+            groups = []
+        merged: dict[str, dict] = {}
+        for g in groups:
+            key = str(g.get("collection", ""))
+            if key in merged:
+                merged[key]["count"] = merged[key].get("count", 0) + g.get("count", 0)
+            else:
+                merged[key] = dict(g)
+        return JSONResponse({"chain": ctx.network, "label": ctx.label, "address": _node_address(ctx, which),
+                             "collections": list(merged.values())})
+
+    @app.get("/node/wallet/nfts/pieces")
+    def node_wallet_nft_pieces(request: Request, chain: str = "", collection: str = "", q: str = "",
+                               sort: str = "number", offset: int = 0, limit: int = 60):
+        _node_side(request)
+        ctx, which = _node_wallet(chain or state.messaging.network)
+        ctx = next((c for c in state.token_chains if c.network == ctx.network), None) or ctx
+        rows: list = []
+        try:
+            index = state.token_index(ctx)
+            for address in _node_addresses(ctx, which):
+                got, _total = index.held_pieces(address, collection, q, sort, 0, 100000)
+                rows += got
+        except Exception:                                    # noqa: BLE001
+            rows = []
+        return JSONResponse({"chain": ctx.network, "collection": collection, "total": len(rows), "offset": offset,
+                             "pieces": rows[offset:offset + max(1, min(int(limit), 200))]})
+
+    @app.post("/node/wallet/send")
+    def node_wallet_send(request: Request, payload: Any = Body(None)):
+        """An offer the way /account/send makes one -- who, how much, the fee -- built and signed by the node's own
+        wallet and held under a ticket until /admin/api/send/confirm (password from outside, as there)."""
+        _admin_check(request, write=True)
+        said = payload if isinstance(payload, dict) else {}
+        try:
+            ctx, which = _node_wallet(str(said.get("chain", "")))
+            sats = walletlib.parse_amount(str(said.get("amount", "")))
+            typed = str(said.get("to", "")).strip()
+            to = _tag_address(state, typed, mainnet=ctx)
+            if which.startswith("key:"):
+                prepared = keywalletlib.prepare(state, ctx, to, sats)
+            else:
+                with ctx.rpc() as rpc:
+                    prepared = walletlib.prepare_send(rpc, to, sats)
+        except HTTPException:
+            raise
+        except Exception as exc:                            # noqa: BLE001
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        ticket = secrets.token_urlsafe(16)
+        now = time.time()
+        for key in [k for k, v in _admin_prepared.items() if now - v[0] > 600]:
+            _admin_prepared.pop(key, None)
+        _admin_prepared[ticket] = (now, which, prepared)
+        tag = typed.lstrip("@").lower() if not re.fullmatch(r"[1-9A-HJ-NP-Za-km-z]{26,35}", typed) else ""
+        return JSONResponse({"ticket": ticket, "chain": ctx.network, "to": to, "to_tag": tag,
+                             "amount": sats, "fee": int(prepared.fee_sats)})
+
+    def _node_ticket(which: str, prepared) -> str:
+        ticket = secrets.token_urlsafe(16)
+        now = time.time()
+        for key in [k for k, v in _admin_prepared.items() if now - v[0] > 600]:
+            _admin_prepared.pop(key, None)
+        _admin_prepared[ticket] = (now, which, prepared)
+        return ticket
+
+    def _node_token_chain(network: str):
+        ctx, which = _node_wallet(network)
+        token_ctx = next((c for c in state.token_chains if c.network == ctx.network), None)
+        if which.startswith("key:") or token_ctx is None:
+            raise ValueError(f"tokens and NFTs on {ctx.label} are sent from a Core wallet here")
+        return token_ctx
+
+    @app.post("/node/wallet/token/send")
+    def node_wallet_token_send(request: Request, payload: Any = Body(None)):
+        """/account/token/send for the node: the token comes out of whichever of its addresses holds enough."""
+        _admin_check(request, write=True)
+        said = payload if isinstance(payload, dict) else {}
+        try:
+            ctx = _node_token_chain(str(said.get("chain", "")))
+            index = state.token_index(ctx)
+            prop, units = _amount_for(index, int(said.get("property_id") or 0), str(said.get("amount", "")))
+            typed = str(said.get("to", "")).strip()
+            to = _tag_address(state, typed, mainnet=ctx)
+            with ctx.rpc() as rpc:
+                parts = _send_parts(rpc, index, prop, units, avoid=to)
+                if len(parts) != 1:
+                    raise ValueError("that much is held across several addresses; send it in smaller amounts")
+                prepared = tokenlib.TokenSender(rpc, ctx.params).prepare(
+                    parts[0][0], tokenlib.send_payload(prop["property_id"], units), to)
+            prepared.what = f"{format_amount(units, prop['divisible'])} {prop['name']}"
+        except HTTPException:
+            raise
+        except Exception as exc:                            # noqa: BLE001
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        tag = typed.lstrip("@").lower() if not re.fullmatch(r"[1-9A-HJ-NP-Za-km-z]{26,35}", typed) else ""
+        return JSONResponse({"ticket": _node_ticket(f"tok:{ctx.network}", prepared), "chain": ctx.network,
+                             "to": to, "to_tag": tag, "amount": units, "property_id": prop["property_id"],
+                             "fee": int(prepared.fee_sats)})
+
+    @app.post("/node/wallet/nft/send")
+    def node_wallet_nft_send(request: Request, payload: Any = Body(None)):
+        """/account/nft/send for the node: one piece one of its addresses holds."""
+        _admin_check(request, write=True)
+        said = payload if isinstance(payload, dict) else {}
+        try:
+            ctx = _node_token_chain(str(said.get("chain", "")))
+            index = state.token_index(ctx)
+            row = index.inscription(contentlib._key(str(said.get("piece", ""))))
+            if row is None:
+                raise ValueError("no such piece")
+            typed = str(said.get("to", "")).strip()
+            to = _tag_address(state, typed, mainnet=ctx)
+            with ctx.rpc() as rpc:
+                if row["owner"] not in _ledger_addresses(rpc):
+                    raise ValueError("this piece is not the node's to send")
+                payload_bytes = P.AnyData(data=inscriptionlib.Transfer(
+                    txid=bytes.fromhex(row["txid"])).encode()).encode()
+                prepared = tokenlib.TokenSender(rpc, ctx.params).prepare(row["owner"], payload_bytes, to)
+            prepared.what = f"inscription #{row['number']}"
+        except HTTPException:
+            raise
+        except Exception as exc:                            # noqa: BLE001
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        tag = typed.lstrip("@").lower() if not re.fullmatch(r"[1-9A-HJ-NP-Za-km-z]{26,35}", typed) else ""
+        return JSONResponse({"ticket": _node_ticket(f"tok:{ctx.network}", prepared), "chain": ctx.network,
+                             "to": to, "to_tag": tag, "number": row["number"], "amount": 1,
+                             "fee": int(prepared.fee_sats)})
+
     @app.get("/wallet", response_class=HTMLResponse)
     def wallet(request: Request):
+        # The accounts' Wallet page, answered by the node's wallets (2026-10-19, see _node_wallets).
+        return render(request, "my_wallet.html", chain=_account_chain(), hidden=[], node_side=True)
+
+    @app.get("/wallet/tools", response_class=HTMLResponse)
+    def wallet_tools(request: Request):
+        """The node's older Wallet page: mining a test block, fast sending, each chain's Core status."""
         chain, _ = _token_chain()
         return render(request, "wallet.html", messaging=messaging_status(),
                       ledger=ledger_status(), **_doge_status(), prepared=None, which=None, now=time.time(),
@@ -4323,7 +4630,7 @@ def create_app(state: AppState) -> FastAPI:
             raise          # a rejected form is a 400, not an error page
         except Exception as exc:
             state.flash(str(exc), "err")
-        return RedirectResponse("/wallet", status_code=303)
+        return RedirectResponse("/wallet/tools", status_code=303)
 
     def _gather_senders(chain, rpc):
         """The three ways a thing travels home, for gather.walk_home."""
@@ -4423,7 +4730,7 @@ def create_app(state: AppState) -> FastAPI:
             error = str(exc)
 
         if txid:
-            return RedirectResponse("/wallet", status_code=303)
+            return RedirectResponse("/wallet/tools", status_code=303)
         return _again("/wallet", prepared=prepared, which=which,
                       error=error, destination=destination, amount=amount)
 
@@ -4470,7 +4777,7 @@ def create_app(state: AppState) -> FastAPI:
             state.flash(str(exc), "err")
         except Exception as exc:
             state.flash(f"Could not split: {exc}", "err")
-        return RedirectResponse("/wallet", status_code=303)
+        return RedirectResponse("/wallet/tools", status_code=303)
 
     @app.post("/fund")
     def fund(request: Request, csrf_token: str = Form("")):
@@ -4494,7 +4801,7 @@ def create_app(state: AppState) -> FastAPI:
             check_csrf(csrf_token)
             if state.mining is not None:
                 state.flash("Already mining a block; it will say when one is found.")
-                return RedirectResponse("/wallet", status_code=303)
+                return RedirectResponse("/wallet/tools", status_code=303)
             with state.messaging.rpc() as rpc:
                 miner = Miner(rpc, state.messaging.params)      # refuses mainnet
                 address = state.derived_address or rpc.call("getnewaddress")
@@ -4509,7 +4816,7 @@ def create_app(state: AppState) -> FastAPI:
             raise          # a rejected form is a 400, not an error page
         except (MiningError, Exception) as exc:
             state.flash(f"Mining failed: {exc}", "err")
-        return RedirectResponse("/wallet", status_code=303)
+        return RedirectResponse("/wallet/tools", status_code=303)
 
     def _ltc_test_mine(request: Request) -> dict[str, Any] | None:
         """What the Wallet page's L test mining panel needs, or None when this node has no L test."""
@@ -4581,7 +4888,7 @@ def create_app(state: AppState) -> FastAPI:
                 raise ValueError("only this node's operator mines L test blocks here")
             if state.mining is not None:
                 state.flash("Already mining a block; it will say when one is found.")
-                return RedirectResponse("/wallet", status_code=303)
+                return RedirectResponse("/wallet/tools", status_code=303)
             address = _faucet_address(chain)
             # Said before the thread starts: the notice is one slot, and a block found at once
             # would otherwise have its "Mined" overwritten by this.
@@ -4593,7 +4900,7 @@ def create_app(state: AppState) -> FastAPI:
             raise          # a rejected form is a 400, not an error page
         except Exception as exc:
             state.flash(f"Mining failed: {exc}", "err")
-        return RedirectResponse("/wallet", status_code=303)
+        return RedirectResponse("/wallet/tools", status_code=303)
 
     def _mine_one(address: str, chain=None) -> None:
         """The thread behind /fund: one block, counting as it goes, then a notice.
@@ -4648,7 +4955,7 @@ def create_app(state: AppState) -> FastAPI:
         else:
             state.mining["stop"] = True
             state.flash("Stopping: the node finishes the batch it is on (under a minute).")
-        return RedirectResponse("/wallet", status_code=303)
+        return RedirectResponse("/wallet/tools", status_code=303)
 
     @app.get("/wallet/mining")
     def wallet_mining():
@@ -9557,6 +9864,13 @@ def create_app(state: AppState) -> FastAPI:
     def wallet_js():
         """Signing up and signing in, as a person does it (templates/wallet_js.js)."""
         return Response((TEMPLATE_DIR / "wallet_js.js").read_text(),
+                        media_type="application/javascript",
+                        headers={"Cache-Control": "no-store"})
+
+    @app.get("/node-wallet.js")
+    def node_wallet_js():
+        """The node's wallet behind the accounts' Wallet page (templates/node_wallet_js.js, 2026-10-19)."""
+        return Response((TEMPLATE_DIR / "node_wallet_js.js").read_text(),
                         media_type="application/javascript",
                         headers={"Cache-Control": "no-store"})
 
@@ -23367,7 +23681,14 @@ def create_app(state: AppState) -> FastAPI:
             return JSONResponse({"detail": "that send has expired -- prepare it again"},
                                 status_code=400)
         try:
-            if held[1].startswith("key:"):
+            if held[1].startswith("tok:"):
+                # A token or NFT send from the node's Wallet page (/node/wallet/token|nft/send).
+                ctx = _node_wallet(held[1].split(":", 1)[1])[0]
+                with ctx.rpc() as rpc:
+                    txid = tokenlib.TokenSender(rpc, ctx.params).broadcast(held[2])
+                state.pending_tokens.append({"txid": txid, "what": getattr(held[2], "what", "send"),
+                                             "at": time.time(), "network": ctx.network})
+            elif held[1].startswith("key:"):
                 txid = keywalletlib.broadcast(_keyed_context(held[1]), held[2])
             else:
                 with _context(held[1]).rpc() as rpc:

@@ -237,7 +237,7 @@ def test_the_wallet_names_litecoin_testnet_test_and_mines_it_here(client, monkey
     # a fresh one sees this app's chain_menu.
     from arcade.web import app as appmod
     appmod.TEMPLATES.env.cache.clear()
-    page = app.get("/wallet").text
+    page = app.get("/wallet/tools").text
     # Since 2026-10-19 the Wallet's chains are picked by the page's own picker (one section per chain label), not the
     # node-global token chain switch, which moved every non-account page of the node at once.
     assert 'class="chainswitch"' not in page.split("</h1>", 1)[0]
