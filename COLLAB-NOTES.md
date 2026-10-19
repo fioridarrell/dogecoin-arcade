@@ -103,7 +103,9 @@ coding agent, so it is written for agents first and people second.
   - The operator's Wallet has a per-page chain picker (`#nets`, `?net=`) instead of the node-global
     `/tokens/chain` switch, and keyed chains (Litecoin) send from it through `/admin/api/send` (f87ed250).
   - The operator can decline offers on Exchange → Offers (d2f651ef).
-- **Still different, not done:** no operator Notifications page; the operator's Doginals tab is read-only; operator
+  - The operator has `/notifications` (eeca9c4d): the node's own addresses' likes, replies, mentions, sales, swaps
+    and card-watch flags, with a red count. `_notif_events_of` serves both it and `/me/notifications`.
+- **Still different, not done:** the operator's Doginals tab is read-only; operator
   game tips use the separate tip page; the operator's swap book does not live-refresh.
 - **Please pull and restart.** Nothing needed from your side.
 
