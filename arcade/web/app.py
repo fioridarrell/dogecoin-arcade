@@ -33,7 +33,7 @@ from typing import Any
 
 from markupsafe import Markup
 
-from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import (
     HTMLResponse, JSONResponse, RedirectResponse, Response,
@@ -23790,6 +23790,12 @@ def create_app(state: AppState) -> FastAPI:
         threading.Timer(1.0, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
         return JSONResponse({"ok": True})
 
+    @app.websocket("/mesh")
+    def mesh_socket(socket: WebSocket):
+        """The mesh on this arcade's own name (2026-10-19: a named tunnel through our domain, a quick one
+        only without a domain): _mesh_bridge, below create_app (a coroutine FastAPI awaits; nothing in here may)."""
+        return _mesh_bridge(state, socket)
+
     @app.get("/admin/api/mesh")
     def admin_mesh(request: Request):
         """The mesh for Admin -> Network (2026-10-19): links, how the node is reached, its tunnel, the STUN it offers
@@ -28855,3 +28861,45 @@ def _local_time(ts: Any, style: str = "full") -> Markup:
 
 
 TEMPLATES.env.globals["local_time"] = _local_time
+
+
+async def _mesh_bridge(state, socket) -> None:
+    """The mesh on this arcade's own name (2026-10-19: a named tunnel through our domain, a quick one
+    only without a domain). A node dials wss://<public name>/mesh -- announced by mesh/service.py `own_name` --
+    and this passes the link to the mesh's own WebSocket port here, message for message. It carries the mesh
+    handshake and frames unchanged: ciphertext between two node keys, nothing this app reads."""
+    import asyncio
+    from ..mesh import wsock
+    svc = getattr(state, "mesh", None)
+    port = getattr(getattr(svc, "node", None), "ws_port", None)
+    if not port:
+        await socket.close(code=1013)
+        return
+    await socket.accept()
+    try:
+        reader, writer = await wsock.connect(f"ws://127.0.0.1:{port}/mesh", timeout=10)
+    except Exception:                                   # noqa: BLE001 -- the mesh is not up
+        await socket.close(code=1011)
+        return
+
+    async def inward():
+        while True:
+            data = await socket.receive_bytes()
+            writer.write(data)
+            await writer.drain()
+
+    async def outward():
+        while True:
+            await socket.send_bytes(await reader.sock.recv())
+
+    tasks = [asyncio.ensure_future(inward()), asyncio.ensure_future(outward())]
+    try:
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for t in tasks:
+            t.cancel()
+        writer.close()
+        try:
+            await socket.close()
+        except Exception:                               # noqa: BLE001 -- already gone
+            pass
