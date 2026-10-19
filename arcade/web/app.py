@@ -27035,7 +27035,7 @@ def create_app(state: AppState) -> FastAPI:
                 # (2026-10-19: orders from the order book were not showing on the operator's exchange pages --
                 # dropping every order filed on this node also dropped all of its own accounts' orders).
                 try:
-                    standing = {o["id"] for o in state.node_trader.standing()}
+                    standing = {o["id"] for o in state.node_trader.standing(own=True)}
                 except Exception:                          # noqa: BLE001 -- no node trader: nothing of its own
                     standing = set()
                 out["trade_orders"] = [{**o, "mine": False}
@@ -27046,7 +27046,7 @@ def create_app(state: AppState) -> FastAPI:
                 out["can_trade_orders"] = True
                 out["my_trade_orders"] = [{**o, "give_label": _side_label(o["give"]),
                                            "get_label": _side_label(o["get"])}
-                                          for o in trader.standing()]
+                                          for o in trader.standing(own=True)]
                 out["my_trades"] = [{"id": t.id, "role": t.role, "state": t.state, "note": t.note,
                                      "give": M_leg_text(t.give), "get": M_leg_text(t.get)}
                                     for t in trader.book.open_trades()]

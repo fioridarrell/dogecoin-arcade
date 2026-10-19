@@ -178,3 +178,25 @@ def test_the_operator_sees_the_orders_its_own_accounts_listed(client, monkeypatc
     assert "Node-facilitated trades" in page and 'href="/admin#trading"' in page
     book = app.get("/exchange/swap/regtest-coin/main-coin").text
     assert "Swaps open here when this node runs both chains" not in book or "Node-facilitated trades" in book
+
+
+def test_an_accounts_delegated_order_shows_to_the_operator(client, monkeypatch):
+    """2026-10-19, after the fix above: the token exchange still showed no orders to the operator. A delegated
+    order (an account's, finished by the node while its page is shut) is kept among the node's standing orders, and
+    those were all left out as "the node's own"."""
+    import json
+    app, state = client
+    monkeypatch.setattr(state, "mesh", _Mesh({_Mesh.node_id}), raising=False)
+    monkeypatch.setattr("arcade.trade_courier.mesh_inbox", lambda st: None)
+    trader = state.node_trader
+    give = {"network": "main", "kind": "coin", "asset": "", "amount": 2 * COIN}
+    get = {"network": "regtest", "kind": "coin", "asset": "", "amount": 3 * COIN}
+    trader.stand("order-held", give, get)
+    trader.stand("order-node", give, get)
+    with trader._db() as conn:
+        conn.execute("INSERT INTO delegated(order_id, key, deposit, payout, owner, state, created) "
+                     "VALUES('order-held', '', '{}', '{}', 'someone', 'open', 0)")
+    assert [o["id"] for o in trader.standing(own=True)] == ["order-node"]
+    _file(state, oid="order-held", node=_Mesh.node_id)
+    page = app.get("/exchange?tab=tokens").text
+    assert "No arcade is offering a swap right now" not in page

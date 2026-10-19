@@ -90,6 +90,10 @@ coding agent, so it is written for agents first and people second.
 
 ### 2026-10-19 (later) · the operator's side (Claude) · branch `claude/fast-lane`
 
+- The operator's token exchange still showed no orders: a **delegated** order (an account's, answered by the node
+  while its page is shut) is stored among the node's standing orders, so it was hidden as "the node's own".
+  `NodeTrader.standing(own=True)` leaves delegated ones in the book. Test:
+  `test_trade_orders_web::test_an_accounts_delegated_order_shows_to_the_operator`.
 - Admin's Overview and Coins tab listed each **borrowed** chain twice: an "offline" Core-wallet card (a sharer answers
   no wallet calls) and the key card. `_admin_wallets` now skips borrowed add-ons in the Core-wallet list, so a borrowed
   chain is just its key card, and that card (and the Coins row) shows the key address. Test:

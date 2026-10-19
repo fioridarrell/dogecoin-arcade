@@ -443,11 +443,15 @@ class NodeTrader:
     POST_EVERY = 12 * 3600
     ORDER_LIFE = 24 * 3600
 
-    def standing(self) -> list[dict]:
+    def standing(self, own: bool = False) -> list[dict]:
+        """Every order this node answers; `own`: only the node's own, not an account's delegated to it (2026-10-19:
+        the operator's exchange hid @apple's delegated order as the node's own)."""
         import json
         with self._db() as conn:
             rows = conn.execute("SELECT * FROM standing_order ORDER BY id").fetchall()
-        return [{"id": r["id"], "give": json.loads(r["give"]), "get": json.loads(r["get"])} for r in rows]
+            held = {r["order_id"] for r in conn.execute("SELECT order_id FROM delegated")} if own else set()
+        return [{"id": r["id"], "give": json.loads(r["give"]), "get": json.loads(r["get"])} for r in rows
+                if r["id"] not in held]
 
     def withdraw(self, order_id: str) -> None:
         with self._db() as conn:
