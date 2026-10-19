@@ -631,7 +631,37 @@ class AppState:
         host = str(self.setting("pages_host", "") or "").strip()
         if not host:
             return ""
-        return host if "://" in host else f"https://{host}"
+        origin = host if "://" in host else f"https://{host}"
+        # A name with no DNS record frames nothing: every game was a white screen on pepecoinarcade.com (2026-10-19,
+        # pages.pepecoinarcade.com set and never routed). Then pages are framed from here, the sandbox without the
+        # second origin, until the name resolves; looked up every few minutes, never waited on for long.
+        name = origin.split("://", 1)[-1].split("/")[0].rsplit(":", 1)[0]
+        return origin if self._resolves(name) else ""
+
+    #: How often a pages name's DNS is looked up again.
+    PAGES_DNS_EVERY = 300.0
+
+    def _resolves(self, name: str) -> bool:
+        kept = self.__dict__.setdefault("_dns_kept", {})
+        now = time.time()
+        got = kept.get(name)
+        if got is not None and now - got[1] < self.PAGES_DNS_EVERY:
+            return got[0]
+        if name in ("localhost", "127.0.0.1") or name.startswith("127."):
+            return True
+
+        def look():
+            import socket
+            try:
+                socket.getaddrinfo(name, 443)
+                kept[name] = (True, time.time())
+            except OSError:
+                kept[name] = (False, time.time())
+        asking = threading.Thread(target=look, name="pages-dns", daemon=True)
+        asking.start()
+        asking.join(2.0 if got is None else 0)
+        got = kept.get(name) or got
+        return True if got is None else got[0]
 
     def vault(self):
         """Encrypted wallets by @tag. Bytes this node cannot read."""
