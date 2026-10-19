@@ -168,6 +168,20 @@
   <button type="button" class="small" id="saveswitches">Save switches</button>
 </section>
 
+<section class="panel" id="cards">
+  <h2>Game cards</h2>
+  <p class="muted" style="margin-top:0">A new game card that looks like somebody else&rsquo;s game (a lookalike name,
+    the same cover) is hidden from the Games tab until you look at it, and you get a notification. Your screening
+    model judges the close ones; without one, a close lookalike is hidden on its own. The first to publish a name is
+    taken as the real one, and trusted publishers are never hidden.</p>
+  <div id="cardrows" class="muted">Nothing hidden.</div>
+  <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:10px">
+    <input autocomplete="off" id="cardtrusted" placeholder="trusted publishers: @ashvale, @pip, or addresses" style="flex:1;min-width:260px">
+    <button type="button" class="small ghost" id="cardtrustsave">Save trusted</button>
+  </div>
+  <p class="muted" id="cardsaid"></p>
+</section>
+
 <section class="panel" id="flags">
   <h2>Sensitive-material flags from other arcades</h2>
   <p class="muted" style="margin-top:0">Arcades that broadcast what their own screening flagged.
@@ -729,6 +743,44 @@ section.panel h2{margin-top:0}
   };
   loadMine();
   setInterval(function () { if (!document.hidden && mine && mine.running) loadMine(); }, 3000);
+
+  // --- the card watch (arcade/cardwatch.py, 2026-10-18) ---
+  function loadCards() {
+    return fetch('/admin/api/cards', {credentials: 'same-origin', cache: 'no-store'})
+      .then(function (r) { return r.json(); }).then(function (d) {
+        var box = $('cardrows'); box.replaceChildren();
+        $('cardtrusted').value = (d.trusted || []).join(', ');
+        $('cardsaid').textContent = d.model ? 'Close lookalikes are judged by your screening model.'
+                                            : 'No screening model is set: every close lookalike is hidden for you to judge.';
+        if (!(d.rows || []).length) { box.textContent = 'Nothing hidden.'; return; }
+        (d.rows || []).forEach(function (r) {
+          var row = document.createElement('div'); row.className = 'row'; row.style.cssText = 'gap:8px;align-items:center;flex-wrap:wrap;padding:6px 0;border-top:1px solid var(--line, #8883)';
+          var t = document.createElement('div'); t.style.flex = '1'; t.style.minWidth = '240px';
+          var who = r.publisher ? '@' + r.publisher : String(r.creator || '').slice(0, 10) + '\u2026';
+          var like = r.like_publisher ? '@' + r.like_publisher : String(r.like_creator || '').slice(0, 10) + '\u2026';
+          t.innerHTML = '<b></b> by <span></span> looks like <b></b> by <span></span><br><small class="muted"></small>';
+          var f = t.querySelectorAll('b, span, small');
+          f[0].textContent = r.name; f[1].textContent = who; f[2].textContent = r.like_name || '?'; f[3].textContent = like;
+          f[4].textContent = (r.status === 'flagged' ? 'Hidden, waiting for you' : r.status === 'confirmed' ? 'Kept hidden' : 'Cleared: on the Games tab')
+                             + ' \u00b7 ' + (r.why || '') + ' \u00b7 ' + (r.by === 'model' ? 'judged by the model' : 'lookalike name');
+          var open = document.createElement('a'); open.href = '/inscriptions/' + r.txid + '/view'; open.textContent = 'Look'; open.className = 'small';
+          row.append(t, open);
+          [['cleared', 'Clear (show it)'], ['confirmed', 'Keep hidden']].forEach(function (b) {
+            if (r.status === b[0]) return;
+            var btn = document.createElement('button'); btn.type = 'button'; btn.className = 'small' + (b[0] === 'cleared' ? ' ghost' : '');
+            btn.textContent = b[1];
+            btn.onclick = function () { call('/admin/api/cards', {txid: r.txid, status: b[0]}).then(loadCards).catch(function (e) { say(e.message, 'err'); }); };
+            row.append(btn);
+          });
+          box.append(row);
+        });
+      }).catch(function () {});
+  }
+  $('cardtrustsave').onclick = function () {
+    call('/admin/api/cards', {trusted: $('cardtrusted').value.split(/[\s,]+/).filter(Boolean)})
+      .then(loadCards).then(function () { say('Trusted publishers saved.', 'ok'); }).catch(function (e) { say(e.message, 'err'); });
+  };
+  loadCards();
 
   function load() {
     return fetch('/admin/api/state', {credentials: 'same-origin', cache: 'no-store'})

@@ -14,6 +14,17 @@
     var here = {{ row.txid|tojson }}, csrf = {{ csrf|tojson }};
     var viewer = {{ viewer|tojson }};
     var holder = {{ row.owner|tojson }}, maker = {{ row.creator|tojson }};
+    var makerName = {{ (('@' ~ name_of(row.creator)) if name_of(row.creator) else '')|tojson }};
+    var gameName = {{ game_name(row.json)|tojson }};
+    // Wallet access for THIS page (base.html, WALLET ACCESS, PER GAME): asked for once, with the publisher named,
+    // before any door that uses the key -- trades, escrow, shops, signing. Joining rooms as yourself is not one.
+    function gameKeys(chain, why){
+      if (arcadeGameAllowed(here)) return arcadeKeys(chain, why);
+      return arcadeAccessAsk(here, gameName, makerName, maker).then(function(yes){
+        if (!yes) throw new Error('Wallet access is off for this game. Check its publisher, then turn it on on its card or when it asks.');
+        return arcadeKeys(chain, why);
+      });
+    }
     var CHAIN = {network: "{{chain.network}}",
                  version: {{chain.params.pubkeyhash_version}}};
     var doors = {contacts: 'viewer', storage: '/storage/', node: '/node/', swap: '/swap/', owner: '/owner/',
@@ -548,7 +559,7 @@
     }
     function tradeKeys(why){
       return import('/wallet.js').then(function(w){
-        return arcadeKeys(CHAIN, why).then(function(keys){ return {w: w, keys: keys}; });
+        return gameKeys(CHAIN, why).then(function(keys){ return {w: w, keys: keys}; });
       });
     }
     function tradeAsk(t, title, button){
@@ -869,7 +880,7 @@
     // its copy, whoever happens to be looking at it.
     function shopByKey(m){
       return import('/wallet.js').then(function(w){
-        return arcadeKeys(CHAIN, 'This shop needs your wallet to trade.').then(function(wallet){
+        return gameKeys(CHAIN, 'This shop needs your wallet to trade.').then(function(wallet){
           return w.shopDoor(wallet, here, m);
         });
       });
@@ -934,7 +945,7 @@
           if (!needKey) return doIt(w, null);
           // The page asked for something only the key can do: open the unlock
           // sheet in place if the wallet is locked, and carry on after.
-          return arcadeKeys(CHAIN, 'This page is asking your wallet to sign something.')
+          return gameKeys(CHAIN, 'This page is asking your wallet to sign something.')
             .then(function(wallet){ return doIt(w, wallet); });
         }).then(function(r){ answer(Object.assign({ok: true}, r)); })
           .catch(function(err){

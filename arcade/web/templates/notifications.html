@@ -13,7 +13,7 @@
 {%- endmacro %}
 
 {% macro row(r) %}
-{% set link = ('/exchange/pair/' ~ r.target if r.source == 'fill' else '/me/messages' if r.source == 'message'
+{% set link = ('/admin#cards' if r.source == 'cardwatch' else '/exchange/pair/' ~ r.target if r.source == 'fill' else '/me/messages' if r.source == 'message'
                else ('/feed?post=' ~ (r.comment or r.target) if r.source in ('feed', 'mention', 'mention_reply')
                else ('/inscriptions/' ~ r.target ~ '/view' if r.source == 'swap'
                else ('/exchange/swap-trade/' ~ r.target if r.source == 'lockswap' else '/me/nfts')))) %}
@@ -40,6 +40,8 @@
       {% elif r.source == 'lockswap' %}
         <b>You {{ 'sold' if r.kind == 'sold' else 'bought' }} {{ r.text }}</b>
         {{ 'to' if r.kind == 'sold' else 'from' }} {{ name(who) }} &middot; swap done
+      {% elif r.source == 'cardwatch' %}
+        <b>A game card was hidden until you look at it.</b> {{ r.text }} (by {{ name(who) }})
       {% elif r.source == 'fill' %}
         <b>Your buy order for {{ r.text }} can fill.</b> A sell order meets your price: open it
         and it fills.

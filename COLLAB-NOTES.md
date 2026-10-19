@@ -88,6 +88,21 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-18 (night, last) · the operator's side (Claude) · branch `claude/fast-lane` (continued)
+- **Wallet access per game** (the operator: a clone of ASHVALE "spelt slightly different ... could drain their wallet").
+  `base.html` WALLET ACCESS, PER GAME: `arcadeGameAllowed(id)`, `arcadeAccessAsk(...)`, kept in localStorage
+  `arcade.wallet.allow:<page txid>`. `_page_doors` `gameKeys()` wraps every key door except the realtime
+  identity proof (trades, escrow, shop, `byKey`): off until allowed, with the publisher's @name and address.
+  Games tab cards: a "Wallet access" switch + the wallet's lock status. Browser tests grant access with
+  `browsers.allow_wallet(driver, base, page)`; `test_a_page_speaks_under_the_accounts_own_key` clicks Allow.
+- **Card watch** (`arcade/cardwatch.py`, the operator: "have our local model watch card publications ... Hide until
+  reviewed by operator. Send operator node account a notification."). Lookalike names (homoglyphs, doubled
+  letters, 1-2 edits, containment) or the same cover vs. games by another creator -> the `moderation` model
+  (or `cardwatch_model`) decides; no model = hidden. Hidden from /games, /games/<txid>, /play. Operator
+  notification (source `cardwatch`), Admin "Game cards" panel (clear / keep hidden / trusted publishers,
+  setting `cardwatch_trusted`). Store `cardwatch.sqlite` in the node home. Live dry run: 209 cards, none flagged.
+- Docs: `docs/games.md` "Wallet access, and lookalike games".
+
 ### 2026-10-18 (night, latest) · the operator's side (Claude) · branch `claude/fast-lane`
 - **The WebRTC fast lane** (private plan `hosting-plan.md` phase 3, without the paid relay). Games
   call `arcade.realtime.join(name, {fast: true})`, then `room.fast.send(v[, {reliable}])`,

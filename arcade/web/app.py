@@ -6022,6 +6022,8 @@ def create_app(state: AppState) -> FastAPI:
     TEMPLATES.env.filters["who"] = _who
     TEMPLATES.env.filters["who_text"] = _who_text
     TEMPLATES.env.globals["name_of"] = _name_of
+    # A game page's own name, from its JSON, for the wallet access sheet (_page_doors; 2026-10-18).
+    TEMPLATES.env.globals["game_name"] = lambda text: (gameslib.parse(text) or {}).get("name", "") if text else ""
 
     def _fav_key(href: str, net: str = "") -> str:
         """A market's favorite key: its address, and for a one-chain market its chain too
@@ -9279,6 +9281,7 @@ def create_app(state: AppState) -> FastAPI:
 
     def _notif_events(account) -> list:
         from .. import notify
+        from ..cardwatch import FLAGGED as cwlib_FLAGGED
         chain = _account_chain()
         me = _account_address(account.pubkey, chain)
         events: list = []
@@ -9344,6 +9347,15 @@ def create_app(state: AppState) -> FastAPI:
                                              mine_there | owners, _said)
         except Exception as exc:                          # noqa: BLE001
             log.info("notifications: lock swaps: %s", exc)
+        if state.operator and account.pubkey.lower() == state.operator:
+            # Game cards the card watch hid, for the operator to look at (2026-10-18).
+            try:
+                for r in _cardwatch().rows((cwlib_FLAGGED,)):
+                    events.append(notify.Event(source="cardwatch", seq=int(r["seq"]), kind="hid a game card",
+                                               actor=r["creator"], target=r["txid"], at=int(r["at"] or 0),
+                                               text=f"“{r['name']}” looks like “{r['like_name']}”: {r['why']}"))
+            except Exception as exc:                      # noqa: BLE001
+                log.info("notifications: card watch: %s", exc)
         return notify.merge(events, _notif_seen(account.pubkey))
 
     def _swap_amount(leg: dict, n: int) -> str:
@@ -21818,9 +21830,58 @@ def create_app(state: AppState) -> FastAPI:
         return any(int(a["kind"]) == feedlib.DELETE and a.get("target") == txid
                    and a.get("author") in makers for a in acts)
 
+    def _cardwatch():
+        held = getattr(state, "_cardwatch", None)
+        if held is None:
+            from .. import cardwatch as cwlib
+            held = state._cardwatch = cwlib.CardWatch(
+                Path(state.home) / "cardwatch.sqlite",
+                model=lambda: state.setting("cardwatch_model") or state.setting("moderation"),
+                trusted=lambda: set(state.setting("cardwatch_trusted") or []))
+        return held
+
+    def _cards_hidden() -> set:
+        try:
+            return _cardwatch().hidden()
+        except Exception as exc:                          # noqa: BLE001 -- never break the Games tab
+            log.info("card watch: %s", exc)
+            return set()
+
+    def _cards_now() -> list[dict]:
+        """Every game card on every chain, every version, for the card watch."""
+        chain, index = _token_chain()
+        out = []
+        for c, ix in [(chain, index)] + _other_indexes():
+            try:
+                rows = _game_rows(ix, limit=5000, newest=False)
+            except Exception:
+                continue
+            for r in rows:
+                g = r["game"]
+                out.append({"txid": r["txid"], "net": c.network, "creator": r["creator"], "height": r["block_height"],
+                            "name": g.get("name", ""), "family": g.get("family", ""), "cover": g.get("cover", ""),
+                            "description": g.get("description", ""), "genre": g.get("genre", ""),
+                            "publisher": ("@" + _name_of(r["creator"])) if _name_of(r["creator"]) else r["creator"]})
+        return out
+
+    def _cardwatch_loop():
+        from .. import cardwatch as cwlib
+        time.sleep(20)
+        while True:
+            try:
+                _cardwatch().check(_cards_now())
+            except Exception:                             # noqa: BLE001 -- looked at again next time
+                log.exception("card watch")
+            time.sleep(cwlib.EVERY)
+
+    if not getattr(state, "no_background", False) and "PYTEST_CURRENT_TEST" not in os.environ:
+        threading.Thread(target=_cardwatch_loop, name="card-watch", daemon=True).start()
+
     def _game_by_txid(txid: str) -> dict | None:
         """The game an inscription on the Games tab's chain is, or None."""
         if not re.fullmatch(r"[0-9a-f]{64}", str(txid or "")):
+            return None
+        if txid in _cards_hidden():
             return None
         chain, index = _chain_of(txid)   # a game on any chain (2026-10-14)
         try:
@@ -21862,6 +21923,10 @@ def create_app(state: AppState) -> FastAPI:
             for r in got:
                 r["_chain"], r["_ix"] = c, ix
             every += got
+        # Cards the card watch hid (arcade/cardwatch.py, 2026-10-18: lookalikes of somebody else's game stay
+        # off the tab until the operator looks).
+        hidden = _cards_hidden()
+        every = [r for r in every if r["txid"] not in hidden]
         acts = _game_acts([r["txid"] for r in every])
         makers = {c: _makers(c) for c in {r["creator"] for r in every}}
         for r in every:
@@ -23062,6 +23127,51 @@ def create_app(state: AppState) -> FastAPI:
         import signal
         threading.Timer(1.0, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
         return JSONResponse({"ok": True})
+
+    @app.get("/admin/api/cards")
+    def admin_cards(request: Request):
+        """The card watch's flags (arcade/cardwatch.py): hidden ones first, then cleared."""
+        _admin_check(request)
+        rows = _cardwatch().rows()
+        for r in rows:
+            r["publisher"] = _name_of(r["creator"]) or ""
+            r["like_publisher"] = _name_of(r["like_creator"] or "") or ""
+        return JSONResponse({"ok": True, "rows": rows, "trusted": state.setting("cardwatch_trusted") or [],
+                             "model": bool(state.setting("cardwatch_model") or state.setting("moderation"))})
+
+    @app.post("/admin/api/cards")
+    def admin_cards_decide(request: Request, payload: Any = Body(None)):
+        """Clear a hidden card (back on the Games tab), keep it hidden for good (confirmed), or set the trusted
+        publishers: {txid, status} or {trusted: [address or @name ...]}."""
+        _admin_check(request, write=True)
+        said = payload if isinstance(payload, dict) else {}
+        if "trusted" in said:
+            got = []
+            for t in said.get("trusted") or []:
+                t = str(t).strip()
+                if not t:
+                    continue
+                if not t.startswith("@"):
+                    got.append(t)
+                    continue
+                found = []
+                for main in (False, True):                # a name's address on each Pepecoin chain
+                    try:
+                        a = _tag_address(state, t, mainnet=main)
+                    except Exception:                     # noqa: BLE001
+                        a = ""
+                    if a and a != t:
+                        found.append(a)
+                if not found:
+                    return JSONResponse({"detail": f"no such name: {t}"}, status_code=400)
+                got += found
+            state.set_setting("cardwatch_trusted", sorted(set(got)))
+            return JSONResponse({"ok": True, "trusted": state.setting("cardwatch_trusted")})
+        try:
+            done = _cardwatch().decide(str(said.get("txid", "")), str(said.get("status", "")))
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        return JSONResponse({"ok": done})
 
     @app.post("/admin/api/moderation/test")
     def admin_moderation_test(request: Request, payload: Any = Body(None)):
