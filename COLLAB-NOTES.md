@@ -88,6 +88,28 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-19 (afternoon) · the operator's side (Claude) · branch `claude/fast-lane`
+
+The operator: "Everything should look the same as it looks on the client side on the operator side." The operator's pages
+are now the accounts' own templates with `node_side` on, answered by the node instead of the browser:
+
+- `/` = me.html (Your arcade, the node's identity), `/wallet` = my_wallet.html, `/contacts` = my_contacts.html,
+  `/messages` = my_messages.html. In the browser, `node-wallet.js` stands in for wallet.js and `node-mail.js`
+  for messaging.js (templates/node_wallet_js.js, node_mail_js.js).
+- Node APIs: `/node/wallet/{state,activity,tokens,nfts/*,send,token/send,nft/send}`, `/node/me/nfts`,
+  `/node/contacts{,/add,/update,/remove}`, `/node/mail/{letters,read}`. Sends hold a ticket in `_admin_prepared`,
+  and `/admin/api/send/confirm` broadcasts it (password from outside, as in Admin); `tok:<net>` tickets are token/NFT
+  sends. Borrowed chains send with the identity key (keywallet.py).
+- The old pages stay as `/overview`, `/wallet/tools` (mining, fast sending), `/contacts/more`, `/messages/more`
+  (files, resumes, contact codes). Their forms redirect back there.
+- Feed/Games: the operator gets the inline tip (coins or a token; `tip_send` takes net/what/token/back) and @-name
+  autocomplete from the node's book. Create: the same chain cards (`/create/chain` moves the node's token chain for
+  the operator). Pair/swap pages: Cancel on the operator's own orders. Offers: token buy-order Decline works for the
+  operator (`declined_bids:node`). Trade history link shown.
+- **Node-facilitated trades is for clients only now** (the operator): the node's own trader always runs, and
+  stand/place/take never refuse the operator.
+- Client pages render the same as before: checked by diffing every account page's HTML before and after.
+
 ### 2026-10-19 (later) · the operator's side (Claude) · branch `claude/fast-lane`
 
 - The operator's token exchange still showed no orders: a **delegated** order (an account's, answered by the node
