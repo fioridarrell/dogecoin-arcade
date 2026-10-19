@@ -427,6 +427,8 @@ NAV = [
     # Every inscribed game (arcade/games.py), where an account's sits.
     ("/games",        "Games",        "mainnet",   True),
     ("/messages",     "Messages",     "testnet",   True),
+    # Likes, replies, sales and swaps to the node's own address, as an account has (2026-10-19).
+    ("/notifications", "Notifications", None,     True),
     ("/feed",         "Feed",         "testnet",   True),
     ("/contacts",     "Address book", None,        True),
     ("/backup",       "Backup",       None,        True),
@@ -9282,10 +9284,41 @@ def create_app(state: AppState) -> FastAPI:
         return dict(got) if isinstance(got, dict) else {}
 
     def _notif_events(account) -> list:
+        chain = _account_chain()
+        owners = {a for a in (_account_address(account.pubkey, c)
+                              for c in _account_chains()) if a}
+        return _notif_events_of(me=_account_address(account.pubkey, chain), owners=owners,
+                                mine_there={a for a in (_account_address(account.pubkey, _token_chain()[0]),) if a},
+                                arrivals_of=account.pubkey,
+                                operator=bool(state.operator and account.pubkey.lower() == state.operator),
+                                seen=_notif_seen(account.pubkey))
+
+    def _node_owners() -> set:
+        """Every address the node's own wallet answers for, on each chain it runs (for its Notifications)."""
+        out = {a for a in (state.derived_address,) if a}
+        for c in (state.ledger, state.doge):
+            if c is None or c is state.messaging:
+                continue
+            try:
+                with c.rpc() as rpc:
+                    out |= set(_ledger_addresses(rpc))
+            except Exception:                              # noqa: BLE001 -- a chain offline names nothing
+                pass
+        return out
+
+    def _node_notif_events() -> list:
+        """The operator's own Notifications (2026-10-19: the operator's tabs should match the client's).
+        The same events as an account's, for the node's own addresses; its encrypted messages stay on Messages,
+        which counts them itself."""
+        owners = _node_owners()
+        return _notif_events_of(me=state.derived_address or "", owners=owners, mine_there=owners, arrivals_of=None,
+                                operator=True, seen=_notif_seen("node"))
+
+    def _notif_events_of(me: str, owners: set, mine_there: set, arrivals_of: str | None, operator: bool,
+                         seen: dict) -> list:
         from .. import notify
         from ..cardwatch import FLAGGED as cwlib_FLAGGED
         chain = _account_chain()
-        me = _account_address(account.pubkey, chain)
         events: list = []
         try:
             with state.store() as store:
@@ -9299,7 +9332,7 @@ def create_app(state: AppState) -> FastAPI:
                            if e.extra.get("txid") not in told]
         except Exception as exc:                          # noqa: BLE001
             log.info("notifications: feed: %s", exc)
-        push = state.push() if hasattr(state, "push") else None
+        push = state.push() if hasattr(state, "push") and arrivals_of else None
         if push is not None:
             def _token_name(pid: str) -> str:
                 try:
@@ -9307,18 +9340,14 @@ def create_app(state: AppState) -> FastAPI:
                     return prop["name"] if prop else ""
                 except Exception:
                     return ""
-            events += notify.message_events(push.arrivals(account.pubkey), _token_name)
-        owners = {a for a in (_account_address(account.pubkey, c)
-                              for c in _account_chains()) if a}
+            events += notify.message_events(push.arrivals(arrivals_of), _token_name)
         try:
             with state.listings._open() as conn:
                 events += notify.sale_events(conn, owners)
         except Exception as exc:                          # noqa: BLE001
             log.info("notifications: sales: %s", exc)
-        mine_there: set = set()
         try:
             tchain, index = _token_chain()
-            mine_there = {a for a in (_account_address(account.pubkey, tchain),) if a}
             rows = index.swaps_of(sorted(mine_there | owners))
             paid = {}
             if rows:
@@ -9349,7 +9378,7 @@ def create_app(state: AppState) -> FastAPI:
                                              mine_there | owners, _said)
         except Exception as exc:                          # noqa: BLE001
             log.info("notifications: lock swaps: %s", exc)
-        if state.operator and account.pubkey.lower() == state.operator:
+        if operator:
             # Game cards the card watch hid, for the operator to look at (2026-10-18).
             try:
                 for r in _cardwatch().rows((cwlib_FLAGGED,)):
@@ -9358,7 +9387,7 @@ def create_app(state: AppState) -> FastAPI:
                                                text=f"“{r['name']}” looks like “{r['like_name']}”: {r['why']}"))
             except Exception as exc:                      # noqa: BLE001
                 log.info("notifications: card watch: %s", exc)
-        return notify.merge(events, _notif_seen(account.pubkey))
+        return notify.merge(events, seen)
 
     def _swap_amount(leg: dict, n: int) -> str:
         """'1,000 GOLD', '1.14 DOGE', '1 Skull #7': a lock-script swap leg as people say it."""
@@ -9367,9 +9396,12 @@ def create_app(state: AppState) -> FastAPI:
         return f"{amount} {leg['name']}"
 
     def _account_counts(request: Request) -> dict:
-        """The red counts for an account's tabs; nothing for anybody else."""
+        """The red counts for an account's tabs, or for the operator's Notifications."""
         if not _account_view(request):
-            return {}
+            try:
+                return {"notif_count": sum(1 for e in _node_notif_events() if e.unread)}
+            except Exception:                             # noqa: BLE001 -- never break a page
+                return {}
         account = signed_in(request)
         if account is None:
             return {}
@@ -9387,13 +9419,23 @@ def create_app(state: AppState) -> FastAPI:
     #: lazy loading as well because the list is getting quite long").
     NOTIFS_PER_PAGE = 30
 
+    @app.get("/notifications", response_class=HTMLResponse)
+    def node_notifications(request: Request, page: int = 1):
+        """The operator's Notifications: the node's own address's likes, replies, mentions, sales and swaps, and the
+        game cards the card watch hid. An account has /me/notifications."""
+        if _account_view(request):
+            return RedirectResponse("/me/notifications", status_code=303)
+        return _notifications_page(request, _node_notif_events(), "node", page)
+
     @app.get("/me/notifications", response_class=HTMLResponse)
     def my_notifications(request: Request, page: int = 1):
         account = signed_in(request)
         if account is None:
             return _to_join(request)
+        return _notifications_page(request, _notif_events(account), account.pubkey, page)
+
+    def _notifications_page(request: Request, events: list, seen_key: str, page: int):
         from .. import notify
-        events = _notif_events(account)
         chain = _account_chain()
         index = state.token_index(chain)
         names: dict[str, str] = {}
@@ -9406,9 +9448,9 @@ def create_app(state: AppState) -> FastAPI:
         # Looked at: everything on the page is read now, the Messages count
         # included -- written before the page is drawn, so its own tab shows no
         # count, while the rows still say which of them were new.
-        seen = notify.seen_now(events, _notif_seen(account.pubkey))
+        seen = notify.seen_now(events, _notif_seen(seen_key))
         seen["message_tab"] = max(int(seen.get("message_tab", 0)), int(seen.get("message", 0)))
-        state.set_setting(f"notif_seen:{account.pubkey}", seen)
+        state.set_setting(f"notif_seen:{seen_key}", seen)
         every = notify.grouped(events)
         # A page at a time, newest first: the next is fetched as the reader
         # scrolls to the foot of this one, and faces are looked up only for

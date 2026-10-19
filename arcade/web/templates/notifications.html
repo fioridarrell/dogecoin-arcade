@@ -3,7 +3,8 @@
 {% block body %}
 <h1 style="margin-bottom:4px">Notifications</h1>
 <p class="sub" style="margin-top:0">Likes, replies, shares and tips on your posts, posts and comments that mention your @name, replies on
-  posts you follow, your sales, and new messages.</p>
+  posts you follow, your sales{% if public %}, and new messages{% else %} and swaps, and game cards the card watch hid.
+  This node's messages are on <a href="/messages">Messages</a>{% endif %}.</p>
 
 {% macro name(address) -%}
   {%- if names.get(address) -%}{{ wall('@' ~ names[address]) }}
@@ -16,7 +17,7 @@
 {% set link = ('/admin#gamecards' if r.source == 'cardwatch' else '/exchange/pair/' ~ r.target if r.source == 'fill' else '/me/messages' if r.source == 'message'
                else ('/feed?post=' ~ (r.comment or r.target) if r.source in ('feed', 'mention', 'mention_reply')
                else ('/inscriptions/' ~ r.target ~ '/view' if r.source == 'swap'
-               else ('/exchange/swap-trade/' ~ r.target if r.source == 'lockswap' else '/me/nfts')))) %}
+               else ('/exchange/swap-trade/' ~ r.target if r.source == 'lockswap' else ('/me/nfts' if public else '/wallet/nfts'))))) %}
 {% set who = r.actors[0] if r.actors else '' %}
 {% set badge = {'liked': ('♥', 'like'), 'disliked': ('↓', 'dislike'), 'replied to': ('↩', 'reply'),
                 'shared': ('⇄', 'share'), 'tipped': ('◆', 'tip'), 'message': ('✉', 'mail'),
