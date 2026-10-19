@@ -287,3 +287,35 @@ def test_a_page_reads_the_tag_chain_whatever_the_operators_view(client, monkeypa
     asked.clear()
     app.get(f"/r/balances/{LTC_L}")
     assert "ltc" in asked, "a Litecoin address is read on Litecoin"
+
+
+def test_a_page_never_waits_for_a_borrowed_chains_answer(client, monkeypatch):
+    """2026-10-19: pepecoinarcade.com borrows Dogecoin and Litecoin over the mesh, and a page drawing its chain menu
+    waited for the far arcade's answer (Exchange 25 s, feed 3-7 s). chain_sync answers from what is known, at once,
+    and asks on a thread of its own."""
+    import threading
+    import time as _t
+    from arcade.web.state import ChainContext
+    app, state = client
+    ltc = ChainContext(network="ltc", role="ledger", label="Litecoin", conf=pathlib.Path("/x"), borrowed=True)
+    gate = threading.Event()
+
+    class Slow:
+        def __enter__(self):
+            gate.wait(5)
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get_blockchain_info(self):
+            return {"blocks": 10, "headers": 10, "verificationprogress": 1.0, "initialblockdownload": False}
+    monkeypatch.setattr(ChainContext, "rpc", lambda self: Slow())
+    t = _t.time()
+    first = state.chain_sync(ltc)
+    assert _t.time() - t < 0.5 and first["ready"] is False, "answered at once, before the far arcade does"
+    gate.set()
+    end = _t.time() + 5
+    while _t.time() < end and not state.chain_sync(ltc).get("ready"):
+        _t.sleep(0.05)
+    assert state.chain_sync(ltc)["ready"] is True, "and ready once it has answered"

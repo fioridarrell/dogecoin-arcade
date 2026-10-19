@@ -1332,6 +1332,29 @@ class AppState:
         kept = self._sync.get(chain.network)
         if kept and kept[0] > now:
             return kept[1]
+        if getattr(chain, "borrowed", False):
+            # A borrowed chain answers over the mesh, from another arcade: up to a minute when that arcade is far or
+            # busy, and a page drawing its chain menu waited for it (2026-10-19: pepecoinarcade.com's Exchange took
+            # 25 s, its feed 3-7 s). The page gets what is known now; the asking happens on a thread of its own.
+            self._refresh_sync_later(chain)
+            return kept[1] if kept else {"ready": False, "progress": 0.0, "online": False, "blocks": 0, "headers": 0}
+        return self._sync_now(chain)
+
+    def _refresh_sync_later(self, chain: ChainContext) -> None:
+        asking = self.__dict__.setdefault("_sync_asking", set())
+        if chain.network in asking:
+            return
+        asking.add(chain.network)
+
+        def ask():
+            try:
+                self._sync_now(chain)
+            finally:
+                asking.discard(chain.network)
+        threading.Thread(target=ask, name=f"arcade-sync-{chain.network}", daemon=True).start()
+
+    def _sync_now(self, chain: ChainContext) -> dict:
+        now = time.time()
         said = {"ready": False, "progress": 0.0, "online": False, "blocks": 0, "headers": 0}
         try:
             with chain.rpc() as rpc:
