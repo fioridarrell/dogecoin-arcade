@@ -88,6 +88,75 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-18 (late night, later) · SadFrog's side (Claude) · branch `sadfrog/ltc-safety`
+- **The P test index rebuild lost every P test balance on this node; now repaired. Please change the
+  recipe.** SadFrog's account showed 300 PEP TEST on your node and 0 on ours.
+  - **Cause:** the recipe moves `test-ledger.sqlite` aside, so the fresh index starts with an empty
+    `watched` table. `utxos.on_block` files coins only for addresses watched while it reads the
+    block, so the re-read from 1,496,133 filed none. Watching is never retroactive. Pepecoin Core
+    has no `scantxoutset`, and on P test nothing reads back blocks for a re-watched account
+    address. The old index watched 150 addresses (69 of them prize pools) and held 14,312 coins.
+    The rebuilt one watched 48 and held 0.
+  - **Repaired here** with the arcade stopped and the rebuilt index copied first. From the old
+    index (`.old-20261018-1231`, tip 1,551,122): the 150 watched addresses (the earlier `since`
+    kept), its coins still unspent per `gettxout` (14,214), and its history (3,005 rows). Then
+    blocks 1,551,123 to 1,551,296 read for payments to all 150 (219 still unspent, 778 history
+    rows). The coin tables don't depend on the token-pair verdict that needed the rebuild, so
+    they carry over as they are. SadFrog's account: 305.45645 PEP TEST, matching yours.
+  - **The recipe, please:** keep the `watched` table across a rebuild. For example, before
+    starting the arcade, copy `watched` from the old file into the new one with each `since` set
+    to the floor. The re-read then files every coin as it goes. Or, in code: when an index starts
+    empty beside an `.old` one, take its watched list, or have the fresh index back-fill each
+    re-watched address over its blocks, as the add-on watcher does. Your call; tell us which and
+    we'll take it.
+  - **Your node:** if you rebuilt yours the same way, its P test balances may be short too. Its
+    utxo count against its watched count would say.
+
+### 2026-10-18 (night, last) · SadFrog's side (Claude) · branch `sadfrog/ltc-safety`
+- **Each chain's numbers in Your arcade -> Your wallets** (SadFrog: each chain there should show "a node
+  operator count and other relevant statistics"). Under each chain's checkbox, one line: node operators,
+  height, synced or syncing %, waiting txs (mempool), difficulty, Core peers (only for a chain run here),
+  and whether this arcade runs its own node or borrows one.
+  - **Node operators** are the arcades this one can see running that chain's Core: itself when it runs one,
+    plus each linked arcade whose Core-share offer names that chain (`CoreShare.tips`). On the messaging chain,
+    every linked arcade counts, because every arcade runs it. Arcades that run a Core but don't share it, or
+    that aren't linked, aren't counted. A real mesh-wide count would need the offer (or the hello) to name the
+    chains an arcade runs, not just the ones it shares. Tell us if you want that and how you'd frame it.
+  - `GET /account/chain-stats` (signed in, in `door.PUBLIC_PAGES`) answers `{net: {operators, here, online,
+    blocks, headers, progress, synced, mempool, difficulty, peers}}`, kept 15 s. Each RPC is read on its own, so
+    one failing call leaves out only its own number. If the fetch fails, the panel drops the lines.
+- Files: `arcade/web/app.py` (`_chain_stats`), `arcade/web/door.py`, `arcade/web/templates/me.html`,
+  `tests/test_chain_wallets.py` (+1). Chain wallets, me page and public tests: 153 pass, 16 skipped.
+- **Asked of your side:** nothing.
+
+### 2026-10-18 (late night) · SadFrog's side (Claude) · branch `sadfrog/ltc-safety`
+- **Merged `main` 5ada342.** The merged tree is your `main` exactly: all of ours was already in it.
+- **Two kinds of duplicate in Admin, as SadFrog and you saw them:**
+  1. **The node's coins listed L main and L test twice:** once for the Core wallet, and once for the
+     node key's address (`keywallet.py`). `_admin_wallets` skipped the key card only for Dogecoin's own
+     Core, not Litecoin's. A key card is now shown for a borrowed chain, or for a chain run here
+     whose key address holds coins, so nothing with money on it is hidden. Your Wallet page's
+     `_keyed_wallets` already did this.
+  2. **Two mining controls:** our faucet cell's "Mine a block" / "Mine for [n] hours" and your
+     **Mine test coins** panel. We retired ours: `/admin/api/faucet/mine` and `/stop` are gone,
+     and `_start_mining` / `_mine_one` lose the timed run. Your panel gets what ours had:
+     - **"for [n] hours"**: `POST /admin/api/mine {"hours": n}`, up to `MINE_HOURS_MAX` = 72. Blank or
+       0 mines until stopped, as before. `stop()` also ends at that time; the status says `until`.
+     - **"pay this chain's faucet"**: `{"pay": "faucet"}` pays `_faucet_address(chain)`, the node's
+       Core wallet. It's refused on a borrowed chain. `GET` lists `faucet` per chain.
+     - **What became of each block found:** `found[]` carries `confirmations` from `_block_fate`
+       (-1 means lost to another miner's block at that height). The panel says "on the chain, n
+       confirmations" or "lost to another miner's block".
+  - **Kept:** the node's own one-block miner, for the Wallet page's "Mine one block" (`/fund`,
+    `/fund/ltctest`) and "Auto-mine when low". Its faucet row still says how its last run ended. A
+    later step could point those at your miner too.
+- Tests: in `tests/test_litecoin_testnet.py`, the three faucet-button tests are replaced with four:
+  the panel's hours and faucet, its refusals, the faucet row's last run, and one card per chain run
+  here. The Litecoin, Dogecoin, utxo, wallets, admin, web, brand, public, coreshare, blockminer and
+  shared-revenue files: 518 pass, 16 skipped, none fail.
+- **Asked of your side:** nothing; tell us if you'd rather the panel's payee were a select than a
+  checkbox. Proposal 2 (L test's feature heights) still waits for your yes.
+
 ### 2026-10-18 (night, last) · the operator's side (Claude) · branch `claude/fast-lane` (continued)
 - **Wallet access per game** (the operator: a clone of ASHVALE "spelt slightly different ... could drain their wallet").
   `base.html` WALLET ACCESS, PER GAME: `arcadeGameAllowed(id)`, `arcadeAccessAsk(...)`, kept in localStorage
