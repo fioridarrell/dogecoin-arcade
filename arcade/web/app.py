@@ -1220,6 +1220,29 @@ def create_app(state: AppState) -> FastAPI:
 
     # --- overview -------------------------------------------------------------
 
+    def _arcades_running() -> dict:
+        """How many OTHER arcades are running (2026-10-19: Overview "should show how many other Dogecoin
+        arcades are running"): linked to this one now, reached in the last hour, or announced on the chain in the
+        last day -- each arcade once, by its mesh key."""
+        mesh = getattr(state, "mesh", None)
+        live, me, linked = set(), "", 0
+        if mesh is not None and getattr(mesh, "loop", None) is not None:
+            me = mesh.node_id
+            links = set(dict(mesh.node.links))
+            linked = len(links)
+            now = time.time()
+            live = links | {e.get("id") for e in list(mesh.node.addrs.values())
+                            if e.get("id") and now - float(e.get("ok") or 0) < 3600}
+        try:
+            with state.store() as store:
+                live |= {str(r["mesh_key"]) for r in store.mesh_peers(state.messaging.network,
+                                                                      since=int(time.time()) - 86400)}
+        except Exception:                                 # noqa: BLE001 -- the count is a nicety
+            pass
+        live.discard(me)
+        live.discard(None)
+        return {"running": len(live), "linked": linked}
+
     @app.get("/", response_class=HTMLResponse)
     def overview(request: Request):
         # On a public instance the front page is the SPLASH, not the
@@ -1286,7 +1309,8 @@ def create_app(state: AppState) -> FastAPI:
                       release_key=releaselib.PUBLIC_KEY,
                       quota=accountslib.limits(state.settings()),
                       quota_labels=accountslib.LABELS,
-                      messaging=messaging_status(), ledger=ledger_status(), stats=stats)
+                      messaging=messaging_status(), ledger=ledger_status(), stats=stats,
+                      arcades=_arcades_running())
 
     @app.post("/settings/updates")
     def set_auto_update(request: Request, csrf_token: str = Form(""),
@@ -22572,7 +22596,9 @@ def create_app(state: AppState) -> FastAPI:
                 return RedirectResponse("/admin/login", status_code=303)
             return render(request, "admin_login.html", reason=str(exc.detail),
                           signed_in=signed_in(request) is not None, need_account=True)
-        return render(request, "admin.html", local=who["local"])
+        return render(request, "admin.html", local=who["local"], update_status=state.update_status, when=_when,
+                      update_every=watcherlib.BlockWatcher.UPDATE_EVERY, release_key=releaselib.PUBLIC_KEY,
+                      trade_cut=swaplib.cut_bps(state.setting("trade_cut", TRADE_CUT)) / 100)
 
     @app.get("/admin/login", response_class=HTMLResponse)
     def admin_login_page(request: Request):
@@ -22867,6 +22893,22 @@ def create_app(state: AppState) -> FastAPI:
             for flag in ("auto_update", "auto_sell", "auto_fill", "node_trades"):
                 if flag in said:
                     state.set_setting(flag, bool(said[flag]))
+            # Moved here from Overview (2026-10-19, the operator: "the overview page needs to be re-organized"): extra
+            # room for sale (the /settings/quotas form's boost fields) and this node's cut of trades (/settings/cut).
+            if isinstance(said.get("boost"), dict):
+                b = said["boost"]
+                price = str(b.get("price") or "").strip()
+                asset = int(b.get("asset") or 0)
+                if asset < 0:
+                    raise ValueError("a boost is paid in coins (0) or a token's number")
+                if price:
+                    parse_amount(price, True)
+                state.set_setting("boost:price", price)
+                state.set_setting("boost:asset", asset)
+                state.set_setting("boost:bytes", max(1, int(b.get("bytes") or accountslib.BYTES_PER_DAY)))
+                state.set_setting("boost:days", max(1, int(b.get("days") or 30)))
+            if "trade_cut" in said:
+                state.set_setting("trade_cut", _percent(said["trade_cut"], "The cut on trades"))
             if isinstance(said.get("swap_big"), dict):
                 # Where a swap waits 1 confirmation instead of none (2026-10-17; was 3 instead of 1, 2026-10-13: "1,
                 # more for big trades"): a mainnet coin leg at or above this, in whole coins.
@@ -23144,6 +23186,31 @@ def create_app(state: AppState) -> FastAPI:
         import signal
         threading.Timer(1.0, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
         return JSONResponse({"ok": True})
+
+    @app.get("/admin/api/mesh")
+    def admin_mesh(request: Request):
+        """The mesh for Admin -> Network (2026-10-19): links, how the node is reached, its tunnel, the STUN it offers
+        and knows (mesh/stun.py), and its Cores peering through the mesh (mesh/corelink.py); and each chain's sync,
+        for Overview's Needs you."""
+        _admin_check(request)
+        chains = []
+        for c in state.all_chains:
+            try:
+                sync = state.chain_sync(c) if hasattr(state, "chain_sync") else {}
+            except Exception:                              # noqa: BLE001
+                sync = {}
+            if sync and not sync.get("ready", True):
+                chains.append({"network": c.network, "label": c.label, "syncing": True,
+                               "progress": round(100 * float(sync.get("progress") or 0), 1)})
+        mesh = getattr(state, "mesh", None)
+        if mesh is None or getattr(mesh, "loop", None) is None:
+            return JSONResponse({"ok": False, "detail": "this node is not on the mesh", "chains": chains,
+                                 "arcades": _arcades_running()})
+        out = {"ok": True, **mesh.status(), "chains": chains, "arcades": _arcades_running()}
+        stun = getattr(mesh, "stun", None)
+        out["stun_mine"] = [f"{h}:{p}" for h, p in stun.mine()] if stun is not None else []
+        out["stun_known"] = len(stun.known()) if stun is not None else 0
+        return JSONResponse(out)
 
     @app.get("/admin/api/cards")
     def admin_cards(request: Request):

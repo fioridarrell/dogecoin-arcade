@@ -13,7 +13,7 @@
 {%- endmacro %}
 
 {% macro row(r) %}
-{% set link = ('/admin#cards' if r.source == 'cardwatch' else '/exchange/pair/' ~ r.target if r.source == 'fill' else '/me/messages' if r.source == 'message'
+{% set link = ('/admin#gamecards' if r.source == 'cardwatch' else '/exchange/pair/' ~ r.target if r.source == 'fill' else '/me/messages' if r.source == 'message'
                else ('/feed?post=' ~ (r.comment or r.target) if r.source in ('feed', 'mention', 'mention_reply')
                else ('/inscriptions/' ~ r.target ~ '/view' if r.source == 'swap'
                else ('/exchange/swap-trade/' ~ r.target if r.source == 'lockswap' else '/me/nfts')))) %}

@@ -2859,12 +2859,17 @@ def test_the_overview_renders_once_the_watcher_has_checked(client):
                              "error": ""})
     answer = page.get("/")
     assert answer.status_code == 200, answer.text[:300]
-    assert "Last checked" in answer.text and "up to date" in answer.text
+    # The update status moved to Admin -> This node (2026-10-19); the Overview still has to render with it set.
+    local = {"host": "127.0.0.1:8420"}
+    answer = page.get("/admin", headers=local)
+    assert answer.status_code == 200, answer.text[:300]
+    assert "last checked" in answer.text and "up to date" in answer.text
 
     state.set_update_status({"at": 1_700_000_000.0, "what": "could not reach the site",
                              "installed": None, "published": None,
                              "error": "connection refused"})
-    body = page.get("/").text
+    assert page.get("/").status_code == 200
+    body = page.get("/admin", headers=local).text
     assert "could not reach the site" in body and "connection refused" in body
 
 
