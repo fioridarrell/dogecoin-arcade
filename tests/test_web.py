@@ -1993,7 +1993,7 @@ def test_resuming_a_message_sends_only_what_is_left(client, _stubbed_chain, monk
         store.record_pending_progress(msg_id, "txid-already-sent")
 
     token = re.search(r'name="csrf_token" value="([^"]+)"',
-                      app.get("/messages").text).group(1)
+                      app.get("/messages/more").text).group(1)
     app.post(f"/messages/{peer.hex()}/resume", data={"csrf_token": token},
              follow_redirects=False)
 
@@ -2041,7 +2041,7 @@ def test_a_resumed_send_keeps_the_readable_copy_and_the_file(client, _stubbed_ch
         store.record_pending_progress(msg_id, "txid-1")
 
     token = re.search(r'name="csrf_token" value="([^"]+)"',
-                      app.get("/messages").text).group(1)
+                      app.get("/messages/more").text).group(1)
     app.post(f"/messages/{peer.hex()}/resume", data={"csrf_token": token},
              follow_redirects=False)
     for _ in range(100):
@@ -2082,7 +2082,7 @@ def test_a_chunked_send_keeps_its_file_too(client, _stubbed_chain, monkeypatch):
         store.save_contact(pubkey=peer, name="Peer")
     big = b"\x89PNG" + bytes(range(256)) * 200         # well past one chunk
     token = re.search(r'name="csrf_token" value="([^"]+)"',
-                      app.get("/messages").text).group(1)
+                      app.get("/messages/more").text).group(1)
     response = app.post(f"/messages/{peer.hex()}/send",
                         data={"csrf_token": token, "body": "", "confirmed": "yes"},
                         files={"attachment": ("big.png", big, "image/png")},
@@ -2145,7 +2145,7 @@ def test_resuming_keeps_the_original_message_id(client, _stubbed_chain):
         store.record_pending_progress(msg_id, "txid-2")
 
     token = re.search(r'name="csrf_token" value="([^"]+)"',
-                      app.get("/messages").text).group(1)
+                      app.get("/messages/more").text).group(1)
     app.post(f"/messages/{peer.hex()}/resume", data={"csrf_token": token},
              follow_redirects=False)
 

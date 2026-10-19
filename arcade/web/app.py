@@ -1628,6 +1628,16 @@ def create_app(state: AppState) -> FastAPI:
         threading.Thread(target=work, name="arcade-post", daemon=True).start()
 
     @app.get("/messages", response_class=HTMLResponse)
+    def messages_page(request: Request):
+        # The accounts' Messenger, over the node's own opened messages (2026-10-19). The old one is /messages/more.
+        if not state.unlocked:
+            try:
+                state.ensure_identity()
+            except Exception:                              # noqa: BLE001 -- the page says so
+                pass
+        return render(request, "my_messages.html", chain=_account_chain(), when=_when, node_side=True)
+
+    @app.get("/messages/more", response_class=HTMLResponse)
     def messages(request: Request):
         # Any visit to the messenger is the reload the progress bubble asked
         # for, so a finished send has nothing left to report.
@@ -1671,7 +1681,7 @@ def create_app(state: AppState) -> FastAPI:
             except HTTPException:
                 raise          # a rejected form is a 400, not an error page
             except ValueError:
-                return RedirectResponse("/messages", status_code=303)
+                return RedirectResponse("/messages/more", status_code=303)
             with state.store() as store:
                 threads = store.conversations(state.identity.fingerprint)
                 items = _with_attachments(store,
@@ -1724,7 +1734,7 @@ def create_app(state: AppState) -> FastAPI:
             raise          # a rejected form is a 400, not an error page
         except Exception as exc:
             state.flash(str(exc), "err")
-            return RedirectResponse("/messages", status_code=303)
+            return RedirectResponse("/messages/more", status_code=303)
 
     @app.post("/messages/{peer_hex}/name")
     def rename_contact(request: Request, peer_hex: str, name: str = Form(""),
@@ -2666,7 +2676,7 @@ def create_app(state: AppState) -> FastAPI:
             row = store.attachment_for(message_id)
         if row is None:
             state.flash("That file is not here.", "err")
-            return RedirectResponse("/messages", status_code=303)
+            return RedirectResponse("/messages/more", status_code=303)
         name = _safe_filename(row["name"])
         return Response(
             content=bytes(row["data"]),
@@ -4431,6 +4441,49 @@ def create_app(state: AppState) -> FastAPI:
             except Exception:                               # noqa: BLE001
                 pass
         return out
+
+    # --- the node's Messenger, in the shape an account's inbox has (messaging.js inbox(); 2026-10-19) -------------
+    # The node opened its own messages already (the scanner, with its identity); the page is the accounts' Messenger,
+    # drawn from these "letters": both sides of every conversation, the body as the content bytes parseBody reads.
+
+    @app.get("/node/mail/letters")
+    def node_mail_letters(request: Request):
+        _node_side(request)
+        if not state.unlocked:
+            state.ensure_identity()
+        fp = state.identity.fingerprint
+        out: list[dict[str, Any]] = []
+        with state.store() as store:
+            sent_txids = {r["txid"] for r in store.conn.execute("SELECT txid FROM sent WHERE sender_fp=?", (fp,))}
+            for r in store.conn.execute(
+                    "SELECT id, sender_pubkey, sender_addr, body, block_time, read_at, first_txid, height "
+                    "FROM message WHERE recipient_fp=?", (fp,)):
+                if r["first_txid"] in sent_txids:
+                    continue
+                out.append({"id": f"m{r['id']}", "peer": bytes(r["sender_pubkey"]).hex(), "mine": False,
+                            "when": int(r["block_time"] or 0), "body": bytes(r["body"] or b"").hex(),
+                            "from_address": r["sender_addr"] or "", "txid": r["first_txid"] or "",
+                            "height": r["height"] or 0, "unread": r["read_at"] is None})
+            for r in store.conn.execute(
+                    "SELECT id, recipient_key, recipient_addr, body, created, txid, height FROM sent "
+                    "WHERE sender_fp=?", (fp,)):
+                out.append({"id": f"s{r['id']}", "peer": bytes(r["recipient_key"]).hex(), "mine": True,
+                            "when": int(r["created"] or 0), "body": bytes(r["body"] or b"").hex(),
+                            "to_address": r["recipient_addr"] or "", "txid": r["txid"] or "",
+                            "height": r["height"] or 0})
+        return JSONResponse({"me": state.identity.public_bytes.hex(), "letters": out})
+
+    @app.post("/node/mail/read")
+    def node_mail_read(request: Request, payload: Any = Body(None)):
+        _admin_check(request, write=True)
+        peer = str((payload or {}).get("peer", ""))
+        if not re.fullmatch(r"[0-9a-f]{64}", peer):
+            return JSONResponse({"detail": "name the conversation"}, status_code=400)
+        with state.store() as store:
+            store.conn.execute("UPDATE message SET read_at=? WHERE recipient_fp=? AND sender_pubkey=? "
+                               "AND read_at IS NULL", (int(time.time()), state.identity.fingerprint,
+                                                       bytes.fromhex(peer)))
+        return JSONResponse({"read": True})
 
     # --- the node's Address book, in the shape an account's book has (messaging.js book(); 2026-10-19) ---------------
 

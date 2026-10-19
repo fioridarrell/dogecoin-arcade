@@ -81,8 +81,10 @@
   </div>
 </div>
 
-<p class="muted bookfoot">Your address book is kept in this browser and follows
-  your account encrypted. This node can't read it.</p>
+{% if node_side %}<p class="muted bookfoot">The node's address book, kept on this machine. Contact codes and the chain
+  scan are on <a href="/contacts/more">the full address book</a>.</p>
+{% else %}<p class="muted bookfoot">Your address book is kept in this browser and follows
+  your account encrypted. This node can't read it.</p>{% endif %}
 
 <script src="/vendor/qrcode.js"></script>
 <style>
@@ -219,7 +221,7 @@ async function acting(what, done) {
   } catch (e) { say(String(e.message || e)); }
 }
 
-$("claim").onclick = () => acting(
+$("claim").onclick = {{ 'true' if node_side else 'false' }} ? () => { location.href = "/#claim-panel"; } : () => acting(
   () => wallet.claim(keys), (r) => `Claiming it: ${r.txid.slice(0, 16)}…`);
 $("announce").onclick = () => acting(
   () => mail.announce(keys, me), () => "Your key is on its way to the chain.");
