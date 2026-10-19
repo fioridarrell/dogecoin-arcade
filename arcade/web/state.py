@@ -1317,6 +1317,8 @@ class AppState:
 
     #: How long a sync answer is kept. Pages ask on every draw; the node is asked
     #: at most once a minute, from whichever request comes first.
+    #: How long the first look at a borrowed chain waits for its answer before calling it not ready.
+    FIRST_SYNC_WAIT = 3.0
     SYNC_SECONDS = 60
 
     def chain_sync(self, chain: ChainContext) -> dict:
@@ -1336,22 +1338,32 @@ class AppState:
             # A borrowed chain answers over the mesh, from another arcade: up to a minute when that arcade is far or
             # busy, and a page drawing its chain menu waited for it (2026-10-19: pepecoinarcade.com's Exchange took
             # 25 s, its feed 3-7 s). The page gets what is known now; the asking happens on a thread of its own.
-            self._refresh_sync_later(chain)
+            if kept:
+                self._refresh_sync_later(chain)
+                return kept[1]
+            # Nothing known yet (just started): a few seconds for the first answer, so a page drawn right after a
+            # restart does not gray out a chain that is fine (2026-10-19, pepecoinarcade.com's D and L icons).
+            asked = self._refresh_sync_later(chain)
+            if asked is not None:
+                asked.join(self.FIRST_SYNC_WAIT)
+            kept = self._sync.get(chain.network)
             return kept[1] if kept else {"ready": False, "progress": 0.0, "online": False, "blocks": 0, "headers": 0}
         return self._sync_now(chain)
 
-    def _refresh_sync_later(self, chain: ChainContext) -> None:
-        asking = self.__dict__.setdefault("_sync_asking", set())
+    def _refresh_sync_later(self, chain: ChainContext) -> "threading.Thread | None":
+        asking = self.__dict__.setdefault("_sync_asking", {})
         if chain.network in asking:
-            return
-        asking.add(chain.network)
+            return asking[chain.network]
 
         def ask():
             try:
                 self._sync_now(chain)
             finally:
-                asking.discard(chain.network)
-        threading.Thread(target=ask, name=f"arcade-sync-{chain.network}", daemon=True).start()
+                asking.pop(chain.network, None)
+        thread = threading.Thread(target=ask, name=f"arcade-sync-{chain.network}", daemon=True)
+        asking[chain.network] = thread
+        thread.start()
+        return thread
 
     def _sync_now(self, chain: ChainContext) -> dict:
         now = time.time()

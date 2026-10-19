@@ -314,9 +314,13 @@ def test_a_page_never_waits_for_a_borrowed_chains_answer(client, monkeypatch):
         def get_blockchain_info(self):
             return {"blocks": 10, "headers": 10, "verificationprogress": 1.0, "initialblockdownload": False}
     monkeypatch.setattr(ChainContext, "rpc", lambda self: Slow())
+    monkeypatch.setattr(type(state), "FIRST_SYNC_WAIT", 0.3)
     t = _t.time()
     first = state.chain_sync(ltc)
-    assert _t.time() - t < 0.5 and first["ready"] is False, "answered at once, before the far arcade does"
+    assert _t.time() - t < 1.0 and first["ready"] is False, "a short wait for the first answer, then not ready"
+    t = _t.time()
+    state.chain_sync(ltc)
+    assert _t.time() - t < 0.5, "and no wait at all while that answer is still on its way"
     gate.set()
     end = _t.time() + 5
     while _t.time() < end and not state.chain_sync(ltc).get("ready"):
