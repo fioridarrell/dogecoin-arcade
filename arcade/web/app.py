@@ -16068,7 +16068,7 @@ def create_app(state: AppState) -> FastAPI:
                 inputs, outputs = htlclib.doginal_out(
                     coin, {"txid": txid, "vout": 1, "value": int(round(float(beside["value"]) * COIN))}, owner)
             elif leg.kind == "coin":
-                inputs, outputs = htlclib.pay_out(coin, owner)
+                inputs, outputs = htlclib.pay_out(coin, owner, params=chain.params)
             else:
                 # The token or NFT moved out by the lock's own reserve, to this account.
                 inputs, outputs = htlclib.move_out(coin, htlclib.address_of(redeem, chain.params),

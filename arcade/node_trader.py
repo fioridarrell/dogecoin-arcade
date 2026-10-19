@@ -727,7 +727,7 @@ class NodeTrader:
         token/NFT moved out by the lock's own reserve."""
         to = to or self._address(leg.network)
         if leg.kind == "coin":
-            return H.pay_out(coin, to)
+            return H.pay_out(coin, to, params=chain.params)
         if leg.kind == "doginal":
             return H.doginal_out(coin, {"txid": coin["txid"], "vout": 1, "value": coin["reserve"]}, to)
         return H.move_out(coin, H.address_of(redeem, chain.params), T.move_data(leg), to)
