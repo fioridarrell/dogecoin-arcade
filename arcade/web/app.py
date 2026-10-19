@@ -13792,7 +13792,22 @@ def create_app(state: AppState) -> FastAPI:
             return JSONResponse({"detail": "this account has no address on that chain"},
                                 status_code=400)
         try:
-            coins = _payload_dust(chain, address)[:fundinglib.DUST_SWEEP_MAX]
+            coins = _payload_dust(chain, address)
+            # Each asked again now (2026-10-19: a sweep from another arcade's tab had spent some of these, the list
+            # here asks hourly, and the node refused the sweep: bad-txns-inputs-spent). Spent ones leave the list.
+            memo = _dust_memo.get((chain.network, address), {"coins": {}})
+            live = []
+            with chain.rpc() as rpc:
+                for coin in coins:
+                    if len(live) >= fundinglib.DUST_SWEEP_MAX:
+                        break
+                    if rpc.call("gettxout", coin["txid"], coin["vout"], True) is None:
+                        memo["coins"].pop((coin["txid"], coin["vout"]), None)
+                    else:
+                        live.append(coin)
+            if coins and not live:
+                raise ValueError("there is nothing left to sweep: those outputs are already back")
+            coins = live
             unsigned = fundinglib.build_dust_sweep(
                 address, coins, rate=fees.MIN_FEE_PER_KB,
                 what=f"sweep {len(coins)} message and file outputs back to your wallet")
