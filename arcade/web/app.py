@@ -3106,6 +3106,10 @@ def create_app(state: AppState) -> FastAPI:
         return out
 
     TEMPLATES.env.globals["chain_menu"] = _chain_menu
+    # An imported macro template is cached with a copy of the globals of the app that first rendered it; a second
+    # app in the same process (the tests) would draw the first one's chains. One app per process in production.
+    if TEMPLATES.env.cache is not None:
+        TEMPLATES.env.cache.clear()
 
     def _coin_of(where: Any) -> str:
         """A chain's coin by its network name, or by the old mainnet bool."""
