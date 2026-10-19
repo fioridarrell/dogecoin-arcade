@@ -117,7 +117,7 @@ def test_l_test_runs_here_when_its_node_is_there_and_finds_its_folder(tmp_path, 
     from arcade.web import __main__ as launcher
     monkeypatch.setenv("HOME", str(tmp_path))
     args = argparse.Namespace(no_ltctest=False, ltctest_conf=None, ltctest_datadir=None, home=str(tmp_path))
-    assert launcher._addon_context(args, NETWORKS["ltctest"], "") is None, "no node here, no choice: off"
+    assert launcher._addon_context(args, NETWORKS["ltctest"], "").borrowed, "no node here, no choice: borrowed (2026-10-19)"
     (tmp_path / ".litecoin-testnet").mkdir()
     (tmp_path / ".litecoin-testnet" / "litecoin.conf").write_text("testnet=1\n")
     ctx = launcher._addon_context(args, NETWORKS["ltctest"], "")

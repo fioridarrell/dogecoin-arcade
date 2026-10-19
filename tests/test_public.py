@@ -861,8 +861,9 @@ def test_sign_in_brings_you_back_to_the_page_that_sent_you(public):
 def test_a_stranger_is_told_how_to_join_on_every_public_page(public):
     app, _ = public
     body = app.get("/feed", headers=LOCAL).text
-    assert "Join or sign in" in body and "/join?next=/feed" in body
-    assert "Join or sign in" not in app.get("/join", headers=LOCAL).text
+    # A sign-in card with a link to make an account (2026-10-19).
+    assert 'id="signbar"' in body and "Create a new account" in body and "/join?next=/feed" in body
+    assert 'id="signbar"' not in app.get("/join", headers=LOCAL).text
 
 
 def test_the_not_here_page_has_a_way_home_and_a_title(public):

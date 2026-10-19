@@ -83,3 +83,20 @@ def test_a_full_statement_drops_what_its_home_no_longer_has(tmp_path):
     book.apply_from(home, rows)
     book.apply_from(home, rows[:1], full=True)
     assert _state(book, keep["id"]) == "live" and _state(book, drop["id"]) == "gone"
+
+
+def test_a_borrowed_chain_is_asked_of_the_fastest_sharer():
+    """2026-10-19: "whichever node has the fastest ping should be the one that that arcade uses". One failure
+    lately does not send a fast sharer behind a slow one; three do."""
+    from arcade.mesh.coreshare import CoreShare
+
+    class Node:
+        links = {"fast": 1, "slow": 1}
+
+        def rtts(self):
+            return {"fast": 40.0, "slow": 900.0}
+    share = CoreShare.__new__(CoreShare)
+    share.node, share.offers, share.failures = Node(), {"fast": {"doge"}, "slow": {"doge"}}, {"fast": 1}
+    assert share.sharers("doge") == ["fast", "slow"]
+    share.failures["fast"] = 3
+    assert share.sharers("doge") == ["slow", "fast"]

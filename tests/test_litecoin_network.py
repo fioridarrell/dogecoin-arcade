@@ -84,7 +84,10 @@ def test_litecoin_runs_here_when_its_node_is_there_or_borrowed_or_off_as_chosen(
     assert borrowed.borrowed and borrowed.label == "Litecoin"
     assert launcher._addon_context(argparse.Namespace(**{**vars(args), "no_ltc": True}), NETWORKS["ltc"], "") is None
     none_here = argparse.Namespace(no_ltc=False, ltc_conf=None, ltc_datadir=None, home=str(tmp_path))
-    assert launcher._addon_context(none_here, NETWORKS["ltc"], "") is None, "no node, no choice: off"
+    # No node, no choice: borrowed from an arcade that shares it (2026-10-19: "Using borrowed nodes should be
+    # on by default"). Still off when the operator says so.
+    got = launcher._addon_context(none_here, NETWORKS["ltc"], "")
+    assert got is not None and got.borrowed, "no node, no choice: borrowed"
 
 
 def test_litecoin_coins_are_guarded_like_the_others(app_state, monkeypatch):
