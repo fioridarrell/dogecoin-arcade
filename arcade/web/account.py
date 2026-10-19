@@ -143,9 +143,9 @@ class Offers:
 #: excluded is a refusal somebody can retry; a coin wrongly OFFERED is a
 #: transaction the network refuses.
 IN_FLIGHT_SECONDS = 1800
-#: How long a broadcast counts as spending its coins before the node's mempool must agree: the pool is read every
-#: 1.5 s (watcher.POOL_SECONDS), so a few seconds covers it (2026-10-19: "one minute is too long").
-FLIGHT_GRACE = 5.0
+#: How long a broadcast counts as spending its coins before the node's mempool must agree: app._pool_spent reads the
+#: pool at most every 10 s, so a little more than that (2026-10-19: "one minute is too long").
+FLIGHT_GRACE = 12.0
 
 
 @dataclass

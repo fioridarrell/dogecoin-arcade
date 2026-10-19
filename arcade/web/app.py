@@ -10353,10 +10353,15 @@ def create_app(state: AppState) -> FastAPI:
     # The coins a standing offer is signed over are spent on nothing else: every
     # funding choice reads `spent_by`, so the reservation lives in one place.
     _flights_spent_by = _flights.spent_by
+
+    def _reserved_here(pubkey: str, network: str) -> frozenset:
+        """Coins this arcade holds for an account's offers, standing orders, listings and runs: not spent, set aside."""
+        return (_bids.reserved(pubkey, network) | _standing.reserved(pubkey, network) | _parts.reserved(network)
+                | _answered_coins(network) | _listed_coins(network))
+
     _flights.spent_by = lambda pubkey, network="": (
-        _flights_spent_by(pubkey, network) | _bids.reserved(pubkey, network)
-        | _standing.reserved(pubkey, network) | _parts.reserved(network)
-        | _answered_coins(network) | _listed_coins(network))
+        _flights_spent_by(pubkey, network) | _reserved_here(pubkey, network)
+        | _held_elsewhere(pubkey, network))
 
     def _listed_coins(network: str) -> frozenset:
         """The coins every open listing is signed over, read from the listings
@@ -10750,9 +10755,18 @@ def create_app(state: AppState) -> FastAPI:
         """Satoshis the index still lists for this address that a transaction in
         the pool has already spent (this node's flights, and the node's own
         mempool -- `Flights(pool=...)`). Neither gone nor spendable: leaving."""
-        spent = _flights.spent_by(pubkey, network)
+        spent = _flights_spent_by(pubkey, network)
         return sum(coin["value"] for coin in utxoslib.unspent(db, address)
                    if (coin["txid"], coin["vout"]) in spent)
+
+    def _held(pubkey: str, network: str, db, address: str) -> int:
+        """Satoshis set aside for this account's offers and orders, here or on another arcade it is held on
+        (2026-10-19: @apple read 11.22 "leaving" on app.dogecoinarcade.com -- three standing buy orders and two
+        pre-signed offers -- and the same coins as spendable on pepecoinarcade.com). Not leaving, not spendable."""
+        spent = _flights_spent_by(pubkey, network)
+        held = _reserved_here(pubkey, network) | _held_elsewhere(pubkey, network)
+        return sum(coin["value"] for coin in utxoslib.unspent(db, address)
+                   if (coin["txid"], coin["vout"]) in held and (coin["txid"], coin["vout"]) not in spent)
 
     def _inscribed(db, address: str) -> int:
         """Satoshis of this address's coins that carry an inscription (a Doginal, or one on Pepecoin mainnet) or could
@@ -10797,6 +10811,7 @@ def create_app(state: AppState) -> FastAPI:
         what is leaving under it."""
         row["spendable"] = max(0, int(row.get("balance") or 0)
                                - int(row.get("leaving") or 0)
+                               - int(row.get("held") or 0)
                                - int(row.get("inscribed") or 0)
                                + int(row.get("incoming") or 0))
 
@@ -11078,18 +11093,29 @@ def create_app(state: AppState) -> FastAPI:
                              "address": found["address"],
                              "blob": json.loads(found["blob"])})
 
+    #: What other arcades ask of this one about an account (its coins, what it holds, its history): its own allowance,
+    #: apart from sign-in's 20 in 5 minutes, which an arcade asking for all of its signed-in accounts would use up.
+    PEER_DATA_ASKS = 300
+
+    def _peer_data_limited(request: Request) -> bool:
+        register = state.accounts()
+        who = f"peerdata:{request.client.host if request.client else ''}"
+        now = int(time.time())
+        count = register.conn.execute("SELECT COUNT(*) FROM attempt WHERE who = ? AND at > ?",
+                                      (who, now - accountslib.ATTEMPT_WINDOW)).fetchone()[0]
+        if count >= PEER_DATA_ASKS:
+            return True
+        register._attempt(who, now)
+        return False
+
     @app.get("/signin/{tag}/coins")
     def signin_coins(request: Request, tag: str):
         """The coins this arcade knows an account's addresses hold, chain by chain, for an arcade the account has
         just been brought to (2026-10-19: "can't it get the information it needs from another arcade?"):
         that arcade checks each one against its own chain (gettxout) instead of reading every block from its floor.
         What any chain says to anybody; only for an account this arcade holds."""
-        register = state.accounts()
-        who = (request.client.host if request.client else "")
-        now = int(time.time())
-        if register._rate_limited(f"vault:{who}", now):
+        if _peer_data_limited(request):
             return JSONResponse({"detail": "too many in a row. Wait a few minutes."}, status_code=429)
-        register._attempt(f"vault:{who}", now)
         found = state.vault().get(tag)
         if found is None:
             return JSONResponse({"detail": "no wallet here by that name"}, status_code=404)
@@ -11105,9 +11131,109 @@ def create_app(state: AppState) -> FastAPI:
                     since = utxoslib.since(db, address)
             except Exception:                               # noqa: BLE001 -- a chain with no index here
                 continue
+            mine = {(c["txid"], c["vout"]) for c in coins}
+            held = sorted(o for o in _reserved_here(found["pubkey"], chain.network) if o in mine)
             out[chain.network] = {"address": address, "since": since,
-                                  "coins": [{k: c[k] for k in ("txid", "vout", "value", "height")} for c in coins]}
+                                  "coins": [{k: c[k] for k in ("txid", "vout", "value", "height")} for c in coins],
+                                  "held": [list(o) for o in held]}
         return JSONResponse({"tag": found["tag"], "chains": out})
+
+    @app.get("/signin/{tag}/activity")
+    def signin_activity(request: Request, tag: str, chain: str = "", before: int | None = None, limit: int = 50):
+        """An account's history on one chain as this arcade's index has it, for an arcade it was brought to whose
+        own history of it starts later (2026-10-19: "history from one isn't showing on the other"). What any
+        chain says to anybody; only for an account this arcade holds."""
+        if _peer_data_limited(request):
+            return JSONResponse({"detail": "too many in a row. Wait a few minutes."}, status_code=429)
+        found = state.vault().get(tag)
+        picked = next((c for c in _account_chains() if c.network == chain), None)
+        if found is None or picked is None:
+            return JSONResponse({"detail": "no such account or chain here"}, status_code=404)
+        address = _account_address(found["pubkey"], picked)
+        if not address:
+            return JSONResponse({"detail": "no address on that chain"}, status_code=404)
+        limit = max(1, min(int(limit), 200))
+        index = state.token_index(picked)
+        with contextlib.closing(index.open()) as db:
+            since = utxoslib.since(db, address)
+            rows = utxoslib.activity(db, [address], before, limit + 1)
+        return JSONResponse({"address": address, "since": since, "more": len(rows) > limit, "rows": rows[:limit]})
+
+    _history_kept: dict[tuple, tuple[float, dict | None]] = {}
+    _history_seen: set = set()
+
+    def _history_elsewhere(tag: str, chain, address: str, before: int, limit: int) -> dict | None:
+        """Older history of an account from the arcade(s) that have it: the first known arcade answering for the same
+        address. On a chain this arcade runs, each transaction is checked to be on it; kept a minute per page."""
+        key = (tag, chain.network, before, limit)
+        kept = _history_kept.get(key)
+        if kept and time.time() - kept[0] < 60:
+            return kept[1]
+        found = None
+        for host in _arcade_hosts():
+            try:
+                r = requests.get(f"https://{host}/signin/{urllib.parse.quote(tag)}/activity", timeout=6,
+                                 params={"chain": chain.network, "before": before, "limit": limit},
+                                 headers={"User-Agent": "arcade-node"})
+                said = r.json() if r.status_code == 200 else None
+            except Exception:                               # noqa: BLE001
+                continue
+            if isinstance(said, dict) and said.get("address") == address and said.get("rows"):
+                found = said
+                break
+        if found and not getattr(chain, "borrowed", False):
+            kept_rows = []
+            with chain.rpc() as rpc:
+                for row in found["rows"]:
+                    txid = str(row.get("txid") or "")
+                    if txid not in _history_seen:
+                        try:
+                            if int((rpc.call("getrawtransaction", txid, 1) or {}).get("confirmations", 0)) < 1:
+                                continue
+                        except Exception:                   # noqa: BLE001 -- not on this chain: left out
+                            continue
+                        _history_seen.add(txid)
+                    kept_rows.append(row)
+            found = {**found, "rows": kept_rows}
+        _history_kept[key] = (time.time(), found)
+        return found
+
+    _held_kept: dict[str, tuple[float, dict]] = {}       # tag -> (asked at, {network: frozenset of outpoints})
+    _held_asking: set = set()
+
+    def _held_elsewhere(pubkey: str, network: str) -> frozenset:
+        """Coins other arcades hold for this account's offers and orders (their /signin/<name>/coins `held`), so this
+        arcade neither spends them nor counts them spendable. Never waited for: asked on a thread at most once a
+        minute, and what was last heard is used meanwhile."""
+        try:
+            tag = (state.vault().by_pubkey(pubkey) or {}).get("tag") or ""
+        except Exception:                                   # noqa: BLE001
+            tag = ""
+        if not tag:
+            return frozenset()
+        kept = _held_kept.get(tag)
+        if (kept is None or time.time() - kept[0] > 60) and tag not in _held_asking:
+            _held_asking.add(tag)
+
+            def ask():
+                got: dict[str, set] = {}
+                try:
+                    for host in _arcade_hosts():
+                        try:
+                            r = requests.get(f"https://{host}/signin/{urllib.parse.quote(tag)}/coins", timeout=8,
+                                             headers={"User-Agent": "arcade-node"})
+                            if r.status_code != 200:
+                                continue
+                            for net, row in (r.json().get("chains") or {}).items():
+                                got.setdefault(net, set()).update(
+                                    (str(o[0]), int(o[1])) for o in (row.get("held") or []) if len(o) == 2)
+                        except Exception:                   # noqa: BLE001 -- that arcade did not answer
+                            continue
+                    _held_kept[tag] = (time.time(), {n: frozenset(v) for n, v in got.items()})
+                finally:
+                    _held_asking.discard(tag)
+            threading.Thread(target=ask, name=f"held {tag}", daemon=True).start()
+        return (kept[1].get(network) if kept else None) or frozenset()
 
     _elsewhere_kept: dict[str, tuple[float, dict | None]] = {}
 
@@ -11413,6 +11539,7 @@ def create_app(state: AppState) -> FastAPI:
                     said["arriving"] = _arriving(account.pubkey, chain.network, db, address)
                     said["leaving"] = _leaving(account.pubkey, chain.network,
                                                db, address)
+                    said["held"] = _held(account.pubkey, chain.network, db, address)
                     said["inscribed"] = _inscribed(db, address)
                     _spendable(said)
                 _top_off_later(account.pubkey, address, int(said.get("spendable") or 0))
@@ -11493,6 +11620,7 @@ def create_app(state: AppState) -> FastAPI:
                         row["arriving"] = _arriving(account.pubkey, one.network, db, here)
                         row["leaving"] = _leaving(account.pubkey, one.network,
                                                   db, here)
+                        row["held"] = _held(account.pubkey, one.network, db, here)
                         row["inscribed"] = _inscribed(db, here)
                     if _ord_chain(one):
                         row.update(_doginal_needs())
@@ -13675,6 +13803,18 @@ def create_app(state: AppState) -> FastAPI:
             rows = utxoslib.activity(db, [address], before, limit + 1)
         said["more"] = len(rows) > limit
         rows = rows[:limit]
+        # What happened before this arcade followed the address, from the arcade that did (2026-10-19).
+        if not said["more"] and said["since"] is not None and len(rows) < limit:
+            tag = (state.vault().by_pubkey(account.pubkey) or {}).get("tag") or ""
+            older = _history_elsewhere(tag, picked, address,
+                                       min([said["since"]] + [r["height"] for r in rows] + ([before] if before else [])),
+                                       limit - len(rows)) if tag else None
+            if older:
+                have = {r["txid"] for r in rows}
+                rows += [{**r, "from": "elsewhere"} for r in older["rows"] if r.get("txid") not in have]
+                said["more"] = bool(older.get("more"))
+                if older.get("since") is not None:
+                    said["since"] = min(said["since"], int(older["since"]))
         names: dict[str, str] = {}
         for row in rows:
             other = row["other"]

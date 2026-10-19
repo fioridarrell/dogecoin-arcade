@@ -432,6 +432,8 @@ function drawHead() {
   const arriving = Number(c.incoming || 0) + Number(c.arriving || 0);
   if (arriving) bits.push(["in", `${coinsOf(arriving)} arriving`]);
   if (c.leaving) bits.push(["out", `${coinsOf(c.leaving)} leaving`]);
+  // Set aside for this account's offers and orders, on this arcade or another (2026-10-19): not leaving, not to spend.
+  if (c.held) bits.push(["out", `${coinsOf(c.held)} held for your offers`]);
   // Coins carrying an inscription are held, not spendable (2026-10-15): said beside the number they are left out of.
   if (c.inscribed) bits.push(["out", `${coinsOf(c.inscribed)} held in ${c.network === "doge" ? "Doginals" : (c.network === "ltc" || c.network === "ltctest") ? "Litecoin inscriptions" : c.network === "main" ? "Pepinals" : "inscriptions"}`]);
   if (asset) {

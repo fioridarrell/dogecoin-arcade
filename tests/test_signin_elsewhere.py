@@ -98,3 +98,26 @@ def test_an_accounts_coins_come_from_its_arcade_and_are_checked_here(tmp_path, n
     assert filed == 1, "only the coin this chain says is unspent, and theirs"
     with contextlib.closing(here.token_index(here.messaging).open()) as db:
         assert [(c["txid"], c["value"], c["height"]) for c in utxos.unspent(db, addr)] == [("aa" * 32, 5 * 100_000_000, 98)]
+
+
+def test_an_arcade_tells_another_an_accounts_history_and_what_it_holds(tmp_path, no_nodes):
+    """2026-10-19: history and balances differed between two arcades. Each serves an account's history and the coins it
+    holds for its offers, for the other to show and to leave alone."""
+    import contextlib
+    from arcade import utxos
+    home, client = _arcade(tmp_path, "home")
+    addr = "nWandererAddressXXXXXXXXXXXXXXXXXXX"
+    home.vault().put("wanderer", "ab" * 32, addr, json.dumps(BLOB))
+    home.set_setting(f"address:{'ab' * 32}", addr)
+    with contextlib.closing(home.token_index(home.messaging).open()) as db:
+        utxos.watch(db, addr, 10, why="test")
+        db.conn.execute("INSERT INTO utxo (txid, vout, address, value, height) VALUES (?,?,?,?,?)",
+                        ("aa" * 32, 0, addr, 5 * 100_000_000, 20))
+        db.conn.execute("INSERT INTO activity (txid, address, height, received, spent, paid_out, other) "
+                        "VALUES (?,?,?,?,?,?,?)", ("aa" * 32, addr, 20, 5 * 100_000_000, 0, 0, ""))
+        db.conn.commit()
+    said = client.get("/signin/wanderer/activity", params={"chain": home.messaging.network}).json()
+    assert said["address"] == addr and [r["txid"] for r in said["rows"]] == ["aa" * 32]
+    coins = client.get("/signin/wanderer/coins").json()["chains"][home.messaging.network]
+    assert coins["held"] == [], "nothing set aside for an offer yet"
+    assert client.get("/signin/nobody/activity", params={"chain": home.messaging.network}).status_code == 404
