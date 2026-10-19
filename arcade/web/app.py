@@ -26970,8 +26970,16 @@ def create_app(state: AppState) -> FastAPI:
                 out["trade_orders"] = [{**o, "mine": o["lister"] in own}
                                        for o in state.trade_orders.visible(_online, tab_live=_tab_live, browser=_browser_lister)]
             else:
-                out["trade_orders"] = [o for o in state.trade_orders.visible(_online, tab_live=_tab_live, browser=_browser_lister)
-                                       if o["node"] != mine]
+                # Every order but this node's own standing ones, which are listed apart as "This node's swaps"
+                # (2026-10-19: orders from the order book were not showing on the operator's exchange pages --
+                # dropping every order filed on this node also dropped all of its own accounts' orders).
+                try:
+                    standing = {o["id"] for o in state.node_trader.standing()}
+                except Exception:                          # noqa: BLE001 -- no node trader: nothing of its own
+                    standing = set()
+                out["trade_orders"] = [{**o, "mine": False}
+                                       for o in state.trade_orders.visible(_online, tab_live=_tab_live, browser=_browser_lister)
+                                       if o.get("id") not in standing]
             if not _account_view(request) and _node_trades():
                 trader = state.node_trader
                 out["can_trade_orders"] = True
