@@ -11078,6 +11078,37 @@ def create_app(state: AppState) -> FastAPI:
                              "address": found["address"],
                              "blob": json.loads(found["blob"])})
 
+    @app.get("/signin/{tag}/coins")
+    def signin_coins(request: Request, tag: str):
+        """The coins this arcade knows an account's addresses hold, chain by chain, for an arcade the account has
+        just been brought to (2026-10-19: "can't it get the information it needs from another arcade?"):
+        that arcade checks each one against its own chain (gettxout) instead of reading every block from its floor.
+        What any chain says to anybody; only for an account this arcade holds."""
+        register = state.accounts()
+        who = (request.client.host if request.client else "")
+        now = int(time.time())
+        if register._rate_limited(f"vault:{who}", now):
+            return JSONResponse({"detail": "too many in a row. Wait a few minutes."}, status_code=429)
+        register._attempt(f"vault:{who}", now)
+        found = state.vault().get(tag)
+        if found is None:
+            return JSONResponse({"detail": "no wallet here by that name"}, status_code=404)
+        out: dict[str, Any] = {}
+        for chain in _account_chains():
+            address = _account_address(found["pubkey"], chain)
+            if not address:
+                continue
+            try:
+                index = state.token_index(chain)
+                with contextlib.closing(index.open()) as db:
+                    coins = utxoslib.unspent(db, address)
+                    since = utxoslib.since(db, address)
+            except Exception:                               # noqa: BLE001 -- a chain with no index here
+                continue
+            out[chain.network] = {"address": address, "since": since,
+                                  "coins": [{k: c[k] for k in ("txid", "vout", "value", "height")} for c in coins]}
+        return JSONResponse({"tag": found["tag"], "chains": out})
+
     _elsewhere_kept: dict[str, tuple[float, dict | None]] = {}
 
     def _arcade_hosts() -> list[str]:
@@ -11151,12 +11182,19 @@ def create_app(state: AppState) -> FastAPI:
     _backfilling: set = set()
 
     @app.post("/account/coins/backfill")
-    def account_coins_backfill(request: Request):
+    def account_coins_backfill(request: Request, payload: Any = Body(None)):
         """Find the coins an account already held before this node watched it --
         for an account brought here from another arcade or a backup file, whose
         coins all arrived elsewhere. Once per address; in the background; from
         each chain's shared floor to where this node started watching."""
         account = _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        # The arcade the account was just brought from (wallet.js bringHere): asked for the coins first, one of the
+        # arcades this one knows and nothing a browser names freely.
+        source = str(said.get("from") or "").rstrip("/")
+        if source and source.removeprefix("https://") not in _arcade_hosts():
+            source = ""
+        mine = state.vault().by_pubkey(account.pubkey) or {}
         started = []
         for chain in _account_chains():
             address = _account_address(account.pubkey, chain)
@@ -11176,6 +11214,13 @@ def create_app(state: AppState) -> FastAPI:
 
             def run(chain=chain, address=address, key=key, start=start, end=end, index=index):
                 try:
+                    if source and mine.get("tag"):
+                        filed = _coins_from(state, source, mine["tag"], chain, address)
+                        if filed is not None:
+                            state.set_setting(key, filed)
+                            state.bump_generation()
+                            log.info("backfill: %s holds %d coins, as %s knew them", address, filed, source)
+                            return
                     with chain.rpc() as rpc:
                         # The Core's coin set first (2026-10-18): coins below the floor too. A Core without
                         # `scantxoutset` (Pepecoin, Dogecoin) or a borrowed one reads the blocks instead.
@@ -28979,3 +29024,37 @@ async def _mesh_bridge(state, socket) -> None:
             await socket.close()
         except Exception:                               # noqa: BLE001 -- already gone
             pass
+
+
+def _coins_from(state, source: str, tag: str, chain, address: str) -> int | None:
+    """An account's coins on `chain` as the arcade it came from knows them, each checked against this arcade's
+    own chain and filed; how many, or None when that arcade could not say (the blocks are read instead)."""
+    try:
+        got = requests.get(f"{source}/signin/{urllib.parse.quote(tag)}/coins", timeout=15,
+                           headers={"User-Agent": "arcade-node"})
+        said = (got.json().get("chains") or {}).get(chain.network) if got.status_code == 200 else None
+    except Exception:                                   # noqa: BLE001
+        return None
+    if not isinstance(said, dict) or said.get("address") != address:
+        return None
+    filed = 0
+    index = state.token_index(chain)
+    with chain.rpc() as rpc, index.open() as db:
+        for coin in (said.get("coins") or [])[:5000]:
+            try:
+                txid, vout = str(coin["txid"]).lower(), int(coin["vout"])
+                out = rpc.call("gettxout", txid, vout, False)
+            except Exception:                           # noqa: BLE001 -- not this chain's word: left out
+                continue
+            if not out or int(out.get("confirmations", 0)) < 1:
+                continue
+            spk = out.get("scriptPubKey") or {}
+            owners = spk.get("addresses") or ([spk["address"]] if spk.get("address") else [])
+            if address not in owners:
+                continue
+            value = int(round(float(out.get("value", 0)) * 100_000_000))
+            height = int(rpc.get_block_count()) - int(out["confirmations"]) + 1
+            db.conn.execute("INSERT OR IGNORE INTO utxo (txid, vout, address, value, height) VALUES (?,?,?,?,?)",
+                            (txid, vout, address, value, height))
+            filed += 1
+    return filed

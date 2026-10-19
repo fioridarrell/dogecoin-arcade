@@ -321,8 +321,10 @@ async function bringHere(said, password, {network, version}) {
     result = await seatWith(wallet);
   }
   remember(wallet.phrase);
-  // Its coins arrived while this node was not watching it: read them back.
-  fetch("/account/coins/backfill", {method: "POST"}).catch(() => {});
+  // Its coins arrived while this node was not watching it: as the arcade it came from knows them, each checked here
+  // (2026-10-19), or read back from the blocks when that arcade cannot say.
+  fetch("/account/coins/backfill", {method: "POST", headers: {"Content-Type": "application/json"},
+                                    body: JSON.stringify({from: said.from || ""})}).catch(() => {});
   return {...result, tag: said.tag, wallet};
 }
 
