@@ -101,9 +101,9 @@ def main(argv: list[str] | None = None) -> int:
              "this one; 'off' never does (auto by default)")
     parser.add_argument(
         "--mesh-core", choices=["on", "off"], default="on",
-        help="let this node's Pepecoin Core nodes peer with other arcades' Core nodes through "
-             "the mesh, so two nodes behind routers can still sync with each other "
-             "(at most 256 KB/s per link; on by default)")
+        help="let this node's Core nodes (Pepecoin, and Dogecoin and Litecoin when it runs them) peer with "
+             "other arcades' Core nodes through the mesh, so two nodes behind routers can still sync with "
+             "each other (at most 256 KB/s per link; on by default)")
     parser.add_argument(
         "--stun-port", type=int, default=3478, metavar="PORT",
         help="UDP port for this node's STUN server, which tells players' browsers their public address so "

@@ -863,3 +863,25 @@ def test_a_local_member_keeps_its_seat_through_a_short_drop(monkeypatch):
         finally:
             await node.stop()
     run(go())
+
+
+def test_every_chain_whose_core_runs_here_is_offered_over_the_mesh(tmp_path):
+    """2026-10-19, the operator: "The same way that the Pepe coin shares IP or tunnel so that other arcades can add it to
+    their peer list on their core the same thing should happen for the rest of the chains." Dogecoin and Litecoin
+    run here are bridged like Pepecoin; a borrowed chain (no Core here) is not."""
+    import pathlib as _p
+
+    from arcade.config import NETWORKS
+    from arcade.mesh.service import for_state
+    from arcade.web.state import AppState, ChainContext
+    chain = lambda net, **k: ChainContext(network=net, role="ledger", label=net, datadir=_p.Path("/nonexistent"), **k)
+    state = AppState(home=tmp_path, messaging=chain("test"), ledger=chain("main"))
+    state.doge = chain("doge")
+    state.ltc = chain("ltc")
+    state.ltc.borrowed = True
+    svc = for_state(state, listen_port=None)
+    try:
+        assert svc.core.chains == {"main": NETWORKS["main"].p2p_port, "test": NETWORKS["test"].p2p_port,
+                                   "doge": NETWORKS["doge"].p2p_port}, svc.core.chains
+    finally:
+        svc.stop()

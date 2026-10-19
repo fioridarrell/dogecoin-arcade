@@ -701,9 +701,13 @@ def for_state(state, *, listen_host: str | None = None, listen_port: int | None 
         peers_file=Path(state.home) / "mesh-peers.json", max_inbound=max_inbound,
         tunnel=tunnel, web_port=web_port)
     if core:
-        # Core to Core through the mesh (corelink.py): each chain's own peer port, and its addnode.
+        # Core to Core through the mesh (corelink.py): each chain's own peer port, and its addnode. Every chain whose
+        # Core runs here -- Pepecoin main and test, and Dogecoin, Litecoin and LTC TEST when this node runs them
+        # (2026-10-19, the operator: "The same way that the Pepe coin shares IP or tunnel ... the same thing should happen
+        # for the rest of the chains"). Only chains both arcades offer are bridged, so an older node is simply not
+        # offered the new ones.
         from .corelink import CoreBridge
-        by_name = {"main": state.ledger, "test": state.messaging}
+        by_name = {c.network: c for c in state.all_chains}
         chains = {}
         for name, chain in by_name.items():
             if getattr(chain, "borrowed", False):          # no Core here to peer with

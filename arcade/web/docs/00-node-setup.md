@@ -360,6 +360,7 @@ An announcement is a small transaction paid from the node's fee address.
 | `--mesh-public-port N` | the port the router forwards, if it is not the same number |
 | `--mesh-peer IP:PORT` | link to a node directly, such as one on the same network, which the chain cannot carry; may be repeated |
 | `--mesh-announce IP:PORT` | announce this address instead of working it out |
+| `--mesh-core on/off` | let this node's Cores (Pepecoin, and Dogecoin and Litecoin when it runs them) peer with other arcades' through the mesh, so two nodes behind routers still sync with each other (on by default) |
 | `--stun-port N` | UDP port of this node's STUN server (default 3478); `0` runs none |
 
 **STUN for fast games.** Fast games connect players' browsers directly to each
