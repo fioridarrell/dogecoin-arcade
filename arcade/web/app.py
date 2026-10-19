@@ -11065,11 +11065,87 @@ def create_app(state: AppState) -> FastAPI:
         register._attempt(f"vault:{who}", now)
         found = state.vault().get(tag)
         if found is None:
+            # Made on another arcade (2026-10-19: "I shouldn't have to enter a URL for the other Arcade. It
+            # should just know automatically"): asked of the arcades this one knows, for the browser to open and
+            # file here. Not when another arcade is asking (`?here=1`), so two arcades never ask each other round.
+            if request.query_params.get("here") != "1":
+                elsewhere = _vault_elsewhere(tag)
+                if elsewhere is not None:
+                    return JSONResponse(elsewhere)
             return JSONResponse({"detail": "no wallet here by that name"},
                                 status_code=404)
         return JSONResponse({"tag": found["tag"], "pubkey": found["pubkey"],
                              "address": found["address"],
                              "blob": json.loads(found["blob"])})
+
+    _elsewhere_kept: dict[str, tuple[float, dict | None]] = {}
+
+    def _arcade_hosts() -> list[str]:
+        """The other arcades this one knows, as https bases: the domains they announce (instance announcements),
+        and the wss:// addresses their meshes announce -- a named domain, or a quick tunnel, which passes
+        /signin/<name> on to its web app (mesh/wsock.py)."""
+        mine = {h.lower() for h in (state.public_hosts or ())}
+        out: list[str] = []
+        try:
+            with state.store() as store:
+                for row in store.instances(state.messaging.network):
+                    out.append(str(row["domain"] or ""))
+                for row in store.mesh_peers(state.messaging.network, since=int(time.time()) - 3 * 86400):
+                    host = str(row["host"] or "")
+                    if host.startswith("wss://"):
+                        out.append(host[len("wss://"):].split("/", 1)[0].split(":", 1)[0])
+        except Exception:                                   # noqa: BLE001 -- nothing known yet
+            pass
+        seen, hosts = set(), []
+        for h in out:
+            h = h.strip().lower()
+            if h and h not in seen and h not in mine and re.fullmatch(r"[a-z0-9.\-]+\.[a-z]{2,}", h):
+                seen.add(h)
+                hosts.append(h)
+        return hosts[:16]
+
+    def _vault_elsewhere(tag: str) -> dict | None:
+        """An account's sealed wallet from whichever known arcade holds it, or None. When the chain says who holds
+        the @name, only that address's wallet is taken; either way the browser opens it with the password, so a
+        wrong one opens nothing. Kept a few minutes, so a sign-in page is not a way to make many requests."""
+        name = str(tag or "").strip().lstrip("@").lower()
+        if not re.fullmatch(r"[a-z0-9_.\-]{1,40}", name):
+            return None
+        kept = _elsewhere_kept.get(name)
+        if kept and time.time() - kept[0] < (600 if kept[1] else 60):
+            return kept[1]
+        try:
+            owner = state.token_index(_account_chain()).address_of(name) or ""
+        except Exception:                                   # noqa: BLE001
+            owner = ""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        def ask(host: str) -> dict | None:
+            got = requests.get(f"https://{host}/signin/{urllib.parse.quote(name)}?here=1", timeout=8,
+                               headers={"User-Agent": "arcade-node"})
+            said = got.json() if got.status_code == 200 else None
+            blob = said.get("blob") if isinstance(said, dict) else None
+            if not isinstance(blob, dict) or not blob.get("sealed"):
+                return None
+            if owner and str(said.get("address") or "") != owner:
+                return None
+            return {"tag": str(said.get("tag") or name), "pubkey": str(said.get("pubkey") or ""),
+                    "address": str(said.get("address") or ""), "blob": blob, "from": f"https://{host}",
+                    "elsewhere": True}
+
+        found = None
+        hosts = _arcade_hosts()
+        if hosts:
+            with ThreadPoolExecutor(max_workers=min(8, len(hosts))) as pool:
+                for job in as_completed([pool.submit(ask, h) for h in hosts]):
+                    try:
+                        found = job.result()
+                    except Exception:                       # noqa: BLE001 -- that arcade did not answer
+                        found = None
+                    if found:
+                        break
+        _elsewhere_kept[name] = (time.time(), found)
+        return found
 
     #: Addresses whose past coins are being read right now (utxos.backfill).
     _backfilling: set = set()

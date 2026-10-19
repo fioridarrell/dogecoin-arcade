@@ -258,6 +258,9 @@ async function _signIn(tag, password, {network, version}) {
   const found = await fetch(`/signin/${encodeURIComponent(tag)}`);
   const said = await found.json();
   if (!found.ok) throw new Error(said.detail || "no wallet by that name");
+  // Made on another arcade: this one found it there by itself (2026-10-19: "It should just know
+  // automatically"), and it is brought here the way an import is, so the same name and password open it here next.
+  if (said.elsewhere) return bringHere(said, password, {network, version});
   const phrase = await open(said.blob, password);
   const wallet = await walletFrom(phrase, network, version);
   await everyChain(wallet, await chains());
@@ -284,6 +287,11 @@ async function _importFrom(node, tag, password, {network, version}) {
                           + `&tag=${encodeURIComponent(String(tag).replace(/^@/, ""))}`);
   const said = await got.json();
   if (!got.ok) throw new Error(said.detail || "that arcade did not send the wallet");
+  return bringHere(said, password, {network, version});
+}
+
+/** A sealed wallet from another arcade, opened in this tab and filed with this node like a sign-up. */
+async function bringHere(said, password, {network, version}) {
   const phrase = await open(said.blob, password);
   const wallet = await walletFrom(phrase, network, version);
   const running = await chains();
