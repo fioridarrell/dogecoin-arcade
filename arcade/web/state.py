@@ -1501,13 +1501,12 @@ class AppState:
 
     @property
     def node_trader(self):
-        """This node's own lock-script trader (arcade/node_trader.py): idle unless the
-        operator turned node-facilitated trades on. Its chains are the ones ready now."""
+        """This node's own lock-script trader (arcade/node_trader.py). Always on: the operator takes and lists
+        whatever the node-facilitated trades switch says, which is for clients coming through the web portal
+        (2026-10-19). Its chains are the ones ready now."""
         if getattr(self, "_node_trader", None) is None:
             from ..node_trader import NodeTrader
-            self._node_trader = NodeTrader(
-                self, {}, self.messaging,
-                enabled=lambda: bool(self.setting("node_trades", False)))
+            self._node_trader = NodeTrader(self, {}, self.messaging, enabled=lambda: True)
         self._node_trader.chains = {c.network: c for c in self.token_chains}
         return self._node_trader
 

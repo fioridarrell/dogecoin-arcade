@@ -384,9 +384,9 @@ class BlockWatcher:
         threading.Thread(target=back, name=f"arcade-{chain.network}-backfill", daemon=True).start()
 
     def _run_trader(self) -> None:
-        """This node's own lock-script trades, every 15 s -- only while the operator has
-        node-facilitated trades on (the trader checks the switch itself)."""
-        on = self.state.setting("node_trades", False)
+        """This node's own lock-script trades, every 15 s, whatever the node-facilitated trades switch says: that
+        switch is for clients through the web portal, not the operator's own trading (2026-10-19)."""
+        on = True
         trader = self.state.node_trader
         # A seller's delegated orders run whatever the switch (2026-10-17: orders "filled without the
         # counterparty being on Arcade"), every 2 s: the node must stay on the mesh (talk_relay ALIVE_FOR 12 s) and

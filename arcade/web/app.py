@@ -27602,7 +27602,9 @@ def create_app(state: AppState) -> FastAPI:
                 out["trade_orders"] = [{**o, "mine": False}
                                        for o in state.trade_orders.visible(_online, tab_live=_tab_live, browser=_browser_lister)
                                        if o.get("id") not in standing]
-            if not _account_view(request) and _node_trades():
+            # The operator's own swaps whatever the node-facilitated trades switch says (2026-10-19: that
+            # switch "should be for clients coming through the Web portal").
+            if not _account_view(request):
                 trader = state.node_trader
                 out["can_trade_orders"] = True
                 out["my_trade_orders"] = [{**o, "give_label": _side_label(o["give"]),
@@ -27737,8 +27739,6 @@ def create_app(state: AppState) -> FastAPI:
         node is online."""
         check_csrf(csrf_token)
         try:
-            if not _node_trades():
-                raise ValueError(NODE_TRADES_OFF)
             give, get = _coin_side(give_network, give_amount), _coin_side(get_network, get_amount, holding=False)
             if give["network"] == get["network"]:
                 where = (f" -- its market is /exchange/pair/{give['asset']}" if give["kind"] == "token" else "")
@@ -27811,8 +27811,6 @@ def create_app(state: AppState) -> FastAPI:
         if a["network"] == b["network"] and not trade_orders.one_chain_offer(a, b):
             return _open_pair(request, base, quote, may_switch=True)
         try:
-            if not _node_trades():
-                raise ValueError(NODE_TRADES_OFF)
             give, get = _price_terms(side, a, b, amount, price)
             # What the node gives comes from its home address: it must hold it (a coin is checked
             # when it locks); what it gets need not be held yet.
@@ -27856,8 +27854,6 @@ def create_app(state: AppState) -> FastAPI:
         Messenger, then both sides settle through lock scripts (arcade/trade.py)."""
         check_csrf(csrf_token)
         try:
-            if not _node_trades():
-                raise ValueError(NODE_TRADES_OFF)
             found = next((o for o in state.trade_orders.visible(_online, tab_live=_tab_live, browser=_browser_lister)
                           if o["id"] == order and o["lister"] == lister), None)
             if found is None:
