@@ -13686,7 +13686,7 @@ def create_app(state: AppState) -> FastAPI:
         """Take a buy order on one of your tokens off YOUR Offers list (the operator,
         2026-09-28: decline it, "but the order remain on the books"). Nothing is
         broadcast and the order is untouched: anybody may still sell into it."""
-        if _account_view(request):
+        if signed_in(request) is not None or _account_view(request):
             who = _signed_in_account(request).pubkey
         else:
             _admin_check(request, write=True)          # the operator's own Offers list (2026-10-19)
@@ -21159,7 +21159,8 @@ def create_app(state: AppState) -> FastAPI:
     def account_wallets(request: Request, payload: Any = Body(None)):
         """Show or hide one chain's wallet in this account's Wallet tab. Only what is SHOWN: the address stays, is
         still announced, is still watched, and coins sent to it still arrive. At least one wallet stays shown."""
-        if _account_view(request):
+        signed = signed_in(request)
+        if signed is not None or _account_view(request):
             whose = _signed_in_account(request).pubkey
         else:
             _admin_check(request, write=True)              # the node's own Wallet (2026-10-19)
@@ -27530,10 +27531,27 @@ def create_app(state: AppState) -> FastAPI:
             got = []
         return JSONResponse({"orders": got}, headers={"Cache-Control": "no-store"})
 
+    @app.post("/account/orders/taking")
+    def orders_taking(request: Request, payload: Any = Body(None)):
+        """A swap on this account's listed order is under way (or fell through), said by the page answering it: off
+        (or back on) this node's book at once, and every other arcade's through the book room (book_relay.py;
+        2026-10-19: "no two users can fill the same order"). Only the account's own orders."""
+        account = _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        oid = str(said.get("id") or "")
+        if not re.fullmatch(r"ord-[0-9a-f]{16}", oid):
+            return JSONResponse({"detail": "name the order"}, status_code=400)
+        mine = {a for a in (_account_address(account.pubkey, c) for c in _account_chains()) if a}
+        if state.trade_orders.lister_of(oid) not in mine:
+            return JSONResponse({"detail": "not this account's order"}, status_code=403)
+        state.trade_orders.set_taking(oid, bool(said.get("taking")))
+        state.bump_generation()
+        return JSONResponse({"id": oid, "taking": bool(said.get("taking"))})
+
     @app.post("/account/orders/cancel")
     def orders_cancel(request: Request, payload: Any = Body(None)):
-        """This account withdrew these swaps: off this node's book now (the cancel batch it inscribes
-        takes them off every other arcade's when its block lands). Only the account's own orders."""
+        """This account withdrew these swaps: off this node's book now, and every other arcade's through the book
+        room (book_relay.py). Only the account's own orders."""
         account = _signed_in_account(request)
         said = payload if isinstance(payload, dict) else {}
         ids = [str(i) for i in (said.get("ids") or []) if isinstance(i, str) and re.fullmatch(r"ord-[0-9a-f]{16}", i)][:50]
@@ -27596,16 +27614,15 @@ def create_app(state: AppState) -> FastAPI:
                 out["trade_orders"] = [{**o, "mine": o["lister"] in own}
                                        for o in state.trade_orders.visible(_online, tab_live=_tab_live, browser=_browser_lister)]
             else:
-                # Every order but this node's own standing ones, which are listed apart as "This node's swaps"
-                # (2026-10-19: orders from the order book were not showing on the operator's exchange pages --
-                # dropping every order filed on this node also dropped all of its own accounts' orders).
+                # The same book every account and every arcade sees (2026-10-19: "it should be the same
+                # orderbook as every other client and operator sees"), this node's own standing orders in it, marked
+                # its own, with Cancel.
                 try:
                     standing = {o["id"] for o in state.node_trader.standing(own=True)}
                 except Exception:                          # noqa: BLE001 -- no node trader: nothing of its own
                     standing = set()
-                out["trade_orders"] = [{**o, "mine": False}
-                                       for o in state.trade_orders.visible(_online, tab_live=_tab_live, browser=_browser_lister)
-                                       if o.get("id") not in standing]
+                out["trade_orders"] = [{**o, "mine": o.get("id") in standing}
+                                       for o in state.trade_orders.visible(_online, tab_live=_tab_live, browser=_browser_lister)]
             # The operator's own swaps whatever the node-facilitated trades switch says (2026-10-19: that
             # switch "should be for clients coming through the Web portal").
             if not _account_view(request):

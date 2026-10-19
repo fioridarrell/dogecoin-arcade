@@ -2677,8 +2677,27 @@ function tradesOf(wallet) {
 }
 function keepTrade(wallet, trade) {
   const all = tradesOf(wallet);
+  const was = all[trade.id];
   all[trade.id] = trade;
   try { localStorage.setItem(`${TRADES}:${wallet.pubkey}`, JSON.stringify(all)); } catch (e) {}
+  // A swap on one of this tab's listed orders just ended (2026-10-19: "no two users can fill the same
+  // order"): taken whole, or its side locked and refunded, the order never stands again; called off with nothing
+  // locked, it is back on every book.
+  const ended = (t) => t && (t.state === "done" || t.state === "aborted");
+  if (trade.role === "responder" && trade.order && ended(trade) && !ended(was)) {
+    if (trade.state === "done" || trade.myLock) withdrawOrder(wallet, trade.order).catch(() => {});
+    else orderTaking(wallet, trade.order, false).catch(() => {});
+  }
+}
+
+/** Tell this account's node that a swap on its listed order is under way (or fell through): it goes off (or back
+ *  on) its book and every other arcade's at once (/account/orders/taking, the book room). */
+async function orderTaking(wallet, id, taking) {
+  const book = myOrdersOf(wallet);
+  const o = book.orders[id];
+  if (o) { if (taking) o.taking = true; else delete o.taking; keepMyOrders(wallet, book); }
+  await fetch("/account/orders/taking", {method: "POST", credentials: "same-origin",
+    headers: {"Content-Type": "application/json"}, body: JSON.stringify({id, taking})});
 }
 export function myTrades(wallet) {
   return Object.values(tradesOf(wallet));
@@ -3050,7 +3069,7 @@ async function postNow(wallet) {
        msg_key: coinsHex(me.publicKey || me.public || me.pub), node: acct.mesh_node, tab: true,
        expires: now + TAB_ORDER_LIFE});
   // To this account's node, not the chain (2026-10-17: "there's no reason why my browser should be posting
-  // orders to the chain"): free, on the book at once; other arcades hear of it over the mesh.
+  // orders to the chain"): free, on the book at once; other arcades hear of it in the mesh's book room (book_relay.py).
   const asked = await fetch("/account/orders/post", {
     method: "POST", headers: {"Content-Type": "application/json"},
     body: JSON.stringify({orders, cancels: book.cancels || []}),
@@ -3126,7 +3145,7 @@ export async function withdrawOrder(wallet, id) {
   book.withdrawn = [...new Set([...(book.withdrawn || []), id])].slice(-200);   // kept after the cancel is posted
   keepMyOrders(wallet, book);
   // Off this node's book at once (2026-10-17: Cancel "says your order is off the books, but it
-  // stays there"): the cancel batch below reaches every other arcade when its block lands.
+  // stays there"), and every other arcade's through the book room.
   try {
     await fetch("/account/orders/cancel", {method: "POST", credentials: "same-origin",
       headers: {"Content-Type": "application/json"}, body: JSON.stringify({ids: [id]})});
@@ -3205,6 +3224,11 @@ export async function answerProposals(wallet) {
                      {meshOnly: true}).catch(() => {});
     };
     if (!fits) { await refuse(mine ? "those are not this swap's terms" : "no such swap here"); continue; }
+    // First taker wins (2026-10-19): a lock moves the whole order, so a second swap could only refund.
+    if (mine.taking || Object.values(trades).some((t) => t.order === p.order && t.role === "responder"
+                                                      && t.state !== "done" && t.state !== "aborted")) {
+      await refuse("somebody else is taking this swap"); continue;
+    }
     // Able to lock its side? If not, say so now, before the taker locks anything.
     const short = await canFund(mine.give);
     if (short) { await refuse(`the lister cannot fund its side (${short})`); continue; }
@@ -3216,6 +3240,8 @@ export async function answerProposals(wallet) {
                    need: confirmationsFor(p.get, p.give, await swapBig()),
                    approved: !!mine.approved};      // approved when it was listed
     keepTrade(wallet, trade);
+    trades[trade.id] = trade;
+    await orderTaking(wallet, p.order, true).catch(() => {});        // off every book now
     // Kept BEFORE it is said, and said again by tradeTick until it goes: an accept that
     // failed to send must not leave the other side waiting for ever.
     await sayAccept(wallet, trade).catch(() => {});

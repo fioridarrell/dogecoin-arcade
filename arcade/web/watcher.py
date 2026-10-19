@@ -112,6 +112,10 @@ class BlockWatcher:
             except Exception:
                 log.debug("talk relay failed", exc_info=True)
             try:
+                self.state.book_relay().tick()       # one swap book across arcades (book_relay.py, 2026-10-19)
+            except Exception:
+                log.debug("book relay failed", exc_info=True)
+            try:
                 # The node's own messaging key stays reachable on the mesh while it holds delegated orders (2026-10-17:
                 # a taker was told "the seller's page is not open" between two slow trader passes).
                 trader = self.state.node_trader

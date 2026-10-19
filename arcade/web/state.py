@@ -1482,9 +1482,17 @@ class AppState:
     def trade_orders(self):
         """Orders inscribed on the chains this node reads (arcade/trade_orders.py)."""
         if getattr(self, "_trade_orders", None) is None:
+            from ..book_relay import BookRelay
             from ..trade_orders import OrderBook
             self._trade_orders = OrderBook(self.home / "trade-orders.sqlite")
+            # One book across arcades: what changes here is said in the mesh's book room (2026-10-19).
+            self._book_relay = BookRelay(lambda: getattr(self, "mesh", None), self._trade_orders,
+                                         self.bump_generation)
         return self._trade_orders
+
+    def book_relay(self):
+        _ = self.trade_orders
+        return self._book_relay
 
     @property
     def trade_watch(self):

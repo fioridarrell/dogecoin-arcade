@@ -88,6 +88,34 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-19 (evening) · the operator's side (Claude) · branch `claude/fast-lane`
+
+The operator: "They should share the same order books ... the same orderbook as every other client and operator sees.
+They should work across Dogecoin arcades" and "Books should be updated as instantaneously as possible. So no two
+users can fill the same order."
+
+- **Found:** since 145aab06 (2026-10-17) a browser's listed swap is filed on its own node only, and "being taken"
+  never left the maker's node, so other arcades never saw tab orders, takes or cancels. Neither the node trader nor
+  a maker tab refused a second taker.
+- **arcade/book_relay.py:** every node sits in mesh room `arcade-book` and announces the orders whose home it is
+  (`OrderBook.on_change` → next 1.5 s pool-watch pass; everything again every 30 s with `full`). Format:
+  `{id, lister, network, body, state: live|taking|gone}`, zlib-compressed, sent as talk_relay pieces.
+  `OrderBook.apply_from(origin, ...)` files only orders whose `node` is the signing origin.
+- **First taker wins:**
+  - `node_trader._consider` refuses a proposal while `_being_taken`, and marks the node's own orders taking too.
+    It withdraws them when filled, or when its side was locked and refunded, and puts them back when the taker
+    walks away.
+  - wallet.js `answerProposals` does the same for a tab's orders. The tab tells its node through the new
+    `/account/orders/taking` (door PUBLIC_POST).
+- **Node orders:** `post()` files the batch on the node's own book at once, rather than a block later.
+- **Operator book:** the operator's book lists its own standing orders, marked as its own with Cancel.
+- **Pace:**
+  - The exchange tokens tab is `data-live-fast`.
+  - The node trader runs at a page's pace: 1.5 s while busy, 8 s otherwise.
+  - Swap claims are tried every 1.5 s; refunds every 15 s.
+- **Node-facilitated trades is for clients only:** the operator always takes and lists.
+- **SadFrog:** pull and restart. The book room needs both arcades on this version to share books.
+
 ### 2026-10-19 (afternoon) · the operator's side (Claude) · branch `claude/fast-lane`
 
 The operator: "Everything should look the same as it looks on the client side on the operator side." The operator's pages
