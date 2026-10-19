@@ -145,7 +145,7 @@
         Share {{ p.shares or '' }}</button></form>
     {% endif %}
 
-    {% if acts %}
+    {% if acts or not public %}
     {# The one of these that costs something gets the amount box the
        operator's own tip page has. The form is unchanged on purpose —
        `/feed/<txid>/tip` is the route, it is simply not one the door opens
@@ -1391,5 +1391,9 @@ document.addEventListener("focusout", (e) => { if (e.target === field) setTimeou
 </script>
 <style>.feedpost.focused{box-shadow:0 0 0 2px var(--accent);animation:focusfade 3s ease-out 1}
 @keyframes focusfade{0%{background:color-mix(in srgb,var(--accent) 22%,var(--panel))}100%{background:var(--panel)}}</style>
+{% endif %}
+{% if not public %}
+{# The operator's tip form posts to the node (tip_send); this only fills its token list from the node's wallet. #}
+<script type="module">import {tipPicker} from "/wallet.js"; tipPicker(document, "/node/wallet/tokens");</script>
 {% endif %}
 {% endblock %}

@@ -2329,7 +2329,7 @@ let tipHeld = null;
 /** Keep a tip form's three steps in step: the coin named for the network picked, and
  *  the token list (this account's own holdings there) when "a token" is picked.
  *  Call once per page. */
-export function tipPicker(root = document) {
+export function tipPicker(root = document, tokensFrom = "/account/tokens") {
   root.addEventListener("change", async (e) => {
     const box = e.target;
     if (!box.form || !(box.hasAttribute("data-tip-net") || box.hasAttribute("data-tip-what"))) return;
@@ -2341,7 +2341,7 @@ export function tipPicker(root = document) {
     if (what.value !== "token") return;
     list.textContent = "";
     try {
-      if (!tipHeld) tipHeld = ((await (await fetch("/account/tokens")).json()).chains) || [];
+      if (!tipHeld) tipHeld = ((await (await fetch(tokensFrom)).json()).chains) || [];
       const here = (tipHeld.find((c) => c.network === net.value) || {}).tokens || [];
       for (const t of here.filter((t) => Number(t.balance) > 0)) {
         const o = document.createElement("option");

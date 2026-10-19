@@ -3964,7 +3964,11 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.post("/feed/{txid}/tip")
     def tip_send(request: Request, txid: str, network: str = Form(""),
-                 amount: str = Form(""), csrf_token: str = Form("")):
+                 amount: str = Form(""), csrf_token: str = Form(""), net: str = Form(""),
+                 what: str = Form("coin"), token: str = Form(""), back: str = Form("")):
+        # The inline tip form the accounts have (2026-10-19, for the operator too): `net`, then coins or `token`.
+        network = net or network
+        back = back if back.startswith("/") and not back.startswith("//") else "/feed"
         try:
             check_csrf(csrf_token)
             row = _feed_thing(state.messaging.network, txid)
@@ -3982,16 +3986,30 @@ def create_app(state: AppState) -> FastAPI:
                 raise ValueError(
                     "they have not published an address on that chain, so "
                     "there is nowhere to send it")
-            sats = parse_amount(amount, True)
-            txid_out = state.send_tip(network, txid, where, sats)
+            if what == "token":
+                # A token from the node's own addresses, then the note on the post that says it was a tip
+                # (feed.TIP_TOKEN, what wallet.tip does for an account).
+                index = state.token_index(context)
+                prop, units = _amount_for(index, int(token or 0), amount)
+                with context.rpc() as rpc:
+                    parts = _send_parts(rpc, index, prop, units, avoid=where)
+                    if len(parts) != 1:
+                        raise ValueError(f"the node holds that much {prop['name']} only across several addresses")
+                    sender = tokenlib.TokenSender(rpc, context.params)
+                    sent = sender.broadcast(sender.prepare(parts[0][0],
+                                                           tokenlib.send_payload(prop["property_id"], units), where))
+                txid_out = state.send_feed_act(feedlib.TIP_TOKEN, txid, sent)
+            else:
+                sats = parse_amount(amount, True)
+                txid_out = state.send_tip(network, txid, where, sats)
             state.flash(f"Tipped. {txid_out} is on its way, and the post shows "
                         f"it once its block lands.", "ok")
         except HTTPException:
             raise
         except Exception as exc:
             state.flash(str(exc), "err")
-            return RedirectResponse(f"/feed/{txid}/tip", status_code=303)
-        return RedirectResponse("/feed", status_code=303)
+            return RedirectResponse(back if net else f"/feed/{txid}/tip", status_code=303)
+        return RedirectResponse(back, status_code=303)
 
     @app.post("/feed/{txid}/{doing}")
     def feed_act(request: Request, txid: str, doing: str,
@@ -13452,12 +13470,16 @@ def create_app(state: AppState) -> FastAPI:
         """Take a buy order on one of your tokens off YOUR Offers list (the operator,
         2026-09-28: decline it, "but the order remain on the books"). Nothing is
         broadcast and the order is untouched: anybody may still sell into it."""
-        account = _signed_in_account(request)
+        if _account_view(request):
+            who = _signed_in_account(request).pubkey
+        else:
+            _admin_check(request, write=True)          # the operator's own Offers list (2026-10-19)
+            who = "node"
         said = payload if isinstance(payload, dict) else {}
         key = str(said.get("key") or "").strip()
         if not re.fullmatch(r"[0-9a-f]{64}|standing-[0-9a-f]{8,64}", key):
             return JSONResponse({"detail": "name the buy order"}, status_code=400)
-        name = f"declined_bids:{account.pubkey}"
+        name = f"declined_bids:{who}"
         kept = [k for k in (state.setting(name, []) or []) if k != key][-499:] + [key]
         state.set_setting(name, kept)
         return JSONResponse({"declined": key})
@@ -27946,8 +27968,8 @@ def create_app(state: AppState) -> FastAPI:
                 # to buy? ... on exchange>offers"): the chain's bids and the ones this
                 # node holds, best price first.
                 looker = signed_in(request) if data["viewer"] == "account" else None
-                declined_bids = set(state.setting(f"declined_bids:{looker.pubkey}", []) or []) \
-                    if looker is not None else set()
+                # The node's own list is "declined_bids:node" (2026-10-19: its Decline posted to the account route).
+                declined_bids = set(state.setting(f"declined_bids:{looker.pubkey if looker else 'node'}", []) or [])
                 if tab == "offers" and data["owned"]:
                     from fractions import Fraction
                     for prop in _token_props(index):

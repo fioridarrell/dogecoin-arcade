@@ -629,3 +629,17 @@ def test_a_token_link_opens_the_token_on_the_chain_it_names(client, monkeypatch)
         seen.clear()
         app.get(f"/tokens/9?chain={chain.network}")
         assert seen and all(f"{chain.network}-ledger" in p for p in seen[:1]), (chain.network, seen[:2])
+
+
+def test_the_operator_tips_from_the_feed_like_an_account(client, monkeypatch):
+    """2026-10-19: everything the same as the client side. The operator's Tip is the inline form (network, coin
+    or token, amount), posted to the node, and it comes back to the page it was on."""
+    app, state = client
+    a_post(state, "a" * 64, text="worth something")
+    page = app.get("/feed").text
+    assert f'id="tip-{"a" * 64}"' in page and 'name="what"' in page and "/node/wallet/tokens" in page
+    paid = []
+    monkeypatch.setattr(type(state), "send_tip", lambda self, net, txid, to, sats: paid.append((net, to, sats)) or "e" * 64)
+    said = app.post(f"/feed/{'a' * 64}/tip", follow_redirects=False, data={
+        "csrf_token": state.csrf_token, "net": state.messaging.network, "what": "coin", "amount": "2", "back": "/feed"})
+    assert said.headers["location"] == "/feed" and paid == [(state.messaging.network, THEM, 200_000_000)]
