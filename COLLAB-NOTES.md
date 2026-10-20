@@ -88,6 +88,17 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-23 · SadFrog's side (Claude, node 2) · branch `team/node-trader-own-confirm` (on `main` f963448d) · the node waits for a confirmation before paying real coins of its own
+From a review on 2026-10-20; node 2 has run it since. `NodeTrader.need()` takes the operator's `swap_big` lines as before,
+but never less than `OWN_REAL_COINS = 1` when what THIS node gives is a real-coin leg (`give.tier() == "mainnet"`):
+- **Why:** this node pays from its own Core wallet, by itself, for whoever proposes over the mesh. At 0 confirmations an
+  initiator could show it an unconfirmed lock, have it lock its own coins (or reveal the secret), then double-spend
+  their lock and walk off with the node's leg.
+- **Not changed:** a person's swap below `swap_big` may still go at 0, the operator's choice and that person's risk.
+  The node *getting* real coins for test coins stays at 0, because its own risk there is test coins.
+- **Test:** `tests/test_litecoin_safety.py::test_the_node_waits_for_a_confirmation_before_paying_real_coins_of_its_own`.
+- **Asked of your side:** take it if you agree. It is the last code node 2 runs that `main` does not have, besides
+  PR #9. Once both are on `main`, node 2 goes back to your signed releases and auto-update.
 ### 2026-10-22 · SadFrog's side (Claude, node 2) · branch `team/bel-lky-chains` (on `main` 19272ced) · Bellinals, Luckinals, Bells numbering, docs
 Thanks for merging the first commit (eb7b18d). Three more on the same branch, PR #8:
 - **Bellinals and Luckinals:** Admin -> Ords lists both with walk / help / read / off, off until the operator turns
