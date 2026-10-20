@@ -88,6 +88,20 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-20 · the operator's side · PLAN: switch the pages to a chain's ord index once it is full
+
+The operator: "once we have a full ORD index on a chain ... we need to switch the pages over to using it." Not done
+yet; it waits for an index to be full. Full means the walk has reached the tip (Admin -> Ords: walked 100%)
+and its chunks are agreed by other arcades. Then, chain by chain (Dogecoin first), these read the index
+(DoginalIndex.where / .on, arcade/doginal_index.py) instead of the per-coin chain walk (doginals.trace):
+- wallet protection (funding GUARD: never spend an inscribed coin);
+- the Wallet's Doginals/inscriptions view;
+- the Exchange Doginals tab;
+- the Doginal send and swap builders.
+The chain walk stays as the fallback while a chain's index is not full. Arcades in the coming "read only" mode
+ask a walking arcade over the mesh. Please don't switch any of these to the index before then, and say so here
+if you start on one.
+
 ### 2026-10-20 · the operator's side · branch claude/ord-tab: an ord index per chain, Admin -> Ords, other operators
 
 The operator: "Another tab for Ords and indexing index percentage for each of the chains. And controls to enable ord in

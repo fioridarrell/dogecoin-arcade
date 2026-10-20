@@ -470,8 +470,11 @@ def test_forgot_password_the_words_set_a_new_one(loaded):
 
     row = state.vault().get("forgetful")
     assert row["blob"] != old_blob, "sealed again"
+    # Whole words only (2026-10-20): the blob is hex, and a recovery word spelled from a-f ("face", "decade", "add")
+    # turns up inside random hex now and then, which failed this test by chance under the gate.
+    import re
     for word in made["phrase"].split():
-        assert word not in row["blob"]
+        assert not re.search(rf"\b{re.escape(word)}\b", row["blob"]), word
     assert made["phrase"].encode() not in (home / "accounts.sqlite").read_bytes()
 
     browser.delete_all_cookies()

@@ -1395,3 +1395,20 @@ def test_a_public_sign_in_remembers_nobody_before_it(named):
     second = _seat(app, headers=EDGE)
     assert "arcade_others" not in app.cookies
     assert app.get("/auth/who", headers=EDGE).json()["pubkey"] == second
+
+
+def test_the_unlock_bar_shows_the_moment_the_page_draws():
+    """2026-10-20: "it takes about three seconds before the unlock button even appears on the screen. The unlock
+    button should appear as soon as the page opens." The bar is shown by a plain script reading this tab's open
+    wallet from sessionStorage, before wallet.js loads or asks the other tabs; the module only hides it again."""
+    import pathlib
+    import re
+    root = pathlib.Path(__file__).resolve().parent.parent / "arcade" / "web" / "templates"
+    base = (root / "base.html").read_text()
+    wallet = (root / "wallet_js.js").read_text()
+    key = re.search(r'const OPEN_WALLET = "([^"]+)";', wallet).group(1)
+    bar = base.index('<div id="unlockbar"')
+    plain = base.index(f'sessionStorage.getItem("{key}")', bar)
+    module = base.index('<script type="module">', bar)
+    assert plain < module, "decided before the module, and with the same key wallet.js keeps the open wallet under"
+    assert "bar.hidden = !!keys" in base[module:module + 400]

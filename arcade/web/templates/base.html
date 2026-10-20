@@ -1472,18 +1472,28 @@ document.addEventListener("click", async (event) => {
   <span>Your wallet is locked.</span>
   <button type="button" class="small" id="unlockbar-go">Unlock</button>
 </div>
+<script>
+// Shown the moment the page draws when this tab holds no open wallet (2026-10-20: "it takes about three
+// seconds before the unlock button even appears ... The unlock button should appear as soon as the page opens").
+// The wait was wallet.js loading, then asking the other tabs for an open wallet (0.4 s, then 1.5 s more); the
+// module below still asks, and hides the bar if another tab hands one over.
+(function () {
+  var open = null, bar = document.getElementById("unlockbar");
+  try { open = sessionStorage.getItem("arcade-open-wallet"); } catch (e) {}
+  if (!bar) return;
+  if (!open) bar.hidden = false;
+  document.getElementById("unlockbar-go").onclick = async function () {
+    var opened = await arcadeUnlockSheet("");
+    // Drawn again, so everything on the page that needs the key has it.
+    if (opened) location.reload();
+  };
+})();
+</script>
 <script type="module">
   const w = await import("/wallet.js");
   const keys = await w.opened(ARCADE_CHAIN);
   const bar = document.getElementById("unlockbar");
-  if (!keys && bar) {
-    bar.hidden = false;
-    document.getElementById("unlockbar-go").onclick = async () => {
-      const opened = await arcadeUnlockSheet("");
-      // Drawn again, so everything on the page that needs the key has it.
-      if (opened) location.reload();
-    };
-  }
+  if (bar) bar.hidden = !!keys;
 </script>
 {% endif %}
 <script>
