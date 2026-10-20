@@ -393,6 +393,12 @@ section.panel h2{margin-top:0}
 .admintable th{text-align:left;color:var(--muted);font-weight:600;padding:6px 8px;border-bottom:1px solid var(--line)}
 .admintable td{padding:7px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
 .admintable td.acts{text-align:right}
+/* The Ords tab (2026-10-20): a walking arcade's lines are long, so its cells wrap, a fact to a line, and the
+   control is wide enough to read -- the table looked different on every arcade. */
+#ords .admintable td{white-space:normal;vertical-align:top}
+#ords .admintable td.ordwhat{white-space:nowrap}
+#ords select{min-width:6.5em;font-size:16px}
+#ords .ordline{display:block}
 .quotagrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px 14px;margin-bottom:10px}
 .quotagrid label{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:.9rem}
 .quotagrid input{width:90px}
@@ -983,6 +989,13 @@ section.panel h2{margin-top:0}
   var ORD_WORDS = {walk: 'Walk', help: 'Help', off: 'Off'};
   function pct(x) { return (x == null ? '\u2014' : Number(x).toFixed(x < 10 ? 2 : 1) + '%'); }
   function num(x) { return Number(x || 0).toLocaleString(); }
+  function lines(items, cls) {
+    var td = document.createElement('td');
+    if (cls) td.className = cls;
+    if (!items.length) td.textContent = '\u2014';
+    items.forEach(function (x) { td.appendChild(text('span', x, 'ordline')); });
+    return td;
+  }
   function loadOrds() {
     if (!document.querySelector('.admintab[data-tab="ords"].on')) return;
     fetch('/admin/api/ords', {headers: {'Accept': 'application/json'}, cache: 'no-store'}).then(function (r) { return r.json(); })
@@ -990,7 +1003,7 @@ section.panel h2{margin-top:0}
         var tb = $('ordrows'); tb.textContent = '';
         (d.rows || []).forEach(function (r) {
           var tr = document.createElement('tr');
-          tr.appendChild(text('td', r.title + ' \u00b7 ' + r.label));
+          var name = text('td', r.title + ' \u00b7 ' + r.label); name.className = 'ordwhat'; tr.appendChild(name);
           var td = document.createElement('td'), sel = document.createElement('select');
           sel.setAttribute('aria-label', r.title + ' ord index');
           ['walk', 'help', 'off'].forEach(function (m) {
@@ -1007,7 +1020,7 @@ section.panel h2{margin-top:0}
           var w = r.walk, line = [];
           if (w) line.push(pct(r.walked_pct) + ' walked here (block ' + num(w.next) + ' of ' + num(r.tip) + ')');
           if (r.mode !== 'off') line.push(pct(r.agreed_pct) + ' agreed by two arcades (' + num(r.agreed) + ' of ' + num(r.ready) + ' chunks)');
-          tr.appendChild(text('td', line.join(' \u00b7 ') || '\u2014'));
+          tr.appendChild(lines(line));
           tr.appendChild(text('td', w ? num(w.inscriptions) : '\u2014'));
           var bits = [];
           if (r.mode === 'off') bits.push('off');
@@ -1018,7 +1031,7 @@ section.panel h2{margin-top:0}
           if (r.differ) bits.push(num(r.differ) + ' chunk' + (r.differ > 1 ? 's' : '') + ' read differently');
           if (r.mode === 'walk' && r.borrowed) bits.push('walking needs this chain\u2019s Core here: helping instead');
           if (r.error) bits.push(r.error);
-          tr.appendChild(text('td', bits.join(' \u00b7 ') || '\u2014', (r.differ || r.error) ? 'idx-bad' : 'muted'));
+          tr.appendChild(lines(bits, (r.differ || r.error) ? 'idx-bad' : 'muted'));
           tb.appendChild(tr);
         });
         if (!tb.childNodes.length) {
