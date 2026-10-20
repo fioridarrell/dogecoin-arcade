@@ -1138,7 +1138,7 @@ section.panel h2{margin-top:0}
       }).catch(function () {});
   }
   loadOperators(); setInterval(function () { if (!document.hidden) loadOperators(); }, 30000);
-  setInterval(function () { if (!document.hidden) loadOrds(); }, 5000);
+  setInterval(function () { if (!document.hidden) loadOrds(); }, 15000);   // the server keeps its answer 20 s
   document.querySelectorAll('.admintabs button[data-tab="ords"]').forEach(function (b) { b.addEventListener('click', loadOrds); });
   document.querySelectorAll('.saveswitches').forEach(function (b) { b.onclick = saveSwitches; });
 

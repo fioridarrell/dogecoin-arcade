@@ -980,7 +980,36 @@ class DoginalIndex:
 
     # --- for people ------------------------------------------------------------------------------------------------
 
+    #: How long an answer to status() is kept, and how long its heavy counts (whole-table counts over millions of rows)
+    #: are (2026-10-20: the Ords tab asked every 5 s, each answer took 3-17 s on .25, and the site's pages waited).
+    STATUS_SECONDS = 20.0
+    COUNTS_SECONDS = 120.0
+
     def status(self) -> dict:
+        kept = getattr(self, "_status_kept", None)
+        if kept and time.monotonic() - kept[0] < self.STATUS_SECONDS:
+            return kept[1]
+        said = self._status()
+        self._status_kept = (time.monotonic(), said)
+        return said
+
+    def _counts(self) -> dict:
+        kept = getattr(self, "_counts_kept", None)
+        if kept and time.monotonic() - kept[0] < self.COUNTS_SECONDS:
+            return kept[1]
+        walking = self.mode() == "walk"
+        counts = {"found": self.store.q("SELECT COALESCE(SUM(n), 0) FROM block")[0][0]}
+        if walking:
+            ins = self.store.q("SELECT COUNT(*), COUNT(burned) FROM insc")[0]
+            counts.update(inscriptions=ins[0], burned=ins[1],
+                          tokens=self.store.q("SELECT COUNT(*) FROM tok")[0][0],
+                          holders=self.store.q("SELECT COUNT(DISTINCT owner) FROM bal WHERE overall != '0'")[0][0],
+                          names={rule: self.store.q(f"SELECT COUNT(DISTINCT {rule}) FROM names")[0][0]
+                                 for rule in ord_rules.NAME_RULES})
+        self._counts_kept = (time.monotonic(), counts)
+        return counts
+
+    def _status(self) -> dict:
         now = time.time()
         ready = ready_chunks(self.tip, self.base) if self.tip else 0
         per = self.store.all_words(max(ready, 1))
@@ -1010,15 +1039,13 @@ class DoginalIndex:
         walk = None
         if self.mode() == "walk":
             nxt = self.walker.next_height()
-            counts = self.store.q("SELECT COUNT(*), COUNT(burned) FROM insc")[0]
+            counts = self._counts()
             walk = {"next": nxt, "tip": self.tip, "left": max(0, self.tip - SETTLE - nxt + 1),
-                    "inscriptions": counts[0], "burned": counts[1],
-                    "tokens": self.store.q("SELECT COUNT(*) FROM tok")[0][0],
-                    "holders": self.store.q("SELECT COUNT(DISTINCT owner) FROM bal WHERE overall != '0'")[0][0],
-                    "names": {rule: self.store.q(f"SELECT COUNT(DISTINCT {rule}) FROM names")[0][0]
-                              for rule in ord_rules.NAME_RULES},
+                    "inscriptions": counts.get("inscriptions", 0), "burned": counts.get("burned", 0),
+                    "tokens": counts.get("tokens", 0), "holders": counts.get("holders", 0),
+                    "names": counts.get("names", {}),
                     "rate": round(self.walker.rate, 2), "error": self.walker.error}
-        found = self.store.q("SELECT COALESCE(SUM(n), 0) FROM block")[0][0]
+        found = self._counts()["found"]
         return {"net": self.net, "found": found, "mode": self.mode(), "base": self.base, "source": SOURCES.get(self.net, ""), "chunk": CHUNK, "tip": self.tip, "ready": ready,
                 "agreed": agreed, "one": one, "none": max(0, ready - len(per)), "differ": differ, "differs": differs,
                 "lease": ({"chunk": mine["c"], "blocks": list(chunk_range(mine["c"], self.base)), "at": mine["at"],
