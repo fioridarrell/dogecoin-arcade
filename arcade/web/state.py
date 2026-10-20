@@ -1559,6 +1559,23 @@ class AppState:
         _ = self.trade_orders
         return self._book_relay
 
+    def doginal_index(self):
+        """Our own index of every Doginal, walked or helped with over the mesh (arcade/doginal_index.py, the operator
+        2026-10-20). None on an arcade that reads no Dogecoin, own or borrowed. Setting `doginal_index`: walk | help
+        (the default) | off; `walk` needs this arcade's own Dogecoin Core, and helps otherwise."""
+        if getattr(self, "_doginal_index", None) is None:
+            doge = getattr(self, "doge", None)
+            if doge is None or getattr(self, "home", None) is None:
+                return None
+            from ..doginal_index import MODES, DoginalIndex
+
+            def mode() -> str:
+                chosen = str(self.setting("doginal_index") or "help")
+                return chosen if chosen in MODES else "help"
+            self._doginal_index = DoginalIndex(Path(self.home) / "doginal-index.sqlite", doge.rpc, mode,
+                                               own_core=lambda: not doge.borrowed)
+        return self._doginal_index
+
     @property
     def trade_watch(self):
         """Its accounts' pre-signed swap claims and refunds, sent when due (trade_watch.py)."""

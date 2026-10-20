@@ -86,6 +86,21 @@
     so they should all hold the same tokens, inscriptions, names and trades. Linked arcades compare
     fingerprints of their indexes every minute; a difference is tracked down to the block it starts at.</p>
   <div id="indexrows" class="muted" style="font-size:.86rem">Not linked to another arcade yet.</div>
+  {# Our own Doginals index (arcade/doginal_index.py, 2026-10-20): walked here, or helped with in chunks. #}
+  <h3 style="margin:14px 0 6px">Doginals index</h3>
+  <p class="muted" style="margin-top:0;font-size:.84rem">Every Doginal, read from the Dogecoin chain by the arcades
+    themselves. <b>Walk</b> reads every block here, in order, and knows where each Doginal is now (it needs this
+    machine's own Dogecoin Core). <b>Help</b> takes a chunk of 100 blocks at a time from the shared list, reads it a
+    block at a time, and says its hash; two arcades with the same hash for a chunk agree on it. A chunk whose arcade
+    goes quiet for 10 minutes goes to the next one.</p>
+  <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
+    <select id="dxmode" aria-label="What this arcade does for the Doginals index">
+      <option value="walk">Walk (full index here)</option><option value="help">Help (chunks)</option>
+      <option value="off">Off</option></select>
+    <button type="button" class="small" id="dxsave">Save</button>
+    <span class="muted" id="dxsaid"></span>
+  </div>
+  <div id="dxbox" class="muted" style="font-size:.86rem;margin-top:6px">Reading&hellip;</div>
   <h3 style="margin:14px 0 6px">Mine test coins</h3>
   <p class="muted" style="margin-top:0;font-size:.84rem">This machine's CPU mines blocks on a test-coin chain, with
     work from its Core: the one here, or the one it borrows. On a borrowed chain a tenth of every block goes to the
@@ -949,6 +964,44 @@ section.panel h2{margin-top:0}
       }).catch(function () { $('swaplist').textContent = 'Could not read the swaps.'; });
   }
   loadSwaps(); setInterval(loadSwaps, 15000);
+  // The Doginals index: what this arcade does, and who holds which chunk right now (every 5 s while shown).
+  function loadDx() {
+    fetch('/admin/api/doginal-index', {headers: {'Accept': 'application/json'}}).then(function (r) { return r.json(); })
+      .then(function (d) {
+        var box = $('dxbox'); box.textContent = '';
+        if (d.none) { box.textContent = d.none; $('dxmode').disabled = true; return; }
+        if (document.activeElement !== $('dxmode')) $('dxmode').value = d.mode;
+        var n = function (x) { return Number(x || 0).toLocaleString(); };
+        var w = d.walk;
+        if (w) box.appendChild(text('div', 'Walking: block ' + n(w.next) + ' of ' + n(w.tip) + ' (' + n(w.left) + ' to go, '
+          + w.rate + ' blocks/s) \u00b7 ' + n(w.inscriptions) + ' Doginals found, ' + n(w.burned) + ' sent to fees'
+          + (w.error ? ' \u00b7 ' + w.error : '')));
+        if (d.lease) box.appendChild(text('div', 'This arcade holds chunk ' + n(d.lease.chunk) + ' (blocks ' + n(d.lease.blocks[0])
+          + '\u2013' + n(d.lease.blocks[1] - 1) + '): ' + d.lease.done + ' of ' + d.chunk + ' blocks read'
+          + (d.help_rate ? ', ' + d.help_rate + ' blocks/s' : '')));
+        else if (d.mode === 'help') box.appendChild(text('div', 'No chunk held right now.'));
+        box.appendChild(text('div', 'Chunks: ' + n(d.ready) + ' ready \u00b7 ' + n(d.agreed) + ' agreed by two arcades \u00b7 '
+          + n(d.one) + ' read by one \u00b7 ' + n(d.none) + ' by none' + (d.helped ? ' \u00b7 ' + n(d.helped) + ' read here as help' : '')));
+        if (d.differ) box.appendChild(text('div', n(d.differ) + ' chunk' + (d.differ > 1 ? 's' : '') + ' read differently by two arcades: '
+          + d.differs.map(function (x) { return 'chunk ' + x.chunk + ' (' + Object.keys(x.says).map(function (k) {
+              return k + ' ' + x.says[k]; }).join(', ') + ')'; }).join('; '), 'idx-bad'));
+        var peers = Object.keys(d.peers || {});
+        if (peers.length) box.appendChild(text('div', 'Linked arcades: ' + peers.map(function (p) {
+          var x = d.peers[p]; return p + ' ' + (x.mode || '?') + (x.walk ? ' at block ' + n(x.walk) : '')
+            + (x.helped ? ', ' + n(x.helped) + ' chunks helped' : ''); }).join(' \u00b7 ')));
+        (d.leases || []).forEach(function (l) {
+          box.appendChild(text('div', '\u2014 arcade ' + l.node + ' is reading chunk ' + n(l.chunk) + ': ' + l.done + ' of '
+            + d.chunk + ' blocks'));
+        });
+        if (d.error) box.appendChild(text('div', d.error, 'idx-bad'));
+      }).catch(function () { $('dxbox').textContent = 'Could not read the Doginals index.'; });
+  }
+  $('dxsave').onclick = function () {
+    call('/admin/api/doginal-index', {mode: $('dxmode').value})
+      .then(function (j) { $('dxsaid').textContent = 'Saved: ' + j.mode + '.'; loadDx(); })
+      .catch(function (e) { $('dxsaid').textContent = e.message; });
+  };
+  loadDx(); setInterval(function () { if (!document.hidden) loadDx(); }, 5000);
   document.querySelectorAll('.saveswitches').forEach(function (b) { b.onclick = saveSwitches; });
 
   // --- tabs: the tab is in the address (#trading), and an old link to a panel (#chains, #swaps, #gamecards)

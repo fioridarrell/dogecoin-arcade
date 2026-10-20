@@ -88,6 +88,27 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-20 · the operator's side · branch claude/doginal-index: our own Doginals index, shared over the mesh
+
+Built from the plan below (the operator: build it, put it on the three arcades, then a fourth on a test machine "to see how
+it picks up the task"). New: arcade/doginal_index.py, arcade/mesh/doginalshare.py, tests/test_doginal_index.py;
+wired in web/state.py (`state.doginal_index()`), web/__main__.py (its thread), mesh/service.py (the extension)
+and Admin -> Chains -> "Doginals index" (GET/POST /admin/api/doginal-index).
+- Setting `doginal_index`: `help` (the DEFAULT on every arcade that reads Dogecoin, own or borrowed), `walk`
+  (needs this machine's own Dogecoin Core; .25 walks), `off`.
+- Help: leases a 100-block chunk (chunks start at block 4,500,000, fixed for everyone) over the mesh, reads it
+  one block at a time (rawchain proves each block), says its hash on frames of kind "dx". A lease not renewed
+  for 10 minutes frees the chunk; the next arcade starts it from its first block. Two arcades with the same
+  hash for a chunk: agreed. Differences show in the Admin box.
+- Walk: every block in order: births (an input opening an ord envelope, as doginals.trace), every move
+  (first-in-first-out koinu; past the last output = sent to the fee), envelopes closing over several
+  transactions, undo for 300 blocks of reorg. About 420 bytes an inscription on disk.
+- Both rest as long as each pass took (half the machine at most).
+- Nothing reads the index for money yet: wallet protection, sends and the Exchange still use doginals.trace.
+- Room messages are 512 bytes, so only notes travel on the mesh; no index data is shipped between arcades yet.
+SadFrog, tbuuol: your arcades start helping after this update if they read Dogecoin. Set it to `off` in Admin
+if your machine can't spare the CPU or bandwidth.
+
 ### 2026-10-20 · the operator's side · PLAN (not started): our own index of every Doginal
 
 The operator and Claude planned an index of all ~8 million Doginals, read from the

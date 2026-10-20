@@ -787,6 +787,15 @@ def for_state(state, *, listen_host: str | None = None, listen_port: int | None 
         return dict(prints)
     service.indexcheck = IndexCheck(fingerprints)
     service.node.add_extension(service.indexcheck)
+    # The Doginals index's shared chunks (doginalshare.py, 2026-10-20).
+    try:
+        index = state.doginal_index() if hasattr(state, "doginal_index") else None
+    except Exception:                                      # noqa: BLE001 -- no Dogecoin here: nothing to share
+        index = None
+    if index is not None:
+        from .doginalshare import DxShare
+        service.doginalshare = DxShare(index)
+        service.node.add_extension(service.doginalshare)
     from . import coreshare
     coreshare.CURRENT = service.coreshare
     # STUN for the WebRTC fast lane (stun.py): served here when asked for, proved by other nodes before it is

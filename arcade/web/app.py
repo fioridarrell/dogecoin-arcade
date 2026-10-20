@@ -23891,6 +23891,27 @@ def create_app(state: AppState) -> FastAPI:
             out["error"] = str(exc)[:200]
         return out
 
+    @app.get("/admin/api/doginal-index")
+    def admin_doginal_index(request: Request):
+        """Admin -> Chains: our own Doginals index (arcade/doginal_index.py, 2026-10-20) -- what this arcade
+        does (walk or help), its chunk or its walk, every linked arcade's leases, and how many chunks agree."""
+        _admin_check(request)
+        index = state.doginal_index()
+        if index is None:
+            return JSONResponse({"none": "This arcade reads no Dogecoin, its own or borrowed."},
+                                headers={"Cache-Control": "no-store"})
+        return JSONResponse(index.status(), headers={"Cache-Control": "no-store"})
+
+    @app.post("/admin/api/doginal-index")
+    def admin_doginal_index_mode(request: Request, payload: Any = Body(None)):
+        _admin_check(request, write=True)
+        from ..doginal_index import MODES
+        mode = (payload or {}).get("mode") if isinstance(payload, dict) else None
+        if mode not in MODES:
+            return JSONResponse({"detail": "walk, help or off"}, status_code=400)
+        state.set_setting("doginal_index", mode)
+        return JSONResponse({"ok": True, "mode": mode})
+
     @app.post("/admin/api/seats")
     def admin_seats(request: Request, payload: Any = Body(None)):
         _admin_check(request, write=True)

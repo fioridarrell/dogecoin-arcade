@@ -192,3 +192,20 @@ def test_chains_run_here_or_borrowed_with_testnet_and_one_more_here(public, monk
     monkeypatch.delenv("INVOCATION_ID", raising=False)
     assert app.post("/admin/api/restart", headers={**LOCAL, **WRITE}).status_code == 409
     assert 'id="chains"' in app.get("/admin", headers=LOCAL).text
+
+
+def test_the_doginals_index_box_reads_and_its_mode_is_saved(public, monkeypatch, tmp_path):
+    """Admin -> Chains -> Doginals index (2026-10-20): walk, help or off, and what the shared chunks look like."""
+    app, state = public
+    page = app.get("/admin", headers=LOCAL)
+    assert page.status_code == 200 and 'id="dxbox"' in page.text and "Doginals index" in page.text
+    assert app.post("/admin/api/doginal-index", headers={**LOCAL, **WRITE}, json={"mode": "fly"}).status_code == 400
+    assert app.post("/admin/api/doginal-index", headers=LOCAL, json={"mode": "off"}).status_code == 403
+    assert app.post("/admin/api/doginal-index", headers={**LOCAL, **WRITE}, json={"mode": "off"}).json()["mode"] == "off"
+    assert state.setting("doginal_index") == "off"
+    from arcade import doginal_index as dx
+    index = dx.DoginalIndex(tmp_path / "dx.sqlite", None, lambda: str(state.setting("doginal_index") or "help"))
+    monkeypatch.setattr(type(state), "doginal_index", lambda self: index)
+    said = app.get("/admin/api/doginal-index", headers=LOCAL).json()
+    assert said["mode"] == "off" and said["chunk"] == dx.CHUNK and said["base"] == dx.BASE
+    assert app.get("/admin/api/doginal-index", headers=EDGE).status_code != 200, "never shown to a stranger"

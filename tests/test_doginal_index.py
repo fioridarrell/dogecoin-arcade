@@ -1,0 +1,350 @@
+"""Our own Doginals index (arcade/doginal_index.py, 2026-10-20): a walker that reads every block in order and
+knows where each inscription is now, and helpers that lease small chunks over the mesh, scan them a block at a time
+and say each chunk's hash, so two arcades' scans agree or a difference shows. Blocks here are made up, byte for byte,
+and read by rawchain like any real one."""
+import hashlib
+import time
+
+import pytest
+
+from arcade import doginal_index as dx
+from arcade import rawchain
+
+
+# --------------------------------------------------------------------------- made-up chain
+
+def _varint(n):
+    return rawchain._varint(n)
+
+
+def _push(data: bytes) -> bytes:
+    if len(data) < 76:
+        return bytes([len(data)]) + data
+    return b"\x4c" + bytes([len(data)]) + data
+
+
+def _tx(vin, vout, tag=b""):
+    """vin: [(txid hex, vout, script bytes)]; vout: [koinu]. `tag` makes otherwise equal transactions differ."""
+    raw = (1).to_bytes(4, "little") + _varint(len(vin))
+    for txid, n, script in vin:
+        raw += bytes.fromhex(txid)[::-1] + n.to_bytes(4, "little") + _varint(len(script)) + script + b"\xff\xff\xff\xff"
+    raw += _varint(len(vout))
+    for v in vout:
+        spk = b"\x76\xa9\x14" + hashlib.sha256(tag + bytes([len(raw) % 256])).digest()[:20] + b"\x88\xac"
+        raw += v.to_bytes(8, "little") + _varint(len(spk)) + spk
+    raw += (0).to_bytes(4, "little")
+    return raw, rawchain.read_tx(raw).txid
+
+
+def _coinbase(h):
+    script = _push(h.to_bytes(4, "little"))
+    raw = ((1).to_bytes(4, "little") + b"\x01" + b"\x00" * 32 + b"\xff\xff\xff\xff" + _varint(len(script)) + script +
+           b"\xff\xff\xff\xff" + b"\x01" + (10_000 * 100_000_000).to_bytes(8, "little") + b"\x01\x51" + b"\x00" * 4)
+    return raw
+
+
+def _envelope(ctype=b"text/plain", parts=((0, b"hi"),), lead=b"ord", total=1):
+    s = _push(lead) + _push(bytes([total])) + _push(ctype)
+    for count, data in parts:
+        s += (_push(bytes([count])) if count else b"\x00") + _push(data)
+    return s + _push(b"\x30" * 71) + _push(b"\x51" * 30)          # signature and redeem script, as a reveal ends
+
+
+def _more(parts):
+    s = b""
+    for count, data in parts:
+        s += (_push(bytes([count])) if count else b"\x00") + _push(data)
+    return s + _push(b"\x30" * 71) + _push(b"\x51" * 30)
+
+
+SIG = _push(b"\x30" * 71) + _push(b"\x02" * 33)
+
+
+class Chain:
+    """A Dogecoin node in miniature: blocks by height, getrawtransaction for any transaction in them."""
+
+    def __init__(self):
+        self.blocks: list[tuple[str, bytes]] = []
+        self.txs: dict[str, bytes] = {}
+        self.calls = 0
+
+    def add(self, txs):
+        h = dx.BASE + len(self.blocks)
+        raws = [_coinbase(h)] + [t[0] for t in txs]
+        ids = [rawchain.read_tx(r).txid for r in raws]
+        prev = bytes.fromhex(self.blocks[-1][0])[::-1] if self.blocks else b"\x00" * 32
+        header = ((1).to_bytes(4, "little") + prev + bytes.fromhex(rawchain.merkle_root(ids))[::-1] +
+                  (1_700_000_000 + h).to_bytes(4, "little") + bytes.fromhex("1e0ffff0")[::-1] + b"\x00" * 4)
+        raw = header + _varint(len(raws)) + b"".join(raws)
+        block_hash = rawchain.sha256d(header)[::-1].hex()
+        self.blocks.append((block_hash, raw))
+        for r, i in zip(raws, ids):
+            self.txs[i] = r
+        return block_hash
+
+    def replace_from(self, height):
+        del self.blocks[height - dx.BASE:]
+
+    # the RPC face
+    def call(self, method, *params):
+        self.calls += 1
+        if method == "getblockcount":
+            return dx.BASE + len(self.blocks) - 1
+        if method == "getblockhash":
+            return self.blocks[params[0] - dx.BASE][0]
+        if method == "getblock":
+            return next(raw for h, raw in self.blocks if h == params[0]).hex()
+        if method == "getrawtransaction":
+            return self.txs[params[0]].hex()
+        raise AssertionError(method)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+FUND = "aa" * 32
+
+
+@pytest.fixture(autouse=True)
+def small(monkeypatch):
+    monkeypatch.setattr(dx, "CHUNK", 4)
+    monkeypatch.setattr(dx, "SETTLE", 0)
+
+
+def _walker(tmp_path, chain):
+    index = dx.DoginalIndex(tmp_path / "walk.sqlite", lambda: chain, lambda: "walk")
+    return index
+
+
+# --------------------------------------------------------------------------- births
+
+def test_a_birth_is_the_transaction_whose_input_opens_an_ord_envelope():
+    reveal = _tx([(FUND, 0, _envelope(b"image/png"))], [100_000])
+    plain = _tx([(FUND, 1, SIG)], [100_000])
+    chain = Chain()
+    chain.add([reveal, plain])
+    block = rawchain.read_block(chain.blocks[0][1])
+    assert dx.births(block) == [(reveal[1], 0, b"image/png".hex())]
+    assert dx.birth_of(rawchain.read_tx(reveal[0]))["done"] is True
+    # The same block always gives the same line; another birth gives another.
+    assert dx.block_hash_of(block.hash, dx.births(block)) == dx.block_hash_of(block.hash, [(reveal[1], 0, b"image/png".hex())])
+    assert dx.block_hash_of(block.hash, []) != dx.block_hash_of(block.hash, dx.births(block))
+
+
+# --------------------------------------------------------------------------- the walker
+
+def test_the_walker_follows_an_inscription_koinu_by_koinu(tmp_path):
+    chain = Chain()
+    reveal = _tx([(FUND, 0, _envelope())], [100_000, 50_000])
+    chain.add([reveal])
+    iid = f"{reveal[1]}i0"
+    # Sent on as the only input: it stays on the first koinu, so output 0.
+    send = _tx([(reveal[1], 0, SIG)], [100_000])
+    chain.add([send])
+    # Bought: two dummy coins in front (30,000 koinu), so the inscription's koinu is the 30,000th of the inputs, which
+    # falls in the second output (outputs 20,000 | 100,000 | ...), 10,000 koinu in.
+    dummies = _tx([(FUND, 2, SIG)], [10_000, 20_000], tag=b"d")
+    chain.add([dummies])
+    buy = _tx([(dummies[1], 0, SIG), (dummies[1], 1, SIG), (send[1], 0, SIG)], [20_000, 100_000, 10_000], tag=b"b")
+    chain.add([buy])
+    index = _walker(tmp_path, chain)
+    index.step()
+    where = index.where(iid)
+    assert where["output"] == f"{buy[1]}:1" and where["offset"] == 10_000 and where["closed"]
+    assert index.on(buy[1], 1) == [{"id": iid, "offset": 10_000}]
+    assert index.on(reveal[1], 0) == []
+
+
+def test_an_inscription_spent_past_every_output_goes_to_the_fee(tmp_path):
+    chain = Chain()
+    big = _tx([(FUND, 0, SIG)], [100_000], tag=b"x")
+    reveal = _tx([(FUND, 1, _envelope())], [100_000])
+    chain.add([big, reveal])
+    # Input 0 is 100,000 koinu of plain coin; the inscription is koinu 100,000; the outputs only add up to 90,000.
+    burn = _tx([(big[1], 0, SIG), (reveal[1], 0, SIG)], [90_000])
+    chain.add([burn])
+    index = _walker(tmp_path, chain)
+    index.step()
+    where = index.where(f"{reveal[1]}i0")
+    assert where["output"] is None and where["burned"] == dx.BASE + 1
+
+
+def test_an_envelope_over_two_transactions_closes_in_the_second(tmp_path):
+    chain = Chain()
+    first = _tx([(FUND, 0, _envelope(parts=((1, b"part one"),), total=2))], [100_000])
+    chain.add([first])
+    rest = _tx([(first[1], 0, _more(((0, b"part two"),)))], [100_000])
+    chain.add([rest])
+    index = _walker(tmp_path, chain)
+    index.step()
+    where = index.where(f"{first[1]}i0")
+    assert where["closed"] and where["output"] == f"{rest[1]}:0"
+    assert index.store.q("SELECT pieces, done_height FROM insc")[0] == (2, dx.BASE + 1)
+    assert index.store.q("SELECT COUNT(*) FROM pending")[0][0] == 0
+
+
+def test_a_reorg_walks_back_and_takes_the_new_blocks(tmp_path):
+    chain = Chain()
+    reveal = _tx([(FUND, 0, _envelope())], [100_000])
+    chain.add([reveal])
+    send = _tx([(reveal[1], 0, SIG)], [100_000])
+    chain.add([send])
+    index = _walker(tmp_path, chain)
+    index.step()
+    assert index.where(f"{reveal[1]}i0")["output"] == f"{send[1]}:0"
+    # Block 1 is replaced by one where the coin goes elsewhere, and a block on top of it.
+    chain.replace_from(dx.BASE + 1)
+    other = _tx([(reveal[1], 0, SIG)], [60_000, 40_000], tag=b"o")
+    chain.add([other])
+    chain.add([])
+    index.step()
+    assert index.where(f"{reveal[1]}i0")["output"] == f"{other[1]}:0"
+    assert index.walker.next_height() == dx.BASE + 3
+
+
+# --------------------------------------------------------------------------- the shared chunks
+
+def _busy_chain(blocks=12):
+    chain = Chain()
+    for b in range(blocks):
+        chain.add([_tx([(FUND, b, _envelope(parts=((0, bytes([b])),)))], [100_000], tag=bytes([b]))] if b % 3 == 0 else [])
+    return chain
+
+
+class Mesh:
+    """Arcades linked to each other: what one posts, every other hears (as DxShare does over the links)."""
+
+    def __init__(self):
+        self.members: dict[str, dx.DoginalIndex] = {}
+        self.up: set[str] = set()
+
+    def join(self, name, index):
+        self.members[name] = index
+        self.up.add(name)
+        mesh = self
+
+        class Share:
+            def post(self, frame):
+                if name not in mesh.up:
+                    return
+                for other, idx in mesh.members.items():
+                    if other != name and other in mesh.up:
+                        idx.heard(name, frame)
+        index.share = Share()
+        for other, idx in self.members.items():               # link up: each says everything it has
+            if other != name:
+                idx.heard(name, index.hello())
+                index.heard(other, idx.hello())
+                if idx.all_mine():
+                    index.heard(other, {"op": "dn", "rows": idx.all_mine()})
+
+
+def test_a_walkers_chunks_and_a_helpers_scans_agree(tmp_path):
+    chain = _busy_chain(12)
+    mesh = Mesh()
+    walker = _walker(tmp_path, chain)
+    helper = dx.DoginalIndex(tmp_path / "help.sqlite", lambda: chain, lambda: "help")
+    mesh.join("walker", walker)
+    mesh.join("helper", helper)
+    walker.step()
+    for _ in range(10):
+        helper.step()
+    status = helper.status()
+    assert status["ready"] == 3 and status["agreed"] == 3 and status["differ"] == 0, status
+    assert walker.status()["agreed"] == 3
+    # The helper read whole chunks, and its hash of each is the walker's.
+    for c in range(3):
+        assert helper.store.words(c)[""] == walker.store.words(c)[""]
+
+
+def test_a_helper_that_lies_shows_as_a_difference(tmp_path):
+    chain = _busy_chain(8)
+    walker = _walker(tmp_path, chain)
+    walker.step()
+    walker.heard("liar", {"op": "dn", "rows": [[0, "ab" * 32, 0]]})
+    status = walker.status()
+    assert status["differ"] == 1 and status["differs"][0]["chunk"] == 0
+    assert status["agreed"] == 0
+
+
+def test_a_chunk_whose_helper_went_quiet_goes_to_the_next(tmp_path, monkeypatch):
+    chain = _busy_chain(4)                                  # one chunk
+    mesh = Mesh()
+    a = dx.DoginalIndex(tmp_path / "a.sqlite", lambda: chain, lambda: "help")
+    b = dx.DoginalIndex(tmp_path / "b.sqlite", lambda: chain, lambda: "help")
+    mesh.join("a", a)
+    mesh.join("b", b)
+    monkeypatch.setattr(dx, "PROGRESS_EVERY", 1)
+    # a takes the chunk and reads one block, then goes off-line.
+    a.step(budget=0)
+    assert a.chunks.mine["c"] == 0
+    monkeypatch.setattr(dx, "AGREE", 1)
+    assert b.chunks.wanted(0, time.time()) == 0, "a's lease holds the chunk while it lasts"
+    mesh.up.discard("a")
+    b.chunks.gone("a")
+    b.step()
+    assert b.store.words(0).get(""), "b took the chunk once a was gone, and finished it"
+
+
+def test_two_helpers_take_different_chunks(tmp_path):
+    chain = _busy_chain(40)                                 # ten chunks
+    mesh = Mesh()
+    a = dx.DoginalIndex(tmp_path / "a.sqlite", lambda: chain, lambda: "help")
+    b = dx.DoginalIndex(tmp_path / "b.sqlite", lambda: chain, lambda: "help")
+    mesh.join("a", a)
+    mesh.join("b", b)
+    a.step(budget=0)
+    b.step(budget=0)
+    # Each wants a chunk nobody else holds while there are such chunks (AGREE 2: a held chunk may still be chosen by a
+    # second helper, which is a second scan of it, never a wrong one).
+    assert a.chunks.mine and b.chunks.mine
+    assert b.status()["leases"][0]["node"] == "a"
+
+
+def test_off_does_nothing(tmp_path):
+    chain = _busy_chain(4)
+    index = dx.DoginalIndex(tmp_path / "off.sqlite", lambda: chain, lambda: "off")
+    index.step()
+    assert chain.calls == 0
+
+
+def test_the_mesh_extension_says_everything_when_a_link_comes_up_and_files_what_it_hears(tmp_path):
+    import asyncio
+    from arcade.mesh.doginalshare import DxShare
+    chain = _busy_chain(8)
+    walker = _walker(tmp_path, chain)
+    walker.step()
+    share = DxShare(walker)
+
+    class Link:
+        peer_id = "ff" * 32
+
+        def __init__(self):
+            self.sent = []
+
+        async def send(self, header, blob=b""):
+            self.sent.append(header)
+
+    class Node:
+        links = {}
+
+    link = Link()
+    share.node = Node()
+    Node.links = {link.peer_id: link}
+
+    async def go():
+        await share.link_up(link)
+        await share.on_frame(link, {"t": "dx", "op": "dn", "rows": [[0, walker.store.words(0)[""], 1]]}, b"")
+        await share.on_frame(link, {"t": "dx", "op": "ls", "c": 1, "at": dx.BASE + 5, "until": time.time() + 60}, b"")
+        share.post({"op": "ld", "c": 1})
+        await asyncio.sleep(0.05)
+    asyncio.run(go())
+    ops = [f["op"] for f in link.sent]
+    assert ops[0] == "hi" and "dn" in ops and ops[-1] == "ld"
+    assert sorted(r[0] for f in link.sent if f["op"] == "dn" for r in f["rows"]) == [0, 1]
+    assert walker.status()["agreed"] == 1
+    assert walker.status()["leases"] == [{"node": "ff" * 6, "chunk": 1, "blocks": list(dx.chunk_range(1)),
+                                          "at": dx.BASE + 5, "done": 1}]
