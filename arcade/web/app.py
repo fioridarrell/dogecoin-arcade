@@ -11615,8 +11615,41 @@ def create_app(state: AppState) -> FastAPI:
         from ..node_trader import swap_big
         return swap_big(state)
 
+    #: /account asked again for the same account while an answer is being worked out waits for that answer instead of
+    #: working it out again (2026-10-20: a page asks from several of its parts at once -- 22 times a minute for one
+    #: phone, ~1.3 s each on .25). Nothing is reused afterwards, so no change can be missed: a 3-second reuse was
+    #: tried first and hid real changes (a key in the pool, quota used, a notice taken away).
+    _account_flight: dict[str, list] = {}
+    _account_flight_lock = threading.Lock()
+
     @app.get("/account")
     def account_state(request: Request):
+        account = signed_in(request)
+        if account is None:
+            return _account_state(request)
+        with _account_flight_lock:
+            flight = _account_flight.get(account.pubkey)
+            first = flight is None
+            if first:
+                flight = _account_flight[account.pubkey] = [threading.Event(), None]
+        if not first:
+            if flight[0].wait(30) and flight[1] is not None:
+                return JSONResponse(flight[1])
+            return _account_state(request)
+        try:
+            answer = _account_state(request)
+            try:
+                flight[1] = json.loads(answer.body)
+            except Exception:                       # noqa: BLE001 -- the waiters work theirs out
+                flight[1] = None
+            return answer
+        finally:
+            flight[0].set()
+            with _account_flight_lock:
+                if _account_flight.get(account.pubkey) is flight:
+                    del _account_flight[account.pubkey]
+
+    def _account_state(request: Request):
         """Everything the page needs to draw itself, and nothing else.
 
         Only ever about the account making the request. An endpoint that
@@ -14594,14 +14627,18 @@ def create_app(state: AppState) -> FastAPI:
         account = _signed_in_account(request)
         out = []
         for chain in _account_chains():
+            # Only an account with an open standing buy order on this chain needs the pool read (2026-10-20: every
+            # page asked, nearly every account has none, and pending_takes once took 20 s on .25).
+            mine = [s for s in _standing.mine(account.pubkey, chain.network)
+                    if not s["away"] and s["status"] == standinglib.OPEN]
+            if not mine:
+                continue
             try:
                 index = state.token_index(chain)
                 taking = index.pending_takes()
             except Exception:
                 continue
-            for s in _standing.mine(account.pubkey, chain.network):
-                if s["away"] or s["status"] != standinglib.OPEN:
-                    continue
+            for s in mine:
                 left = s["left_units"]
                 for ask in _crossing(index, s, taking):
                     units = min(left, ask["free"])

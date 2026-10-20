@@ -104,6 +104,10 @@ complete search boxes rather than a drop-down with a super long list" (Exchange 
 - Trade any pair: an empty box on tap, the current choice as its placeholder, at most 8 to start
   (held first, coins first), every typed word must match, 12 at most, "N more, type to narrow". Coins
   are labelled by the chain's own name ("Pepecoin (PEP) – Main"), no longer "PEP · Pepecoin (PEP) – Main".
+- /account: asks for the same account that arrive while its answer is being worked out wait for it and get
+  the same answer (single flight); nothing is reused after. A 3-second reuse was tried first and hid real
+  changes (a key in the pool, quota used, a notice taken away), so don't add one. /account/standing/fillable
+  reads the pool only for an account with an open standing buy order on that chain.
 - Earlier today: .25's Dogecoin index is read only. Walking it starved the site (see the ord-rules entry).
 
 ### 2026-10-20 · the operator's side · ord indexes follow the official rules; DRC-20 / PRC-20; names (rules 2)

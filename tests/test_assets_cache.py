@@ -45,3 +45,37 @@ def test_the_fingerprinted_address_is_kept_and_nothing_else_is(client):
 def test_the_public_door_lets_the_stylesheet_through():
     from arcade.web import door
     assert "/base.css" in door.PUBLIC_PAGES
+
+
+def test_one_account_asking_at_once_is_answered_from_one_working_out(client, monkeypatch):
+    """/account asked from several parts of a page at the same moment works the answer out once (2026-10-20: 22 times
+    a minute for one phone, ~1.3 s each on .25). Nothing is kept afterwards: the next ask works it out again."""
+    import threading
+    import time
+    from nacl.signing import SigningKey
+    from test_auth_web import _sign_in
+    app, state = client
+    assert _sign_in(app, SigningKey.generate(), headers=LOCAL).status_code == 200
+    register = state.accounts()
+    real, calls = register.room, []
+
+    def slow_room(*a, **kw):                       # once per working out, at its end
+        calls.append(1)
+        time.sleep(0.4)
+        return real(*a, **kw)
+    monkeypatch.setattr(register, "room", slow_room)
+    monkeypatch.setattr(type(state), "accounts", lambda self: register)
+    said = []
+
+    def ask():
+        said.append(app.get("/account", headers=LOCAL).json())
+    threads = [threading.Thread(target=ask) for _ in range(5)]
+    for t in threads:
+        t.start()
+        time.sleep(0.02)
+    for t in threads:
+        t.join(10)
+    assert len(said) == 5 and all(s["pubkey"] == said[0]["pubkey"] for s in said)
+    assert len(calls) == 1, f"worked out {len(calls)} times for 5 asks at once"
+    app.get("/account", headers=LOCAL)
+    assert len(calls) == 2, "nothing kept afterwards"
