@@ -516,6 +516,7 @@ class DoginalIndex:
             with self.rpc_factory() as rpc:
                 self.tip = int(rpc.call("getblockcount"))
                 if mode == "walk" and self.own_core():
+                    self._let_go()
                     self.walker.step(rpc, self.tip, budget)
                 else:
                     self._help(rpc, budget)
@@ -569,6 +570,15 @@ class DoginalIndex:
                 self.share.post({"op": "ld", "c": c})
         else:
             self.store.set_meta("lease", lease)
+
+    def _let_go(self) -> None:
+        """A helper's chunk let go at once (now walking: the walk reads it anyway), so nobody waits for its lease."""
+        if self.chunks.mine is not None:
+            c = self.chunks.mine["c"]
+            self.chunks.mine = None
+            self.store.set_meta("lease", None)
+            if self.share is not None:
+                self.share.post({"op": "ld", "c": c})
 
     def _say_lease(self, lease: dict) -> None:
         if self.share is not None:

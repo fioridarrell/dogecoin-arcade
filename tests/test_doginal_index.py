@@ -348,3 +348,20 @@ def test_the_mesh_extension_says_everything_when_a_link_comes_up_and_files_what_
     assert walker.status()["agreed"] == 1
     assert walker.status()["leases"] == [{"node": "ff" * 6, "chunk": 1, "blocks": list(dx.chunk_range(1)),
                                           "at": dx.BASE + 5, "done": 1}]
+
+
+def test_a_helper_turned_walker_lets_its_chunk_go_at_once(tmp_path):
+    chain = _busy_chain(8)
+    mode = ["help"]
+    index = dx.DoginalIndex(tmp_path / "x.sqlite", lambda: chain, lambda: mode[0])
+    said = []
+
+    class Share:
+        def post(self, frame):
+            said.append(frame)
+    index.share = Share()
+    index.step(budget=0)
+    held = index.chunks.mine["c"]
+    mode[0] = "walk"
+    index.step()
+    assert index.chunks.mine is None and {"op": "ld", "c": held} in said
