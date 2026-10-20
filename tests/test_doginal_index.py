@@ -410,15 +410,34 @@ def test_a_helper_says_how_many_it_found_in_the_chunks_it_read(tmp_path):
     assert helper.status()["found"] == 3, "births at blocks 0, 3 and 6 of the eight"
 
 
-def test_a_fast_machine_goes_straight_on_and_a_small_one_rests(tmp_path, monkeypatch):
-    """2026-10-20: a test machine "is a much faster machine. It shouldn't be pacing with the other one"."""
+def test_cores_are_lanes_each_reading_a_chunk_of_its_own_side_by_side(tmp_path, monkeypatch):
+    """2026-10-20: "dedicate the number of cores to your ord index". Three cores: three chunks at once, their
+    blocks fetched side by side and read in worker processes; the hashes are the same as one core's."""
+    chain = _busy_chain(24)                                   # six chunks of four
+    many = dx.DoginalIndex(tmp_path / "many.sqlite", lambda: chain, lambda: "help", cores=lambda: 3)
+    many.step(budget=0)
+    assert len(many.chunks.lanes) == 3 and len({l["c"] for l in many.chunks.lanes}) == 3, "three different chunks"
+    for _ in range(6):
+        many.step()
+    one = dx.DoginalIndex(tmp_path / "one.sqlite", lambda: chain, lambda: "help", cores=lambda: 1)
+    for _ in range(8):
+        one.step()
+    for c in range(6):
+        assert many.store.words(c)[""] == one.store.words(c)[""], c
+    assert many.status()["cores"] == 3
+    # Fewer cores: the newest lanes let go.
+    many.cores = lambda: 1
+    many.chunks.lanes[:] = [{"c": 0, "at": dx.chunk_range(0)[0]}, {"c": 1, "at": dx.chunk_range(1)[0]}]
+    many.step(budget=0)
+    assert len(many.chunks.lanes) <= 1
+
+
+def test_a_small_machine_on_one_core_rests_and_a_big_one_goes_straight_on(tmp_path, monkeypatch):
     chain = _busy_chain(8)
-    pace = ["full"]
-    index = dx.DoginalIndex(tmp_path / "p.sqlite", lambda: chain, lambda: "help", pace=lambda: pace[0])
-    assert index.step() < 0.1, "full: no rest"
-    pace[0] = "half"
-    assert index.step() >= 0.5, "half: rests as long as it worked"
-    monkeypatch.setattr("os.cpu_count", lambda: 20)
-    assert dx.default_pace() == "full"
+    index = dx.DoginalIndex(tmp_path / "p.sqlite", lambda: chain, lambda: "help", cores=lambda: 1)
     monkeypatch.setattr("os.cpu_count", lambda: 4)
-    assert dx.default_pace() == "half"
+    assert index.step() >= 0.5, "one core of four: rests as long as it worked"
+    assert dx.default_cores() == 1
+    monkeypatch.setattr("os.cpu_count", lambda: 20)
+    assert index.step() < 0.1, "a big machine: straight on"
+    assert dx.default_cores() == 10

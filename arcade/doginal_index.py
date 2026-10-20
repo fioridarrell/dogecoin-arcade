@@ -64,16 +64,24 @@ PROGRESS_EVERY = 10              # blocks between two progress words
 #: Undo kept for this many blocks back, so a reorg rolls the walker back instead of stopping it.
 UNDO_BLOCKS = 300
 MODES = ("walk", "help", "off")
-#: How much of the machine the indexes use: "half" rests as long as each pass took, "full" never rests.
-PACES = ("full", "half")
-#: A machine with at least this many CPU cores goes full speed unless told otherwise; a small one (.25 has 4, and
-#: serves the live site) takes half.
-FULL_FROM_CORES = 8
+#: A machine with at least this many CPU cores helps on half of them by default and never rests; a smaller one (.25
+#: has 4, and serves the live site) helps on one, resting as long as each pass took (half that core).
+BIG_FROM_CORES = 8
 
 
-def default_pace() -> str:
+def default_cores() -> int:
+    """Cores the ord indexes help with when the operator has not said (Admin -> Ords)."""
     import os
-    return "full" if (os.cpu_count() or 1) >= FULL_FROM_CORES else "half"
+    n = os.cpu_count() or 1
+    return max(1, n // 2) if n >= BIG_FROM_CORES else 1
+
+
+def _parse(job: tuple) -> tuple[str, str, int]:
+    """One block's (hash, line, births) from its raw hex, in a worker process (a lane of a helper on many cores)."""
+    raw_hex, block_hash, taproot, mweb = job
+    block = rawchain.read_block(bytes.fromhex(raw_hex), block_hash, mweb=mweb)
+    found = births(block, taproot)
+    return block.hash, block_hash_of(block.hash, found), len(found)
 
 
 # --------------------------------------------------------------------------- reading a block
@@ -525,7 +533,12 @@ class Chunks:
         self.store = store
         self.leases: dict[int, dict[str, tuple[float, int]]] = {}       # chunk -> node -> (until, at height)
         self.peers: dict[str, dict] = {}                                 # node -> its last "hi"
-        self.mine: dict | None = store.meta("lease")                     # {"c", "at"}
+        # This arcade's own leases, one per lane (a core it helps with): [{"c", "at"}]. One lease was kept before.
+        self.lanes: list[dict] = list(store.meta("lanes") or ([store.meta("lease")] if store.meta("lease") else []))
+
+    @property
+    def mine(self) -> dict | None:
+        return self.lanes[0] if self.lanes else None
 
     def lease_from(self, node: str, c: int, at: int, until: float) -> None:
         self.leases.setdefault(int(c), {})[node] = (float(until), int(at))
@@ -549,15 +562,15 @@ class Chunks:
         busy = sum(1 for until, _at in self.leases.get(c, {}).values() if until > now)
         return max(0, AGREE - best - busy)
 
-    def choose(self, ready: int, now: float, walker_at: int | None = None) -> int | None:
+    def choose(self, ready: int, now: float, exclude: set | frozenset = frozenset()) -> int | None:
         """The next chunk to take: one that some arcade has already said (so it becomes agreed) first, then the lowest
         nobody has; a random one of the first few either way, so two helpers rarely take the same."""
         said = self.store.all_words(ready)
-        first = [c for c in sorted(said) if self.wanted(c, now, said[c]) > 0][:16]
+        first = [c for c in sorted(said) if c not in exclude and self.wanted(c, now, said[c]) > 0][:16]
         if not first:
             c = 0
             while c < ready and len(first) < 16:
-                if c not in said and self.wanted(c, now, {}) > 0:
+                if c not in said and c not in exclude and self.wanted(c, now, {}) > 0:
                     first.append(c)
                 c += 1
         return random.choice(first) if first else None
@@ -578,9 +591,11 @@ class DoginalIndex:
 
     def __init__(self, path: Path, rpc_factory: Callable[[], Any] | None, mode: Callable[[], str],
                  own_core: Callable[[], bool] = lambda: True, net: str = "doge", mweb: bool = False,
-                 pace: Callable[[], str] | None = None):
+                 cores: Callable[[], int] | None = None):
         self.net = net
-        self.pace = pace or default_pace
+        self.cores = cores or default_cores
+        self._pool: Any = None
+        self._pool_size = 0
         self.base = STARTS.get(net, BASE) if net != "doge" else BASE
         self.taproot, self.mweb = net in TAPROOT, mweb
         self.store = Store(path, self.base)
@@ -622,58 +637,115 @@ class DoginalIndex:
             return 30.0
         self._tell_new_chunks()
         took = time.monotonic() - started
-        # Half the machine: rest as long as the work took. Full: straight on (2026-10-20: a test machine "is a much
-        # faster machine. It shouldn't be pacing with the other one").
-        return 0.05 if self.pace() == "full" else max(0.5, took)
+        # One core on a small machine: rest as long as the work took. More, or a big machine: straight on (the operator
+        # 2026-10-20: a test machine "is a much faster machine. It shouldn't be pacing with the other one").
+        import os
+        if self._lanes_wanted() > 1 or (os.cpu_count() or 1) >= BIG_FROM_CORES:
+            return 0.05
+        return max(0.5, took)
+
+    def _lanes_wanted(self) -> int:
+        try:
+            return max(1, int(self.cores()))
+        except (TypeError, ValueError):
+            return 1
 
     def _help(self, rpc, budget: float) -> None:
+        """Help with as many chunks at once as this arcade gives cores (a lane each): their next blocks are fetched
+        side by side and read in worker processes, a block a lane at a time (2026-10-20: dedicate cores)."""
         now = time.time()
         ready = ready_chunks(self.tip, self.base)
-        lease = self.chunks.mine
-        if lease is None:
-            c = self.chunks.choose(ready, now)
+        lanes = self.chunks.lanes
+        want = self._lanes_wanted()
+        while len(lanes) > want:                                  # fewer cores now: the newest lanes let go
+            self._drop_lane(lanes[-1])
+        held = {lane["c"] for lane in lanes}
+        while len(lanes) < want:
+            c = self.chunks.choose(ready, now, exclude=held)
             if c is None:
-                return
-            lease = self.chunks.mine = {"c": c, "at": chunk_range(c, self.base)[0]}
-            self.store.set_meta("lease", lease)
-            self._say_lease(lease)
-        c, (lo, hi) = lease["c"], chunk_range(lease["c"], self.base)
+                break
+            lane = {"c": c, "at": chunk_range(c, self.base)[0]}
+            lanes.append(lane)
+            held.add(c)
+            self._say_lease(lane)
+        self._keep_lanes()
+        if not lanes:
+            return
         start, done = time.monotonic(), 0
-        while lease["at"] < hi and not (done and time.monotonic() - start >= budget):
-            h = lease["at"]
-            have = self.store.q("SELECT hash, line FROM block WHERE height=?", (h,))
-            if not have:
-                block_hash, line, n = scan_block(rpc, h, self.taproot, self.mweb)
+        while not (done and time.monotonic() - start >= budget):
+            todo = [lane for lane in lanes if lane["at"] < chunk_range(lane["c"], self.base)[1]]
+            if not todo:
+                break
+            heights = [lane["at"] for lane in todo]
+            stored = {h for h in heights if self.store.q("SELECT 1 FROM block WHERE height=?", (h,))}
+            for h, (block_hash, line, n) in self._scan_many(rpc, [h for h in heights if h not in stored]).items():
                 self.store.x("INSERT OR REPLACE INTO block (height, hash, line, n) VALUES (?,?,?,?)",
                              (h, block_hash, line, n))
-            lease["at"] = h + 1
-            done += 1
-            if (lease["at"] - lo) % PROGRESS_EVERY == 0:
-                self.store.set_meta("lease", lease)
-                self._say_lease(lease)
+            for lane in todo:
+                lo = chunk_range(lane["c"], self.base)[0]
+                lane["at"] += 1
+                done += 1
+                if (lane["at"] - lo) % PROGRESS_EVERY == 0:
+                    self._say_lease(lane)
+            self._keep_lanes()
         if done:
             self.help_rate = done / max(time.monotonic() - start, 1e-6)
-        if lease["at"] >= hi:
-            got = self.store.chunk_line(c)
-            if got is not None:
-                self.store.say(c, "", got[0], got[1])
-                self.helped += 1
-                self.store.set_meta("helped", self.helped)
-            self.chunks.mine = None
-            self.store.set_meta("lease", None)
-            if self.share is not None:
-                self.share.post({"op": "ld", "c": c})
-        else:
-            self.store.set_meta("lease", lease)
+        for lane in list(lanes):
+            c = lane["c"]
+            if lane["at"] >= chunk_range(c, self.base)[1]:
+                got = self.store.chunk_line(c)
+                if got is not None:
+                    self.store.say(c, "", got[0], got[1])
+                    self.helped += 1
+                    self.store.set_meta("helped", self.helped)
+                self._drop_lane(lane)
+        self._keep_lanes()
+
+    def _scan_many(self, rpc, heights: list[int]) -> dict[int, tuple[str, str, int]]:
+        """(hash, line, births) for each height: one at a time on one lane; on several, fetched side by side (threads,
+        each its own connection) and read in worker processes (Python reads blocks on one core per process)."""
+        if not heights:
+            return {}
+        if len(heights) == 1 or self._lanes_wanted() == 1:
+            return {h: scan_block(rpc, h, self.taproot, self.mweb) for h in heights}
+        from concurrent.futures import ThreadPoolExecutor
+
+        def fetch(h: int) -> tuple[str, str]:
+            with self.rpc_factory() as own:
+                block_hash = own.call("getblockhash", h)
+                return block_hash, own.call("getblock", block_hash, 0)
+        with ThreadPoolExecutor(max_workers=len(heights)) as fetchers:
+            raws = list(fetchers.map(fetch, heights))
+        pool = self._workers()
+        jobs = [(raw, block_hash, self.taproot, self.mweb) for block_hash, raw in raws]
+        return dict(zip(heights, pool.map(_parse, jobs)))
+
+    def _workers(self):
+        want = self._lanes_wanted()
+        if self._pool is None or self._pool_size != want:
+            import multiprocessing
+            from concurrent.futures import ProcessPoolExecutor
+            if self._pool is not None:
+                self._pool.shutdown(wait=False, cancel_futures=True)
+            self._pool = ProcessPoolExecutor(max_workers=want, mp_context=multiprocessing.get_context("spawn"))
+            self._pool_size = want
+        return self._pool
+
+    def _keep_lanes(self) -> None:
+        self.store.set_meta("lanes", self.chunks.lanes)
+        self.store.set_meta("lease", None)
+
+    def _drop_lane(self, lane: dict) -> None:
+        if lane in self.chunks.lanes:
+            self.chunks.lanes.remove(lane)
+        if self.share is not None:
+            self.share.post({"op": "ld", "c": lane["c"]})
 
     def _let_go(self) -> None:
         """A helper's chunk let go at once (now walking: the walk reads it anyway), so nobody waits for its lease."""
-        if self.chunks.mine is not None:
-            c = self.chunks.mine["c"]
-            self.chunks.mine = None
-            self.store.set_meta("lease", None)
-            if self.share is not None:
-                self.share.post({"op": "ld", "c": c})
+        for lane in list(self.chunks.lanes):
+            self._drop_lane(lane)
+        self._keep_lanes()
 
     def _say_lease(self, lease: dict) -> None:
         if self.share is not None:
@@ -760,6 +832,9 @@ class DoginalIndex:
                 "agreed": agreed, "one": one, "none": max(0, ready - len(per)), "differ": differ, "differs": differs,
                 "lease": ({"chunk": mine["c"], "blocks": list(chunk_range(mine["c"], self.base)), "at": mine["at"],
                            "done": mine["at"] - chunk_range(mine["c"], self.base)[0]} if mine else None),
+                "lanes": [{"chunk": lane["c"], "at": lane["at"], "done": lane["at"] - chunk_range(lane["c"], self.base)[0]}
+                          for lane in self.chunks.lanes],
+                "cores": self._lanes_wanted(),
                 "helped": self.helped, "help_rate": round(self.help_rate, 2), "leases": sorted(leases, key=lambda l: l["chunk"]),
                 "peers": {n[:12]: p for n, p in self.chunks.peers.items()}, "walk": walk, "error": self.error}
 

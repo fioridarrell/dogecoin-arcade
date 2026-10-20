@@ -23972,7 +23972,7 @@ def create_app(state: AppState) -> FastAPI:
                 "agreed_pct": round(100 * (st.get("agreed") or 0) / ready, 2) if ready else 0.0,
             })
         import os
-        return JSONResponse({"rows": rows, "pace": state.ord_pace(), "cores": os.cpu_count() or 1},
+        return JSONResponse({"rows": rows, "cores": state.ord_cores(), "machine": os.cpu_count() or 1},
                             headers={"Cache-Control": "no-store"})
 
     @app.post("/admin/api/ords")
@@ -23980,12 +23980,16 @@ def create_app(state: AppState) -> FastAPI:
         _admin_check(request, write=True)
         from ..doginal_index import MODES, STARTS
         said = payload if isinstance(payload, dict) else {}
-        from ..doginal_index import PACES
-        if "pace" in said:
-            if said["pace"] not in PACES:
-                return JSONResponse({"detail": "full or half"}, status_code=400)
-            state.set_setting("ord_pace", said["pace"])
-            return JSONResponse({"ok": True, "pace": said["pace"]})
+        if "cores" in said:
+            import os
+            try:
+                cores = int(said["cores"])
+            except (TypeError, ValueError):
+                cores = 0
+            if not 1 <= cores <= (os.cpu_count() or 1):
+                return JSONResponse({"detail": f"from 1 to {os.cpu_count() or 1} cores"}, status_code=400)
+            state.set_setting("ord_cores", cores)
+            return JSONResponse({"ok": True, "cores": cores})
         net, mode = str(said.get("net") or ""), said.get("mode")
         if net not in STARTS or mode not in MODES:
             return JSONResponse({"detail": "a chain, and walk, help or off"}, status_code=400)

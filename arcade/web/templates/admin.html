@@ -307,16 +307,19 @@
     where each inscription is now (it needs that chain&rsquo;s Core on this machine). <b>Help</b> takes 100 blocks at a
     time from the shared list, reads them a block at a time, and says their hash; two arcades with the same hash for a
     chunk agree on it. A chunk whose arcade goes quiet for 10 minutes goes to the next one.</p>
+  <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap;margin:4px 0 10px">
+    <label for="ordcores"><b>Cores for ords:</b></label>
+    <input type="number" id="ordcores" min="1" step="1" inputmode="numeric" style="width:5.5em;font-size:16px">
+    <span class="muted" id="ordmachine"></span>
+    <button type="button" class="small" id="ordcoressave">Save</button>
+  </div>
+  <p class="muted" style="margin:0 0 10px;font-size:.84rem">Each core helps with a chunk of its own, side by side.
+    Walking a chain is block after block, so it uses one core whatever this says. One core on a small machine rests
+    between passes, so the arcade&rsquo;s pages stay quick.</p>
   <div class="tablewrap"><table class="admintable">
     <thead><tr><th>Chain</th><th>Index</th><th>Starts at</th><th>Indexed</th><th>Inscriptions</th><th>Now</th></tr></thead>
     <tbody id="ordrows"><tr><td colspan="6" class="muted">Loading&hellip;</td></tr></tbody>
   </table></div>
-  <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
-    <label class="muted" for="ordpace">How much of this machine:</label>
-    <select id="ordpace" style="min-width:12em;font-size:16px">
-      <option value="full">All of it (fastest)</option><option value="half">Half (keeps pages quick)</option></select>
-    <span class="muted" id="ordcores"></span>
-  </div>
   <span class="muted" id="ordsaid"></span>
 </section>
 </div>
@@ -1007,8 +1010,9 @@ section.panel h2{margin-top:0}
     fetch('/admin/api/ords', {headers: {'Accept': 'application/json'}, cache: 'no-store'}).then(function (r) { return r.json(); })
       .then(function (d) {
         var tb = $('ordrows'); tb.textContent = '';
-        if (document.activeElement !== $('ordpace')) $('ordpace').value = d.pace;
-        $('ordcores').textContent = d.cores + ' CPU cores here';
+        if (document.activeElement !== $('ordcores')) $('ordcores').value = d.cores;
+        $('ordcores').max = d.machine;
+        $('ordmachine').textContent = 'of ' + d.machine + ' on this machine';
         (d.rows || []).forEach(function (r) {
           var tr = document.createElement('tr');
           var name = text('td', r.title + ' \u00b7 ' + r.label); name.className = 'ordwhat'; tr.appendChild(name);
@@ -1035,7 +1039,8 @@ section.panel h2{margin-top:0}
                            : r.found ? lines([num(r.found), 'in chunks read here']) : text('td', '\u2014'));
           var bits = [];
           if (r.mode === 'off') bits.push('off');
-          if (r.lease) bits.push('reading chunk ' + num(r.lease.chunk) + ': ' + r.lease.done + ' of ' + r.chunk + ' blocks' + (r.help_rate ? ', ' + r.help_rate + ' blocks/s' : ''));
+          (r.lanes || []).forEach(function (l) { bits.push('reading chunk ' + num(l.chunk) + ': ' + l.done + ' of ' + r.chunk + ' blocks'); });
+          if ((r.lanes || []).length && r.help_rate) bits.push(r.help_rate + ' blocks/s here');
           if (w && w.rate) bits.push(w.rate + ' blocks/s');
           if (r.helped) bits.push(num(r.helped) + ' chunks read here as help');
           (r.leases || []).forEach(function (l) { bits.push('arcade ' + l.node + ' reads chunk ' + num(l.chunk) + ' (' + l.done + '/' + r.chunk + ')'); });
@@ -1051,9 +1056,9 @@ section.panel h2{margin-top:0}
         }
       }).catch(function () { $('ordrows').textContent = 'Could not read the ord indexes.'; });
   }
-  $('ordpace').onchange = function () {
-    call('/admin/api/ords', {pace: $('ordpace').value})
-      .then(function (j) { $('ordsaid').textContent = j.pace === 'full' ? 'All of this machine.' : 'Half of this machine.'; })
+  $('ordcoressave').onclick = function () {
+    call('/admin/api/ords', {cores: Number($('ordcores').value)})
+      .then(function (j) { $('ordsaid').textContent = 'Ords help with ' + j.cores + ' core' + (j.cores > 1 ? 's' : '') + '.'; loadOrds(); })
       .catch(function (e) { $('ordsaid').textContent = e.message; });
   };
   function loadOperators() {

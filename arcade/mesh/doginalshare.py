@@ -71,9 +71,8 @@ class DxShare:
                 rows = await asyncio.to_thread(index.all_mine)
                 for i in range(0, len(rows), ROWS_PER_FRAME):
                     await link.send({"t": "dx", "op": "dn", "net": net, "rows": rows[i:i + ROWS_PER_FRAME]})
-                mine = index.chunks.mine
-                if mine:
-                    await link.send({"t": "dx", "op": "ls", "net": net, "c": mine["c"], "at": mine["at"],
+                for lane in list(index.chunks.lanes):              # every lane this arcade holds
+                    await link.send({"t": "dx", "op": "ls", "net": net, "c": lane["c"], "at": lane["at"],
                                      "until": time.time() + LEASE_SECONDS})
         except Exception:                                      # noqa: BLE001 -- the link went
             log.debug("dx link_up", exc_info=True)

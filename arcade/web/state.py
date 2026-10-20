@@ -1611,12 +1611,17 @@ class AppState:
         chosen = str(chosen or "off")
         return chosen if chosen in MODES else "off"
 
-    def ord_pace(self) -> str:
-        """full | half: how much of this machine the ord indexes use (Admin -> Ords). By default full on a machine with
-        8 or more cores, half on a smaller one."""
-        from ..doginal_index import PACES, default_pace
-        chosen = self.setting("ord_pace")
-        return chosen if chosen in PACES else default_pace()
+    def ord_cores(self) -> int:
+        """How many CPU cores the ord indexes help with (Admin -> Ords; 2026-10-20: "dedicate the number of
+        cores"): the operator's number, at most this machine's; by default half of a big machine's, one on a small
+        one."""
+        import os
+        from ..doginal_index import default_cores
+        chosen = self.setting("ord_cores")
+        try:
+            return max(1, min(int(chosen), os.cpu_count() or 1)) if chosen is not None else default_cores()
+        except (TypeError, ValueError):
+            return default_cores()
 
     def ord_indexes(self) -> dict:
         """Our own ord index of each chain this arcade reads, its own Core or a borrowed one (arcade/doginal_index.py;
@@ -1634,7 +1639,7 @@ class AppState:
             kept[net] = DoginalIndex(Path(self.home) / f"ord-{net}.sqlite", chain.rpc,
                                      (lambda n=net: self.ord_mode(n)),
                                      own_core=(lambda c=chain: not getattr(c, "borrowed", False)),
-                                     net=net, mweb=bool(getattr(chain.params, "mweb", False)), pace=self.ord_pace)
+                                     net=net, mweb=bool(getattr(chain.params, "mweb", False)), cores=self.ord_cores)
         return dict(kept)
 
     def doginal_index(self):

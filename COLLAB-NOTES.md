@@ -107,9 +107,11 @@ for each chain ... find the official block height for each chains ord index", an
   name, version, hosts}).
 - Not done yet: Litecoin blocks holding an MWEB peg-in can't be read raw (rawchain says Unreadable); that
   chunk's error shows in the tab.
-- Pace (the operator: a test machine "is a much faster machine. It shouldn't be pacing with the other one"): setting
-  `ord_pace` = full | half. By default a machine with 8+ CPU cores goes full (no rest between passes) and a
-  smaller one takes half (rests as long as it worked). Shown as "How much of this machine" on the Ords tab.
+- Cores (the operator: a test machine "is a much faster machine. It shouldn't be pacing with the other one", and "dedicate the
+  number of cores"): setting `ord_cores`, 1 to the machine's count. Each core is a lane holding a chunk of its own:
+  the lanes' next blocks are fetched side by side (threads) and read in worker processes (spawn). Default: half the
+  cores on a machine with 8+, else 1, which rests between passes. Walk stays one core (block after block).
+  "Cores for ords" on the Ords tab. Status has `lanes`; link_up says every lane's lease.
 - Also on this branch: a Core run with its wallet switched off (`disablewallet=1`, as a test machine's Dogecoin Core)
   is now treated like a borrowed chain. `state.keyed(chain)` says so, and the arcade holds that chain's coins with
   its own key (keywallet.py). Chain-agnostic, P main included, but never P test: the identity key itself is read
