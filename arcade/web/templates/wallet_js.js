@@ -156,6 +156,45 @@ export async function everyChain(wallet, chains) {
   return wallet;
 }
 
+/* --- address types --------------------------------------------------------
+ *
+ * One set of twelve words gives a chain more than one kind of address
+ * (2026-10-20: a drop-down on the Wallet card to choose the type; more
+ * types are coming from tbuuol). Each kind is a row here and nothing else needs
+ * to change: the card lists them, Receive shows that kind's address, and a coin
+ * send is built from it and signed with its key. The first row is the chain's
+ * ordinary address. A chain with one kind shows no drop-down.
+ * Native segwit is test chains only until it has had a real-money review.
+ */
+export const ADDRESS_KINDS = {
+  ltctest: [
+    {id: "legacy", label: "Legacy"},
+    {id: "p2wpkh", label: "Native SegWit", hrp: "tltc", path: "m/84'/1'/0'/0/0"},
+  ],
+};
+export const addressKinds = (network) => ADDRESS_KINDS[network] || [];
+
+/** That kind's key and address on `network`, from the wallet's words. */
+async function kindKey(wallet, network, kind) {
+  const base = keysOn(wallet, network);
+  if (kind.id === "p2wpkh") {
+    const seg = await coins.nativeSegwitKey(wallet.seed, network, 0);
+    return {...base, key: seg.key, pubkey: seg.pubkey,
+            address: await coins.p2wpkhAddress(seg.pubkey, kind.hrp)};
+  }
+  throw new Error(`this wallet cannot make a ${kind.label} address yet`);
+}
+
+/** The wallet as one address kind sees it: its key on `network` is that kind's,
+ *  so checked() and confirm() sign with it. The first kind is the wallet itself. */
+export async function asKind(wallet, network, kindId) {
+  const kinds = addressKinds(network);
+  const kind = kinds.find((k) => k.id === kindId);
+  if (!kind || kind === kinds[0]) return wallet;
+  if (!wallet || !wallet.seed) throw new Error(`Unlock your wallet to use its ${kind.label} address.`);
+  return {...wallet, on: {...wallet.on, [network]: await kindKey(wallet, network, kind)}};
+}
+
 /** Register any address this node does not know yet. Signed-in only. */
 export async function tellTheNode(wallet) {
   const said = await state();
@@ -503,11 +542,11 @@ export async function waitForCoins(seconds = 120) {
  * without asking.
  */
 
-export async function offerSend(to, amount, chain) {
+export async function offerSend(to, amount, chain, from = "") {
   return working(async () => {
     const asked = await fetch("/account/send", {
       method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({to, amount, chain: chain || ""}),
+      body: JSON.stringify(from ? {to, amount, chain: chain || "", from} : {to, amount, chain: chain || ""}),
     });
     const offer = await asked.json();
     if (!asked.ok) throw new Error(offer.detail || "that cannot be sent");
