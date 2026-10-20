@@ -20,13 +20,14 @@ class Node:
     def __init__(self):
         self.made = 0
         self.sent = []
+        self.funded = set()
 
     def call(self, method, *params):
         if method == "getnewaddress":
             self.made += 1
             return f"addr{self.made}"
         if method == "listunspent":
-            return [{"address": a} for a in params[2]]
+            return [{"address": a, "amount": 3.0} for a in params[2] if a in self.funded]
         raise AssertionError(method)
 
     def __enter__(self):
@@ -87,6 +88,7 @@ def stand(monkeypatch):
 
     def fund(self, rpc, addresses):
         node.sent.append(addresses)
+        node.funded.update(addresses)
         return "fundtx"
     monkeypatch.setattr(fruit.FruitStand, "_fund", fund)
     s = fruit.FruitStand(State(), Chain(node), index)
@@ -160,3 +162,28 @@ def test_the_funding_is_paid_from_the_nodes_own_address_with_change_back_to_it(m
     assert stand._fund(Rpc(), ["a1", "a2"]) == "txid"
     assert calls["from"] == "nodeaddr" and calls["opts"] == {"changeAddress": "nodeaddr"}
     assert [v for v, _ in calls["outs"]] == [fruit.FUND * fruit.tokenlib.COIN] * 2
+
+
+def test_a_fruit_address_whose_coins_went_elsewhere_is_funded_again(stand):
+    """2026-10-20: the gather swept 149 funded fruit addresses home before their claims; a second run must fund them
+    again rather than trust that they once were."""
+    s, index, node, broadcast = stand
+    real_fund = fruit.FruitStand._fund
+    s.reserve(wait=0)
+    assert len(node.sent) == 1
+    # Forget the claims and empty the addresses, as the sweep did.
+    book = s._book()
+    for name in fruit.FRUITS[1:]:
+        book[name].pop("claim", None)
+        index.names.pop(name, None)
+        node.funded.discard(book[name]["address"])
+    s._keep(book)
+    s.reserve(wait=0)
+    assert len(node.sent) == 2 and len(node.sent[1]) == 149
+
+
+def test_the_gather_leaves_the_fruit_addresses_alone():
+    import inspect
+    from arcade.web import app as webapp
+    source = inspect.getsource(webapp)
+    assert 'keep += [row.get("address") for row in (state.setting("fruit_stand") or {}).values()]' in source

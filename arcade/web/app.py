@@ -4912,6 +4912,9 @@ def create_app(state: AppState) -> FastAPI:
                 # The cross-chain book's exchange addresses hold deposits for
                 # other people and are never gathered (arcade/xchain_node.py).
                 keep = [state.setting(f"xchain:address:{which}") for which in ("testnet", "main")]
+                # The fruit names' addresses (arcade/fruit.py): each keeps the coins its claim and its transfer pay
+                # from (2026-10-20: the gather swept 149 of them home between their funding and their claims).
+                keep += [row.get("address") for row in (state.setting("fruit_stand") or {}).values()]
                 return gatherlib.walk_home(rpc, index, home, own, send_coins=coins,
                                            send_token=token, send_piece=piece,
                                            limit=limit, keep=[a for a in keep if a])

@@ -13,6 +13,7 @@ Left out of the list: names already somebody's on the chain when it was made (@a
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import threading
 import time
@@ -121,10 +122,11 @@ class FruitStand:
                     book[name] = {"address": rpc.call("getnewaddress", f"fruit:{name}")}
             self._keep(book)
             todo = [n for n in FRUITS if not book[n].get("claim") and not self.index.address_of(n)]
-            unfunded = [n for n in todo if not book[n].get("funded")]
+            unfunded = [n for n in todo if self._coins(rpc, book[n]["address"], 0) < FUND * tokenlib.COIN // 2]
             if unfunded:
                 self.busy = f"funding {len(unfunded)} addresses"
-                txid = self._fund(rpc, [book[n]["address"] for n in unfunded])
+                with self._sending():
+                    txid = self._fund(rpc, [book[n]["address"] for n in unfunded])
                 for n in unfunded:
                     book[n]["funded"] = txid
                 self._keep(book)
@@ -141,10 +143,33 @@ class FruitStand:
                 self.busy = f"claiming @{name} ({i + 1} of {len(todo)})"
                 if self.index.address_of(name):
                     continue                                   # somebody else's now: left as "taken"
-                prepared = sender.prepare(book[name]["address"], P.AnyData(data=taglib.encode(name)).encode())
-                prepared.what = f"reserve @{name}"
-                book[name]["claim"] = sender.broadcast(prepared)
+                with self._sending():
+                    prepared = sender.prepare(book[name]["address"], P.AnyData(data=taglib.encode(name)).encode())
+                    prepared.what = f"reserve @{name}"
+                    book[name]["claim"] = sender.broadcast(prepared)
                 self._keep(book)
+
+    @staticmethod
+    def _coins(rpc, address: str, minconf: int = 1) -> int:
+        return sum(int(round(float(u["amount"]) * tokenlib.COIN))
+                   for u in rpc.call("listunspent", minconf, 9_999_999, [address]) or [] if u.get("spendable", True))
+
+    @contextlib.contextmanager
+    def _sending(self, wait: float = 120.0):
+        """The application's one-send-at-a-time lock (state.begin_send), so no other send builds from the same coins."""
+        begin = getattr(self.state, "begin_send", None)
+        if begin is None:
+            yield
+            return
+        until = time.time() + wait
+        while not begin():
+            if time.time() > until:
+                raise ValueError("the wallet is busy sending something else; try again")
+            time.sleep(1)
+        try:
+            yield
+        finally:
+            self.state.end_send()
 
     def _fund(self, rpc, addresses: list[str]) -> str:
         """FUND coins to each address in one transaction, paid from the node's own address (@bigchiefenergy's) with
@@ -182,7 +207,7 @@ class FruitStand:
                 raise ValueError(f"@{name} is not held by this node yet")
             if self.index.tag_of(to):
                 raise ValueError(f"that address already holds @{self.index.tag_of(to)}")
-            with self.chain.rpc() as rpc:
+            with self.chain.rpc() as rpc, self._sending():
                 sender = tokenlib.TokenSender(rpc, self.chain.params)
                 prepared = sender.prepare(row["address"],
                                           P.AnyData(data=taglib.encode(name, taglib.KIND_TRANSFER)).encode(), reference=to)
