@@ -481,6 +481,49 @@ def test_a_game_whose_card_box_is_off_is_stopped_not_asked(browser, doors):
         browser.execute_script(forget, page)
 
 
+def test_a_ticked_wallet_access_box_stays_ticked_on_its_card(browser, doors):
+    """2026-10-20: "Once you check, allow Wallet access on a game card that check should stay on that game
+    card". The Games tab drew its boxes before base.html had defined what reads them, so every visit showed them off."""
+    import json as _json
+    state, page = doors["state"], doors["page"]
+    index = state.token_index(state.messaging)
+    maker = index.inscription(page)["creator"]
+    card = "c8" * 32
+    with index.open() as db:
+        db.conn.execute(
+            "INSERT OR REPLACE INTO inscription(txid,number,creator,owner,block_height,position,content_type,"
+            "content_len,sha256,json,chunks,content) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (card, 99998, maker, maker, 10 ** 7, 0, "text/html", 2, "ab" * 32,
+             _json.dumps({"game": {"name": "Box Game", "play": page}}), 1, b"hi"))
+        db.conn.commit()
+    box = f'.gameaccess[data-access="{page}"] input'
+    try:
+        browser.get(f"{doors['base']}/games")
+        browser.execute_script("localStorage.removeItem('arcade.wallet.allow:' + arguments[0])", page)
+        browser.refresh()
+        browser.execute_script("arguments[0].click()", browser.find_element(By.CSS_SELECTOR, box))
+        allow = None
+        for _ in range(40):
+            allow = [b for b in browser.find_elements(By.CSS_SELECTOR, ".askcard button")
+                     if b.is_displayed() and b.text == "Allow wallet access"]
+            if allow:
+                break
+            time.sleep(0.25)
+        assert allow, "ticking the box asks, naming the publisher"
+        allow[0].click()
+        time.sleep(0.5)
+        assert browser.find_element(By.CSS_SELECTOR, box).is_selected()
+        for where in ("/games", "/games?sort=new"):
+            browser.get(doors["base"] + where)
+            time.sleep(1)
+            assert browser.find_element(By.CSS_SELECTOR, box).is_selected(), f"{where}: the box came back off"
+    finally:
+        with index.open() as db:
+            db.conn.execute("DELETE FROM inscription WHERE txid=?", (card,))
+            db.conn.commit()
+        browser.execute_script("localStorage.removeItem('arcade.wallet.allow:' + arguments[0])", page)
+
+
 def test_the_hour_the_page_spends_is_the_accounts_one(browser, doors):
     """The cap a page in a loop hits is the account's message dial -- a tally
     kept in the tab resets with the tab and could only ever be theatre. Here

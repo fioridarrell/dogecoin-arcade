@@ -216,7 +216,11 @@
   });
   document.addEventListener('arcade:access', draw);
   document.addEventListener('arcade:unlocked', lock);
-  draw(); lock();
+  // After the page has parsed: base.html's arcadeGameAllowed and arcadeWalletOpen are defined below this script, so
+  // drawing at once threw and every box came back unticked on each visit (2026-10-20: a ticked box "should
+  // stay on that game card").
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { draw(); lock(); });
+  else { draw(); lock(); }
 })();
 </script>
 
