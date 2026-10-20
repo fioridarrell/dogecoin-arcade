@@ -23236,6 +23236,11 @@ def create_app(state: AppState) -> FastAPI:
                 return JSONResponse(
                     {"detail": "native segwit is on test chains only for now"},
                     status_code=400)
+            # Only the address this account registered, never somebody else's.
+            if state.setting(f"segwit_watch:{account.pubkey}:{chain.network}") != want_from:
+                return JSONResponse(
+                    {"detail": "register this segwit address on the Wallet page first"},
+                    status_code=400)
             address = want_from
         try:
             # A @tag is a name for an address, so it is resolved here and

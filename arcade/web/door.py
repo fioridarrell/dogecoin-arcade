@@ -69,6 +69,7 @@ PUBLIC_PAGES = frozenset({
     "/games",                 # every inscribed game (arcade/games.py)
     "/account/escrows",       # an account's own escrows (needs a session)
     "/account/doginals",      # this account's own Doginals on Dogecoin, to list (needs a session)
+    "/account/segwit/balance",  # the account's registered native-segwit address, test chains (needs a session)
     "/account/doge-stray",    # coins at the account's testnet key's Dogecoin address, to move home (2026-10-17)
     "/doginals/listings",     # Doginals listed for DOGE (the Exchange's Doginals tab)
     "/launch",
@@ -435,6 +436,8 @@ PUBLIC_POST = ("/auth/challenge", "/auth/login", "/auth/logout",
                "/account/token/send", "/account/token/create",
                "/account/token/manage",
                "/account/sign",
+               # the account's own native-segwit address, watched (test chains only)
+               "/account/segwit/register",
                # starring a market: the caller's own list of favorites, nothing else
                "/account/favorites",
                # the page holding this account's listed swaps is open (order_presence)

@@ -1207,3 +1207,17 @@ What else changed today:
   - What did not work: a hand rebrand of 93 files that could not be merged and fell 65 commits
     behind in a day; doc renames that the code did not match; eight old gold or cream colours
     left over.
+
+## 2026-10-20 · the operator's side · branch claude/segwit-panel
+
+tbuuol's PR #5 (team/segwit-send-wiring, 9 commits) is merged as is, on top of
+the wallet gate. Two additions from review:
+- `/account/segwit/register` (POST) and `/account/segwit/balance` (GET) are in
+  door.py; without them the panel read 0 and never registered through the
+  public site.
+- `/account/send` with `from` takes only the segwit address THIS account
+  registered (setting segwit_watch:<pubkey>:<network>), never another's.
+tests/test_node2_segwit_app.py's "gap" test now checks the one-address cap
+(a second, different address is 409) instead of five registrations passing.
+PR #3 (games-define-before-use) is closed: the same bug was fixed here in
+0e45ca4 (draw() and lock() wait for DOMContentLoaded).

@@ -52,15 +52,18 @@ def test_register_refuses_what_is_not_a_native_segwit_address_here(client, monke
         assert r.status_code == 400, (bad, r.text)
 
 
-def test_register_takes_an_address_the_account_never_proved_it_holds(client, monkeypatch):
-    """Documents a GAP, it is not a wish: any signed-in account can make the node watch any
-    bech32 address (no signature from the m/84' key, no cap). Harmless for funds (only the key
-    holder can sign), but it grows the watch list and records interest in strangers' addresses."""
+def test_register_takes_one_segwit_address_per_account_and_chain(client, monkeypatch):
+    """The cap on the gap: an account cannot grow the watch list with strangers'
+    addresses. (It still never proves it holds the m/84' key.)"""
     app, _, _ = _ready(client, monkeypatch)
-    for n in range(5):
+    assert app.post("/account/segwit/register",
+                    json={"chain": "ltctest", "address": MINE}).status_code == 200
+    assert app.post("/account/segwit/register",
+                    json={"chain": "ltctest", "address": MINE}).status_code == 200
+    for n in range(3):
         other = script.p2wpkh_address(P, bytes([n + 1]) * 20)
         assert app.post("/account/segwit/register",
-                        json={"chain": "ltctest", "address": other}).status_code == 200
+                        json={"chain": "ltctest", "address": other}).status_code == 409
 
 
 def test_send_from_the_segwit_address_builds_a_bip143_offer(client, monkeypatch):
@@ -101,3 +104,18 @@ def test_send_from_refuses_a_non_segwit_from(client, monkeypatch):
     r = app.post("/account/send", json={"to": THEIRS, "amount": "1", "chain": "ltctest",
                                         "from": THEIRS})
     assert r.status_code == 400, r.text
+
+
+def test_send_from_refuses_a_segwit_address_this_account_never_registered(client, monkeypatch):
+    app, _, _ = _ready(client, monkeypatch)
+    assert app.post("/account/segwit/register",
+                    json={"chain": "ltctest", "address": MINE}).status_code == 200
+    r = app.post("/account/send", json={"to": THEIRS, "amount": "1", "chain": "ltctest",
+                                        "from": SOMEONE})
+    assert r.status_code == 400 and "register" in r.json()["detail"], r.text
+
+
+def test_the_segwit_routes_pass_the_public_door():
+    from arcade.web import door
+    assert "/account/segwit/register" in door.PUBLIC_POST
+    assert "/account/segwit/balance" in door.PUBLIC_PAGES
