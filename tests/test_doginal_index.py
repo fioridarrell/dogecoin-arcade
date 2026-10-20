@@ -153,7 +153,7 @@ def test_the_walker_follows_an_inscription_koinu_by_koinu(tmp_path):
     index = _walker(tmp_path, chain)
     index.step()
     where = index.where(iid)
-    assert where["output"] == f"{buy[1]}:1" and where["offset"] == 10_000 and where["closed"]
+    assert where["output"] == f"{buy[1]}:1" and where["offset"] == 10_000 and where["number"] == 0
     assert index.on(buy[1], 1) == [{"id": iid, "offset": 10_000}]
     assert index.on(reveal[1], 0) == []
 
@@ -181,8 +181,8 @@ def test_an_envelope_over_two_transactions_closes_in_the_second(tmp_path):
     index = _walker(tmp_path, chain)
     index.step()
     where = index.where(f"{first[1]}i0")
-    assert where["closed"] and where["output"] == f"{rest[1]}:0"
-    assert index.store.q("SELECT pieces, done_height FROM insc")[0] == (2, dx.BASE + 1)
+    assert where["output"] == f"{rest[1]}:0", "numbered and placed when its body is complete"
+    assert index.store.q("SELECT pieces, height FROM insc")[0] == (2, dx.BASE + 1)
     assert index.store.q("SELECT COUNT(*) FROM pending")[0][0] == 0
 
 
@@ -264,6 +264,7 @@ def test_a_helper_that_lies_shows_as_a_difference(tmp_path):
     chain = _busy_chain(8)
     walker = _walker(tmp_path, chain)
     walker.step()
+    walker.heard("liar", {"op": "hi", "mode": "help", "rules": dx.ord_rules.RULES})
     walker.heard("liar", {"op": "dn", "rows": [[0, "ab" * 32, 0]]})
     status = walker.status()
     assert status["differ"] == 1 and status["differs"][0]["chunk"] == 0
@@ -337,6 +338,7 @@ def test_the_mesh_extension_says_everything_when_a_link_comes_up_and_files_what_
 
     async def go():
         await share.link_up(link)
+        await share.on_frame(link, {"t": "dx", **walker.hello()}, b"")               # it says hello (its rules) first
         await share.on_frame(link, {"t": "dx", "op": "dn", "net": "doge", "rows": [[0, walker.store.words(0)[""], 1]]}, b"")
         await share.on_frame(link, {"t": "dx", "op": "ls", "net": "doge", "c": 1, "at": dx.BASE + 5,
                                     "until": time.time() + 60}, b"")

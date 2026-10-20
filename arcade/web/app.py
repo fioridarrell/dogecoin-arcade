@@ -24071,19 +24071,42 @@ def create_app(state: AppState) -> FastAPI:
         index = state.ord_indexes().get(net)
         if index is None:
             return JSONResponse({"detail": "this arcade does not read that chain"}, status_code=404)
-        q = (q or "").strip().lower()
+        said = (q or "").strip()
+        q = said.lower()
         if INSCRIPTION_ID.match(q):
             question = {"what": "where", "id": q}
         elif re.match(r"^[0-9a-f]{64}:[0-9]{1,6}$", q):
             txid, vout = q.split(":")
             question = {"what": "on", "txid": txid, "vout": int(vout)}
+        elif q.startswith("type:") or q.startswith("p:") or q == "kinds":     # by content type or JSON "p"
+            question = {"what": "kinds", "ctype": said[5:].strip() if q.startswith("type:") else "",
+                        "proto": said[2:].strip() if q.startswith("p:") else ""}
+        elif len(said.encode("utf-8")) == 4:                   # a DRC-20 / PRC-20 tick (2026-10-20)
+            question = {"what": "token", "tick": said}
+        elif "." in said and " " not in said:                  # a name ("p":"dns"): every reading's first claim
+            question = {"what": "name", "name": said}
+        elif re.match(r"^[1-9A-HJ-NP-Za-km-z]{25,40}$", said):  # an address: its token balances
+            question = {"what": "balances", "owner": said}
         else:
-            return JSONResponse({"detail": "an inscription id (txid + i + number), or a coin as txid:vout"},
+            return JSONResponse({"detail": "an inscription id, a coin as txid:vout, a 4-character tick, a name "
+                                           "like jon.doge, an address, type:image/png, p:drc-20, or kinds"},
                                 status_code=400)
         try:
             return JSONResponse(index.lookup(question), headers={"Cache-Control": "no-store"})
         except Exception as exc:                               # noqa: BLE001 -- said in the box
             return JSONResponse({"detail": str(exc)[:300]}, status_code=409)
+
+    @app.get("/admin/api/ords/names")
+    def admin_ords_names(request: Request, net: str = "doge"):
+        """Admin -> Ords -> Names: where the readings of a "p":"dns" name disagree (arcade/ord_rules.NAME_RULES), from
+        this arcade's own walk (2026-10-20: "make sure that we are indexing the domains the correct way")."""
+        _admin_check(request)
+        from .. import ord_rules
+        index = state.ord_indexes().get(net)
+        if index is None or index.mode() != "walk":
+            return JSONResponse({"detail": "only an arcade that walks this chain keeps its names"}, status_code=409)
+        return JSONResponse({**index.name_disagreements(), "readings": ord_rules.NAME_RULES},
+                            headers={"Cache-Control": "no-store"})
 
     @app.get("/admin/api/operators")
     def admin_operators(request: Request):

@@ -88,6 +88,31 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-20 · the operator's side · ord indexes follow the official rules; DRC-20 / PRC-20; names (rules 2)
+
+The operator: match wonky-ord (all ords are in the index), index DRC-20 and PRC-20 balances, and index the "p":"dns"
+names "the correct way". arcade/ord_rules.py (RULES = 2) copies the indexers' code:
+- Inscriptions, as tylordius/wonky-dogeord and apezord/ord-dogecoin: input 0 only, push-only, "ord", a piece count
+  above 0, an exact countdown, continued in the tx whose input 0 spends the previous piece. NUMBERED WHEN
+  COMPLETE. No new number when input 0's first koinu already carries an inscription. Their OP_PUSHDATA2/4 length
+  quirk is copied (the opcode byte read as the low byte); Doginals use 240-byte pieces, so ordinary inscriptions
+  never meet it. Real chain: number 0 = 15f3b73d...f62ei0 (the pixel-art monkey) at block 4,609,723.
+- DRC-20 (Dogecoin) / PRC-20 (Pepecoin, reallyshadydev/pepecoin-ord-indexer), as src/drc20 +
+  drc20_updater.rs: 4-byte ticks matched in lowercase, string amounts with no exponent or sign, 18 decimals at
+  most, at least 40 characters of body. Single-transaction inscriptions only, never landing in the fee. A mint
+  is cut to the supply left. Only a note's FIRST move counts, and a move into the fee returns it to the
+  sender. Owners are addresses (script hash for others). Walkers only, since transfers need moves.
+- Names: every candidate kept with the name it makes under three readings (ord_rules.NAME_RULES): "spec" (DNS
+  v1.2, jonheaven/dns: plain text label.namespace or JSON reg, any namespace, Unicode rules), "json" (JSON reg
+  only, any ending), "doge2023" (JSON, .doge only, the 2023 indexer guide). The first claim by inscription
+  number wins in each; Admin -> Ords -> Names shows where they disagree. The operator chooses the reading from that.
+- Every inscription keeps its content type (text), its JSON "p" (`proto`) and its body size, indexed, so a
+  protocol added later finds its own inscriptions without re-reading every body (the operator: "so we can go back and
+  scan by mime type later"). Look up takes `type:image/png`, `p:drc-20` or `kinds`.
+- Every row a block writes keeps its old value (undo), so a reorg puts balances and names back too.
+- "hi" carries `rules`; chunk words from an arcade on other rules are ignored. A store kept under other rules is
+  dropped and cut again, so every arcade's Dogecoin index starts over once (cheap: ~7% in).
+
 ### 2026-10-20 · the operator's side · chain names: "<Chain> (<TICKER>) – Main|Test" everywhere
 
 The operator: "Redo the naming convention so it is the network name – Main or test ... Because we could be and will

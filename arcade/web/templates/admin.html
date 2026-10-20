@@ -322,9 +322,12 @@
   </table></div>
   <span class="muted" id="ordsaid"></span>
   <h3 style="margin:14px 0 6px">Look up</h3>
-  <p class="muted" style="margin-top:0;font-size:.84rem">An inscription id (where it is now), or a coin as
-    <code>txid:vout</code> (what sits on it). Answered from this arcade&rsquo;s own walk, or, on <b>Read only</b>, by a
-    linked arcade that walks the chain.</p>
+  <p class="muted" style="margin-top:0;font-size:.84rem">An inscription id (where it is now), a coin as
+    <code>txid:vout</code> (what sits on it), a 4-character DRC-20 / PRC-20 tick (its supply and holders), a name like
+    <code>jon.doge</code> (who claimed it first, under each reading), an address (its token balances),
+    <code>type:image/png</code> or <code>p:drc-20</code> (how many, and the first ones), or <code>kinds</code> (the
+    commonest types and protocols). Answered from
+    this arcade&rsquo;s own walk, or, on <b>Read only</b>, by a linked arcade that walks the chain.</p>
   <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
     <select id="ordlooknet" aria-label="Chain to look up on" style="font-size:16px"></select>
     <input autocomplete="off" id="ordlookq" style="flex:1;min-width:260px;font-size:16px" placeholder="inscription id, or txid:vout"
@@ -332,6 +335,13 @@
     <button type="button" class="small" id="ordlookgo">Look up</button>
   </div>
   <pre id="ordlooksaid" class="muted" style="white-space:pre-wrap;font-size:.84rem;margin:8px 0 0"></pre>
+  {# 2026-10-20: "make sure that we are indexing the domains the correct way" -- every reading kept. #}
+  <h3 style="margin:14px 0 6px">Names: where the readings disagree</h3>
+  <p class="muted" style="margin-top:0;font-size:.84rem">A <code>"p":"dns"</code> name is claimed by an inscription;
+    the first valid claim wins and its holder owns the name. The readings differ on which inscriptions are claims, so
+    the same name can have a different first claim under each. Read from this arcade&rsquo;s own walk.</p>
+  <button type="button" class="small" id="ordnamesgo">Show</button>
+  <pre id="ordnamessaid" class="muted" style="white-space:pre-wrap;font-size:.84rem;margin:8px 0 0"></pre>
 </section>
 </div>
 
@@ -1050,7 +1060,8 @@ section.panel h2{margin-top:0}
           tr.appendChild(lines(line));
           // A walker knows every inscription it passed; a helper counts the births in the chunks it read (2026-10-20:
           // a test machine showed a dash and looked as if it had found nothing).
-          tr.appendChild(w ? text('td', num(w.inscriptions))
+          tr.appendChild(w ? lines([num(w.inscriptions) + ' inscriptions', num(w.tokens) + ' tokens, '
+                                    + num(w.holders) + ' holders', num((w.names || {}).spec) + ' names'])
                            : r.found ? lines([num(r.found), 'in chunks read here']) : text('td', '\u2014'));
           var bits = [];
           if (r.mode === 'off') bits.push('off');
@@ -1080,6 +1091,26 @@ section.panel h2{margin-top:0}
       .then(function (r) { return r.json(); })
       .then(function (j) { out.textContent = j.detail ? j.detail : JSON.stringify(j, null, 2); })
       .catch(function (e) { out.textContent = String(e.message || e); });
+  };
+  $('ordnamesgo').onclick = function () {
+    var out = $('ordnamessaid'); out.textContent = 'Reading\u2026';
+    fetch('/admin/api/ords/names?net=' + encodeURIComponent($('ordlooknet').value), {headers: {'Accept': 'application/json'},
+                                                                                   cache: 'no-store'})
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (j.detail) { out.textContent = j.detail; return; }
+        var lines = [j.names.toLocaleString() + ' names in all; ' + j.different_first_claim.toLocaleString()
+          + ' with a different first claim under two readings.'];
+        Object.keys(j.readings).forEach(function (k) {
+          lines.push('\u2022 ' + k + ': ' + (j.per_reading[k] || 0).toLocaleString() + ' names \u2014 ' + j.readings[k]);
+        });
+        if (j.examples.length) lines.push('', 'First claim (inscription number) under each reading:');
+        j.examples.forEach(function (x) {
+          lines.push(x.name + ': ' + Object.keys(j.readings).map(function (k) {
+            return k + ' ' + (x[k] == null ? '\u2014' : '#' + Number(x[k]).toLocaleString()); }).join(', '));
+        });
+        out.textContent = lines.join('\n');
+      }).catch(function (e) { out.textContent = String(e.message || e); });
   };
   $('ordcoressave').onclick = function () {
     call('/admin/api/ords', {cores: Number($('ordcores').value)})

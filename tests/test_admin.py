@@ -231,6 +231,17 @@ def test_the_ords_tab_lists_each_chain_with_its_official_start_and_saves_its_mod
     assert app.get("/admin/api/ords/lookup?net=main&q=nonsense", headers=LOCAL).status_code == 400
     said = app.get("/admin/api/ords/lookup?net=main&q=" + "ab" * 32 + "i0", headers=LOCAL)
     assert said.status_code == 409 and "linked arcade" in said.json()["detail"], "no walker linked in a test"
+    # Ticks, names and addresses go to the same box (2026-10-20); a walker answers them, a reader asks one.
+    for q in ("wow!", "jon.doge", "nYW2BPLENpu2nGa7WCExvzxD3hQYueULFa"):
+        got = app.get("/admin/api/ords/lookup?net=main&q=" + q, headers=LOCAL)
+        assert got.status_code == 409, (q, got.text)
+    assert app.get("/admin/api/ords/names?net=main", headers=LOCAL).status_code == 409, "names: walkers only"
+    state.set_setting("ord_index:main", "walk")
+    names = app.get("/admin/api/ords/names?net=main", headers=LOCAL).json()
+    assert names["names"] == 0 and set(names["readings"]) == {"spec", "json", "doge2023"}
+    assert app.get("/admin/api/ords/lookup?net=main&q=wow!", headers=LOCAL).json() == {
+        "token": None, "from": "this arcade", "walked_to": 186920}
+    assert 'id="ordnamesgo"' in page.text
     state.set_setting("ord_index:main", None)
 
 
