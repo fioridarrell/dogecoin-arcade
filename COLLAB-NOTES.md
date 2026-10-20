@@ -1221,3 +1221,25 @@ tests/test_node2_segwit_app.py's "gap" test now checks the one-address cap
 (a second, different address is 409) instead of five registrations passing.
 PR #3 (games-define-before-use) is closed: the same bug was fixed here in
 0e45ca4 (draw() and lock() wait for DOMContentLoaded).
+
+## 2026-10-20 · the operator's side · address types on the Wallet card (for tbuuol)
+
+The operator asked that the Native SegWit panel not show under every chain, and for
+a drop-down on the card to choose the address type, with more types to come
+from you. So:
+- The kinds are one list in `arcade/web/templates/wallet_js.js`:
+  `ADDRESS_KINDS = {ltctest: [{id: "legacy", …}, {id: "p2wpkh", label: "Native SegWit", hrp: "tltc", path: "m/84'/1'/0'/0/0"}]}`.
+  The first row is the chain's ordinary address. A chain with one row shows no
+  drop-down.
+- To add a type: add its row, and a branch in `kindKey()` (same file) that
+  returns `{...base, key, pubkey, address}` for it. `asKind(wallet, network, id)`
+  hands checked()/confirm() a wallet whose key on that chain is the kind's, so
+  signing needs nothing else, as long as `coins.verifyOffer` knows the
+  input's script (it knows p2wpkh).
+- The card (my_wallet.html) uses `/account/segwit/register` and
+  `/account/segwit/balance` for every non-ordinary kind today. A kind that is not
+  bech32 v0 needs those routes widened (or a kind-neutral pair). That's the one
+  server change a new type needs.
+- The bottom "Native SegWit" panel is gone. The card's chosen kind sets its
+  address, balance, Receive and coin Send. Tokens and NFTs stay on the ordinary
+  address. Activity for a non-ordinary kind says it is not listed yet.
