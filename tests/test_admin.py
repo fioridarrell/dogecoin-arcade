@@ -209,3 +209,16 @@ def test_the_doginals_index_box_reads_and_its_mode_is_saved(public, monkeypatch,
     said = app.get("/admin/api/doginal-index", headers=LOCAL).json()
     assert said["mode"] == "off" and said["chunk"] == dx.CHUNK and said["base"] == dx.BASE
     assert app.get("/admin/api/doginal-index", headers=EDGE).status_code != 200, "never shown to a stranger"
+
+
+def test_the_doginals_index_box_draws_its_counts_in_a_browser_like_reading(public, monkeypatch, tmp_path):
+    """2026-10-20: the status's `none` (chunks nobody read yet) was taken for "this arcade reads no Dogecoin" and the
+    box showed one number. The no-Dogecoin answer is `absent`, a word the status never uses."""
+    app, state = public
+    from arcade import doginal_index as dx
+    index = dx.DoginalIndex(tmp_path / "dx.sqlite", None, lambda: "help")
+    monkeypatch.setattr(type(state), "doginal_index", lambda self: index)
+    said = app.get("/admin/api/doginal-index", headers=LOCAL).json()
+    assert "absent" not in said and "none" in said
+    page = app.get("/admin", headers=LOCAL).text
+    assert "if (d.absent)" in page and "if (d.none)" not in page

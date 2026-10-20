@@ -23898,7 +23898,7 @@ def create_app(state: AppState) -> FastAPI:
         _admin_check(request)
         index = state.doginal_index()
         if index is None:
-            return JSONResponse({"none": "This arcade reads no Dogecoin, its own or borrowed."},
+            return JSONResponse({"absent": "This arcade reads no Dogecoin, its own or borrowed."},
                                 headers={"Cache-Control": "no-store"})
         return JSONResponse(index.status(), headers={"Cache-Control": "no-store"})
 

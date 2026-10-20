@@ -969,7 +969,7 @@ section.panel h2{margin-top:0}
     fetch('/admin/api/doginal-index', {headers: {'Accept': 'application/json'}}).then(function (r) { return r.json(); })
       .then(function (d) {
         var box = $('dxbox'); box.textContent = '';
-        if (d.none) { box.textContent = d.none; $('dxmode').disabled = true; return; }
+        if (d.absent) { box.textContent = d.absent; $('dxmode').disabled = true; return; }
         if (document.activeElement !== $('dxmode')) $('dxmode').value = d.mode;
         var n = function (x) { return Number(x || 0).toLocaleString(); };
         var w = d.walk;
