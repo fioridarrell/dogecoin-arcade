@@ -22958,6 +22958,62 @@ def create_app(state: AppState) -> FastAPI:
             raise HTTPException(404, "no such game")
         return launch_thread(request, txid)
 
+    def _game_of_page(page: str) -> dict:
+        """Whether an inscribed page is a game -- a card itself, or the page a card's `play` opens -- and that card.
+
+        For the wallet gate (base.html, arcadeGameGate; 2026-10-20: a player "can't play a game that uses
+        Wallet controls unless they check the wallet check box on the game card"): a game page that asks for the
+        wallet without the card's box ticked is stopped, so the browser needs to know which pages are games."""
+        pages = state.__dict__.setdefault("_game_pages", {})      # page -> (when, answer); a test may clear it
+        held = pages.get(page)
+        if held and time.time() - held[0] < (300 if held[1].get("game") else 60):
+            return held[1]
+        said = {"game": False}
+        chain, index = _token_chain()
+        for _, ix in [(chain, index)] + _other_indexes():
+            try:
+                row = ix.inscription(page)
+            except Exception:
+                row = None
+            if not row:
+                continue
+            card, own = None, gameslib.parse(row.get("json"))
+            if own:
+                card = {"txid": row["txid"], "game": own}
+            else:
+                # A card by the same maker whose Play opens this page (_game_opens' rule).
+                try:
+                    with contextlib.closing(ix.open()) as db:
+                        rows = db.conn.execute(
+                            "SELECT txid, json FROM inscription WHERE creator=? AND content_type LIKE 'text/html%' "
+                            "AND json LIKE ? ORDER BY block_height DESC, position DESC LIMIT 20",
+                            (row["creator"], f"%{page}%")).fetchall()
+                except Exception:
+                    rows = []
+                for r in rows:
+                    g = gameslib.parse(r["json"])
+                    if g and g.get("play") == page:
+                        card = {"txid": r["txid"], "game": g}
+                        break
+            if card:
+                creator = row["creator"]
+                tag = _name_of(creator)
+                said = {"game": True, "card": card["txid"], "name": card["game"]["name"],
+                        "wallet": bool(card["game"].get("wallet")),
+                        "opens": _game_opens(ix, creator, card["txid"], card["game"]),
+                        "publisher": f"@{tag}" if tag else "", "address": creator}
+            break
+        pages[page] = (time.time(), said)
+        return said
+
+    @app.get("/games/{txid}/access")
+    def game_access(txid: str):
+        """Is this page a game, which card, and does the card say it uses the wallet (for the wallet gate)."""
+        txid = (txid or "").lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", txid):
+            return JSONResponse({"game": False})
+        return JSONResponse(_game_of_page(txid))
+
     @app.get("/play/{which}", response_class=HTMLResponse)
     def game_door(request: Request, which: str):
         """A game's own front door (SadFrog, 2026-10-17): the sign-up in the game's
