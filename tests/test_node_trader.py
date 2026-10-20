@@ -271,7 +271,7 @@ def test_two_nodes_trade_an_nft_for_doge(market, monkeypatch):
 
 
 def _doginals_on_doge(dg, tmp_path, traders, postage):
-    """Two small coins in the Dogecoin wallet, each carrying a Doginal by the fake Doge Soft's word: (txid, vout of the
+    """Two small coins in the Dogecoin wallet, each carrying a Doginal by the fake index's word: (txid, vout of the
     one traded, vout of a decoy -- ANOTHER Doginal, the smallest coin there, which must never pay a fee)."""
     from arcade import doginals
     home, decoy_home = dg.call("getnewaddress"), dg.call("getnewaddress")
@@ -297,7 +297,7 @@ def _doginals_on_doge(dg, tmp_path, traders, postage):
 
 def test_two_nodes_trade_a_doginal_for_pep(market, tmp_path):
     """[Claude 2026-10-15] the operator: "use the atomic swap feature we have to trade doginals." B gives a Doginal on
-    Dogecoin regtest for A's 3 PEP, through the same locks and steps as any leg; Doge Soft is faked (never the real one).
+    Dogecoin regtest for A's 3 PEP, through the same locks and steps as any leg; the Doginals source is faked (never a real one).
     The Doginal goes into B's lock first and whole (output 0, its reserve output 1) and comes out to A first and whole,
     the reserve paying the claim."""
     from arcade import htlc as H

@@ -2,7 +2,7 @@
 2026-10-14: "identify which UTXOs are doginals to make sure they are not spent unless somebody is trying to send a doginal
 to someone else").
 
-Read from the chain itself, by this node (2026-10-15: "Remove Doge Soft API"; its index did not know Anti Doginal
+Read from the chain itself, by this node (2026-10-15: remove the outside Doginals API; its index did not know Anti Doginal
 Dog #1089, which sat on a 0.01 DOGE coin): each small output is traced back, koinu by koinu, to the transaction whose
 input opened an ord envelope (`trace`), and an inscription's content is read out of that envelope (`content`). No index:
 a few raw transactions per coin, through the chain's own node. Optionally an ord-style server answers as well

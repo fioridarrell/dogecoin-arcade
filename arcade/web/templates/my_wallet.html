@@ -63,7 +63,7 @@
 <div id="panel-nfts" role="tabpanel" hidden></div>
 {# [Claude 2026-10-15] Inscriptions on this account's own coins -- Doginals on Dogecoin, ord inscriptions on Pepecoin
    mainnet -- read from the chain by this node (2026-10-14: "We have to have the wallet check its own utxo to see if
-   they are doginals"; 2026-10-15: "Remove Doge Soft API", "do the same for small .01 pep txs"). Shown under NFTs. #}
+   they are doginals"; 2026-10-15: the outside Doginals API removed, "do the same for small .01 pep txs"). Shown under NFTs. #}
 <section id="doginals" class="wl-dg" hidden aria-labelledby="dg-title"></section>
 
 {# Coins in the small outputs this account's messages, posts and files left on
@@ -1467,7 +1467,7 @@ async function drawCollection() {
  * Pepecoin mainnet. The node lists the account's own coins (/account/coins) and reads each transaction from its own chain
  * (/account/doginal-tx/<txid>, doginals.trace: the coin's koinu followed back to the envelope that inscribed them), once
  * per transaction for good; this browser keeps the answers too. Nothing outside this arcade is asked (2026-10-15:
- * "Remove Doge Soft API"). A small coin the node could not read is said so and never shown as a plain coin.
+ * the outside Doginals API removed). A small coin the node could not read is said so and never shown as a plain coin.
  */
 
 const DG_TX = "arcade.inscriptions.v2.";         // + network + "." + txid: the chain's answer (v1 held an outside index's)

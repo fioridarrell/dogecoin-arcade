@@ -88,6 +88,17 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-20 · the operator's side · branch claude/no-outside-doginals-name
+
+Wording only, no behaviour change. The operator: no outside Doginals index is to be
+named anywhere (the node reads Doginals from the chain itself since 2026-10-15).
+Comments, docstrings, test docstrings, assertion messages and three test names
+in arcade/doginals.py, arcade/web/app.py, affiliates.html, my_wallet.html and
+ten test files now say "the outside Doginals API" / "the Doginals source" / "the
+index". Left on purpose: the three guard asserts (test_affiliates.py,
+test_doginal_wallet.py) that check that domain is absent from pages and code.
+Please don't add it back in new code or notes.
+
 ### 2026-10-20 · the operator's side · branch claude/segwit-panel
 
 tbuuol's PR #5 (team/segwit-send-wiring, 9 commits) is merged as is, on top of

@@ -1,6 +1,6 @@
 """Coins carrying Doginals are never spent by an ordinary Dogecoin send (2026-10-14: "identify which UTXOs are
-doginals to make sure they are not spent unless somebody is trying to send a doginal to someone else"). Doge Soft is
-faked: arcade/doginals.py asks it per transaction and keeps the answer."""
+doginals to make sure they are not spent unless somebody is trying to send a doginal to someone else"). The Doginals
+source is faked: arcade/doginals.py asks it per transaction and keeps the answer."""
 
 import pytest
 
@@ -27,7 +27,7 @@ def test_an_inscribed_coin_is_left_out(tmp_path):
 
 
 def test_a_small_coin_nobody_vouched_for_is_left_out_a_big_one_is_not(tmp_path):
-    g = doginals.Doginals(tmp_path / "d.sqlite", fetch=_fake({}, []))   # Doge Soft is down
+    g = doginals.Doginals(tmp_path / "d.sqlite", fetch=_fake({}, []))   # the source is down
     small, big = {"txid": T2, "vout": 0, "value": 100_000}, {"txid": T2, "vout": 1, "value": 200_000_000}
     assert g.spendable([small, big]) == [big]
 

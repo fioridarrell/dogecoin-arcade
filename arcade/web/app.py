@@ -812,7 +812,7 @@ def create_app(state: AppState) -> FastAPI:
             pass
     TEMPLATES.env.globals["brand"] = brandlib.current()   # this node's name, colours, icons (brand.py)
     # [Claude 2026-10-14] Inscriptions stay put: a wallet's ordinary sends never spend a coin carrying one (arcade/doginals.py).
-    # Read from each chain by its own node (2026-10-15, "Remove Doge Soft API"): Doginals on Dogecoin, and the same ord
+    # Read from each chain by its own node (2026-10-15, the outside Doginals API removed): Doginals on Dogecoin, and the same ord
     # envelopes on small Pepecoin MAINNET coins ("do the same for small .01 pep txs. Not made by the Arcade").
     fundinglib.GUARDS = []
     fundinglib.GUARD_BY_NET = {}
@@ -8350,8 +8350,8 @@ def create_app(state: AppState) -> FastAPI:
         """
         return RedirectResponse("/docs/features.md", status_code=307)
 
-    #: The arcade's affiliates (2026-10-15): (name, link, what they do). Doge Soft was one until the operator removed it
-    #: the same day ("Remove Doge Soft API and affiliate link").
+    #: The arcade's affiliates (2026-10-15): (name, link, what they do). An outside Doginals index was one until
+    #: the operator removed it the same day, with its API.
     #: explorer is where this arcade reads Doginals from (arcade/doginals.py).
     AFFILIATES = (
         ("Anti Doginal Dogs", "https://antidoginaldogs.com",
@@ -13324,8 +13324,8 @@ def create_app(state: AppState) -> FastAPI:
         """The account's own coins on one chain, one row per output.
 
         [Claude 2026-10-15] For the Wallet's Doginals check (2026-10-14: "We have to have the wallet check its own utxo
-        to see if they are doginals", and "I want the client side to access Doge soft"): the BROWSER takes this list to Doge
-        Soft and asks which of these coins carry an inscription. This node only lists them; it asks nobody."""
+        to see if they are doginals"): the BROWSER takes this list to /account/doginal-tx and asks which of these coins carry
+        an inscription. This node only lists them; it asks nobody."""
         account = _signed_in_account(request)
         try:
             one = _chain_asked({"chain": chain})
@@ -13344,7 +13344,7 @@ def create_app(state: AppState) -> FastAPI:
         """What sits on one transaction's outputs, read from the chain by this node (doginals.trace), for the Wallet's
         inscriptions check: Doginals on Dogecoin, ord inscriptions on Pepecoin mainnet (`chain`). Only a transaction that
         holds one of this account's own coins on that chain; kept for good, so each is read once. 2026-10-15 (the browser
-        could not read the outside index it used; then the operator: "Remove Doge Soft API")."""
+        could not read the outside index it used; then the operator removed that outside Doginals API)."""
         from .. import doginals as D
         account = _signed_in_account(request)
         txid = str(txid or "").lower()

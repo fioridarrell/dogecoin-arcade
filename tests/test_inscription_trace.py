@@ -1,4 +1,4 @@
-"""The chain's own reading of inscriptions (2026-10-15: "Remove Doge Soft API"; "do the same for small .01 pep txs.
+"""The chain's own reading of inscriptions (2026-10-15: the outside Doginals API removed; "do the same for small .01 pep txs.
 Not made by the Arcade"): a coin's koinu are followed back to the envelope that inscribed them, and an inscription's
 content is read out of its envelope, across as many transactions as it runs on. A fake node here; the real one is
 checked against live Doginals (Anti Doginal Dog #1089 at 81690a86…:0, and eight indexed ones) by hand."""
