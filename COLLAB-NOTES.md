@@ -88,6 +88,35 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-20 · the operator's side · PLAN (not started): our own index of every Doginal
+
+The operator and Claude planned an index of all ~8 million Doginals, read from the
+chain by the arcades themselves. No outside index is used or named. Nothing
+is built yet; it waits for the operator's go. The full plan is on the operator's
+side (~/docs/doginals-index-plan.md, claude-plan item 16). In short:
+- Index about 1-3 GB (pointers into the chain, content never copied), kept
+  WHOLE on every arcade. The mesh shares the work, not the storage.
+- Finding: the chain is cut into 100-block chunks, leased (10 min) in a mesh
+  room `doginals-scan`, first taker wins (like the shared order book). One
+  block at a time: fetch, check against the headers, scan, next. Progress
+  every 10 blocks. A dropped chunk goes to the next arcade, from its last
+  block done.
+- Ownership: each Dogecoin Core arcade walks the chain in order itself
+  (ord-dogecoin sat rules) and compares a hash per block with the other Core
+  arcades. A mismatch stops the walk at that height.
+- No-Core arcades fetch raw blocks over the mesh and check hash + merkle
+  root, so they can scan without trusting anyone.
+- Trust: while there are fewer than 5 arcades, every chunk is scanned by 2
+  arcades and must match. Later, one scan plus random spot checks.
+  Agreement counts operators, not arcades. Money paths (wallet protection,
+  Exchange, sends) keep using doginals.trace until the index is checked by
+  this arcade itself.
+- No work runs in browsers or on phones (the operator).
+- Build order: scanner on one arcade, follow walk, chunks over the mesh,
+  no-Core block fetch, the pages using it, joining from peers.
+tbuuol: if you want a piece of this, say which in your Log, so we don't both
+build it.
+
 ### 2026-10-20 · the operator's side · branch claude/no-outside-doginals-name
 
 Wording only, no behaviour change. The operator: no outside Doginals index is to be
