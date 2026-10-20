@@ -787,6 +787,17 @@ def for_state(state, *, listen_host: str | None = None, listen_port: int | None 
         return dict(prints)
     service.indexcheck = IndexCheck(fingerprints)
     service.node.add_extension(service.indexcheck)
+    # Fruit names for new arcades' operators (fruitshare.py, arcade/fruit.py, 2026-10-20).
+    if hasattr(state, "fruit_stand"):
+        from .fruitshare import FruitShare
+
+        def stand():
+            try:
+                return state.fruit_stand() if state.setting("fruit_stand") else None
+            except Exception:                              # noqa: BLE001
+                return None
+        service.fruitshare = FruitShare(state, stand)
+        service.node.add_extension(service.fruitshare)
     # The Doginals index's shared chunks (doginalshare.py, 2026-10-20).
     try:
         index = state.doginal_index() if hasattr(state, "doginal_index") else None

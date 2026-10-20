@@ -47,6 +47,8 @@ FRUITS = (
 #: Coins sent to each fruit address: its claim, and later its transfer, each pay a fee from it.
 FUND = 3
 SETTING = "fruit_stand"
+#: How long a fruit stays promised to an arcade whose operator has not signed up yet.
+PROMISE_SECONDS = 30 * 86400
 
 
 class FruitStand:
@@ -76,6 +78,8 @@ class FruitStand:
                 pass
             if row.get("given_to"):
                 where = "given" if holder == row["given_to"] else "giving"
+            elif holder and holder == row.get("address") and self._promised(row):
+                where = "promised"
             elif holder and holder == row.get("address"):
                 where = "held"
             elif holder:
@@ -87,11 +91,38 @@ class FruitStand:
             else:
                 where = "waiting"
             rows.append({"name": name, "state": where, "address": row.get("address", ""),
-                         "given_to": row.get("given_to", "")})
+                         "given_to": row.get("given_to", ""), "promised_to": row.get("promised_to", "")})
         counts: dict[str, int] = {}
         for r in rows:
             counts[r["state"]] = counts.get(r["state"], 0) + 1
         return {"counts": counts, "rows": rows, "busy": self.busy, "error": self.error}
+
+    @staticmethod
+    def _promised(row: dict) -> bool:
+        return bool(row.get("promised_to")) and time.time() - float(row.get("promised_at") or 0) < PROMISE_SECONDS
+
+    def promise(self, node: str) -> str | None:
+        """The fruit for a new arcade (mesh node id `node`): the one already promised to it, or the next free one,
+        kept for it PROMISE_SECONDS while its operator signs up."""
+        with self._lock:
+            book = self._book()
+            for name in FRUITS:
+                row = book.get(name) or {}
+                if row.get("promised_to") == node and not row.get("given_to") and self._promised(row):
+                    return name
+            free = self.next_free()
+            if free is None:
+                return None
+            book[free] = {**book[free], "promised_to": node, "promised_at": time.time()}
+            self._keep(book)
+            return free
+
+    def give_promised(self, node: str, name: str, to: str) -> str:
+        """Send `name` to `to`, but only the fruit this node promised to that arcade."""
+        row = self._book().get(name) or {}
+        if row.get("promised_to") != node:
+            raise ValueError(f"@{name} was not promised to that arcade")
+        return self.give(name, to)
 
     def next_free(self) -> str | None:
         for r in self.status()["rows"]:

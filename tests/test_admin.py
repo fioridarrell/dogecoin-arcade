@@ -222,3 +222,41 @@ def test_the_doginals_index_box_draws_its_counts_in_a_browser_like_reading(publi
     assert "absent" not in said and "none" in said
     page = app.get("/admin", headers=LOCAL).text
     assert "if (d.absent)" in page and "if (d.none)" not in page
+
+
+def test_the_first_operator_signs_up_with_the_offered_fruit_at_the_machine(public):
+    """2026-10-20: a new arcade's operator gets a fruit name automatically (arcade/fruit.py,
+    mesh/fruitshare.py). At the machine, with no operator yet, the offered fruit is free to that sign-up, which
+    becomes the operator and asks the fruit's holder to send the name. From outside it is nobody's to take."""
+    from nacl.signing import SigningKey
+    from arcade.script import b58check_encode, hash160
+    app, state = public
+    state.set_setting("fruit_offer", {"name": "mango", "from": "holder-node"})
+    asked = []
+
+    class Share:
+        def ask_to_give(self, to):
+            asked.append(to)
+
+    class Mesh:
+        fruitshare = Share()
+    was = getattr(state, "mesh", None)
+    state.mesh = Mesh()
+    try:
+        assert 'value="mango"' in app.get("/join", headers=LOCAL).text
+        assert 'value="mango"' not in app.get("/join", headers=EDGE).text
+        assert app.get("/signup/mango", headers=LOCAL).json()["fruit"] is True
+        assert "fruit" not in app.get("/signup/mango", headers=EDGE).json()
+        key = SigningKey.generate()
+        pubkey = key.verify_key.encode().hex()
+        chain = state.messaging
+        address = b58check_encode(chain.params.pubkeyhash_version, hash160(b"\x02" + key.verify_key.encode()))
+        said = app.post("/signup", headers=LOCAL, json={"tag": "mango", "pubkey": pubkey, "address": address,
+                                                        "blob": {"sealed": "x"}})
+        assert said.status_code == 200, said.text
+        assert said.json()["fruit"] is True
+        assert state.operator == pubkey
+        assert asked == [address]
+    finally:
+        state.mesh = was
+        state.set_setting("fruit_offer", None)

@@ -10152,7 +10152,7 @@ def create_app(state: AppState) -> FastAPI:
         of what this one does underneath.
         """
         register = state.accounts()
-        return render(request, "signup.html", chain=_account_chain(),
+        return render(request, "signup.html", chain=_account_chain(), fruit=_fruit_here(request),
                       seats=register.seats, free=register.free(),
                       secure_enough=secure_context(request),
                       why_not=WHY_NOT_SECURE)
@@ -10940,8 +10940,16 @@ def create_app(state: AppState) -> FastAPI:
     # nothing to check and nothing to steal: only somebody who can decrypt
     # the blob can produce the key that signs a challenge.
 
+    def _fruit_here(request: Request) -> str:
+        """The fruit name the mesh offered this arcade for its operator (mesh/fruitshare.py, 2026-10-20), while
+        it has no operator and only to a request from the machine itself: "" otherwise."""
+        if state.operator or state.public or _from_outside(request):
+            return ""
+        offer = state.setting("fruit_offer") or {}
+        return "" if offer.get("to") else str(offer.get("name") or "")
+
     @app.get("/signup/{tag}")
-    def signup_free(tag: str):
+    def signup_free(tag: str, request: Request):
         """Is this name free -- here, and as far as the chain has been read.
 
         Two answers rather than one, because they are different questions
@@ -10953,6 +10961,9 @@ def create_app(state: AppState) -> FastAPI:
         except taglib.TagError as bad:
             return JSONResponse({"free": False, "detail": str(bad)})
         here = state.vault().taken(wanted)
+        if wanted == _fruit_here(request) and not here:
+            return JSONResponse({"tag": wanted, "free": True, "here": False, "on_chain": True, "fruit": True,
+                                 "detail": f"@{wanted} is this arcade's operator name, from the fruit stand"})
         on_chain = ""
         try:
             on_chain = state.token_index(_account_chain()).address_of(wanted) or ""
@@ -11057,9 +11068,23 @@ def create_app(state: AppState) -> FastAPI:
         except Exception as exc:
             why_not = f"the faucet could not pay just now: {exc}"
 
+        # This arcade's first operator, signing up at the machine with the fruit the mesh offered it: made the
+        # operator, and the fruit's holder asked to send the name to its address (mesh/fruitshare.py).
+        fruit = ""
+        if wanted == _fruit_here(request):
+            fruit = wanted
+            state.claim_operator(pubkey)
+            try:
+                share = getattr(getattr(state, "mesh", None), "fruitshare", None)
+                to = _account_address(pubkey, _tag_chain()[0]) or address
+                if share is not None:
+                    share.ask_to_give(to)
+            except Exception:                                  # noqa: BLE001 -- asked again every minute
+                log.debug("asking for the fruit name failed", exc_info=True)
+
         token = _open_session(pubkey)
         answer = JSONResponse({"tag": wanted, "pubkey": pubkey,
-                               "address": address,
+                               "address": address, "fruit": bool(fruit),
                                "given": given, "no_coins": why_not})
         _set_session(answer, token, request)
         return answer
@@ -23915,15 +23940,12 @@ def create_app(state: AppState) -> FastAPI:
         state.set_setting("doginal_index", mode)
         return JSONResponse({"ok": True, "mode": mode})
 
-    _FRUIT: dict = {}
-
     def _fruit_stand():
         """The node's fruit names for new arcades' operators (arcade/fruit.py, 2026-10-20)."""
-        from .. import fruit as fruitlib
-        if "stand" not in _FRUIT:
-            chain, index = _tag_chain()
-            _FRUIT["stand"] = fruitlib.FruitStand(state, chain, index)
-        return _FRUIT["stand"]
+        stand = state.fruit_stand()
+        if stand is None:
+            raise HTTPException(404, "this arcade indexes no chain names are claimed on")
+        return stand
 
     @app.get("/admin/api/fruit")
     def admin_fruit(request: Request):

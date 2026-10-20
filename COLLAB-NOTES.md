@@ -95,8 +95,12 @@ reserves 150 well-known fruits. The chain allows ONE name per address, so arcade
 from an address of its own in the node's wallet (label "fruit:<name>") and later hands one on with an
 ordinary name transfer. No new chain rule. Admin API: GET /admin/api/fruit, POST /admin/api/fruit/reserve,
 POST /admin/api/fruit/give {name, to}. Left out: @apple, @banana, @orange (already people's), @strawberry
-(a test machine arcade's operator), "kaffirlime" (a slur). Still to build: a new arcade asking the mesh for its
-fruit when its operator signs up. Please don't claim fruit names for tests on P test.
+(a test machine arcade's operator), "kaffirlime" (a slur). All 150 are held now. The automatic part is built too
+(mesh/fruitshare.py, frames "fr": want / offer / give / given / no): an arcade with no operator and no fruit
+names asks its links; a holder promises it the next free fruit for 30 days (setting `fruit_offer` there). At
+that machine, /join fills the fruit in (editable); signing up with it makes that account the operator and asks
+the holder to transfer the name (the page skips its own claim and waits for the name to arrive). Please don't
+claim fruit names for tests on P test.
 
 ### 2026-10-20 · the operator's side · branch claude/doginal-index: our own Doginals index, shared over the mesh
 

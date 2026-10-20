@@ -1559,6 +1559,17 @@ class AppState:
         _ = self.trade_orders
         return self._book_relay
 
+    def fruit_stand(self):
+        """The fruit names this node holds for new arcades' operators (arcade/fruit.py), on the chain names are
+        claimed on (the messaging chain, as web/app.py's _tag_chain). None when that chain is not indexed here."""
+        if getattr(self, "_fruit_stand", None) is None:
+            chain = next((c for c in self.token_chains if c.network == self.messaging.network), None)
+            if chain is None:
+                return None
+            from ..fruit import FruitStand
+            self._fruit_stand = FruitStand(self, chain, self.token_index(chain))
+        return self._fruit_stand
+
     def doginal_index(self):
         """Our own index of every Doginal, walked or helped with over the mesh (arcade/doginal_index.py, the operator
         2026-10-20). None on an arcade that reads no Dogecoin, own or borrowed. Setting `doginal_index`: walk | help

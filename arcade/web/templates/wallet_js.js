@@ -2077,7 +2077,7 @@ export async function signAndSend(wallet, where, body) {
  * again".
  */
 
-export async function setUp(wallet, identity, tag, {onStep, faucetRefusal} = {}) {
+export async function setUp(wallet, identity, tag, {onStep, faucetRefusal, fruit} = {}) {
   const step = (what, how) => { if (onStep) onStep({what, how}); };
   const out = {claimed: "", announced: "", trouble: []};
 
@@ -2097,13 +2097,18 @@ export async function setUp(wallet, identity, tag, {onStep, faucetRefusal} = {})
   }
   step("coins", "here");
 
-  step("name", "claiming");
-  try {
-    out.claimed = (await claim(wallet, tag)).txid;
-    step("name", "on its way");
-  } catch (e) {
-    out.trouble.push(`the name could not be claimed: ${e.message || e}`);
-    step("name", "failed");
+  if (fruit) {
+    // An operator's fruit name (2026-10-20): the arcade holding it sends it here; there is nothing to claim.
+    step("name", "coming from the fruit stand");
+  } else {
+    step("name", "claiming");
+    try {
+      out.claimed = (await claim(wallet, tag)).txid;
+      step("name", "on its way");
+    } catch (e) {
+      out.trouble.push(`the name could not be claimed: ${e.message || e}`);
+      step("name", "failed");
+    }
   }
 
   // The key, whether or not the name went: they are separate things and
@@ -2135,9 +2140,9 @@ export async function setUp(wallet, identity, tag, {onStep, faucetRefusal} = {})
   // not from a memory of relaying something. Quietly: nothing here is
   // blocked on it, and a tab that is closed early costs nothing, because
   // both transactions are already out.
-  if (out.claimed || out.announced) {
-    const seen = await settle(!!out.claimed, !!out.announced, tag, step);
-    if (out.claimed && !seen.name) {
+  if (out.claimed || out.announced || fruit) {
+    const seen = await settle(!!out.claimed || !!fruit, !!out.announced, tag, step);
+    if ((out.claimed || fruit) && !seen.name) {
       out.trouble.push("your name is broadcast but this node has not indexed "
         + "it yet, so people cannot find you by it this minute");
     }

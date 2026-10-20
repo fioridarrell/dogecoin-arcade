@@ -187,3 +187,69 @@ def test_the_gather_leaves_the_fruit_addresses_alone():
     from arcade.web import app as webapp
     source = inspect.getsource(webapp)
     assert 'keep += [row.get("address") for row in (state.setting("fruit_stand") or {}).values()]' in source
+
+
+# --------------------------------------------------------------------------- promises and the mesh
+
+def test_a_fruit_is_promised_to_one_arcade_and_given_only_to_it(stand):
+    s, index, node, broadcast = stand
+    s.reserve(wait=0)
+    first = s.promise("arcade-a")
+    assert s.promise("arcade-a") == first, "asking again gets the same one"
+    second = s.promise("arcade-b")
+    assert second and second != first
+    with pytest.raises(ValueError):
+        s.give_promised("arcade-b", first, "addr-b")
+    s.give_promised("arcade-a", first, "addr-a")
+    assert index.address_of(first) == "addr-a"
+    assert s.status()["counts"] == {"held": 148, "promised": 1, "given": 1}
+
+
+def test_the_mesh_asks_offers_and_hands_the_fruit_over(stand):
+    import asyncio
+    from arcade.mesh.fruitshare import FruitShare
+    s, index, node, broadcast = stand
+    s.reserve(wait=0)
+
+    class Arcade:
+        def __init__(self, holder):
+            self.settings = {"fruit_stand": {"x": 1}} if holder else {}
+            self.operator = ""
+
+        def setting(self, k, d=None):
+            return self.settings.get(k, d)
+
+        def set_setting(self, k, v):
+            self.settings[k] = v
+
+    class Link:
+        def __init__(self, peer_id):
+            self.peer_id, self.other, self.share = peer_id, None, None
+
+        async def send(self, header, blob=b""):
+            await self.other.share.on_frame(self.other, header, blob)
+
+    new, old = Arcade(False), Arcade(True)
+    asker, holder = FruitShare(new, lambda: None), FruitShare(old, lambda: s)
+    to_holder, to_asker = Link("old"), Link("new")          # each side's link, named by who is at the other end
+    to_holder.other, to_asker.other = to_asker, to_holder
+    to_holder.share, to_asker.share = asker, holder
+
+    class Node:
+        def __init__(self, links):
+            self.links = links
+    asker.node, holder.node = Node({"old": to_holder}), Node({"new": to_asker})
+
+    async def go():
+        assert asker.wants() and not holder.wants()
+        await asker.link_up(to_holder)
+        offer = new.settings["fruit_offer"]
+        assert offer["from"] == "old" and offer["name"] in fruit.FRUITS
+        assert not asker.wants(), "an arcade with an offer asks no more"
+        asker.loop = asyncio.get_running_loop()
+        asker.ask_to_give("operator-address")
+        await asyncio.sleep(0.05)
+        return offer["name"]
+    name = asyncio.run(go())
+    assert index.address_of(name) == "operator-address"
+    assert new.settings["fruit_offer"]["txid"]
