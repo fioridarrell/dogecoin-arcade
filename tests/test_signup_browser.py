@@ -196,7 +196,8 @@ def test_a_short_password_is_allowed_and_the_page_says_what_it_costs(loaded):
     """Somebody who wants `1234` gets `1234` (D-157). What they also get is
     a sentence saying their encrypted wallet can be taken from this node
     and opened in seconds -- because that is true, and refusing them would
-    not have made it less so."""
+    not have made it less so. (2026-10-20: a password on the leaked-password lists IS refused -- `1234` would be
+    in real life; the suite runs with that check off, so this is a short password the list has not seen.)"""
     browser, base, state, home = loaded
     said = _sign_up(browser, "brief", password="1234")
     assert "error" not in said, said

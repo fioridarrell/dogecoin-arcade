@@ -194,11 +194,23 @@ function wire() {
   // What they have chosen, said plainly, as they type. Not a refusal:
   // a floor stops the person who would have picked something short and
   // stops nobody else, and this is their wallet (D-157).
+  let checking = null;
   $("pw").oninput = () => {
     const said = wallet.strength($("pw").value);
     $("pw-says").textContent = said.says;
     $("pw-says").style.color = said.ok ? "var(--ok)"
       : said.level === "instantly" ? "var(--bad)" : "var(--warn)";
+    // Leaked already? Said as they type (2026-10-20); "Create my account" refuses it either way.
+    clearTimeout(checking);
+    const typed = $("pw").value;
+    checking = setTimeout(async () => {
+      const seen = await wallet.leaked(typed);
+      if (seen && $("pw").value === typed) {
+        $("pw-says").textContent = `This password is on leaked-password lists (${seen.toLocaleString()} times), `
+          + "so it would be refused. Choose another.";
+        $("pw-says").style.color = "var(--bad)";
+      }
+    }, 600);
   };
 
   $("make").onclick = async () => {

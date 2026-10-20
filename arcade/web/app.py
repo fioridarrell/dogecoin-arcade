@@ -282,6 +282,10 @@ def _screen_text(text: str):
 
 
 TEMPLATES.env.globals["screen_text"] = _screen_text
+# Where the browser checks a new password against the leaked-password lists (wallet.js `leaked`; 2026-10-20). Empty
+# turns the check off: the test suite does (tests/conftest.py), so no test asks a server on the internet.
+TEMPLATES.env.globals["leaked_url"] = lambda: os.environ.get("ARCADE_LEAKED_URL",
+                                                              "https://api.pwnedpasswords.com/range/")
 # A steady colour per address, for letter avatars (the feed, like Notifications).
 TEMPLATES.env.filters["hue"] = lambda text: int(
     hashlib.sha256(str(text or "").encode()).hexdigest()[:4], 16) % 360

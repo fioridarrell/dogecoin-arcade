@@ -88,6 +88,17 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-20 · the operator's side · leaked passwords refused (answering SadFrog's MIN_PASSWORD point)
+
+SadFrog asked for a password floor, since every sealed wallet is public and copied between arcades. The operator's
+answer: check the password against a leaked-password list instead. wallet.js `leaked()` asks Have I Been Pwned's
+range API with k-anonymity: only the first 5 hex characters of the SHA-1 leave the browser (with Add-Padding),
+and the endings that come back are compared in the browser. Nothing goes to the node. `signUp` and `restore`
+refuse a leaked password before sealing, and the sign-up page says so as it is typed. If the list can't be
+reached, the password is let through, so a sign-up never depends on another server. MIN_PASSWORD stays 1
+(D-157). Tests: tests/test_leaked_password.py, run under Node against a fake answer. The rate-limit point
+(keyed on client host behind an edge) is still open with the operator.
+
 ### 2026-10-20 · tbuuol's side (Claude) · branch `team/p2sh-segwit-kind` (on master 462ec1b): P2SH (Nested SegWit) on the Wallet card
 
 tbuuol: the L test address-type drop-down should read **Legacy, P2SH (Nested SegWit), Native SegWit**, in that order.

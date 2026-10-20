@@ -27,6 +27,45 @@ import * as coins from "/coins.js";
  * refusal; `strength` below is what it says. */
 export const MIN_PASSWORD = 1;
 
+/* A password that has already leaked is refused (2026-10-20, answering SadFrog's review: "check a leaked
+ * password api and make sure whatever password they use is not on the leaked password list"). Not a floor: a
+ * leaked password is on every list an attacker tries first, whatever its length. Have I Been Pwned's range API,
+ * k-anonymity: only the first 5 hex characters of the password's SHA-1 leave this browser, with padding, and the
+ * hundreds of hash endings that come back are compared HERE. Neither the password nor its whole hash is ever sent,
+ * and nothing goes to this node. */
+export const LEAKED_URL = "https://api.pwnedpasswords.com/range/";
+
+/** How many times this password appears in the leaked-password lists: 0 for none, null when the list could not be
+ *  asked (the page then lets the password through rather than blocking a sign-up on somebody else's server). */
+export async function leaked(password) {
+  if (!password) return 0;
+  // The arcade's own word on where the list is (base.html, ARCADE_LEAKED_URL); "" turns the check off.
+  const url = typeof globalThis.ARCADE_LEAKED_URL === "string" ? globalThis.ARCADE_LEAKED_URL : LEAKED_URL;
+  if (!url) return null;
+  try {
+    const digest = hex(new Uint8Array(await crypto.subtle.digest("SHA-1", enc.encode(password)))).toUpperCase();
+    const head = digest.slice(0, 5), tail = digest.slice(5);
+    const answer = await fetch(url + head, {headers: {"Add-Padding": "true"}, cache: "no-store",
+                                                   credentials: "omit", referrerPolicy: "no-referrer"});
+    if (!answer.ok) return null;
+    for (const line of (await answer.text()).split("\n")) {
+      const [ending, count] = line.trim().split(":");
+      if (ending === tail) return parseInt(count, 10) || 0;      // padding lines carry a count of 0
+    }
+    return 0;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function refuseLeaked(password) {
+  const seen = await leaked(password);
+  if (seen) {
+    throw new Error(`That password has turned up ${seen.toLocaleString()} time${seen === 1 ? "" : "s"} in leaked-`
+      + "password lists (haveibeenpwned.com), so it is one of the first an attacker tries. Choose another.");
+  }
+}
+
 //: Roughly how long the blob would stand up to somebody who has it and a
 //: graphics card. Deliberately pessimistic: 600,000 PBKDF2 iterations is
 //: about 10^5 guesses a second on hardware somebody can rent, and the
@@ -271,6 +310,7 @@ async function _signUp(tag, password, {network, version}) {
   // these addresses for itself.
   const running = await chains();
   await everyChain(wallet, running);
+  await refuseLeaked(password);
   const blob = await seal(phrase, password);
   const alsoOn = {};
   for (const chain of running) {
@@ -441,6 +481,7 @@ async function _restore(phrase, password, {network, version}) {
     throw new Error("those words are not an account on this node. Check each word; "
       + "if you signed up on another node, restore there. Nothing was changed.");
   }
+  await refuseLeaked(password);
   const blob = await seal(wallet.phrase, password);
   const stored = await fetch("/account/vault", {
     method: "POST", headers: {"Content-Type": "application/json"},

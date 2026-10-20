@@ -1979,6 +1979,7 @@ function arcadeMainnetReview(costs){
 // other tab of this site), otherwise this sheet, and the action carries on once
 // the password opens it -- instead of sending somebody to their own page first.
 var ARCADE_ME = {{ (account_name or '')|tojson }};
+var ARCADE_LEAKED_URL = {{ leaked_url()|tojson }};
 // Signed in at all -- with or without a wallet kept here under a name. An account
 // signed in by its twelve words (/join/keys) has a session but no ARCADE_ME, and
 // was told to sign in again and again (2026-10-08).
