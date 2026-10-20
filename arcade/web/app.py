@@ -4320,13 +4320,19 @@ def create_app(state: AppState) -> FastAPI:
             raise ValueError("unknown wallet")
         return state.messaging if which == "messaging" else state.ledger
 
+    def _key_chains() -> list:
+        """Every chain but Pepecoin testnet (where the identity key itself lives): where the node may hold coins with
+        its own key -- a borrowed chain, or a Core here run with no wallet (2026-10-20, chain-agnostic)."""
+        chains = [] if state.ledger.network == state.messaging.network else [state.ledger]
+        return chains + list(getattr(state, "addons", None) or [])
+
     def _keyed_wallets() -> list[dict[str, Any]]:
         """The node's coins on each add-on chain it has no Core wallet for (keywallet.py), for the Wallet page:
         balance, address, and whether this machine's CPU may mine there (2026-10-18: "no way to mine Test
         LTC" from the operator's Wallet)."""
         out = []
-        for ctx in list(getattr(state, "addons", None) or []):
-            if not ctx.borrowed:
+        for ctx in _key_chains():
+            if not state.keyed(ctx):
                 continue                                  # a Core here has its own wallet and its own section
             row = {"network": ctx.network, "title": ctx.title, "letter": ctx.letter, "net": ctx.net,
                    "word": ctx.word, "coin": ctx.params.coin, "mainnet": bool(ctx.is_mainnet),
@@ -4356,7 +4362,7 @@ def create_app(state: AppState) -> FastAPI:
         for ctx in [state.messaging, state.ledger] + list(getattr(state, "addons", None) or []):
             if ctx is None or any(c.network == ctx.network for c, _ in out) or not state.chain_ready(ctx):
                 continue
-            if getattr(ctx, "borrowed", False):
+            if state.keyed(ctx):                          # borrowed, or a Core here with no wallet (2026-10-20)
                 out.append((ctx, f"key:{ctx.network}"))
             else:
                 out.append((ctx, "messaging" if ctx is state.messaging else "ledger" if ctx is state.ledger
@@ -23731,11 +23737,14 @@ def create_app(state: AppState) -> FastAPI:
 
     def _admin_wallets() -> list[dict]:
         out = []
-        wallets = [("messaging", state.messaging), ("ledger", state.ledger)]
-        # Every add-on chain's node wallet, Dogecoin's first as before (2026-10-18: L main, L test).
-        # A borrowed chain has no Core wallet here (a sharer answers no wallet calls), so it gets only its key card
-        # below -- not an "offline" card besides it (2026-10-19).
-        wallets += [(c.network, c) for c in getattr(state, "addons", []) if not c.borrowed]
+        wallets = [("messaging", state.messaging)]
+        # P main and every add-on chain's node wallet, Dogecoin's first as before (2026-10-18: L main, L test).
+        # A borrowed chain, or a Core here run with no wallet, has no Core wallet card -- only its key card below,
+        # not an "offline" card besides it (2026-10-19; 2026-10-20: chain-agnostic, a test machine's walletless
+        # Dogecoin Core).
+        if state.ledger.network != state.messaging.network and not state.keyed(state.ledger):
+            wallets.append(("ledger", state.ledger))
+        wallets += [(c.network, c) for c in getattr(state, "addons", []) if not state.keyed(c)]
         for which, ctx in wallets:
             row = {"which": which, "label": ctx.title, "network": ctx.network,
                    "net": ctx.net, "coin": ctx.params.coin}
@@ -23758,16 +23767,16 @@ def create_app(state: AppState) -> FastAPI:
         # arcade with that key (keywallet.py; 2026-10-18: "there should be no extra step").
         # A chain whose Core runs here has its own wallet card above, so its key card is shown only when that
         # address holds coins (2026-10-18, SadFrog: L main and L test were listed twice), as the Wallet page does.
-        for ctx in list(getattr(state, "addons", None) or []):
+        for ctx in _key_chains():
             row = {"which": f"key:{ctx.network}", "label": ctx.title, "network": ctx.network, "net": ctx.net,
                    "coin": ctx.params.coin, "keyed": True}
             try:
                 row.update(keywalletlib.balance(state, ctx))
             except Exception as exc:                    # noqa: BLE001
-                if not ctx.borrowed:
+                if not state.keyed(ctx):
                     continue
                 row["error"] = str(exc)[:200]
-            if not ctx.borrowed and not float(row.get("balance") or 0):
+            if not state.keyed(ctx) and not float(row.get("balance") or 0):
                 continue
             out.append(row)
         return out
@@ -23919,26 +23928,56 @@ def create_app(state: AppState) -> FastAPI:
             out["error"] = str(exc)[:200]
         return out
 
-    @app.get("/admin/api/doginal-index")
-    def admin_doginal_index(request: Request):
-        """Admin -> Chains: our own Doginals index (arcade/doginal_index.py, 2026-10-20) -- what this arcade
-        does (walk or help), its chunk or its walk, every linked arcade's leases, and how many chunks agree."""
+    @app.get("/admin/api/ords")
+    def admin_ords(request: Request):
+        """Admin -> Ords (2026-10-20): each chain's own ord index -- walk, help or off, where it starts (the
+        official first-inscription height of that chain's ord indexer), how far it is, and every linked arcade's
+        chunks (arcade/doginal_index.py)."""
         _admin_check(request)
-        index = state.doginal_index()
-        if index is None:
-            return JSONResponse({"absent": "This arcade reads no Dogecoin, its own or borrowed."},
-                                headers={"Cache-Control": "no-store"})
-        return JSONResponse(index.status(), headers={"Cache-Control": "no-store"})
+        from ..doginal_index import SETTLE, SOURCES, STARTS
+        indexes = state.ord_indexes()
+        rows = []
+        for chain in state.all_chains:
+            net = chain.network
+            if net not in STARTS:
+                continue
+            index = indexes.get(net)
+            st = index.status() if index is not None else {"mode": "off", "base": STARTS[net]}
+            tip = st.get("tip") or 0
+            if not tip:
+                try:
+                    tip = int(state.chain_sync(chain).get("blocks") or 0)
+                except Exception:                              # noqa: BLE001 -- not answering: no percentage
+                    tip = 0
+            span = max(1, tip - SETTLE - st["base"] + 1)
+            walk = st.get("walk") or {}
+            ready = st.get("ready") or 0
+            rows.append({
+                **st, "net": net, "title": getattr(chain, "title", "") or chain.label, "label": chain.label,
+                "source": SOURCES.get(net, ""), "tip": tip, "borrowed": bool(getattr(chain, "borrowed", False)),
+                "walked_pct": round(100 * max(0, (walk.get("next") or st["base"]) - st["base"]) / span, 2) if walk else None,
+                "agreed_pct": round(100 * (st.get("agreed") or 0) / ready, 2) if ready else 0.0,
+            })
+        return JSONResponse({"rows": rows}, headers={"Cache-Control": "no-store"})
 
-    @app.post("/admin/api/doginal-index")
-    def admin_doginal_index_mode(request: Request, payload: Any = Body(None)):
+    @app.post("/admin/api/ords")
+    def admin_ords_mode(request: Request, payload: Any = Body(None)):
         _admin_check(request, write=True)
-        from ..doginal_index import MODES
-        mode = (payload or {}).get("mode") if isinstance(payload, dict) else None
-        if mode not in MODES:
-            return JSONResponse({"detail": "walk, help or off"}, status_code=400)
-        state.set_setting("doginal_index", mode)
-        return JSONResponse({"ok": True, "mode": mode})
+        from ..doginal_index import MODES, STARTS
+        said = payload if isinstance(payload, dict) else {}
+        net, mode = str(said.get("net") or ""), said.get("mode")
+        if net not in STARTS or mode not in MODES:
+            return JSONResponse({"detail": "a chain, and walk, help or off"}, status_code=400)
+        state.set_setting(f"ord_index:{net}", mode)
+        return JSONResponse({"ok": True, "net": net, "mode": mode})
+
+    @app.get("/admin/api/operators")
+    def admin_operators(request: Request):
+        """Network -> Other operators: who runs each arcade this one has heard from over the mesh."""
+        _admin_check(request)
+        share = getattr(getattr(state, "mesh", None), "operators", None)
+        return JSONResponse({"mesh": share is not None, "rows": share.status() if share is not None else []},
+                            headers={"Cache-Control": "no-store"})
 
     def _fruit_stand():
         """The node's fruit names for new arcades' operators (arcade/fruit.py, 2026-10-20)."""
@@ -24502,9 +24541,9 @@ def create_app(state: AppState) -> FastAPI:
         return JSONResponse({"txid": txid})
 
     def _keyed_context(which: str):
-        """The add-on chain a `key:<net>` wallet card names (keywallet.py)."""
+        """The chain a `key:<net>` wallet card names (keywallet.py): P main or an add-on chain, never P test."""
         net = which.split(":", 1)[1]
-        ctx = next((c for c in (getattr(state, "addons", None) or []) if c.network == net), None)
+        ctx = next((c for c in _key_chains() if c.network == net), None)
         if ctx is None:
             raise ValueError("unknown wallet")
         return ctx

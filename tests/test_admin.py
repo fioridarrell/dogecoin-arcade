@@ -194,34 +194,28 @@ def test_chains_run_here_or_borrowed_with_testnet_and_one_more_here(public, monk
     assert 'id="chains"' in app.get("/admin", headers=LOCAL).text
 
 
-def test_the_doginals_index_box_reads_and_its_mode_is_saved(public, monkeypatch, tmp_path):
-    """Admin -> Chains -> Doginals index (2026-10-20): walk, help or off, and what the shared chunks look like."""
+def test_the_ords_tab_lists_each_chain_with_its_official_start_and_saves_its_mode(public):
+    """Admin -> Ords (2026-10-20): each chain's own ord index, its official first-inscription height, how far
+    it is, and walk / help / off for each."""
     app, state = public
     page = app.get("/admin", headers=LOCAL)
-    assert page.status_code == 200 and 'id="dxbox"' in page.text and "Doginals index" in page.text
-    assert app.post("/admin/api/doginal-index", headers={**LOCAL, **WRITE}, json={"mode": "fly"}).status_code == 400
-    assert app.post("/admin/api/doginal-index", headers=LOCAL, json={"mode": "off"}).status_code == 403
-    assert app.post("/admin/api/doginal-index", headers={**LOCAL, **WRITE}, json={"mode": "off"}).json()["mode"] == "off"
-    assert state.setting("doginal_index") == "off"
+    assert page.status_code == 200 and 'data-tab="ords"' in page.text and 'id="ordrows"' in page.text
+    assert 'id="oprows"' in page.text, "Network -> Other operators"
+    assert app.post("/admin/api/ords", headers={**LOCAL, **WRITE}, json={"net": "doge", "mode": "fly"}).status_code == 400
+    assert app.post("/admin/api/ords", headers={**LOCAL, **WRITE}, json={"net": "btc", "mode": "off"}).status_code == 400
+    assert app.post("/admin/api/ords", headers=LOCAL, json={"net": "main", "mode": "help"}).status_code == 403
+    assert state.ord_mode("main") == "off" and state.ord_mode("doge") == "help", "off until turned on; Dogecoin helps"
+    assert app.post("/admin/api/ords", headers={**LOCAL, **WRITE}, json={"net": "main", "mode": "help"}).json()["ok"]
+    assert state.ord_mode("main") == "help"
     from arcade import doginal_index as dx
-    index = dx.DoginalIndex(tmp_path / "dx.sqlite", None, lambda: str(state.setting("doginal_index") or "help"))
-    monkeypatch.setattr(type(state), "doginal_index", lambda self: index)
-    said = app.get("/admin/api/doginal-index", headers=LOCAL).json()
-    assert said["mode"] == "off" and said["chunk"] == dx.CHUNK and said["base"] == dx.BASE
-    assert app.get("/admin/api/doginal-index", headers=EDGE).status_code != 200, "never shown to a stranger"
-
-
-def test_the_doginals_index_box_draws_its_counts_in_a_browser_like_reading(public, monkeypatch, tmp_path):
-    """2026-10-20: the status's `none` (chunks nobody read yet) was taken for "this arcade reads no Dogecoin" and the
-    box showed one number. The no-Dogecoin answer is `absent`, a word the status never uses."""
-    app, state = public
-    from arcade import doginal_index as dx
-    index = dx.DoginalIndex(tmp_path / "dx.sqlite", None, lambda: "help")
-    monkeypatch.setattr(type(state), "doginal_index", lambda self: index)
-    said = app.get("/admin/api/doginal-index", headers=LOCAL).json()
-    assert "absent" not in said and "none" in said
-    page = app.get("/admin", headers=LOCAL).text
-    assert "if (d.absent)" in page and "if (d.none)" not in page
+    rows = {r["net"]: r for r in app.get("/admin/api/ords", headers=LOCAL).json()["rows"]}
+    assert rows, "every chain this arcade reads that has ords"
+    for net, r in rows.items():
+        assert r["base"] == dx.STARTS[net] and r["source"]
+    assert rows["main"]["mode"] == "help"
+    assert app.get("/admin/api/ords", headers=EDGE).status_code != 200, "never shown to a stranger"
+    assert "rows" in app.get("/admin/api/operators", headers=LOCAL).json()
+    state.set_setting("ord_index:main", None)
 
 
 def test_the_first_operator_signs_up_with_the_offered_fruit_at_the_machine(public):
@@ -260,3 +254,47 @@ def test_the_first_operator_signs_up_with_the_offered_fruit_at_the_machine(publi
     finally:
         state.mesh = was
         state.set_setting("fruit_offer", None)
+
+
+def test_a_core_here_with_its_wallet_switched_off_is_held_with_the_arcades_own_key():
+    """2026-10-20: a test machine's Dogecoin Core runs with disablewallet=1; every wallet call said "Method not found" and the
+    operator's Wallet showed no Dogecoin. Such a Core is treated as a borrowed chain is: the arcade's own key holds
+    the coins (keywallet.py), on every chain but P test. A Core with a wallet keeps its own."""
+    from arcade.rpc import RpcError
+    from arcade.web.state import AppState
+
+    class Rpc:
+        def __init__(self, wallet):
+            self.wallet = wallet
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def call(self, method, *params):
+            if not self.wallet:
+                raise RpcError(-32601, "Method not found", method)
+            return {"walletversion": 130000}
+
+    class Chain:
+        is_addon, borrowed = True, False
+
+        def __init__(self, net, wallet):
+            self.network, self._wallet = net, wallet
+
+        def rpc(self):
+            return Rpc(self._wallet)
+
+    class Holder:
+        KEYED_SECONDS = 300
+        messaging = Chain("test", wallet=False)
+    holder = Holder()
+    assert AppState.keyed(holder, Chain("doge", wallet=False)) is True
+    assert AppState.keyed(holder, Chain("main", wallet=False)) is True, "chain-agnostic: P main too"
+    assert AppState.keyed(holder, Holder.messaging) is False, "P test: the identity key itself lives in its wallet"
+    assert AppState.keyed(holder, Chain("ltc", wallet=True)) is False
+    borrowed = Chain("ltctest", wallet=True)
+    borrowed.borrowed = True
+    assert AppState.keyed(holder, borrowed) is True

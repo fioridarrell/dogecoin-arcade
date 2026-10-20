@@ -3,7 +3,10 @@ shared, indexing and verification").
 
 On the wire (frames of kind "dx" on an ordinary link, never flooded), each one small:
 
-    hi  {mode, walk, helped, v}          what this arcade does: walk (its own full index) or help (chunks)
+Every frame names its chain (`net`, and `base` in "hi"): one index per chain (2026-10-20, the Ords tab). Frames of an
+older arcade (v1, no `net`) are not read.
+
+    hi  {net, base, mode, walk, helped, v}   what this arcade does: walk (its own full index) or help (chunks)
     ls  {c, at, until}                   it holds chunk c's lease, has read up to block `at`, until `until`
     ld  {c}                              it let chunk c go (finished, or gave up)
     dn  {rows: [[c, hash, births]...]}   its hashes of finished chunks; every one of them when a link comes up
@@ -23,43 +26,76 @@ log = logging.getLogger("arcade.mesh")
 ROWS_PER_FRAME = 500           # a "dn" frame stays well under the link's 64 KB frame
 
 
+class _Chain:
+    """One chain's index's way out: what it posts goes out with its chain named."""
+
+    def __init__(self, share: "DxShare", net: str):
+        self.share, self.net = share, net
+
+    def post(self, frame: dict) -> None:
+        self.share.post({**frame, "net": self.net})
+
+
 class DxShare:
     kinds = ("dx",)
 
-    def __init__(self, index: Any):
-        self.index = index
+    def __init__(self, indexes: Any):
+        # {net: DoginalIndex}, or one index (its own chain), or a callable giving the dict (chains switched on later)
+        if callable(indexes) and not hasattr(indexes, "net"):
+            self._indexes = indexes
+        else:
+            fixed = indexes if isinstance(indexes, dict) else {indexes.net: indexes}
+            self._indexes = lambda: fixed
         self.node = None
         self.loop: asyncio.AbstractEventLoop | None = None
         self._lock = threading.Lock()
-        index.share = self
+        self.indexes()
+
+    def indexes(self) -> dict:
+        got = dict(self._indexes() or {})
+        for net, index in got.items():
+            if not isinstance(getattr(index, "share", None), _Chain):
+                index.share = _Chain(self, net)
+        return got
 
     # ---------------------------------------------------------------- hooks
     async def link_up(self, link) -> None:
         self.loop = asyncio.get_running_loop()
+        import time
+        from ..doginal_index import LEASE_SECONDS
         try:
-            await link.send({"t": "dx", **await asyncio.to_thread(self.index.hello)})
-            rows = await asyncio.to_thread(self.index.all_mine)
-            for i in range(0, len(rows), ROWS_PER_FRAME):
-                await link.send({"t": "dx", "op": "dn", "rows": rows[i:i + ROWS_PER_FRAME]})
-            mine = self.index.chunks.mine
-            if mine:
-                import time
-                from ..doginal_index import LEASE_SECONDS
-                await link.send({"t": "dx", "op": "ls", "c": mine["c"], "at": mine["at"],
-                                 "until": time.time() + LEASE_SECONDS})
+            for net, index in (await asyncio.to_thread(self.indexes)).items():
+                if index.mode() == "off":
+                    continue
+                await link.send({"t": "dx", **await asyncio.to_thread(index.hello)})
+                rows = await asyncio.to_thread(index.all_mine)
+                for i in range(0, len(rows), ROWS_PER_FRAME):
+                    await link.send({"t": "dx", "op": "dn", "net": net, "rows": rows[i:i + ROWS_PER_FRAME]})
+                mine = index.chunks.mine
+                if mine:
+                    await link.send({"t": "dx", "op": "ls", "net": net, "c": mine["c"], "at": mine["at"],
+                                     "until": time.time() + LEASE_SECONDS})
         except Exception:                                      # noqa: BLE001 -- the link went
             log.debug("dx link_up", exc_info=True)
 
     async def link_down(self, peer_id: str) -> None:
-        self.index.chunks.gone(peer_id)
+        for index in self.indexes().values():
+            index.chunks.gone(peer_id)
 
     async def rebalance(self) -> None:
         self.loop = asyncio.get_running_loop()
-        await self._send_all({"t": "dx", **await asyncio.to_thread(self.index.hello)})
+        for index in (await asyncio.to_thread(self.indexes)).values():
+            if index.mode() != "off":
+                await self._send_all({"t": "dx", **await asyncio.to_thread(index.hello)})
 
     async def on_frame(self, link, header: dict, blob: bytes) -> None:
+        index = self.indexes().get(str(header.get("net") or ""))
+        if index is None:
+            return                                             # a chain not indexed here, or an older arcade
+        if header.get("op") == "hi" and header.get("base") not in (None, index.base):
+            return                                             # cut from another start: its chunks are not ours
         try:
-            await asyncio.to_thread(self.index.heard, link.peer_id, header)
+            await asyncio.to_thread(index.heard, link.peer_id, header)
         except Exception:                                      # noqa: BLE001 -- not a word this version reads
             log.debug("dx frame", exc_info=True)
 

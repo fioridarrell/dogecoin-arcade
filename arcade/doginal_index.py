@@ -37,9 +37,21 @@ from . import rawchain
 
 log = logging.getLogger("arcade.doginal_index")
 
-#: Where the chunks start (5 Dec 2022, before the first Doginal) and how big each is. Every arcade must cut the same
-#: chunks, so these two never change without a new protocol word.
-BASE = 4_500_000
+#: Where each chain's ord index starts: the official first-inscription height of that chain's ord indexer (the operator
+#: 2026-10-20: "The block height on each chain varies so find the official block height for each chains ord index"),
+#: read from each indexer's src/chain.rs `first_inscription_height`. Every arcade cuts the same chunks from these,
+#: so they never change without a new protocol word.
+STARTS = {"doge": 4_600_000, "main": 186_920, "test": 34_237, "ltc": 2_424_429, "ltctest": 2_669_127}
+SOURCES = {
+    "doge": "ord-dogecoin (apezord) and wonky-ord: 4,600,000",
+    "main": "ord-pepecoin (mvdnbrk) and pepecoin-ord-indexer: 186,920",
+    "test": "pepecoin-ord-indexer (reallyshadydev): 34,237",
+    "ltc": "ord-litecoin (ynohtna92): 2,424,429",
+    "ltctest": "ord-litecoin (ynohtna92): 2,669,127",
+}
+#: Chains whose ords are mostly Taproot (ord's witness envelope) as well as the Doginals kind.
+TAPROOT = frozenset({"ltc", "ltctest"})
+BASE = STARTS["doge"]
 CHUNK = 100
 #: Blocks this far under the tip are scanned; the newest ones may still be replaced by a reorg.
 SETTLE = 12
@@ -80,7 +92,7 @@ def _parts_end(data: list) -> bool:
 
 
 def birth_of(tx: rawchain.Tx) -> dict | None:
-    """{"vin", "ctype", "done"} when `tx` gives birth to an inscription, else None."""
+    """{"vin", "ctype", "done"} when `tx` gives birth to a Doginals-kind inscription, else None."""
     j = envelope_input(tx)
     if j is None:
         return None
@@ -89,21 +101,84 @@ def birth_of(tx: rawchain.Tx) -> dict | None:
     return {"vin": j, "ctype": ctype.hex(), "done": _parts_end(pushes[3:])}
 
 
-def births(block: rawchain.Block) -> list[tuple[str, int, str]]:
-    """(txid, envelope input, content type hex) for every birth in the block, in block order."""
+def _ops(script: bytes):
+    """(opcode, pushed bytes or None) for each operation of a script; stops quietly at a truncated push."""
+    at = 0
+    while at < len(script):
+        op = script[at]
+        at += 1
+        if 1 <= op <= 75:
+            n = op
+        elif op == 0x4C and at < len(script):
+            n, at = script[at], at + 1
+        elif op == 0x4D:
+            n, at = int.from_bytes(script[at:at + 2], "little"), at + 2
+        elif op == 0x4E:
+            n, at = int.from_bytes(script[at:at + 4], "little"), at + 4
+        else:
+            yield op, (b"" if op == 0 else bytes([op - 0x50]) if 0x51 <= op <= 0x60 else None)
+            continue
+        if at + n > len(script):
+            return
+        yield op, script[at:at + n]
+        at += n
+
+
+def taproot_envelopes(witness: list[bytes]) -> list[str]:
+    """The content types (hex) of ord's witness envelopes in one input -- OP_FALSE OP_IF "ord" fields... OP_ENDIF in
+    the tapscript of a script-path spend (ord's inscription format, as ord-litecoin reads it)."""
+    w = [x for x in witness or []]
+    if len(w) >= 2 and w[-1][:1] == b"\x50":                  # an annex
+        w = w[:-1]
+    if len(w) < 2:
+        return []
+    ops = list(_ops(w[-2]))
+    found = []
+    i = 0
+    while i + 2 < len(ops):
+        if ops[i][0] == 0x00 and ops[i + 1][0] == 0x63 and ops[i + 2][1] == b"ord":
+            ctype, j = b"", i + 3
+            while j < len(ops) and ops[j][0] != 0x68:
+                tag = ops[j][1]
+                if tag == b"":                                    # the body: pushes to OP_ENDIF
+                    j += 1
+                    while j < len(ops) and ops[j][0] != 0x68:
+                        j += 1
+                    break
+                if tag == b"\x01" and j + 1 < len(ops) and isinstance(ops[j + 1][1], bytes):
+                    ctype = ops[j + 1][1]
+                j += 2
+            found.append(ctype.hex())
+            i = j + 1
+        else:
+            i += 1
+    return found
+
+
+def births_of(tx: rawchain.Tx, taproot: bool = False) -> list[dict]:
+    """Every inscription `tx` gives birth to: {"n", "vin", "ctype", "done"}; the id is txid + "i" + n. The Doginals kind
+    (an input script opening with "ord", i0) and, on a Taproot chain, ord's witness envelopes, numbered in input order."""
     out = []
-    for tx in block.txs:
-        b = birth_of(tx)
-        if b is not None:
-            out.append((tx.txid, b["vin"], b["ctype"]))
+    b = birth_of(tx)
+    if b is not None:
+        out.append({"n": 0, **b})
+    if taproot:
+        for j, i in enumerate(tx.vin):
+            for ctype in taproot_envelopes(i.get("witness") or []):
+                out.append({"n": len(out), "vin": j, "ctype": ctype, "done": True})
     return out
 
 
-def block_hash_of(block_hash: str, found: list[tuple[str, int, str]]) -> str:
+def births(block: rawchain.Block, taproot: bool = False) -> list[tuple[str, int, int, str]]:
+    """(txid, n, envelope input, content type hex) for every birth in the block, in block order."""
+    return [(tx.txid, b["n"], b["vin"], b["ctype"]) for tx in block.txs for b in births_of(tx, taproot)]
+
+
+def block_hash_of(block_hash: str, found: list[tuple[str, int, int, str]]) -> str:
     """One block's line in a chunk's hash: the block, and what was born in it."""
     h = hashlib.sha256(block_hash.encode() + b"\n")
-    for txid, vin, ctype in found:
-        h.update(f"{txid}:{vin}:{ctype}\n".encode())
+    for txid, n, vin, ctype in found:
+        h.update(f"{txid}i{n}:{vin}:{ctype}\n".encode())
     return h.hexdigest()
 
 
@@ -112,25 +187,26 @@ def chunk_hash_of(lines: list[str]) -> str:
     return hashlib.sha256("".join(lines).encode()).hexdigest()
 
 
-def chunk_of(height: int) -> int:
-    return (height - BASE) // CHUNK
+def chunk_of(height: int, base: int | None = None) -> int:
+    return (height - (BASE if base is None else base)) // CHUNK
 
 
-def chunk_range(c: int) -> tuple[int, int]:
-    lo = BASE + c * CHUNK
+def chunk_range(c: int, base: int | None = None) -> tuple[int, int]:
+    lo = (BASE if base is None else base) + c * CHUNK
     return lo, lo + CHUNK
 
 
-def ready_chunks(tip: int) -> int:
+def ready_chunks(tip: int, base: int | None = None) -> int:
     """How many chunks are wholly settled under this tip."""
-    return max(0, (tip - SETTLE + 1 - BASE) // CHUNK)
+    return max(0, (tip - SETTLE + 1 - (BASE if base is None else base)) // CHUNK)
 
 
 # --------------------------------------------------------------------------- the store
 
 class Store:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, base: int | None = None):
         self.path = Path(path)
+        self.base = BASE if base is None else base
         self._lock = threading.RLock()
         self._db = sqlite3.connect(self.path, timeout=60, check_same_thread=False, isolation_level=None)
         self._db.execute("PRAGMA journal_mode=WAL")
@@ -183,7 +259,7 @@ class Store:
 
     def chunk_line(self, c: int) -> tuple[str, int] | None:
         """(this arcade's hash of chunk c, births in it) when every one of its blocks has been read here."""
-        lo, hi = chunk_range(c)
+        lo, hi = chunk_range(c, self.base)
         rows = self.q("SELECT height, line, n FROM block WHERE height>=? AND height<? ORDER BY height", (lo, hi))
         if len(rows) != CHUNK:
             return None
@@ -237,8 +313,9 @@ class Walker:
     """Every block from BASE in order: births, moves, envelopes closing. Needs this arcade's OWN Dogecoin Core (the
     values of spent coins are asked of it)."""
 
-    def __init__(self, store: Store):
+    def __init__(self, store: Store, taproot: bool = False, mweb: bool = False):
         self.store = store
+        self.base, self.taproot, self.mweb = store.base, taproot, mweb
         self.tracked: dict[bytes, list[tuple[int, int]]] | None = None     # outpoint -> [(rid, koinu offset)]
         self.pending: dict[bytes, int] = {}                                # outpoint -> rid whose envelope is open
         self.values: OrderedDict[bytes, int] = OrderedDict()               # recent outputs' koinu
@@ -246,7 +323,7 @@ class Walker:
         self.error = ""
 
     def next_height(self) -> int:
-        return int(self.store.meta("walk_next", BASE))
+        return int(self.store.meta("walk_next", self.base))
 
     def _load(self) -> None:
         tracked: dict[bytes, list[tuple[int, int]]] = {}
@@ -280,8 +357,8 @@ class Walker:
             if h > tip - SETTLE or (done and time.monotonic() - start >= budget):
                 break
             block_hash = rpc.call("getblockhash", h)
-            block = rawchain.read_block(bytes.fromhex(rpc.call("getblock", block_hash, 0)), block_hash)
-            if h > BASE:
+            block = rawchain.read_block(bytes.fromhex(rpc.call("getblock", block_hash, 0)), block_hash, mweb=self.mweb)
+            if h > self.base:
                 before = self.store.q("SELECT hash FROM block WHERE height=?", (h - 1,))
                 if before and before[0][0] != block.prev:
                     self.rollback(h - 1)
@@ -299,7 +376,7 @@ class Walker:
         assert tracked is not None
         undo: dict[str, list] = {"born": [], "at": [], "pending": [], "done": []}
         moves: list[str] = []
-        born_here: list[tuple[str, int, str]] = []
+        born_here: list[tuple[str, int, int, str]] = []
         rows_at: dict[int, tuple | None] = {}
         rid_ids: dict[int, str] = {}
         next_rid = (self.store.q("SELECT COALESCE(MAX(rid), 0) FROM insc")[0][0]) + 1
@@ -312,9 +389,9 @@ class Walker:
                     continue
                 # What this transaction carries in: tracked coins it spends (their inscriptions move), a birth.
                 carried: list[tuple[int, int]] = []          # (rid, koinu position among the inputs)
-                needs = [j for j, i in enumerate(tx.vin) if _outpoint(i["txid"], i["vout"]) in tracked]
-                b = birth_of(tx)
-                upto = max(needs + ([b["vin"]] if b else []), default=-1)
+                needs = [j for j, i in enumerate(tx.vin) if i["vout"] != -1 and _outpoint(i["txid"], i["vout"]) in tracked]
+                born = births_of(tx, self.taproot)
+                upto = max(needs + [b["vin"] for b in born], default=-1)
                 if upto < 0 and not pending:
                     continue
                 if upto >= 0:
@@ -324,14 +401,14 @@ class Walker:
                         key = _outpoint(tx.vin[j]["txid"], tx.vin[j]["vout"])
                         for rid, off in tracked.pop(key):
                             carried.append((rid, base + off))
-                    if b:
+                    for b in born:
                         rid = next_rid
                         next_rid += 1
-                        iid = f"{tx.txid}i0"
+                        iid = f"{tx.txid}i{b['n']}"
                         db.execute("INSERT INTO insc (rid, id, height, txpos, vin, ctype, done_height) VALUES "
                                    "(?,?,?,?,?,?,?)", (rid, iid, h, pos, b["vin"], b["ctype"], h if b["done"] else None))
                         undo["born"].append(rid)
-                        born_here.append((tx.txid, b["vin"], b["ctype"]))
+                        born_here.append((tx.txid, b["n"], b["vin"], b["ctype"]))
                         rid_ids[rid] = iid
                         rows_at[rid] = None                       # born here: nowhere before
                         undo["at"].append([rid, None])
@@ -343,7 +420,7 @@ class Walker:
                             db.execute("INSERT OR REPLACE INTO pending VALUES (?,?,?)", (rid, tx.txid, 0))
                             undo["pending"].append([rid, None])
                 # An open envelope continued: input 0's pushes, in the transaction spending its output 0.
-                for i in tx.vin:
+                for i in (tx.vin if pending else ()):
                     key = _outpoint(i["txid"], i["vout"])
                     rid = pending.pop(key, None)
                     if rid is None:
@@ -386,10 +463,10 @@ class Walker:
             db.execute("INSERT OR REPLACE INTO undo VALUES (?,?)", (h, json.dumps(undo)))
             db.execute("DELETE FROM undo WHERE height<?", (h - UNDO_BLOCKS,))
             db.execute("INSERT OR REPLACE INTO meta VALUES ('walk_next', ?)", (json.dumps(h + 1),))
-            if (h + 1 - BASE) % CHUNK == 0:
-                c = chunk_of(h)
+            if (h + 1 - self.base) % CHUNK == 0:
+                c = chunk_of(h, self.base)
                 rows = db.execute("SELECT line, n FROM block WHERE height>=? AND height<=? ORDER BY height",
-                                  (chunk_range(c)[0], h)).fetchall()
+                                  (chunk_range(c, self.base)[0], h)).fetchall()
                 if len(rows) == CHUNK:
                     db.execute("INSERT OR REPLACE INTO seen VALUES (?,?,?,?,?)",
                                (c, "", chunk_hash_of([r[0] for r in rows]), sum(r[1] for r in rows), time.time()))
@@ -422,7 +499,7 @@ class Walker:
                 db.execute("DELETE FROM pending WHERE rid=?", (rid,))
             db.execute("DELETE FROM block WHERE height=?", (h,))
             db.execute("DELETE FROM undo WHERE height=?", (h,))
-            db.execute("DELETE FROM seen WHERE chunk=? AND node=''", (chunk_of(h),))
+            db.execute("DELETE FROM seen WHERE chunk=? AND node=''", (chunk_of(h, self.base),))
             db.execute("INSERT OR REPLACE INTO meta VALUES ('walk_next', ?)", (json.dumps(h),))
         log.warning("doginal index: block %d was replaced (reorg); walked back", h)
         self.tracked = None
@@ -476,11 +553,11 @@ class Chunks:
         return random.choice(first) if first else None
 
 
-def scan_block(rpc, h: int) -> tuple[str, str, int]:
+def scan_block(rpc, h: int, taproot: bool = False, mweb: bool = False) -> tuple[str, str, int]:
     """(block hash, its line, births in it) for one block, read raw and proved (rawchain)."""
     block_hash = rpc.call("getblockhash", h)
-    block = rawchain.read_block(bytes.fromhex(rpc.call("getblock", block_hash, 0)), block_hash)
-    found = births(block)
+    block = rawchain.read_block(bytes.fromhex(rpc.call("getblock", block_hash, 0)), block_hash, mweb=mweb)
+    found = births(block, taproot)
     return block.hash, block_hash_of(block.hash, found), len(found)
 
 
@@ -490,12 +567,15 @@ class DoginalIndex:
     """The thread's work: walk or help, a little at a time, and what the mesh hears and says (DxShare)."""
 
     def __init__(self, path: Path, rpc_factory: Callable[[], Any] | None, mode: Callable[[], str],
-                 own_core: Callable[[], bool] = lambda: True):
-        self.store = Store(path)
+                 own_core: Callable[[], bool] = lambda: True, net: str = "doge", mweb: bool = False):
+        self.net = net
+        self.base = STARTS.get(net, BASE) if net != "doge" else BASE
+        self.taproot, self.mweb = net in TAPROOT, mweb
+        self.store = Store(path, self.base)
         self.rpc_factory = rpc_factory
         self.mode = mode
         self.own_core = own_core
-        self.walker = Walker(self.store)
+        self.walker = Walker(self.store, self.taproot, mweb)
         self.chunks = Chunks(self.store)
         self.share: Any = None                       # DxShare, when the mesh runs
         self.tip = 0
@@ -533,22 +613,22 @@ class DoginalIndex:
 
     def _help(self, rpc, budget: float) -> None:
         now = time.time()
-        ready = ready_chunks(self.tip)
+        ready = ready_chunks(self.tip, self.base)
         lease = self.chunks.mine
         if lease is None:
             c = self.chunks.choose(ready, now)
             if c is None:
                 return
-            lease = self.chunks.mine = {"c": c, "at": chunk_range(c)[0]}
+            lease = self.chunks.mine = {"c": c, "at": chunk_range(c, self.base)[0]}
             self.store.set_meta("lease", lease)
             self._say_lease(lease)
-        c, (lo, hi) = lease["c"], chunk_range(lease["c"])
+        c, (lo, hi) = lease["c"], chunk_range(lease["c"], self.base)
         start, done = time.monotonic(), 0
         while lease["at"] < hi and not (done and time.monotonic() - start >= budget):
             h = lease["at"]
             have = self.store.q("SELECT hash, line FROM block WHERE height=?", (h,))
             if not have:
-                block_hash, line, n = scan_block(rpc, h)
+                block_hash, line, n = scan_block(rpc, h, self.taproot, self.mweb)
                 self.store.x("INSERT OR REPLACE INTO block (height, hash, line, n) VALUES (?,?,?,?)",
                              (h, block_hash, line, n))
             lease["at"] = h + 1
@@ -621,14 +701,14 @@ class DoginalIndex:
                     self.chunks.drop_from(node, c)
 
     def hello(self) -> dict:
-        return {"op": "hi", "mode": self.mode(), "walk": self.walker.next_height() if self.mode() == "walk" else None,
-                "helped": self.helped, "v": 1}
+        return {"op": "hi", "net": self.net, "base": self.base, "mode": self.mode(),
+                "walk": self.walker.next_height() if self.mode() == "walk" else None, "helped": self.helped, "v": 2}
 
     # --- for people ------------------------------------------------------------------------------------------------
 
     def status(self) -> dict:
         now = time.time()
-        ready = ready_chunks(self.tip) if self.tip else 0
+        ready = ready_chunks(self.tip, self.base) if self.tip else 0
         per = self.store.all_words(max(ready, 1))
         agreed = differ = one = 0
         differs = []
@@ -643,13 +723,13 @@ class DoginalIndex:
             if len(tally) > 1:
                 differ += 1
                 if len(differs) < 10:
-                    differs.append({"chunk": c, "blocks": list(chunk_range(c)),
+                    differs.append({"chunk": c, "blocks": list(chunk_range(c, self.base)),
                                     "says": {(n[:12] or "this arcade"): h[:16] for n, h in words.items()}})
         leases = []
         for c, held in self.chunks.leases.items():
             for node, (until, at) in held.items():
                 if until > now:
-                    lo, hi = chunk_range(c)
+                    lo, hi = chunk_range(c, self.base)
                     leases.append({"node": node[:12], "chunk": c, "blocks": [lo, hi], "at": at,
                                    "done": max(0, min(CHUNK, at - lo))})
         mine = self.chunks.mine
@@ -660,10 +740,10 @@ class DoginalIndex:
             walk = {"next": nxt, "tip": self.tip, "left": max(0, self.tip - SETTLE - nxt + 1),
                     "inscriptions": counts[0], "closed": counts[1], "burned": counts[2],
                     "rate": round(self.walker.rate, 2), "error": self.walker.error}
-        return {"mode": self.mode(), "base": BASE, "chunk": CHUNK, "tip": self.tip, "ready": ready,
+        return {"net": self.net, "mode": self.mode(), "base": self.base, "source": SOURCES.get(self.net, ""), "chunk": CHUNK, "tip": self.tip, "ready": ready,
                 "agreed": agreed, "one": one, "none": max(0, ready - len(per)), "differ": differ, "differs": differs,
-                "lease": ({"chunk": mine["c"], "blocks": list(chunk_range(mine["c"])), "at": mine["at"],
-                           "done": mine["at"] - chunk_range(mine["c"])[0]} if mine else None),
+                "lease": ({"chunk": mine["c"], "blocks": list(chunk_range(mine["c"], self.base)), "at": mine["at"],
+                           "done": mine["at"] - chunk_range(mine["c"], self.base)[0]} if mine else None),
                 "helped": self.helped, "help_rate": round(self.help_rate, 2), "leases": sorted(leases, key=lambda l: l["chunk"]),
                 "peers": {n[:12]: p for n, p in self.chunks.peers.items()}, "walk": walk, "error": self.error}
 
@@ -686,10 +766,11 @@ class DoginalIndex:
 
 
 class Runner:
-    """The daemon thread: DoginalIndex.step, resting as long as each pass took (half the machine at most)."""
+    """The daemon thread: each chain's DoginalIndex.step in turn, resting as long as the passes took (half the machine
+    at most). `indexes`: one index, or a callable giving {net: index} (chains switched on while it runs)."""
 
-    def __init__(self, index: DoginalIndex):
-        self.index = index
+    def __init__(self, indexes: Any):
+        self.indexes = indexes if callable(indexes) and not hasattr(indexes, "step") else (lambda: {"": indexes})
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -704,9 +785,12 @@ class Runner:
     def _run(self) -> None:
         self._stop.wait(20)                              # let the node start first
         while not self._stop.is_set():
+            rests = []
             try:
-                rest = self.index.step()
+                for index in list(self.indexes().values()):
+                    if index.mode() in ("walk", "help"):
+                        rests.append(index.step())
             except Exception:                            # noqa: BLE001 -- never dies
-                log.debug("doginal index step", exc_info=True)
-                rest = 30.0
-            self._stop.wait(rest)
+                log.debug("ord index step", exc_info=True)
+                rests.append(30.0)
+            self._stop.wait(min(rests) if rests else 10.0)

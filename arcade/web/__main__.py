@@ -231,14 +231,13 @@ def main(argv: list[str] | None = None) -> int:
     # while somebody is looking at the conversation actually appears.
     BlockWatcher(state).start()
 
-    # Our own Doginals index (arcade/doginal_index.py): walking the chain, or helping other arcades with chunks of it.
+    # Our own ord index of each chain (arcade/doginal_index.py): walking a chain, or helping other arcades with chunks
+    # of it; each chain switched on or off in Admin -> Ords.
     try:
-        index = state.doginal_index()
-        if index is not None:
-            from ..doginal_index import Runner
-            Runner(index).start()
+        from ..doginal_index import Runner
+        Runner(state.ord_indexes).start()
     except Exception as exc:
-        print(f"  the Doginals index did not start: {exc}")
+        print(f"  the ord indexes did not start: {exc}")
 
     # A collection that was being inscribed when the process last stopped
     # carries on from the piece after the last one written down.

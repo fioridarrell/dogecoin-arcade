@@ -80,14 +80,18 @@ def test_a_coin_whose_koinu_come_after_the_inscription_is_clean():
 
 
 def test_a_walk_that_does_not_end_is_never_called_clean():
+    """A walk longer than one ask's steps is "cannot tell yet", never clean; it keeps where it got to and the next ask
+    goes on from there (2026-10-20, 52b0a65: no depth limit -- a Doginal Frog ~60 deep was filed unknown for good)."""
     txs, prev = {}, None
     for n in range(60):
         t = f"{n:064x}"
         vin = [{"txid": prev, "vout": 0, "scriptSig": _sig(b"\x01")}] if prev else [{"coinbase": "00"}]
         txs[t] = _tx(t, vin, [0.01])
         prev = t
-    with pytest.raises(D.TraceIncomplete):
-        D.trace(Node(txs), prev, 0)
+    with pytest.raises(D.TraceIncomplete) as stopped:
+        D.trace(Node(txs), prev, 0, limit=40)
+    assert stopped.value.state["queue"], "where it got to"
+    assert D.trace(Node(txs), prev, 0, limit=40, resume=stopped.value.state) == [], "and the next ask finishes it"
 
 
 def test_content_is_read_across_the_transactions_it_runs_on():
@@ -101,9 +105,9 @@ def test_content_is_read_across_the_transactions_it_runs_on():
         D.content(Node(txs, blocks={10: [g]}, ), f"{g}i0", look=1)
 
 
-def test_a_guard_on_the_chain_marks_what_it_cannot_finish_and_keeps_it_out(tmp_path):
+def test_a_guard_on_the_chain_marks_what_it_cannot_finish_and_keeps_it_out(tmp_path, monkeypatch):
     txs, prev = dict(_chain()), None
-    for n in range(60):
+    for n in range(D.TRACE_TXS + 50):                      # longer than one ask goes
         t = f"{n:064x}"
         vin = [{"txid": prev, "vout": 0, "scriptSig": _sig(b"\x01")}] if prev else [{"coinbase": "00"}]
         txs[t] = _tx(t, vin, [0.01])
@@ -120,6 +124,10 @@ def test_a_guard_on_the_chain_marks_what_it_cannot_finish_and_keeps_it_out(tmp_p
     assert guard.held(prev)[0][0]["unknown"] is True
     assert guard.spendable([{"txid": X, "vout": 0, "value": 1_000_000}, {"txid": prev, "vout": 0, "value": 1_000_000},
                             {"txid": X, "vout": 1, "value": 48_990_000}]) == [{"txid": X, "vout": 1, "value": 48_990_000}]
+    # Asked again once the retry time is up: the walk goes on from where it stopped, reaches the coinbase, and the coin
+    # is known clean at last.
+    monkeypatch.setattr(D, "UNKNOWN_RETRY", 0)
+    assert guard.held(prev) == {}
 
 
 def test_pep_mainnet_coins_get_the_same_guard(client):

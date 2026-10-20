@@ -88,6 +88,31 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-20 · the operator's side · branch claude/ord-tab: an ord index per chain, Admin -> Ords, other operators
+
+The operator: "Another tab for Ords and indexing index percentage for each of the chains. And controls to enable ord in
+for each chain ... find the official block height for each chains ord index", and "a list of other operators".
+- arcade/doginal_index.py is now one index per chain (`state.ord_indexes()`, files ord-<net>.sqlite), each
+  starting at its chain's official first-inscription height (each indexer's src/chain.rs):
+  doge 4,600,000 (ord-dogecoin, wonky-ord), P main 186,920 (ord-pepecoin, pepecoin-ord-indexer), P test 34,237
+  (pepecoin-ord-indexer), L main 2,424,429 and L test 2,669,127 (ord-litecoin). Dogecoin moved from my guess of
+  4,500,000, so its chunks are cut again and the old doginal-index.sqlite is no longer used.
+- Litecoin chains also read ord's Taproot witness envelopes (OP_FALSE OP_IF "ord" ... OP_ENDIF), numbered
+  i0, i1... across a transaction.
+- Settings `ord_index:<net>` = walk | help | off. Dogecoin defaults to help (or the old `doginal_index`); every
+  other chain is off until its operator turns it on.
+- "dx" frames now carry `net` (and `base` in "hi"): v2. Frames from an older arcade without `net` are ignored.
+- Admin: the Ords tab (GET/POST /admin/api/ords) replaces the Doginals box under Chains;
+  Network -> Other operators (GET /admin/api/operators) is fed by mesh/operators.py (frames "op": "me" {tag,
+  name, version, hosts}).
+- Not done yet: Litecoin blocks holding an MWEB peg-in can't be read raw (rawchain says Unreadable); that
+  chunk's error shows in the tab.
+- Also on this branch: a Core run with its wallet switched off (`disablewallet=1`, as a test machine's Dogecoin Core)
+  is now treated like a borrowed chain. `state.keyed(chain)` says so, and the arcade holds that chain's coins with
+  its own key (keywallet.py). Chain-agnostic, P main included, but never P test: the identity key itself is read
+  from P test's Core wallet. Before this, the operator's Wallet on a test machine showed no Dogecoin
+  ("getaccountaddress: Method not found").
+
 ### 2026-10-20 · the operator's side · branch claude/fruit-stand: fruit names held for new arcades' operators
 
 The operator: every new arcade's operator gets a fruit name, chosen automatically; @bigchiefenergy (the .25 node)

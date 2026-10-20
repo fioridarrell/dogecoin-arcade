@@ -127,10 +127,10 @@ def test_a_birth_is_the_transaction_whose_input_opens_an_ord_envelope():
     chain = Chain()
     chain.add([reveal, plain])
     block = rawchain.read_block(chain.blocks[0][1])
-    assert dx.births(block) == [(reveal[1], 0, b"image/png".hex())]
+    assert dx.births(block) == [(reveal[1], 0, 0, b"image/png".hex())]
     assert dx.birth_of(rawchain.read_tx(reveal[0]))["done"] is True
     # The same block always gives the same line; another birth gives another.
-    assert dx.block_hash_of(block.hash, dx.births(block)) == dx.block_hash_of(block.hash, [(reveal[1], 0, b"image/png".hex())])
+    assert dx.block_hash_of(block.hash, dx.births(block)) == dx.block_hash_of(block.hash, [(reveal[1], 0, 0, b"image/png".hex())])
     assert dx.block_hash_of(block.hash, []) != dx.block_hash_of(block.hash, dx.births(block))
 
 
@@ -337,13 +337,17 @@ def test_the_mesh_extension_says_everything_when_a_link_comes_up_and_files_what_
 
     async def go():
         await share.link_up(link)
-        await share.on_frame(link, {"t": "dx", "op": "dn", "rows": [[0, walker.store.words(0)[""], 1]]}, b"")
-        await share.on_frame(link, {"t": "dx", "op": "ls", "c": 1, "at": dx.BASE + 5, "until": time.time() + 60}, b"")
-        share.post({"op": "ld", "c": 1})
+        await share.on_frame(link, {"t": "dx", "op": "dn", "net": "doge", "rows": [[0, walker.store.words(0)[""], 1]]}, b"")
+        await share.on_frame(link, {"t": "dx", "op": "ls", "net": "doge", "c": 1, "at": dx.BASE + 5,
+                                    "until": time.time() + 60}, b"")
+        await share.on_frame(link, {"t": "dx", "op": "dn", "rows": [[2, "ab" * 32, 1]]}, b"")   # v1: no chain named
+        walker.share.post({"op": "ld", "c": 1})          # as the index posts: through its chain's way out
         await asyncio.sleep(0.05)
     asyncio.run(go())
     ops = [f["op"] for f in link.sent]
     assert ops[0] == "hi" and "dn" in ops and ops[-1] == "ld"
+    assert all(f.get("net") == "doge" for f in link.sent)
+    assert ("ff" * 32) not in walker.store.words(2), "an older arcade's frame naming no chain is not read"
     assert sorted(r[0] for f in link.sent if f["op"] == "dn" for r in f["rows"]) == [0, 1]
     assert walker.status()["agreed"] == 1
     assert walker.status()["leases"] == [{"node": "ff" * 6, "chunk": 1, "blocks": list(dx.chunk_range(1)),
@@ -365,3 +369,33 @@ def test_a_helper_turned_walker_lets_its_chunk_go_at_once(tmp_path):
     mode[0] = "walk"
     index.step()
     assert index.chunks.mine is None and {"op": "ld", "c": held} in said
+
+
+def test_ords_witness_envelopes_are_read_on_a_taproot_chain():
+    """Litecoin's ords are mostly ord's own kind (2026-10-20, the Ords tab): OP_FALSE OP_IF "ord" 1 <type> 0 <body>
+    OP_ENDIF in the tapscript of a script-path spend, one inscription per envelope, numbered across the transaction."""
+    def tapscript(ctype, body):
+        return (_push(b"\x02" * 32) + b"\xac" + b"\x00\x63" + _push(b"ord") + _push(b"\x01") + _push(ctype)
+                + b"\x00" + _push(body) + b"\x68")
+    control = b"\xc0" + b"\x11" * 32
+    one = [b"\x30" * 64, tapscript(b"text/plain", b"hello"), control]
+    two = [b"\x30" * 64, tapscript(b"image/webp", b"x" * 100) + b"\x00\x63" + _push(b"ord") + _push(b"\x01")
+           + _push(b"text/html") + b"\x00" + _push(b"<b>") + b"\x68", control]
+    assert dx.taproot_envelopes(one) == [b"text/plain".hex()]
+    assert dx.taproot_envelopes(two) == [b"image/webp".hex(), b"text/html".hex()]
+    assert dx.taproot_envelopes(one + [b"\x50annex"]) == [b"text/plain".hex()], "an annex is passed over"
+    assert dx.taproot_envelopes([b"\x30" * 64, b"\x02" * 33]) == [], "a key-path spend has no envelope"
+
+    tx = rawchain.Tx(txid="ab" * 32, wtxid="", raw=b"", version=2, locktime=0, stripped_size=0, vout=[(10_000, b"")],
+                     vin=[{"txid": "cd" * 32, "vout": 0, "script": b"", "sequence": 0, "witness": one},
+                          {"txid": "ef" * 32, "vout": 1, "script": b"", "sequence": 0, "witness": two}])
+    assert [(b["n"], b["vin"]) for b in dx.births_of(tx, taproot=True)] == [(0, 0), (1, 1), (2, 1)]
+    assert dx.births_of(tx, taproot=False) == [], "Dogecoin and Pepecoin read only the Doginals kind"
+
+
+def test_each_chain_starts_at_its_official_first_inscription_height(tmp_path):
+    assert dx.STARTS == {"doge": 4_600_000, "main": 186_920, "test": 34_237, "ltc": 2_424_429, "ltctest": 2_669_127}
+    ltc = dx.DoginalIndex(tmp_path / "ltc.sqlite", None, lambda: "off", net="ltc", mweb=True)
+    assert ltc.base == 2_424_429 and ltc.taproot and ltc.walker.mweb
+    assert dx.chunk_range(0, ltc.base) == (2_424_429, 2_424_429 + dx.CHUNK)
+    assert ltc.status()["source"].startswith("ord-litecoin")
