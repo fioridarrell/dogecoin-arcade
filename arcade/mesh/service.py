@@ -757,6 +757,19 @@ def for_state(state, *, listen_host: str | None = None, listen_port: int | None 
         def addnode(name: str, hostport: str, op: str):
             with by_name[name].rpc() as rpc:
                 return rpc.call("addnode", hostport, op)
+
+        # The bridge's peers from before this start: an arcade that stops (a restart) never says `addnode remove`,
+        # and Core keeps them, dialing dead local ports -- 150 each on .25's Pepecoin Cores after a day of deploys
+        # (2026-10-19, the operator: "we have like 11 peers"). No bridge port is live yet, so every 127.0.0.1 one goes.
+        for name in chains:
+            try:
+                with by_name[name].rpc() as rpc:
+                    for row in rpc.call("getaddednodeinfo") or []:
+                        added = str(row.get("addednode") or "")
+                        if added.startswith("127.0.0.1:"):
+                            rpc.call("addnode", added, "remove")
+            except Exception:                              # noqa: BLE001 -- a Core away: tidied next start
+                log.debug("mesh: could not tidy %s's added peers", name, exc_info=True)
         service.core = CoreBridge(chains, addnode)
         service.node.add_extension(service.core)
     service.coreshare = shared_cores(state)
