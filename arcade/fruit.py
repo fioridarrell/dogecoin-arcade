@@ -124,7 +124,7 @@ class FruitStand:
             unfunded = [n for n in todo if not book[n].get("funded")]
             if unfunded:
                 self.busy = f"funding {len(unfunded)} addresses"
-                txid = rpc.call("sendmany", "", {book[n]["address"]: FUND for n in unfunded})
+                txid = self._fund(rpc, [book[n]["address"] for n in unfunded])
                 for n in unfunded:
                     book[n]["funded"] = txid
                 self._keep(book)
@@ -145,6 +145,27 @@ class FruitStand:
                 prepared.what = f"reserve @{name}"
                 book[name]["claim"] = sender.broadcast(prepared)
                 self._keep(book)
+
+    def _fund(self, rpc, addresses: list[str]) -> str:
+        """FUND coins to each address in one transaction, paid from the node's own address (@bigchiefenergy's) with
+        the change back to it -- never from another address of the wallet (2026-10-20: `sendmany` spends the wallet's
+        default "account", whose bookkeeping on .25 is negative after years of sends, and refused)."""
+        from . import fees
+        from .txbuild import build_raw_tx, p2pkh_script
+        funder = self.state.derived_address
+        if not funder:
+            raise ValueError("this node has no identity address to pay from")
+        outputs = [(FUND * tokenlib.COIN, p2pkh_script(a)) for a in addresses]
+        sender = tokenlib.TokenSender(rpc, self.chain.params)
+        try:
+            inputs = sender._inputs._select_inputs(funder, sum(v for v, _ in outputs) + tokenlib.COIN)
+        except tokenlib.SendError as exc:
+            raise ValueError(f"the node's address cannot pay for the fruit names: {exc}") from exc
+        funded = fees.fund(rpc, build_raw_tx(inputs, outputs), {"changeAddress": funder})
+        signed = rpc.call("signrawtransaction", funded["hex"])
+        if not signed.get("complete"):
+            raise ValueError(f"signing the funding failed: {signed.get('errors')}")
+        return rpc.call("sendrawtransaction", signed["hex"])
 
     # --- handing one on --------------------------------------------------------------------------------------------
 

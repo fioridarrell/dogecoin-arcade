@@ -25,9 +25,6 @@ class Node:
         if method == "getnewaddress":
             self.made += 1
             return f"addr{self.made}"
-        if method == "sendmany":
-            self.sent.append(params[1])
-            return "fundtx"
         if method == "listunspent":
             return [{"address": a} for a in params[2]]
         raise AssertionError(method)
@@ -87,6 +84,11 @@ def stand(monkeypatch):
                 index.names[name] = reference
             return f"tx{len(broadcast)}"
     monkeypatch.setattr(fruit.tokenlib, "TokenSender", Sender)
+
+    def fund(self, rpc, addresses):
+        node.sent.append(addresses)
+        return "fundtx"
+    monkeypatch.setattr(fruit.FruitStand, "_fund", fund)
     s = fruit.FruitStand(State(), Chain(node), index)
     return s, index, node, broadcast
 
@@ -128,3 +130,33 @@ def test_a_fruit_is_handed_on_once_and_only_to_an_address_without_a_name(stand):
         s.give(first, "someone-else")
     assert s.next_free() != first
     assert s.status()["counts"]["given"] == 1
+
+
+def test_the_funding_is_paid_from_the_nodes_own_address_with_change_back_to_it(monkeypatch):
+    """2026-10-20 on .25: `sendmany` spent the wallet's default account and refused; the funding now picks coins of
+    the node's identity address only, change to it."""
+    from arcade import fees
+    calls = {}
+
+    class Inputs:
+        def _select_inputs(self, sender, needed):
+            calls["from"], calls["needed"] = sender, needed
+            return ["in"]
+
+    class Sender:
+        def __init__(self, rpc, params):
+            self._inputs = Inputs()
+    monkeypatch.setattr(fruit.tokenlib, "TokenSender", Sender)
+    monkeypatch.setattr("arcade.txbuild.build_raw_tx", lambda ins, outs: calls.setdefault("outs", outs) and "raw")
+    monkeypatch.setattr("arcade.txbuild.p2pkh_script", lambda a: a.encode())
+    monkeypatch.setattr(fees, "fund", lambda rpc, raw, opts: calls.setdefault("opts", opts) and {"hex": "ff"})
+
+    class Rpc:
+        def call(self, method, *params):
+            return {"complete": True, "hex": "ff"} if method == "signrawtransaction" else "txid"
+    state = State()
+    state.derived_address = "nodeaddr"
+    stand = fruit.FruitStand(state, Chain(None), Index())
+    assert stand._fund(Rpc(), ["a1", "a2"]) == "txid"
+    assert calls["from"] == "nodeaddr" and calls["opts"] == {"changeAddress": "nodeaddr"}
+    assert [v for v, _ in calls["outs"]] == [fruit.FUND * fruit.tokenlib.COIN] * 2
