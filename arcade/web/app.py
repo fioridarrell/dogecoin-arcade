@@ -23912,6 +23912,43 @@ def create_app(state: AppState) -> FastAPI:
         state.set_setting("doginal_index", mode)
         return JSONResponse({"ok": True, "mode": mode})
 
+    _FRUIT: dict = {}
+
+    def _fruit_stand():
+        """The node's fruit names for new arcades' operators (arcade/fruit.py, 2026-10-20)."""
+        from .. import fruit as fruitlib
+        if "stand" not in _FRUIT:
+            chain, index = _tag_chain()
+            _FRUIT["stand"] = fruitlib.FruitStand(state, chain, index)
+        return _FRUIT["stand"]
+
+    @app.get("/admin/api/fruit")
+    def admin_fruit(request: Request):
+        _admin_check(request)
+        return JSONResponse(_fruit_stand().status(), headers={"Cache-Control": "no-store"})
+
+    @app.post("/admin/api/fruit/reserve")
+    def admin_fruit_reserve(request: Request):
+        """Claim every fruit name not held yet, each from an address of its own in this node's wallet."""
+        _admin_check(request, write=True)
+        stand = _fruit_stand()
+        if stand.busy:
+            return JSONResponse({"detail": f"already at it: {stand.busy}"}, status_code=409)
+        stand.busy = "starting"
+        threading.Thread(target=stand.reserve, name="arcade-fruit", daemon=True).start()
+        return JSONResponse({"ok": True})
+
+    @app.post("/admin/api/fruit/give")
+    def admin_fruit_give(request: Request, payload: Any = Body(None)):
+        """Hand one fruit name to an address (a new arcade's operator)."""
+        _admin_check(request, write=True)
+        said = payload if isinstance(payload, dict) else {}
+        try:
+            txid = _fruit_stand().give(str(said.get("name") or ""), str(said.get("to") or "").strip())
+        except (ValueError, tokenlib.TokenError) as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        return JSONResponse({"ok": True, "txid": txid})
+
     @app.post("/admin/api/seats")
     def admin_seats(request: Request, payload: Any = Body(None)):
         _admin_check(request, write=True)

@@ -88,6 +88,16 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-20 · the operator's side · branch claude/fruit-stand: fruit names held for new arcades' operators
+
+The operator: every new arcade's operator gets a fruit name, chosen automatically; @bigchiefenergy (the .25 node)
+reserves 150 well-known fruits. The chain allows ONE name per address, so arcade/fruit.py claims each fruit
+from an address of its own in the node's wallet (label "fruit:<name>") and later hands one on with an
+ordinary name transfer. No new chain rule. Admin API: GET /admin/api/fruit, POST /admin/api/fruit/reserve,
+POST /admin/api/fruit/give {name, to}. Left out: @apple, @banana, @orange (already people's), @strawberry
+(a test machine arcade's operator), "kaffirlime" (a slur). Still to build: a new arcade asking the mesh for its
+fruit when its operator signs up. Please don't claim fruit names for tests on P test.
+
 ### 2026-10-20 · the operator's side · branch claude/doginal-index: our own Doginals index, shared over the mesh
 
 Built from the plan below (the operator: build it, put it on the three arcades, then a fourth on a test machine "to see how
