@@ -225,6 +225,13 @@ def test_the_ords_tab_lists_each_chain_with_its_official_start_and_saves_its_mod
     said = app.get("/admin/api/ords", headers=LOCAL).json()
     assert said["cores"] == 1 and said["machine"] == (os.cpu_count() or 1) and 'id="ordcores"' in page.text
     state.set_setting("ord_cores", None)
+    # Read only, and the lookup box (2026-10-20).
+    assert app.post("/admin/api/ords", headers={**LOCAL, **WRITE}, json={"net": "main", "mode": "read"}).json()["ok"]
+    assert state.ord_mode("main") == "read" and 'Read only' in page.text and 'id="ordlookq"' in page.text
+    assert app.get("/admin/api/ords/lookup?net=main&q=nonsense", headers=LOCAL).status_code == 400
+    said = app.get("/admin/api/ords/lookup?net=main&q=" + "ab" * 32 + "i0", headers=LOCAL)
+    assert said.status_code == 409 and "linked arcade" in said.json()["detail"], "no walker linked in a test"
+    state.set_setting("ord_index:main", None)
 
 
 def test_the_first_operator_signs_up_with_the_offered_fruit_at_the_machine(public):

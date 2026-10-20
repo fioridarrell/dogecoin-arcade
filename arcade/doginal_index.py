@@ -63,7 +63,10 @@ LEASE_SECONDS = 600
 PROGRESS_EVERY = 10              # blocks between two progress words
 #: Undo kept for this many blocks back, so a reorg rolls the walker back instead of stopping it.
 UNDO_BLOCKS = 300
-MODES = ("walk", "help", "off")
+#: walk: the whole index here; help: chunks for the shared list; read: no index here, its questions asked of a linked
+#: arcade that walks (2026-10-20: "read only. Where it can read the index, but it doesn't hold the index on
+#: its own copy of arcade"); off.
+MODES = ("walk", "help", "read", "off")
 #: A machine with at least this many CPU cores helps on half of them by default and never rests; a smaller one (.25
 #: has 4, and serves the live site) helps on one, resting as long as each pass took (half that core).
 BIG_FROM_CORES = 8
@@ -835,10 +838,38 @@ class DoginalIndex:
                 "lanes": [{"chunk": lane["c"], "at": lane["at"], "done": lane["at"] - chunk_range(lane["c"], self.base)[0]}
                           for lane in self.chunks.lanes],
                 "cores": self._lanes_wanted(),
+                "walkers": [{"node": n[:12], "walked_to": h} for n, h in self.walkers()],
                 "helped": self.helped, "help_rate": round(self.help_rate, 2), "leases": sorted(leases, key=lambda l: l["chunk"]),
                 "peers": {n[:12]: p for n, p in self.chunks.peers.items()}, "walk": walk, "error": self.error}
 
-    # --- lookups (walker) ------------------------------------------------------------------------------------------
+    # --- lookups ---------------------------------------------------------------------------------------------------
+
+    def answer(self, question: dict) -> dict:
+        """A linked arcade's question, answered from this arcade's own walk: {"what": "where", "id"} or
+        {"what": "on", "txid", "vout"}. Only a walking arcade answers: a helper knows births, not where things are."""
+        if self.mode() != "walk":
+            raise ValueError("this arcade does not walk this chain")
+        what = question.get("what")
+        if what == "where":
+            return {"where": self.where(str(question.get("id") or ""))}
+        if what == "on":
+            return {"on": self.on(str(question.get("txid") or ""), int(question.get("vout") or 0))}
+        raise ValueError("no such question")
+
+    def lookup(self, question: dict) -> dict:
+        """The answer, and whose it is: this arcade's own walk, else (read only, or not walking) a linked arcade that
+        walks this chain, asked over the mesh."""
+        if self.mode() == "walk":
+            return {**self.answer(question), "from": "this arcade", "walked_to": self.walker.next_height()}
+        if self.share is None or not hasattr(self.share, "ask"):
+            raise ValueError("no linked arcade to ask: the mesh is off here")
+        return self.share.ask(question)
+
+    def walkers(self) -> list[tuple[str, int]]:
+        """Linked arcades that walk this chain, furthest first: (node, the block they have walked to)."""
+        rows = [(node, int(p.get("walk") or 0)) for node, p in self.chunks.peers.items()
+                if p.get("mode") == "walk" and time.time() - float(p.get("at") or 0) < 300]
+        return sorted(rows, key=lambda r: -r[1])
 
     def where(self, inscription: str) -> dict | None:
         row = self.store.q("SELECT i.id, i.height, i.ctype, i.done_height, i.burned, a.txid, a.vout, a.off "

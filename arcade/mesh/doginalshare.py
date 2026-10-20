@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import itertools
 import threading
+import time
 from typing import Any
 
 log = logging.getLogger("arcade.mesh")
@@ -26,14 +28,21 @@ log = logging.getLogger("arcade.mesh")
 ROWS_PER_FRAME = 500           # a "dn" frame stays well under the link's 64 KB frame
 
 
+ASK_SECONDS = 15.0
+ANSWERS_PER_MINUTE = 120       # questions one linked arcade may ask of this one
+
+
 class _Chain:
-    """One chain's index's way out: what it posts goes out with its chain named."""
+    """One chain's index's way out: what it posts goes out with its chain named, and its questions to a walker."""
 
     def __init__(self, share: "DxShare", net: str):
         self.share, self.net = share, net
 
     def post(self, frame: dict) -> None:
         self.share.post({**frame, "net": self.net})
+
+    def ask(self, question: dict) -> dict:
+        return self.share.ask(self.net, question)
 
 
 class DxShare:
@@ -49,6 +58,9 @@ class DxShare:
         self.node = None
         self.loop: asyncio.AbstractEventLoop | None = None
         self._lock = threading.Lock()
+        self._ids = itertools.count(1)
+        self._waiting: dict[int, tuple[str, asyncio.Future]] = {}
+        self._asked: dict[str, list[float]] = {}
         self.indexes()
 
     def indexes(self) -> dict:
@@ -88,15 +100,69 @@ class DxShare:
                 await self._send_all({"t": "dx", **await asyncio.to_thread(index.hello)})
 
     async def on_frame(self, link, header: dict, blob: bytes) -> None:
+        if header.get("op") == "a":                            # an answer to one of this arcade's questions
+            got = self._waiting.get(header.get("id"))
+            if got is not None and got[0] == link.peer_id and not got[1].done():
+                got[1].set_result(header)
+            return
         index = self.indexes().get(str(header.get("net") or ""))
         if index is None:
             return                                             # a chain not indexed here, or an older arcade
+        if header.get("op") == "q":
+            await self._answer(link, index, header)
+            return
         if header.get("op") == "hi" and header.get("base") not in (None, index.base):
             return                                             # cut from another start: its chunks are not ours
         try:
             await asyncio.to_thread(index.heard, link.peer_id, header)
         except Exception:                                      # noqa: BLE001 -- not a word this version reads
             log.debug("dx frame", exc_info=True)
+
+    # ---------------------------------------------------------------- questions (read only)
+    async def _answer(self, link, index, header: dict) -> None:
+        rid, peer, now = header.get("id"), link.peer_id, time.monotonic()
+        if not isinstance(rid, int):
+            return
+        asked = [t for t in self._asked.get(peer, []) if t > now - 60]
+        self._asked[peer] = asked + [now]
+        said: dict = {"t": "dx", "op": "a", "id": rid}
+        try:
+            if len(asked) >= ANSWERS_PER_MINUTE:
+                raise ValueError("too many questions this minute")
+            got = await asyncio.to_thread(index.answer, header.get("question") or {})
+            said.update(got, walked_to=index.walker.next_height())
+        except Exception as exc:                               # noqa: BLE001 -- said back
+            said["err"] = str(exc)[:200]
+        try:
+            await link.send(said)
+        except Exception:                                      # noqa: BLE001
+            pass
+
+    def ask(self, net: str, question: dict) -> dict:
+        """From a web thread: ask the furthest-walked linked arcade for this chain. {"where"|"on", "from", "walked_to"}."""
+        index = self.indexes().get(net)
+        loop = self.loop
+        if index is None or loop is None or self.node is None:
+            raise ValueError("no linked arcade to ask")
+        for node, _height in index.walkers():
+            link = self.node.links.get(node)
+            if link is None:
+                continue
+            got = asyncio.run_coroutine_threadsafe(self._ask(link, net, question), loop).result(ASK_SECONDS + 1)
+            if got.get("err"):
+                raise ValueError(f"arcade {node[:12]}: {got['err']}")
+            return {k: v for k, v in got.items() if k not in ("t", "op", "id")} | {"from": f"arcade {node[:12]}"}
+        raise ValueError("no linked arcade walks this chain yet")
+
+    async def _ask(self, link, net: str, question: dict) -> dict:
+        rid = next(self._ids)
+        fut = asyncio.get_running_loop().create_future()
+        self._waiting[rid] = (link.peer_id, fut)
+        try:
+            await link.send({"t": "dx", "op": "q", "net": net, "id": rid, "question": question})
+            return await asyncio.wait_for(fut, ASK_SECONDS)
+        finally:
+            self._waiting.pop(rid, None)
 
     # ---------------------------------------------------------------- saying
     def post(self, frame: dict) -> None:

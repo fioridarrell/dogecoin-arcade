@@ -441,3 +441,51 @@ def test_a_small_machine_on_one_core_rests_and_a_big_one_goes_straight_on(tmp_pa
     monkeypatch.setattr("os.cpu_count", lambda: 20)
     assert index.step() < 0.1, "a big machine: straight on"
     assert dx.default_cores() == 10
+
+
+def test_read_only_holds_no_index_and_asks_an_arcade_that_walks(tmp_path):
+    """2026-10-20: "read only. Where it can read the index, but it doesn't hold the index on its own copy of
+    arcade." The reader scans nothing; its question goes over the mesh to the furthest-walked linked arcade."""
+    import asyncio
+    from arcade.mesh.doginalshare import DxShare
+    chain = Chain()
+    reveal = _tx([(FUND, 0, _envelope())], [100_000, 50_000])
+    chain.add([reveal])
+    send = _tx([(reveal[1], 0, SIG)], [100_000])
+    chain.add([send])
+    walker = _walker(tmp_path, chain)
+    walker.step()
+    reader = dx.DoginalIndex(tmp_path / "read.sqlite", lambda: chain, lambda: "read")
+    calls = chain.calls
+    assert reader.step() == 10.0 and chain.calls == calls, "read only: nothing scanned"
+    with pytest.raises(ValueError):
+        reader.answer({"what": "where", "id": f"{reveal[1]}i0"})
+
+    class Link:
+        def __init__(self, peer_id):
+            self.peer_id, self.far = peer_id, None
+
+        async def send(self, header, blob=b""):
+            await self.far.share.on_frame(self.far, header, blob)
+
+    class Node:
+        def __init__(self):
+            self.links = {}
+    w_share, r_share = DxShare(walker), DxShare(reader)
+    to_walker, to_reader = Link("walker-node"), Link("reader-node")
+    to_walker.far, to_reader.far = to_reader, to_walker          # what one sends, the other hears on its own link
+    to_reader.share, to_walker.share = w_share, r_share
+    w_share.node, r_share.node = Node(), Node()
+    r_share.node.links = {"walker-node": to_walker}
+    w_share.node.links = {"reader-node": to_reader}
+
+    async def go():
+        r_share.loop = w_share.loop = asyncio.get_running_loop()
+        await r_share.on_frame(to_walker, {"t": "dx", **walker.hello()}, b"")     # the reader hears the walker's hi
+        where = await asyncio.to_thread(reader.lookup, {"what": "where", "id": f"{reveal[1]}i0"})
+        on = await asyncio.to_thread(reader.lookup, {"what": "on", "txid": send[1], "vout": 0})
+        return where, on
+    where, on = asyncio.run(go())
+    assert where["where"]["output"] == f"{send[1]}:0" and where["from"] == "arcade walker-node"
+    assert on["on"] == [{"id": f"{reveal[1]}i0", "offset": 0}]
+    assert reader.store.q("SELECT COUNT(*) FROM insc")[0][0] == 0, "and the reader keeps no index"

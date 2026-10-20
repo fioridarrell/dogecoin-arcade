@@ -321,6 +321,17 @@
     <tbody id="ordrows"><tr><td colspan="6" class="muted">Loading&hellip;</td></tr></tbody>
   </table></div>
   <span class="muted" id="ordsaid"></span>
+  <h3 style="margin:14px 0 6px">Look up</h3>
+  <p class="muted" style="margin-top:0;font-size:.84rem">An inscription id (where it is now), or a coin as
+    <code>txid:vout</code> (what sits on it). Answered from this arcade&rsquo;s own walk, or, on <b>Read only</b>, by a
+    linked arcade that walks the chain.</p>
+  <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
+    <select id="ordlooknet" aria-label="Chain to look up on" style="font-size:16px"></select>
+    <input autocomplete="off" id="ordlookq" style="flex:1;min-width:260px;font-size:16px" placeholder="inscription id, or txid:vout"
+           aria-label="Inscription id or coin">
+    <button type="button" class="small" id="ordlookgo">Look up</button>
+  </div>
+  <pre id="ordlooksaid" class="muted" style="white-space:pre-wrap;font-size:.84rem;margin:8px 0 0"></pre>
 </section>
 </div>
 
@@ -995,7 +1006,7 @@ section.panel h2{margin-top:0}
   }
   loadSwaps(); setInterval(loadSwaps, 15000);
   // --- Ords (2026-10-20): each chain's own ord index, every 5 s while the tab shows; and Network -> Other operators.
-  var ORD_WORDS = {walk: 'Walk', help: 'Help', off: 'Off'};
+  var ORD_WORDS = {walk: 'Walk', help: 'Help', read: 'Read only', off: 'Off'};
   function pct(x) { return (x == null ? '\u2014' : Number(x).toFixed(x < 10 ? 2 : 1) + '%'); }
   function num(x) { return Number(x || 0).toLocaleString(); }
   function lines(items, cls) {
@@ -1010,6 +1021,10 @@ section.panel h2{margin-top:0}
     fetch('/admin/api/ords', {headers: {'Accept': 'application/json'}, cache: 'no-store'}).then(function (r) { return r.json(); })
       .then(function (d) {
         var tb = $('ordrows'); tb.textContent = '';
+        var pick = $('ordlooknet');
+        if (!pick.options.length) (d.rows || []).forEach(function (r) {
+          var o = document.createElement('option'); o.value = r.net; o.textContent = r.title; pick.appendChild(o);
+        });
         if (document.activeElement !== $('ordcores')) $('ordcores').value = d.cores;
         $('ordcores').max = d.machine;
         $('ordmachine').textContent = 'of ' + d.machine + ' on this machine';
@@ -1018,7 +1033,7 @@ section.panel h2{margin-top:0}
           var name = text('td', r.title + ' \u00b7 ' + r.label); name.className = 'ordwhat'; tr.appendChild(name);
           var td = document.createElement('td'), sel = document.createElement('select');
           sel.setAttribute('aria-label', r.title + ' ord index');
-          ['walk', 'help', 'off'].forEach(function (m) {
+          ['walk', 'help', 'read', 'off'].forEach(function (m) {
             var o = document.createElement('option'); o.value = m; o.textContent = ORD_WORDS[m];
             o.selected = r.mode === m; sel.appendChild(o);
           });
@@ -1039,6 +1054,8 @@ section.panel h2{margin-top:0}
                            : r.found ? lines([num(r.found), 'in chunks read here']) : text('td', '\u2014'));
           var bits = [];
           if (r.mode === 'off') bits.push('off');
+          if (r.mode === 'read') bits.push((r.walkers || []).length ? 'reads from arcade ' + r.walkers[0].node
+            + ' (walked to block ' + num(r.walkers[0].walked_to) + ')' : 'no linked arcade walks this chain yet');
           (r.lanes || []).forEach(function (l) { bits.push('reading chunk ' + num(l.chunk) + ': ' + l.done + ' of ' + r.chunk + ' blocks'); });
           if ((r.lanes || []).length && r.help_rate) bits.push(r.help_rate + ' blocks/s here');
           if (w && w.rate) bits.push(w.rate + ' blocks/s');
@@ -1056,6 +1073,14 @@ section.panel h2{margin-top:0}
         }
       }).catch(function () { $('ordrows').textContent = 'Could not read the ord indexes.'; });
   }
+  $('ordlookgo').onclick = function () {
+    var out = $('ordlooksaid'); out.textContent = 'Asking\u2026';
+    fetch('/admin/api/ords/lookup?net=' + encodeURIComponent($('ordlooknet').value) + '&q='
+          + encodeURIComponent($('ordlookq').value.trim()), {headers: {'Accept': 'application/json'}, cache: 'no-store'})
+      .then(function (r) { return r.json(); })
+      .then(function (j) { out.textContent = j.detail ? j.detail : JSON.stringify(j, null, 2); })
+      .catch(function (e) { out.textContent = String(e.message || e); });
+  };
   $('ordcoressave').onclick = function () {
     call('/admin/api/ords', {cores: Number($('ordcores').value)})
       .then(function (j) { $('ordsaid').textContent = 'Ords help with ' + j.cores + ' core' + (j.cores > 1 ? 's' : '') + '.'; loadOrds(); })

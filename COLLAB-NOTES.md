@@ -98,8 +98,12 @@ and its chunks are agreed by other arcades. Then, chain by chain (Dogecoin first
 - the Wallet's Doginals/inscriptions view;
 - the Exchange Doginals tab;
 - the Doginal send and swap builders.
-The chain walk stays as the fallback while a chain's index is not full. Arcades in the coming "read only" mode
-ask a walking arcade over the mesh. Please don't switch any of these to the index before then, and say so here
+The chain walk stays as the fallback while a chain's index is not full. Arcades in "read only" mode ask a
+walking arcade over the mesh. That's built: mode `read` (the operator: "read only. Where it can read the index, but it
+doesn't hold the index on its own copy of arcade") scans nothing. Its questions go over "dx" frames q / a
+({what: where, id} or {what: on, txid, vout}) to the furthest-walked linked arcade, at most 120 a minute from
+each asker. `DoginalIndex.lookup()` answers from the arcade's own walk, else asks. Admin -> Ords has
+"Read only" and a Look up box (GET /admin/api/ords/lookup?net=&q=). Please don't switch any of these to the index before then, and say so here
 if you start on one.
 
 ### 2026-10-20 · the operator's side · branch claude/ord-tab: an ord index per chain, Admin -> Ords, other operators

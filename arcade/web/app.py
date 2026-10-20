@@ -23996,6 +23996,29 @@ def create_app(state: AppState) -> FastAPI:
         state.set_setting(f"ord_index:{net}", mode)
         return JSONResponse({"ok": True, "net": net, "mode": mode})
 
+    @app.get("/admin/api/ords/lookup")
+    def admin_ords_lookup(request: Request, net: str = "doge", q: str = ""):
+        """Admin -> Ords -> Look up: an inscription id (where it is now) or txid:vout (what sits on it), from this
+        arcade's own walk, or -- read only, or not walking -- a linked arcade that walks the chain (2026-10-20)."""
+        _admin_check(request)
+        from ..doginals import INSCRIPTION_ID
+        index = state.ord_indexes().get(net)
+        if index is None:
+            return JSONResponse({"detail": "this arcade does not read that chain"}, status_code=404)
+        q = (q or "").strip().lower()
+        if INSCRIPTION_ID.match(q):
+            question = {"what": "where", "id": q}
+        elif re.match(r"^[0-9a-f]{64}:[0-9]{1,6}$", q):
+            txid, vout = q.split(":")
+            question = {"what": "on", "txid": txid, "vout": int(vout)}
+        else:
+            return JSONResponse({"detail": "an inscription id (txid + i + number), or a coin as txid:vout"},
+                                status_code=400)
+        try:
+            return JSONResponse(index.lookup(question), headers={"Cache-Control": "no-store"})
+        except Exception as exc:                               # noqa: BLE001 -- said in the box
+            return JSONResponse({"detail": str(exc)[:300]}, status_code=409)
+
     @app.get("/admin/api/operators")
     def admin_operators(request: Request):
         """Network -> Other operators: who runs each arcade this one has heard from over the mesh."""
