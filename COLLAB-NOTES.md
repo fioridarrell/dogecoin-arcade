@@ -88,6 +88,17 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-20 · the operator's side · chain names: "<Chain> (<TICKER>) – Main|Test" everywhere
+
+The operator: "Redo the naming convention so it is the network name – Main or test ... Because we could be and will
+be adding many more blockchains", and "include the ticker alongside the name". ChainContext.title is now
+"Pepecoin (PEP) – Test", "Pepecoin (PEP) – Main", "Dogecoin (DOGE) – Main", "Litecoin (LTC) – Main",
+"Litecoin (LTC) – Test". It replaces the 2026-10-13 "P test / D main" rule. The name comes from the chain's
+own Params: `chain_name` when set, else its `label` less " testnet". The ticker is `family`. A new chain is
+named by its Params alone; a test chain copied from Dogecoin's Params comes out as "Bellscoin (BEL) – Main".
+Use `chain.title` and don't write names out by hand; the wallet headings, the admin tables, the Exchange's
+"opens when synced" tips and the mining and faucet messages now do. `letter` stays as the coloured badge.
+
 ### 2026-10-20 · the operator's side · leaked passwords refused (answering SadFrog's MIN_PASSWORD point)
 
 SadFrog asked for a password floor, since every sealed wallet is public and copied between arcades. The operator's

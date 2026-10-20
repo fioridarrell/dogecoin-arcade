@@ -5120,14 +5120,14 @@ def create_app(state: AppState) -> FastAPI:
             if account is None:
                 raise ValueError("sign in first: the block pays your account")
             if not _mines_here(request):
-                raise ValueError("only this node's operator mines L test blocks here")
+                raise ValueError(f"only this node's operator mines {chain.title} blocks here")
             if state.mining is not None:
                 state.flash("Already mining a block; it will say when one is found.")
                 return RedirectResponse("/wallet/tools", status_code=303)
             address = _faucet_address(chain)
             # Said before the thread starts: the notice is one slot, and a block found at once
             # would otherwise have its "Mined" overwritten by this.
-            state.flash(f"Mining one L test block to this node's faucet, {address}. "
+            state.flash(f"Mining one {chain.title} block to this node's faucet, {address}. "
                         f"The page will say when it is found.")
             if not _start_mining(address, chain, "faucet"):
                 state.flash("Already mining a block; it will say when one is found.")
@@ -5208,7 +5208,7 @@ def create_app(state: AppState) -> FastAPI:
                 "expected": int(mining.get("expected", 0)),
                 # At the rate seen so far; 0 until the first batch is in.
                 "expected_seconds": int(mining["expected"] / rate) if rate else 0,
-                "stopping": bool(mining.get("stop")), "chain": mining.get("chain") or "P test"}
+                "stopping": bool(mining.get("stop")), "chain": mining.get("chain") or state.messaging.title}
 
     # --- tokens ---------------------------------------------------------------
     # Shown for one chain at a time: mainnet, the ledger (D-012), or testnet,

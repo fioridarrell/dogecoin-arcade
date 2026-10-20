@@ -201,10 +201,15 @@ class ChainContext:
 
     @property
     def title(self) -> str:
-        """One short name for every chain, said the same everywhere (2026-10-13:
-        "make it say only P test or P main or D main in all of the labels across the
-        site"): P test, P main, D main."""
-        return f"{self.letter} {self.word}"
+        """One name for every chain, said the same everywhere: the chain's name and ticker, then Main or Test --
+        "Pepecoin (PEP) - Test", "Dogecoin (DOGE) - Main", "Litecoin (LTC) - Test" (2026-10-20: "the network
+        name - Main or test ... Because we could be and will be adding many more blockchains", and "include the
+        ticker alongside the name"; before, "P test", "D main").
+        A new chain names itself once, in its Params (`chain_name`)."""
+        name = self.params.chain_name or self.params.label.removesuffix(" testnet").removesuffix(" regtest")
+        if name in ("Mainnet", "Testnet", "Regtest"):
+            name = "Pepecoin"            # the arcade's own chain, whose Params were written before it had company
+        return f"{name} ({self.params.family}) \u2013 {self.word.capitalize()}"
 
     @property
     def net(self) -> str:
