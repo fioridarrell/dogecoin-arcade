@@ -23971,13 +23971,21 @@ def create_app(state: AppState) -> FastAPI:
                 "walked_pct": round(100 * max(0, (walk.get("next") or st["base"]) - st["base"]) / span, 2) if walk else None,
                 "agreed_pct": round(100 * (st.get("agreed") or 0) / ready, 2) if ready else 0.0,
             })
-        return JSONResponse({"rows": rows}, headers={"Cache-Control": "no-store"})
+        import os
+        return JSONResponse({"rows": rows, "pace": state.ord_pace(), "cores": os.cpu_count() or 1},
+                            headers={"Cache-Control": "no-store"})
 
     @app.post("/admin/api/ords")
     def admin_ords_mode(request: Request, payload: Any = Body(None)):
         _admin_check(request, write=True)
         from ..doginal_index import MODES, STARTS
         said = payload if isinstance(payload, dict) else {}
+        from ..doginal_index import PACES
+        if "pace" in said:
+            if said["pace"] not in PACES:
+                return JSONResponse({"detail": "full or half"}, status_code=400)
+            state.set_setting("ord_pace", said["pace"])
+            return JSONResponse({"ok": True, "pace": said["pace"]})
         net, mode = str(said.get("net") or ""), said.get("mode")
         if net not in STARTS or mode not in MODES:
             return JSONResponse({"detail": "a chain, and walk, help or off"}, status_code=400)

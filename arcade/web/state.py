@@ -1611,6 +1611,13 @@ class AppState:
         chosen = str(chosen or "off")
         return chosen if chosen in MODES else "off"
 
+    def ord_pace(self) -> str:
+        """full | half: how much of this machine the ord indexes use (Admin -> Ords). By default full on a machine with
+        8 or more cores, half on a smaller one."""
+        from ..doginal_index import PACES, default_pace
+        chosen = self.setting("ord_pace")
+        return chosen if chosen in PACES else default_pace()
+
     def ord_indexes(self) -> dict:
         """Our own ord index of each chain this arcade reads, its own Core or a borrowed one (arcade/doginal_index.py;
         2026-10-20: the Ords tab, "controls to enable ord in for each chain"). One file each, ord-<net>.sqlite."""
@@ -1627,7 +1634,7 @@ class AppState:
             kept[net] = DoginalIndex(Path(self.home) / f"ord-{net}.sqlite", chain.rpc,
                                      (lambda n=net: self.ord_mode(n)),
                                      own_core=(lambda c=chain: not getattr(c, "borrowed", False)),
-                                     net=net, mweb=bool(getattr(chain.params, "mweb", False)))
+                                     net=net, mweb=bool(getattr(chain.params, "mweb", False)), pace=self.ord_pace)
         return dict(kept)
 
     def doginal_index(self):

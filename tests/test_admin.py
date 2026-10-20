@@ -216,6 +216,12 @@ def test_the_ords_tab_lists_each_chain_with_its_official_start_and_saves_its_mod
     assert app.get("/admin/api/ords", headers=EDGE).status_code != 200, "never shown to a stranger"
     assert "rows" in app.get("/admin/api/operators", headers=LOCAL).json()
     state.set_setting("ord_index:main", None)
+    # How much of the machine (2026-10-20): full or half, by default from its cores.
+    assert app.post("/admin/api/ords", headers={**LOCAL, **WRITE}, json={"pace": "fast"}).status_code == 400
+    assert app.post("/admin/api/ords", headers={**LOCAL, **WRITE}, json={"pace": "half"}).json()["pace"] == "half"
+    said = app.get("/admin/api/ords", headers=LOCAL).json()
+    assert said["pace"] == "half" and said["cores"] >= 1 and 'id="ordpace"' in page.text
+    state.set_setting("ord_pace", None)
 
 
 def test_the_first_operator_signs_up_with_the_offered_fruit_at_the_machine(public):

@@ -311,6 +311,12 @@
     <thead><tr><th>Chain</th><th>Index</th><th>Starts at</th><th>Indexed</th><th>Inscriptions</th><th>Now</th></tr></thead>
     <tbody id="ordrows"><tr><td colspan="6" class="muted">Loading&hellip;</td></tr></tbody>
   </table></div>
+  <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
+    <label class="muted" for="ordpace">How much of this machine:</label>
+    <select id="ordpace" style="min-width:12em;font-size:16px">
+      <option value="full">All of it (fastest)</option><option value="half">Half (keeps pages quick)</option></select>
+    <span class="muted" id="ordcores"></span>
+  </div>
   <span class="muted" id="ordsaid"></span>
 </section>
 </div>
@@ -1001,6 +1007,8 @@ section.panel h2{margin-top:0}
     fetch('/admin/api/ords', {headers: {'Accept': 'application/json'}, cache: 'no-store'}).then(function (r) { return r.json(); })
       .then(function (d) {
         var tb = $('ordrows'); tb.textContent = '';
+        if (document.activeElement !== $('ordpace')) $('ordpace').value = d.pace;
+        $('ordcores').textContent = d.cores + ' CPU cores here';
         (d.rows || []).forEach(function (r) {
           var tr = document.createElement('tr');
           var name = text('td', r.title + ' \u00b7 ' + r.label); name.className = 'ordwhat'; tr.appendChild(name);
@@ -1043,6 +1051,11 @@ section.panel h2{margin-top:0}
         }
       }).catch(function () { $('ordrows').textContent = 'Could not read the ord indexes.'; });
   }
+  $('ordpace').onchange = function () {
+    call('/admin/api/ords', {pace: $('ordpace').value})
+      .then(function (j) { $('ordsaid').textContent = j.pace === 'full' ? 'All of this machine.' : 'Half of this machine.'; })
+      .catch(function (e) { $('ordsaid').textContent = e.message; });
+  };
   function loadOperators() {
     fetch('/admin/api/operators', {headers: {'Accept': 'application/json'}, cache: 'no-store'}).then(function (r) { return r.json(); })
       .then(function (d) {

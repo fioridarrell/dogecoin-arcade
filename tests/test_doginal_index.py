@@ -408,3 +408,17 @@ def test_a_helper_says_how_many_it_found_in_the_chunks_it_read(tmp_path):
         helper.step()
     assert helper.status()["walk"] is None
     assert helper.status()["found"] == 3, "births at blocks 0, 3 and 6 of the eight"
+
+
+def test_a_fast_machine_goes_straight_on_and_a_small_one_rests(tmp_path, monkeypatch):
+    """2026-10-20: a test machine "is a much faster machine. It shouldn't be pacing with the other one"."""
+    chain = _busy_chain(8)
+    pace = ["full"]
+    index = dx.DoginalIndex(tmp_path / "p.sqlite", lambda: chain, lambda: "help", pace=lambda: pace[0])
+    assert index.step() < 0.1, "full: no rest"
+    pace[0] = "half"
+    assert index.step() >= 0.5, "half: rests as long as it worked"
+    monkeypatch.setattr("os.cpu_count", lambda: 20)
+    assert dx.default_pace() == "full"
+    monkeypatch.setattr("os.cpu_count", lambda: 4)
+    assert dx.default_pace() == "half"

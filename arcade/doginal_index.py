@@ -64,6 +64,16 @@ PROGRESS_EVERY = 10              # blocks between two progress words
 #: Undo kept for this many blocks back, so a reorg rolls the walker back instead of stopping it.
 UNDO_BLOCKS = 300
 MODES = ("walk", "help", "off")
+#: How much of the machine the indexes use: "half" rests as long as each pass took, "full" never rests.
+PACES = ("full", "half")
+#: A machine with at least this many CPU cores goes full speed unless told otherwise; a small one (.25 has 4, and
+#: serves the live site) takes half.
+FULL_FROM_CORES = 8
+
+
+def default_pace() -> str:
+    import os
+    return "full" if (os.cpu_count() or 1) >= FULL_FROM_CORES else "half"
 
 
 # --------------------------------------------------------------------------- reading a block
@@ -567,8 +577,10 @@ class DoginalIndex:
     """The thread's work: walk or help, a little at a time, and what the mesh hears and says (DxShare)."""
 
     def __init__(self, path: Path, rpc_factory: Callable[[], Any] | None, mode: Callable[[], str],
-                 own_core: Callable[[], bool] = lambda: True, net: str = "doge", mweb: bool = False):
+                 own_core: Callable[[], bool] = lambda: True, net: str = "doge", mweb: bool = False,
+                 pace: Callable[[], str] | None = None):
         self.net = net
+        self.pace = pace or default_pace
         self.base = STARTS.get(net, BASE) if net != "doge" else BASE
         self.taproot, self.mweb = net in TAPROOT, mweb
         self.store = Store(path, self.base)
@@ -609,7 +621,10 @@ class DoginalIndex:
             log.debug("doginal index pass failed", exc_info=True)
             return 30.0
         self._tell_new_chunks()
-        return max(0.5, time.monotonic() - started)
+        took = time.monotonic() - started
+        # Half the machine: rest as long as the work took. Full: straight on (2026-10-20: a test machine "is a much
+        # faster machine. It shouldn't be pacing with the other one").
+        return 0.05 if self.pace() == "full" else max(0.5, took)
 
     def _help(self, rpc, budget: float) -> None:
         now = time.time()
