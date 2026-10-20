@@ -11013,7 +11013,9 @@ def create_app(state: AppState) -> FastAPI:
                 owner = state.token_index(chain).address_of(wanted) or ""
             except Exception:                 # noqa: BLE001 -- no index yet
                 owner = ""
-            if owner and owner != address:
+            # Except this arcade's operator's fruit, which the fruit stand holds on the chain until it sends it here
+            # (arcade/fruit.py, mesh/fruitshare.py; 2026-10-20).
+            if owner and owner != address and wanted != _fruit_here(request):
                 raise ValueError(f"@{wanted} is claimed on the chain by another address")
             register = state.accounts()
             register.join(pubkey)         # a seat, and it may say there is none

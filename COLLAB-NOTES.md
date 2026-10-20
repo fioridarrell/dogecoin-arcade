@@ -126,6 +126,9 @@ names asks its links; a holder promises it the next free fruit for 30 days (sett
 that machine, /join fills the fruit in (editable); signing up with it makes that account the operator and asks
 the holder to transfer the name (the page skips its own claim and waits for the name to arrive). Please don't
 claim fruit names for tests on P test.
+SadFrog: merged your team/signin-hardening (PR #6) on top, with one exception added to your new claimed-name check
+in /signup: the operator's offered fruit passes it, because the fruit stand holds that name on the chain until it
+sends it (test_admin.py::test_the_offered_fruit_passes_the_claimed_name_check_and_nothing_else_does).
 
 ### 2026-10-20 · the operator's side · branch claude/doginal-index: our own Doginals index, shared over the mesh
 

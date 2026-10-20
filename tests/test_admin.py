@@ -298,3 +298,43 @@ def test_a_core_here_with_its_wallet_switched_off_is_held_with_the_arcades_own_k
     borrowed = Chain("ltctest", wallet=True)
     borrowed.borrowed = True
     assert AppState.keyed(holder, borrowed) is True
+
+
+def test_the_offered_fruit_passes_the_claimed_name_check_and_nothing_else_does(public, monkeypatch):
+    """SadFrog's /signup refuses a name the chain says another address holds (team/signin-hardening). The operator's
+    offered fruit is held on the chain by the fruit stand until it is sent, so it alone goes through (2026-10-20)."""
+    from nacl.signing import SigningKey
+    from arcade.script import b58check_encode, hash160
+    app, state = public
+    state.set_setting("fruit_offer", {"name": "papaya", "from": "holder-node"})
+    held = {"papaya": "fruit-stand-address", "someone": "their-address"}
+
+    class Index:
+        def address_of(self, tag):
+            return held.get(tag)
+
+        def __getattr__(self, name):
+            raise AttributeError(name)
+    monkeypatch.setattr(type(state), "token_index", lambda self, chain: Index())
+
+    class Mesh:
+        class fruitshare:
+            @staticmethod
+            def ask_to_give(to):
+                pass
+    was = getattr(state, "mesh", None)
+    state.mesh = Mesh()
+
+    def signup(tag):
+        key = SigningKey.generate()
+        address = b58check_encode(state.messaging.params.pubkeyhash_version, hash160(b"\x02" + key.verify_key.encode()))
+        return app.post("/signup", headers=LOCAL, json={"tag": tag, "pubkey": key.verify_key.encode().hex(),
+                                                        "address": address, "blob": {"sealed": "x"}})
+    try:
+        refused = signup("someone")
+        assert refused.status_code == 400 and "claimed on the chain" in refused.json()["detail"]
+        took = signup("papaya")
+        assert took.status_code == 200 and took.json()["fruit"] is True, took.text
+    finally:
+        state.mesh = was
+        state.set_setting("fruit_offer", None)
