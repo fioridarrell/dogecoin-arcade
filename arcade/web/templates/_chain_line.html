@@ -9,7 +9,7 @@
 {% set icons = coin_icons() %}
 <div class="coinpick-wrap {{ 'is-main' if chain.is_mainnet }}">
 <div class="coinpick" role="group" aria-label="Which chain to create on">
-  {% for m in chain_menu() %}
+  {% for m in chain_menu(account_side=True) %}{# the Wallet card's order: the tag chain first #}
   {% set on = m.network == chain.network %}
   {% set name = m.label ~ ': ' ~ ('real ' ~ m.coin if m.mainnet else m.coin) %}
   {% if m.ready %}
