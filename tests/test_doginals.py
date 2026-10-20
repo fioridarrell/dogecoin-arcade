@@ -95,3 +95,52 @@ def test_a_doginal_send_is_refused_unless_the_coin_holds_exactly_it(tmp_path, mo
     monkeypatch.setattr(funding, "GUARD", g)
     with pytest.raises(funding.FundingError):   # two inscriptions on one coin: never sent together by accident
         funding.build_doginal_send(None, NETWORKS["doge"], me, coin, T1 + "i0", them, rate=100_000_000)
+
+
+class _Chain:
+    """A fake Dogecoin node: `hops` transfers of one 0.001 DOGE coin after the Doginal was inscribed."""
+
+    def __init__(self, hops):
+        self.txs = {"pp" * 32: {"txid": "pp" * 32, "vin": [{"coinbase": "00"}], "vout": [{"n": 0, "value": 0.001}]},
+                    "g0" * 32: {"txid": "g0" * 32, "vin": [{"txid": "pp" * 32, "vout": 0,
+                                                           "scriptSig": {"hex": "036f7264" + "00" * 8}}],
+                                "vout": [{"n": 0, "value": 0.001}]}}
+        prev = "g0" * 32
+        for n in range(1, hops + 1):
+            t = f"{n:04x}" * 16
+            self.txs[t] = {"txid": t, "vin": [{"txid": prev, "vout": 0, "scriptSig": {"hex": "47"}}],
+                           "vout": [{"n": 0, "value": 0.001}]}
+            prev = t
+        self.last = prev
+
+    def call(self, method, txid, *_):
+        assert method == "getrawtransaction"
+        return self.txs[txid]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+
+def test_a_doginal_many_transfers_from_its_inscription_is_still_found(tmp_path):
+    """2026-10-20: Doginal Frog #10000 reached @dondogecon after years of changing hands; the walk back gave up at
+    40 steps, its coin was filed "unknown" and the wallet never showed it."""
+    chain = _Chain(60)
+    g = doginals.Doginals(tmp_path / "d.sqlite", fetch=lambda t: {"txid": t, "inscriptions": []},
+                          rpc_factory=lambda: chain)
+    assert g.held(chain.last) == {0: [{"id": "g0" * 32 + "i0", "offset": 0}]}
+
+
+def test_a_coin_that_could_not_be_read_is_asked_again_later(tmp_path, monkeypatch):
+    chain = _Chain(30)
+    g = doginals.Doginals(tmp_path / "d.sqlite", fetch=lambda t: {"txid": t, "inscriptions": []},
+                          rpc_factory=lambda: chain)
+    monkeypatch.setattr(doginals, "TRACE_TXS", 5)
+    monkeypatch.setattr(doginals.trace, "__defaults__", (None, 5))
+    assert g.held(chain.last)[0][0].get("unknown"), "the walk ran out: kept out of sends, named nothing"
+    monkeypatch.setattr(doginals.trace, "__defaults__", (None, 600))
+    assert g.held(chain.last)[0][0].get("unknown"), "asked again only after UNKNOWN_RETRY"
+    monkeypatch.setattr(doginals, "UNKNOWN_RETRY", 0)
+    assert g.held(chain.last) == {0: [{"id": "g0" * 32 + "i0", "offset": 0}]}, "and then it is found"

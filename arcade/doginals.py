@@ -95,9 +95,12 @@ class Doginals:
     def held(self, txid: str) -> dict[int, list[dict]]:
         """{vout: [{"id", "offset"}]} for one transaction; {} when nothing is inscribed on any of its outputs."""
         with self._lock, self._db() as db:
-            row = db.execute("SELECT held FROM tx2 WHERE txid=?", (txid,)).fetchone()
+            row = db.execute("SELECT held, at FROM tx2 WHERE txid=?", (txid,)).fetchone()
         if row:
-            return {int(k): v for k, v in json.loads(row[0]).items()}
+            kept = {int(k): v for k, v in json.loads(row[0]).items()}
+            unsure = any(i.get("unknown") for on in kept.values() for i in on)
+            if not unsure or time.time() - float(row[1]) < UNKNOWN_RETRY:
+                return kept
         try:
             said = self.fetch(txid) or {}
         except Exception as exc:                            # noqa: BLE001
@@ -248,7 +251,12 @@ def _inputs_of(raw: bytes) -> list[tuple[str, int, bytes]]:
 #: through outputs this small, since an inscription that went into a big coin went with that coin's owner's consent.
 TRACE_MAX = 10_000_000          # koinu (0.1 DOGE)
 #: How far back one output is followed before it is left as "cannot tell" (protected, never called clean).
-TRACE_TXS = 40
+# 2026-10-20: 40 was too few -- a Doginal Frog that had changed hands for years (#10000, sent to @dondogecon from a
+# wallet off the arcade) took ~60 steps, its coin was filed "unknown" and the wallet never showed it. A walk is a
+# getrawtransaction a step and is done once per transaction (kept in tx2).
+TRACE_TXS = 600
+#: An answer that could not name what a small coin carries is asked again after this long, not kept for good.
+UNKNOWN_RETRY = 600
 
 
 class TraceIncomplete(Exception):
