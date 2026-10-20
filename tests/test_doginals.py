@@ -133,14 +133,23 @@ def test_a_doginal_many_transfers_from_its_inscription_is_still_found(tmp_path):
     assert g.held(chain.last) == {0: [{"id": "g0" * 32 + "i0", "offset": 0}]}
 
 
-def test_a_coin_that_could_not_be_read_is_asked_again_later(tmp_path, monkeypatch):
+def test_a_walk_too_long_for_one_ask_goes_on_from_where_it_stopped(tmp_path, monkeypatch):
+    """2026-10-20: "Some doginals are going to be deeper" -- no depth limit: each ask walks TRACE_TXS further
+    from where the last one stopped, and the coin is "unknown" (kept out of sends) only until the walk is done."""
     chain = _Chain(30)
+    calls = []
+    real = chain.call
+    chain.call = lambda *a: (calls.append(a[1]), real(*a))[1]
     g = doginals.Doginals(tmp_path / "d.sqlite", fetch=lambda t: {"txid": t, "inscriptions": []},
                           rpc_factory=lambda: chain)
-    monkeypatch.setattr(doginals, "TRACE_TXS", 5)
-    monkeypatch.setattr(doginals.trace, "__defaults__", (None, 5))
+    monkeypatch.setattr(doginals.trace, "__defaults__", (None, 8, None))     # 8 steps an ask
     assert g.held(chain.last)[0][0].get("unknown"), "the walk ran out: kept out of sends, named nothing"
-    monkeypatch.setattr(doginals.trace, "__defaults__", (None, 600))
     assert g.held(chain.last)[0][0].get("unknown"), "asked again only after UNKNOWN_RETRY"
     monkeypatch.setattr(doginals, "UNKNOWN_RETRY", 0)
-    assert g.held(chain.last) == {0: [{"id": "g0" * 32 + "i0", "offset": 0}]}, "and then it is found"
+    asks = 1
+    while g.held(chain.last)[0][0].get("unknown"):
+        asks += 1
+        assert asks < 10, "the walk never finished"
+    assert g.held(chain.last) == {0: [{"id": "g0" * 32 + "i0", "offset": 0}]}, "found, 31 steps deep"
+    assert asks == 3, asks                                   # 32 steps at 8 an ask: the 4th walk finds it
+    assert len(calls) < 31 + 4 * 3, f"each ask went on from where the last stopped ({len(calls)} reads)"
