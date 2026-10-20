@@ -1031,6 +1031,57 @@ def create_app(state: AppState) -> FastAPI:
         return RedirectResponse(f"{where}{'&' if '?' in where else '?'}"
                                 f"held={token}", status_code=303)
 
+    # --- the scripts and the stylesheet every page loads, kept by the browser (2026-10-20: "measure the load
+    # times ... offer solutions"; every tab switch downloaded ~250 KB of the same code again). Each is asked for as
+    # "/wallet.js?v=<fingerprint of what is served>": that exact address is kept for good, any change makes a new
+    # address, and the pages themselves are still never cached -- so a browser can never run an old copy (the reason
+    # these were no-store: a stale copy of the code that derives somebody's keys has no acceptable failure mode).
+    ASSETS = {"/wallet.js": "wallet_js.js", "/coins.js": "coins.js", "/signin.js": "signin.js",
+              "/messaging.js": "messaging_js.js", "/qrscan.js": "qrscan.js", "/base.css": "base_css.css"}
+    _asset_kept: dict = {}
+
+    def _assets_mark() -> str:
+        """ONE fingerprint for all of them together: they import one another (in a circle, too), and a page must never
+        load two copies of a module under two addresses -- so any change to any of them changes every address."""
+        stamps = tuple((TEMPLATE_DIR / f).stat().st_mtime_ns for f in ASSETS.values())
+        kept = _asset_kept.get("")
+        if kept and kept[0] == stamps:
+            return kept[1]
+        h = hashlib.sha256()
+        for f in ASSETS.values():
+            h.update((TEMPLATE_DIR / f).read_bytes())
+        mark = h.hexdigest()[:12]
+        _asset_kept.clear()
+        _asset_kept[""] = (stamps, mark)
+        return mark
+
+    def _asset(path: str) -> tuple[str, str]:
+        """(body, fingerprint) of one asset, its references to the others versioned too."""
+        mark = _assets_mark()
+        kept = _asset_kept.get(path)
+        if kept and kept[0] == mark:
+            return kept[1], mark
+        body = _versioned((TEMPLATE_DIR / ASSETS[path]).read_text())
+        _asset_kept[path] = (mark, body)
+        return body, mark
+
+    def _versioned(text: str) -> str:
+        """Every quoted reference to an asset ("/wallet.js", '/coins.js', `/signin.js`) as its fingerprinted address."""
+        mark = None
+        for path in ASSETS:
+            if path not in text:
+                continue
+            mark = mark or _assets_mark()
+            for q in ('"', "'", "`"):
+                text = text.replace(f"{q}{path}{q}", f"{q}{path}?v={mark}{q}")
+        return text
+
+    def _asset_response(request: Request, path: str) -> Response:
+        body, mark = _asset(path)
+        kind = "text/css" if path.endswith(".css") else "application/javascript"
+        keep = ("public, max-age=31536000, immutable" if request.query_params.get("v") == mark else "no-store")
+        return Response(body, media_type=kind, headers={"Cache-Control": keep})
+
     def render(request: Request, template: str, **context: Any) -> HTMLResponse:
         """Render a page, never from a cache.
 
@@ -1094,6 +1145,10 @@ def create_app(state: AppState) -> FastAPI:
         # has since gone. A page painted mid-send and restored from cache was
         # part of how an interface got stuck looking busy against an idle server.
         response.headers["Cache-Control"] = "no-store, must-revalidate"
+        # The scripts and the stylesheet by their fingerprinted addresses, which the browser keeps (2026-10-20).
+        body = _versioned(response.body.decode("utf-8"))
+        response.body = body.encode("utf-8")
+        response.headers["content-length"] = str(len(response.body))
         # Only this wallet may put one of its pages in a frame. The approval
         # pop-up under a running inscription is one, and that is the reason
         # for the rule: an inscribed page could otherwise frame the same
@@ -10102,11 +10157,9 @@ def create_app(state: AppState) -> FastAPI:
                         headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
     @app.get("/wallet.js")
-    def wallet_js():
+    def wallet_js(request: Request):
         """Signing up and signing in, as a person does it (templates/wallet_js.js)."""
-        return Response((TEMPLATE_DIR / "wallet_js.js").read_text(),
-                        media_type="application/javascript",
-                        headers={"Cache-Control": "no-store"})
+        return _asset_response(request, "/wallet.js")
 
     @app.get("/node-wallet.js")
     def node_wallet_js():
@@ -10123,37 +10176,33 @@ def create_app(state: AppState) -> FastAPI:
                         headers={"Cache-Control": "no-store"})
 
     @app.get("/messaging.js")
-    def messaging_js():
+    def messaging_js(request: Request):
         """Opening and sealing messages in the browser (templates/messaging_js.js)."""
-        return Response((TEMPLATE_DIR / "messaging_js.js").read_text(),
-                        media_type="application/javascript",
-                        headers={"Cache-Control": "no-store"})
+        return _asset_response(request, "/messaging.js")
 
     @app.get("/qrscan.js")
-    def qrscan_js():
+    def qrscan_js(request: Request):
         """Scanning a QR code with the camera (templates/qrscan.js; the reader is vendor/jsQR.js)."""
-        return Response((TEMPLATE_DIR / "qrscan.js").read_text(),
-                        media_type="application/javascript",
-                        headers={"Cache-Control": "no-store"})
+        return _asset_response(request, "/qrscan.js")
 
     @app.get("/coins.js")
-    def coins_js():
+    def coins_js(request: Request):
         """The browser's coin half (templates/coins.js)."""
-        return Response((TEMPLATE_DIR / "coins.js").read_text(),
-                        media_type="application/javascript",
-                        headers={"Cache-Control": "no-store"})
+        return _asset_response(request, "/coins.js")
 
     @app.get("/signin.js")
-    def signin_js():
+    def signin_js(request: Request):
         """The browser's half of the login (templates/signin.js).
 
-        Not cached. It is small, and a stale copy of the code that derives
-        somebody's keys is the one kind of staleness with no acceptable
-        failure mode.
+        A stale copy of the code that derives somebody's keys is the one kind of staleness with no acceptable failure
+        mode: so it is kept only under its fingerprinted address (ASSETS), which changes whenever it does.
         """
-        body = (TEMPLATE_DIR / "signin.js").read_text()
-        return Response(body, media_type="application/javascript",
-                        headers={"Cache-Control": "no-store"})
+        return _asset_response(request, "/signin.js")
+
+    @app.get("/base.css")
+    def base_css(request: Request):
+        """The style every page shares (templates/base_css.css, out of base.html since 2026-10-20: 45 KB a page)."""
+        return _asset_response(request, "/base.css")
 
     @app.get("/join", response_class=HTMLResponse)
     def join_page(request: Request):
@@ -26452,7 +26501,8 @@ def create_app(state: AppState) -> FastAPI:
                     log.debug("the coins held on %s could not be read", c.network, exc_info=True)
             out.append({"key": f"{c.network}-coin", "kind": "coin", "net": c.network,
                         "name": NETWORKS[c.network].coin, "divisible": True,
-                        "label": f"{NETWORKS[c.network].coin} \u00b7 {c.title or c.net}",
+                        # The chain's own name says the coin (2026-10-20: "PEP \u00b7 Pepecoin (PEP) \u2013 Main" said it twice).
+                        "label": c.title or f"{NETWORKS[c.network].coin} \u00b7 {c.net}",
                         "mine": bool(held), "held": held})
         if viewer == "nobody" and not everything:
             return out

@@ -93,7 +93,7 @@ PUBLIC_PAGES = frozenset({
     "/push/key",              # the key a browser subscribes to this node's pushes with
     "/account/push/news",     # what woke the phone: who wrote, never what (signed in)
     "/admin/login",           # the remote admin password page (rate-limited)
-    "/signin.js",
+    "/signin.js", "/base.css",
     "/coins.js",
     "/wallet.js",
     "/messaging.js",

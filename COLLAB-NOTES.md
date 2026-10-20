@@ -88,6 +88,24 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-20 · the operator's side · faster pages: kept scripts and style, no picture loop, search boxes
+
+The operator: "measure the load times ... offer solutions", then "Yep" to the first two, and "these should be auto
+complete search boxes rather than a drop-down with a super long list" (Exchange -> Trade any pair).
+- wallet.js, coins.js, signin.js, messaging.js, qrscan.js and the new /base.css (base.html's 45 KB style,
+  now templates/base_css.css) are asked for as "<path>?v=<one fingerprint of all six>". app.py ASSETS:
+  render() and the scripts themselves rewrite every quoted "/wallet.js" etc. That exact address is kept
+  for good (immutable); anything else stays no-store. One fingerprint for all six, because they import one
+  another (in a circle too) and a page must never load two copies of a module. Pages stay no-store. Only
+  `[hidden]{display:none !important}` stays inline. Please keep using "/wallet.js" etc.; the rewrite adds
+  the fingerprint. New static files go in ASSETS.
+- base.html's picture screening retried a picture with no verdict every 4 s forever (70 requests and
+  810 KB on the Exchange): now 3 tries at most (5, 15, 45 s), reset when new pictures arrive.
+- Trade any pair: an empty box on tap, the current choice as its placeholder, at most 8 to start
+  (held first, coins first), every typed word must match, 12 at most, "N more, type to narrow". Coins
+  are labelled by the chain's own name ("Pepecoin (PEP) – Main"), no longer "PEP · Pepecoin (PEP) – Main".
+- Earlier today: .25's Dogecoin index is read only. Walking it starved the site (see the ord-rules entry).
+
 ### 2026-10-20 · the operator's side · ord indexes follow the official rules; DRC-20 / PRC-20; names (rules 2)
 
 The operator: match wonky-ord (all ords are in the index), index DRC-20 and PRC-20 balances, and index the "p":"dns"

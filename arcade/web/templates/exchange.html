@@ -780,12 +780,25 @@ document.addEventListener('click', function (ev) {
         function choose(o) {
           sel.value = o.value; q.value = o.textContent; open(false);
           sel.dispatchEvent(new Event('change', {bubbles: true}));
+          q.blur();                       // picked: let go, so a phone puts its keyboard away and the next tap searches
         }
+        // Type to search (2026-10-20: "auto complete search boxes rather than a drop-down with a super long
+        // list"): empty, a short start -- what the reader holds on their own half, coins first otherwise -- and then
+        // only what every typed word matches, a dozen at most.
         function fill() {
-          var words = q.value.trim().toLowerCase(), opts = [].slice.call(sel.options).filter(function (o) {
-            return allowed(sel, o) && (!words || q.value === shown(sel)
-              || (o.textContent + ' ' + o.value).toLowerCase().indexOf(words) >= 0);
+          var words = q.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+          var opts = [].slice.call(sel.options).filter(function (o) {
+            var text = (o.textContent + ' ' + o.value + ' ' + (o.dataset.name || '')).toLowerCase();
+            return allowed(sel, o) && words.every(function (w) { return text.indexOf(w) >= 0; });
           });
+          if (!words.length) {
+            opts.sort(function (a, b) {
+              return (b.dataset.mine === '1') - (a.dataset.mine === '1')
+                || (a.dataset.kind === 'coin' ? 0 : 1) - (b.dataset.kind === 'coin' ? 0 : 1);
+            });
+          }
+          var cap = words.length ? 12 : 8, more = opts.length - cap;
+          opts = opts.slice(0, cap);
           list.innerHTML = ''; at = -1;
           if (!opts.length) {
             var none = document.createElement('span'); none.className = 'pick-none';
@@ -793,7 +806,7 @@ document.addEventListener('click', function (ev) {
                                             : 'Nothing matches.';
             list.appendChild(none);
           }
-          opts.slice(0, 60).forEach(function (o) {
+          opts.forEach(function (o) {
             var row = document.createElement('button'); row.type = 'button'; row.className = 'pick-row';
             row.setAttribute('role', 'option'); row.dataset.value = o.value;
             var name = document.createElement('span'); name.textContent = o.textContent; row.appendChild(name);
@@ -804,11 +817,19 @@ document.addEventListener('click', function (ev) {
             row.addEventListener('mousedown', function (e) { e.preventDefault(); choose(o); });
             list.appendChild(row);
           });
+          if (more > 0) {
+            var hint = document.createElement('span'); hint.className = 'pick-none';
+            hint.textContent = more + ' more \u2014 type to narrow it down';
+            list.appendChild(hint);
+          }
           open(true);
         }
-        q.addEventListener('focus', function () { q.select(); fill(); });
+        // Emptied to type into; what is chosen now stays in view, greyed, until something else is picked.
+        q.addEventListener('focus', function () { q.placeholder = shown(sel) || 'Search a coin or token'; q.value = ''; fill(); });
         q.addEventListener('input', function (e) { e.stopPropagation(); fill(); });
-        q.addEventListener('blur', function () { open(false); q.value = shown(sel); });
+        // A tap on a box that already has focus (and shows the choice again) searches afresh too.
+        q.addEventListener('click', function () { if (list.hidden || q.value === shown(sel)) { q.value = ''; fill(); } });
+        q.addEventListener('blur', function () { open(false); q.value = shown(sel); q.placeholder = 'Search a coin or token'; });
         q.addEventListener('keydown', function (e) {
           var rows = list.querySelectorAll('.pick-row');
           if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
