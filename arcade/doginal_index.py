@@ -740,7 +740,8 @@ class DoginalIndex:
             walk = {"next": nxt, "tip": self.tip, "left": max(0, self.tip - SETTLE - nxt + 1),
                     "inscriptions": counts[0], "closed": counts[1], "burned": counts[2],
                     "rate": round(self.walker.rate, 2), "error": self.walker.error}
-        return {"net": self.net, "mode": self.mode(), "base": self.base, "source": SOURCES.get(self.net, ""), "chunk": CHUNK, "tip": self.tip, "ready": ready,
+        found = self.store.q("SELECT COALESCE(SUM(n), 0) FROM block")[0][0]
+        return {"net": self.net, "found": found, "mode": self.mode(), "base": self.base, "source": SOURCES.get(self.net, ""), "chunk": CHUNK, "tip": self.tip, "ready": ready,
                 "agreed": agreed, "one": one, "none": max(0, ready - len(per)), "differ": differ, "differs": differs,
                 "lease": ({"chunk": mine["c"], "blocks": list(chunk_range(mine["c"], self.base)), "at": mine["at"],
                            "done": mine["at"] - chunk_range(mine["c"], self.base)[0]} if mine else None),

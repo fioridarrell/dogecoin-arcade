@@ -399,3 +399,12 @@ def test_each_chain_starts_at_its_official_first_inscription_height(tmp_path):
     assert ltc.base == 2_424_429 and ltc.taproot and ltc.walker.mweb
     assert dx.chunk_range(0, ltc.base) == (2_424_429, 2_424_429 + dx.CHUNK)
     assert ltc.status()["source"].startswith("ord-litecoin")
+
+
+def test_a_helper_says_how_many_it_found_in_the_chunks_it_read(tmp_path):
+    chain = _busy_chain(8)
+    helper = dx.DoginalIndex(tmp_path / "h.sqlite", lambda: chain, lambda: "help")
+    for _ in range(4):
+        helper.step()
+    assert helper.status()["walk"] is None
+    assert helper.status()["found"] == 3, "births at blocks 0, 3 and 6 of the eight"

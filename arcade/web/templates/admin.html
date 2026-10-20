@@ -1021,7 +1021,10 @@ section.panel h2{margin-top:0}
           if (w) line.push(pct(r.walked_pct) + ' walked here (block ' + num(w.next) + ' of ' + num(r.tip) + ')');
           if (r.mode !== 'off') line.push(pct(r.agreed_pct) + ' agreed by two arcades (' + num(r.agreed) + ' of ' + num(r.ready) + ' chunks)');
           tr.appendChild(lines(line));
-          tr.appendChild(text('td', w ? num(w.inscriptions) : '\u2014'));
+          // A walker knows every inscription it passed; a helper counts the births in the chunks it read (2026-10-20:
+          // a test machine showed a dash and looked as if it had found nothing).
+          tr.appendChild(w ? text('td', num(w.inscriptions))
+                           : r.found ? lines([num(r.found), 'in chunks read here']) : text('td', '\u2014'));
           var bits = [];
           if (r.mode === 'off') bits.push('off');
           if (r.lease) bits.push('reading chunk ' + num(r.lease.chunk) + ': ' + r.lease.done + ' of ' + r.chunk + ' blocks' + (r.help_rate ? ', ' + r.help_rate + ' blocks/s' : ''));
