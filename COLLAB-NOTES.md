@@ -88,6 +88,27 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-21 · the operator's side · idea parked for later: trace each inscription to where it is, in parallel
+
+The operator: "Can't we split up the walk work so that the identified TXIDs that are an ORD are each traced to their current
+location". Parked ("will come back to it"). The thinking so far:
+- **Sound part:** an inscription's moves do not depend on other inscriptions -- where it lands after a spend depends
+  only on the spending transaction and its inputs' values -- so every inscription could be traced on its own, side by
+  side, handed out like chunks.
+- **The missing piece:** "who spent this coin?" Dogecoin Core cannot say (it knows unspent coins, not their spenders),
+  and only reading every input of every block finds out -- which is what the walk does. Backward tracing (a coin back
+  to its inscription's start: doginals.trace) is easy; forward is not.
+- **How it could be split anyway:** (1) every chunk scanner keeps a compact "spent here?" filter of the coins spent in
+  its chunks (a few hundred MB for all of Dogecoin, across the mesh, instead of ~96 GB of full notes); (2) trace every
+  inscription in parallel, each hop = ask the filters which chunk spent the coin, read that one block; (3) settle the
+  two rules that do depend on others afterwards -- re-inscription (a birth counts only when nothing sits on input 0's
+  first koinu) and inscriptions spent to the fee (they follow the coinbase) -- as a check-and-fix pass; (4) prove it on
+  PEP Main against the walked index, inscription by inscription, before Dogecoin.
+- **The catch:** a busy wallet's inscription can hop thousands of times (a block read per hop). Several days' work.
+- **First, cheaper:** profile why a test machine walks 2023 Dogecoin at ~5 blocks/s (input values asked one transaction at
+  a time? block reads? Python?), batch the input-value lookups, and shrink the notes so they can be kept for the whole
+  chain. And the walk keeps every inscription's place in memory (~17 GB on a test machine): compact it or look up on demand.
+
 ### 2026-10-21 · the operator's side · import any wallet (a private key or a 12-word phrase), several named wallets a coin
 
 The operator (plan item 18): "We should be able to import any with private key or 12 word seed phrase, even if that wallet
