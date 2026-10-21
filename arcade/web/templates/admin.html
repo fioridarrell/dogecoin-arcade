@@ -302,28 +302,11 @@
 <div class="admintab" data-tab="ords" aria-label="Ords">
 <section class="panel" id="ords">
   <h2>Ords</h2>
-  <p class="muted" style="margin-top:0">Every inscription on each chain, read from its blocks by the arcades themselves,
-    from the first block that chain&rsquo;s ord indexer starts at. The chain is cut into chunks of 100 blocks, handed
-    out in line: whoever is free takes the next one, so no two arcades scan the same blocks until every chunk has been
-    scanned once. Then the arcades audit each other&rsquo;s chunks: two that agree make a chunk legitimate, and three,
-    four or more raise its confidence. A chunk whose arcade goes quiet for 10 minutes goes to the next one.
-    <b>Hold the full index</b> keeps every inscription, its owner and every token balance here: it stitches the
-    chunks&rsquo; notes together in order (scanned by its own spare cores or fetched from the arcades that scanned
-    them), and when it is far behind it fetches the whole index from the arcades that hold it, a piece from each.
-    <b>Help scan</b> scans chunks for the others. <b>Read only</b> keeps no index and asks an arcade that holds one.</p>
-  <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap;margin:4px 0 10px">
-    <label for="ordcores"><b>Cores for ords:</b></label>
-    <input autocomplete="off" type="number" id="ordcores" min="1" step="1" inputmode="numeric" style="width:5.5em;font-size:16px">
-    <span class="muted" id="ordmachine"></span>
-    <button type="button" class="small" id="ordcoressave">Save</button>
-  </div>
-  <p class="muted" style="margin:0 0 10px;font-size:.84rem">Each core scans a chunk of its own, side by side. Holding
-    the index, one core stitches and the rest scan the chunks in line ahead of it. One core on a small machine rests
-    between passes, so the arcade&rsquo;s pages stay quick.</p>
-  <div class="tablewrap"><table class="admintable">
-    <thead><tr><th>Chain</th><th>Index</th><th>Starts at</th><th>Indexed</th><th>Inscriptions</th><th>Agreed</th><th>On disk</th><th>Now</th></tr></thead>
-    <tbody id="ordrows"><tr><td colspan="8" class="muted">Loading&hellip;</td></tr></tbody>
-  </table></div>
+  {# 2026-10-20 (the operator): "update the admin interface to be more descriptive and helpful to the admin" -- a coin to pick
+     the chain, then that chain's index in plain words: how complete, what needs you, the ring of arcades holding it,
+     how this arcade takes part, and what it costs this machine. Mock-up first (ords.html), then this. #}
+  <div class="ordcoins" id="ordcoins" role="tablist" aria-label="Chain"></div>
+  <div id="ordchain"><p class="muted">Loading&hellip;</p></div>
   <span class="muted" id="ordsaid"></span>
   <h3 style="margin:14px 0 6px">Look up</h3>
   <p class="muted" style="margin-top:0;font-size:.84rem">An inscription id (where it is now), a coin as
@@ -432,6 +415,35 @@ section.panel h2{margin-top:0}
 #ords .admintable td{white-space:normal;vertical-align:top}
 #ords .admintable td.ordwhat{white-space:nowrap}
 #ords select{min-width:6.5em;font-size:16px}
+#ords .ordcoins{display:flex;gap:10px;overflow-x:auto;padding:2px 0 6px}
+#ords .ordcoins button{padding:5px;border-radius:14px;border:2px solid transparent;background:none;flex:none;cursor:pointer}
+#ords .ordcoins button.on{border-color:var(--accent)}
+#ords .ordcoins img{width:42px;height:42px;display:block;border-radius:50%}
+#ords .ordcoins button.off img{opacity:.45}
+#ords .ordtitle{font-weight:700;font-size:1.12rem;margin:6px 0 2px}
+#ords .ordpct{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:12px 0}
+#ords .ordpct>div,#ords .ordcard{border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+#ords .ordpct b{display:block;font-size:1.5rem;line-height:1.2}
+#ords .ordbar{height:8px;border-radius:99px;background:var(--line);overflow:hidden;margin:6px 0 4px}
+#ords .ordbar i{display:block;height:100%}
+#ords .ordattn{border-left:4px solid var(--warn,#b26b00);padding:9px 12px;border-radius:8px;margin:0 0 8px;font-size:.92rem;
+  background:color-mix(in srgb,var(--warn,#b26b00) 9%,transparent)}
+#ords .ordattn.bad{border-color:var(--bad);background:color-mix(in srgb,var(--bad) 9%,transparent)}
+#ords .ordattn.ok{border-color:var(--good,#2f7d4f);background:color-mix(in srgb,var(--good,#2f7d4f) 9%,transparent)}
+#ords .ordcard{margin:12px 0}
+#ords .ordcard h3{margin:0 0 6px;font-size:1rem}
+#ords .ordring svg{width:100%;max-width:400px;display:block;margin:0 auto}
+#ords .ordring text{font:600 11px system-ui,sans-serif;fill:var(--fg)}
+#ords .ordring .sub{font:500 10px system-ui,sans-serif;fill:var(--muted)}
+#ords .ordmodes{display:grid;gap:8px}
+#ords .ordmode{display:flex;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;cursor:pointer}
+#ords .ordmode.on{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 7%,transparent)}
+#ords .ordmode input{margin-top:4px}
+#ords .ordrec{font-size:.72rem;border:1px solid var(--accent);color:var(--accent);border-radius:99px;padding:0 7px;margin-left:6px}
+#ords .ordcost{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+#ords .ordcost>div{border:1px solid var(--line);border-radius:10px;padding:10px}
+#ords .ordcost b{display:block;font-size:1.05rem}
+#ords details.ordmore>summary{cursor:pointer;color:var(--muted);font-size:.9rem}
 #ords .ordline{display:block}
 .quotagrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px 14px;margin-bottom:10px}
 .quotagrid label{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:.9rem}
@@ -1029,98 +1041,254 @@ section.panel h2{margin-top:0}
     return (i ? n.toFixed(n < 10 ? 2 : 1) : n) + ' ' + units[i];
   }
   function lines(items, cls) {
-    var td = document.createElement('td');
+    var td = document.createElement('div');
     if (cls) td.className = cls;
     if (!items.length) td.textContent = '\u2014';
     items.forEach(function (x) { td.appendChild(text('span', x, 'ordline')); });
     return td;
   }
-  function loadOrds() {
-    if (!document.querySelector('.admintab[data-tab="ords"].on')) return;
+  var ORD_PICK = null;
+  try { ORD_PICK = localStorage.getItem('ords.chain'); } catch (e) { /* no storage: first chain */ }
+  var ORD_DATA = null;
+  var ORD_COLORS = ['#c8962a', '#3c8dbc', '#2f9e6e', '#a05cc4', '#d0573c', '#6b8e23'];
+  var ORD_CHOICES = [
+    ['walk', 'Hold the full index', 'Keeps every inscription, who owns it and every token balance, stitched in order from '
+      + 'the chunks every arcade scans. Answers lookups for the arcades that only read. Takes disk (see below) and, on a '
+      + 'big machine, its spare cores scan ahead.'],
+    ['help', 'Help scan', 'Scans chunks of blocks for everyone, in line, and keeps small notes until the holders have '
+      + 'stitched them. No index here. Uses the cores set below.'],
+    ['read', 'Read only', 'Keeps nothing; asks an arcade that holds the index. Costs nothing here.'],
+    ['off', 'Off', 'This arcade takes no part in this chain’s ords.']];
+  function ordName(c) { return c.tag ? '@' + c.tag : (c.me ? 'this arcade' : 'arcade ' + c.node); }
+  function ordEl(tag, cls, html) { var e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; }
+  function ordEsc(t) { var d = document.createElement('div'); d.textContent = String(t); return d.innerHTML; }
+
+  function ordRing(r) {
+    // Every whole copy of the index is a ring (A inside, then B, then C), as long as that copy reaches; the thin ring
+    // inside says how many copies each part has. When the index is cut into stretches (plan item 16), each ring will
+    // hold several arcades' stretches: the drawing is already one arc per holder.
+    var cx = 200, cy = 200, F = 1, R = [100, 128, 156], letters = ['A', 'B', 'C'];
+    var p = function (f, rad) { var a = -Math.PI / 2 + f * 2 * Math.PI; return [cx + rad * Math.cos(a), cy + rad * Math.sin(a)]; };
+    var arc = function (f0, f1, rad) {
+      if (f1 - f0 >= .9999) f1 = f0 + .9999;
+      var a = p(f0, rad), b = p(f1, rad);
+      return 'M' + a[0].toFixed(2) + ' ' + a[1].toFixed(2) + ' A' + rad + ' ' + rad + ' 0 ' + (f1 - f0 > .5 ? 1 : 0) + ' 1 '
+        + b[0].toFixed(2) + ' ' + b[1].toFixed(2);
+    };
+    var copies = (r.copies || []).slice(0, 3), svg = '<svg viewBox="0 0 400 400" role="img" aria-label="'
+      + ordEsc(r.title) + ': the copies of its index">';
+    letters.forEach(function (L, k) {
+      var rad = R[k], c = copies[k];
+      svg += '<circle cx="' + cx + '" cy="' + cy + '" r="' + rad + '" fill="none" stroke="var(--line)" stroke-width="22"'
+        + (c ? ' opacity=".55"' : ' stroke-dasharray="3 6" opacity=".9"') + '/>';
+      var t = p(-.014, rad);
+      svg += '<text x="' + t[0] + '" y="' + (t[1] + 4) + '" text-anchor="end" style="font:700 11px system-ui;fill:var(--muted)">' + L + '</text>';
+      if (!c) return;
+      var f = Math.max(c.frac, .004), id = 'ordarc-' + r.net + '-' + k;
+      svg += '<path id="' + id + '" d="' + arc(0, f, rad) + '" fill="none" stroke="' + ORD_COLORS[k] + '" stroke-width="22"/>';
+      var label = ordName(c) + ' ' + Math.round(c.frac * 100) + '%';
+      if (f * 2 * Math.PI * rad > label.length * 6.2 + 12) {
+        svg += '<text dy="4" style="font:600 10.5px system-ui;fill:#fff"><textPath href="#' + id + '" startOffset="50%" '
+          + 'text-anchor="middle">' + ordEsc(label) + '</textPath></text>';
+      } else {
+        var q = p(f / 2, rad + 30);
+        svg += '<text x="' + q[0] + '" y="' + q[1] + '" text-anchor="middle">' + ordEsc(label) + '</text>';
+      }
+    });
+    // copies: 2+ green, 1 amber, none red, past the furthest copy grey (not indexed yet)
+    var cuts = [0, 1].concat(copies.map(function (c) { return c.frac; })).sort(function (a, b) { return a - b; });
+    var two = 0, top = copies.length ? copies[0].frac : 0;
+    for (var i = 0; i + 1 < cuts.length; i++) {
+      var s0 = cuts[i], e0 = cuts[i + 1], m = (s0 + e0) / 2;
+      if (e0 - s0 < 1e-4) continue;
+      var n = copies.filter(function (c) { return c.frac > m; }).length;
+      var col = m > top ? 'var(--line)' : n >= 2 ? 'var(--good,#2f7d4f)' : n === 1 ? 'var(--warn,#b26b00)' : 'var(--bad)';
+      if (n >= 2) two += e0 - s0;
+      svg += '<path d="' + arc(s0, e0 - .001, 76) + '" fill="none" stroke="' + col + '" stroke-width="7"/>';
+    }
+    svg += '<text x="' + cx + '" y="' + (cy - 50) + '" text-anchor="middle" class="sub">copies</text>';
+    svg += '<text x="' + cx + '" y="' + (cy - 6) + '" text-anchor="middle" style="font:700 22px system-ui;fill:var(--fg)">'
+      + Math.round(two * 100) + '%</text><text x="' + cx + '" y="' + (cy + 12) + '" text-anchor="middle" class="sub">'
+      + 'of the chain on 2 copies</text><text x="' + cx + '" y="' + (cy + 26) + '" text-anchor="middle" class="sub">'
+      + (r.copies || []).length + ' arcade' + ((r.copies || []).length === 1 ? '' : 's') + ' holding</text></svg>';
+    return svg;
+  }
+
+  function ordAttention(r) {
+    var out = [], copies = r.copies || [];
+    if (r.upgrading) out.push(['', r.upgrading + '. Lookups wait until it is done; nothing is walked again.']);
+    if ((r.disputed || []).length) out.push(['bad', r.disputed.length + ' chunk(s) this index stitched from another '
+      + 'arcade’s notes are now outvoted (first: chunk ' + num(r.disputed[0]) + '). The index past it may be wrong; '
+      + 'nothing was changed. Ask Claude before rebuilding.']);
+    if (r.error) out.push(['bad', r.error]);
+    if (r.differ) out.push(['', num(r.differ) + ' chunk' + (r.differ > 1 ? 's were' : ' was') + ' read differently by '
+      + 'two arcades. Another arcade scans it to settle which is right.']);
+    if (r.mode !== 'off' && !copies.length) out.push(['bad', 'No arcade holds this chain’s index yet. One that can '
+      + 'spare the disk should choose Hold the full index.']);
+    else if (r.mode !== 'off' && copies.length === 1) out.push(['', 'Only one copy: ' + ordName(copies[0]) + ' holds it. '
+      + 'A second arcade holding the index (ring B) would keep it safe if that one goes offline.']);
+    if (r.mode === 'read' && !(r.walkers || []).length) out.push(['', 'Read only, but no linked arcade holds this '
+      + 'chain’s index right now: lookups cannot be answered.']);
+    var sn = r.snapshot || {};
+    if (sn.fetching) out.push(['', 'Fetching the whole index from arcade ' + sn.fetching.from + ': '
+      + (sn.fetching.pieces ? num(sn.fetching.have) + ' of ' + num(sn.fetching.pieces) + ' pieces' : 'asking') + '.']);
+    if (!out.length) out.push(['ok', r.mode === 'off' ? 'Off here. Nothing needs you.' : 'Nothing needs you.']);
+    return out;
+  }
+
+  function ordDetails(r) {
+    // Everything the old table said, kept for when it matters.
+    var w = r.walk, bits = [];
+    bits.push('Starts at block ' + num(r.base) + (r.source ? ' (' + r.source + ')' : ''));
+    if (w) bits.push(num(w.inscriptions) + ' inscriptions, ' + num(w.tokens) + ' tokens with ' + num(w.holders)
+      + ' holders, ' + num((w.names || {}).spec) + ' names');
+    if (r.found) bits.push(num(r.found) + ' births in the chunks read here');
+    if (r.agreed_births) bits.push(num(r.agreed_births) + ' inscriptions agreed by two or more arcades');
+    Object.keys(r.levels || {}).forEach(function (k) {
+      var lv = r.levels[k];
+      if (!lv.chunks) return;
+      var who = k === '1' ? '1 arcade (unchecked)' : (Number(k) >= 5 ? '5 or more arcades' : k + ' arcades');
+      bits.push(who + ': ' + num(lv.chunks) + ' chunks, ' + num(lv.inscriptions) + ' inscriptions');
+    });
+    if (r.ready) bits.push(r.phase === 'audit' ? 'every chunk scanned once: auditing'
+                           : 'scanned once: ' + num(r.covered) + ' of ' + num(r.ready) + ' chunks');
+    (r.lanes || []).forEach(function (l) { bits.push('reading chunk ' + num(l.chunk) + ': ' + l.done + ' of ' + r.chunk + ' blocks'); });
+    if (r.helped) bits.push(num(r.helped) + ' chunks read here as help');
+    (r.leases || []).forEach(function (l) { bits.push('arcade ' + l.node + ' reads chunk ' + num(l.chunk) + ' (' + l.done + '/' + r.chunk + ')'); });
+    if (r.mode === 'walk' && r.borrowed) bits.push('no Core of this chain here: stitched from other arcades’ notes');
+    if (r.notes && r.notes.chunks) bits.push(num(r.notes.chunks) + ' chunks of notes kept (' + bytes(r.notes.bytes)
+                                               + ') until every holder has stitched past them');
+    var sn = r.snapshot || {};
+    if (sn.said) bits.push(sn.said);
+    if (sn.made) bits.push('serves a copy of its index at block ' + num(sn.made));
+    if (r.rebuilt && r.rebuilt.why) bits.push('built again: ' + r.rebuilt.why);
+    return bits;
+  }
+
+  function ordDraw() {
+    var d = ORD_DATA, rows = (d && d.rows) || [];
+    var box = $('ordchain'), coins = $('ordcoins');
+    coins.textContent = ''; box.textContent = '';
+    if (!rows.length) { box.appendChild(ordEl('p', 'muted', 'This arcade reads none of the chains that have ords.')); return; }
+    var r = rows.filter(function (x) { return x.net === ORD_PICK; })[0] || rows.filter(function (x) { return x.mode !== 'off'; })[0] || rows[0];
+    rows.forEach(function (x) {
+      var b = ordEl('button', (x === r ? 'on' : '') + (x.mode === 'off' ? ' off' : ''));
+      b.type = 'button'; b.title = x.title; b.setAttribute('aria-label', x.title); b.setAttribute('role', 'tab');
+      b.setAttribute('aria-selected', x === r ? 'true' : 'false');
+      if (x.icon) { var img = document.createElement('img'); img.src = x.icon; img.alt = ''; b.appendChild(img); }
+      else b.textContent = x.label;
+      b.onclick = function () { ORD_PICK = x.net; try { localStorage.setItem('ords.chain', x.net); } catch (e) { /* kept for this visit */ } ordDraw(); };
+      coins.appendChild(b);
+    });
+    box.appendChild(ordEl('div', 'ordtitle', ordEsc(r.title)));
+    var copies = r.copies || [], mine = copies.filter(function (c) { return c.me; })[0];
+    var what = r.mode === 'walk' ? 'This arcade <b>holds the full index</b>' + (mine ? ', walked to block ' + num(mine.walked_to)
+      + ' of ' + num(r.tip) : '') + '.'
+      : r.mode === 'help' ? 'This arcade <b>helps scan</b> this chain' + ((r.lanes || []).length ? ': ' + (r.lanes || []).map(function (l) {
+          return 'chunk ' + num(l.chunk) + ', ' + l.done + ' of ' + r.chunk + ' blocks'; }).join('; ') : '') + '.'
+      : r.mode === 'read' ? 'This arcade is <b>read only</b> for this chain' + ((r.walkers || []).length ? ': it asks '
+          + ordEsc(ordName((copies.filter(function (c) { return c.node === r.walkers[0].node; })[0]) || {node: r.walkers[0].node})) : '') + '.'
+      : 'This arcade takes <b>no part</b> in this chain’s ords.';
+    box.appendChild(ordEl('div', 'muted', what));
+    // how complete
+    var three = 0;
+    Object.keys(r.levels || {}).forEach(function (k) { if (Number(k) >= 3) three += r.levels[k].chunks; });
+    var best = copies.length ? copies[0].frac * 100 : 0;
+    var boxes = [
+      [r.mode === 'walk' ? 'Indexed here' : 'Indexed (best copy)', r.mode === 'walk' && r.walked_pct != null ? r.walked_pct : best,
+       '#3c8dbc', r.mode === 'walk' && mine ? 'block ' + num(mine.walked_to) + ' of ' + num(r.tip) : (copies.length ? 'by ' + ordName(copies[0]) : 'nobody holds it yet')],
+      ['Scanned once', r.ready ? 100 * (r.covered || 0) / r.ready : 0, '#9b948a', 'every block read by some arcade'],
+      ['Checked by two', r.agreed_pct || 0, 'var(--accent)', 'two arcades read it the same way'],
+      ['Three or more', r.ready ? 100 * three / r.ready : 0, 'var(--good,#2f7d4f)', 'audited again: higher confidence']];
+    var pctBox = ordEl('div', 'ordpct');
+    boxes.forEach(function (b) {
+      var v = Math.max(0, Math.min(100, Number(b[1]) || 0)), cell = ordEl('div');
+      cell.innerHTML = '<span class="muted" style="font-size:.84rem">' + b[0] + '</span><b>' + pct(v) + '</b>'
+        + '<div class="ordbar"><i style="width:' + v + '%;background:' + b[2] + '"></i></div>'
+        + '<span class="muted" style="font-size:.8rem">' + ordEsc(b[3]) + '</span>';
+      pctBox.appendChild(cell);
+    });
+    box.appendChild(pctBox);
+    // needs you
+    ordAttention(r).forEach(function (a) { box.appendChild(ordEl('div', 'ordattn ' + a[0], ordEsc(a[1]))); });
+    // the ring
+    var ring = ordEl('div', 'ordcard ordring');
+    ring.appendChild(ordEl('h3', '', 'The copies of the index'));
+    ring.appendChild(ordEl('div', 'muted', '<span style="font-size:.84rem">Each ring is one whole copy of this chain’s '
+      + 'index, drawn as far as it reaches. Two copies keep it safe if an arcade goes offline; a third ring opens as more '
+      + 'arcades take part. The thin ring inside shows how many copies each part has: green two or more, amber one, grey '
+      + 'not indexed yet.</span>'));
+    ring.appendChild(ordEl('div', '', ordRing(r)));
+    var legend = copies.map(function (c, k) {
+      return '<div style="display:flex;gap:8px;align-items:baseline;margin:4px 0"><span style="width:12px;height:12px;border-radius:3px;'
+        + 'flex:none;background:' + (k < 3 ? ORD_COLORS[k] : 'var(--line)') + '"></span><span><b>' + ordEsc(ordName(c)) + '</b>'
+        + (c.me ? ' (this arcade)' : ' <span class="muted">arcade ' + ordEsc(c.node) + '</span>') + ': ring '
+        + (k < 3 ? 'ABC'[k] : '–') + ', ' + Math.round(c.frac * 100) + '% (block ' + num(c.walked_to) + ')</span></div>';
+    }).join('');
+    var others = (r.others || []).map(function (o) { return '<b>' + ordEsc(ordName(o)) + '</b> (' + (o.mode === 'help' ? 'helps scan' : 'read only') + ')'; });
+    ring.appendChild(ordEl('div', '', legend + (others.length ? '<div class="muted" style="margin-top:6px">Also linked, holding '
+      + 'no copy: ' + others.join(', ') + '</div>' : '')));
+    box.appendChild(ring);
+    // how this arcade takes part
+    var big = (d.machine || 1) >= 8, rec = big ? 'walk' : 'help';
+    var part = ordEl('div', 'ordcard');
+    part.appendChild(ordEl('h3', '', 'How this arcade takes part'));
+    var modes = ordEl('div', 'ordmodes');
+    ORD_CHOICES.forEach(function (c) {
+      var lab = ordEl('label', 'ordmode' + (r.mode === c[0] ? ' on' : ''));
+      lab.innerHTML = '<input type="radio" name="ordmode-' + r.net + '"' + (r.mode === c[0] ? ' checked' : '') + '><span><b>'
+        + c[1] + '</b>' + (c[0] === rec ? '<span class="ordrec">recommended here</span>' : '') + '<br><span class="muted" '
+        + 'style="font-size:.84rem">' + c[2] + '</span></span>';
+      lab.querySelector('input').onchange = function () {
+        call('/admin/api/ords', {net: r.net, mode: c[0]})
+          .then(function () { $('ordsaid').textContent = r.title + ': ' + ORD_WORDS[c[0]] + '.'; loadOrds(true); })
+          .catch(function (e) { $('ordsaid').textContent = e.message; });
+      };
+      modes.appendChild(lab);
+    });
+    part.appendChild(modes);
+    var cores = ordEl('div', 'row', '<label for="ordcores"><b>Cores for ords:</b></label> <input autocomplete="off" type="number" '
+      + 'id="ordcores" min="1" step="1" inputmode="numeric" style="width:5.5em;font-size:16px"> <span class="muted">of ' + d.machine
+      + ' on this machine</span> <button type="button" class="small" id="ordcoressave">Save</button>');
+    cores.style.cssText = 'gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0 0';
+    part.appendChild(cores);
+    part.appendChild(ordEl('p', 'muted', '<span style="font-size:.84rem">Each core scans a chunk of its own. Holding the index, '
+      + 'one core stitches and the rest scan ahead. ' + (big ? '' : 'A machine with fewer than 8 cores that serves the live site '
+      + 'should not hold a big chain’s index: walking it slows the pages. Help scan instead.') + '</span>'));
+    box.appendChild(part);
+    $('ordcores').value = d.cores; $('ordcores').max = d.machine;
+    $('ordcoressave').onclick = function () {
+      call('/admin/api/ords', {cores: Number($('ordcores').value)})
+        .then(function (j) { $('ordsaid').textContent = 'Ords help with ' + j.cores + ' core' + (j.cores > 1 ? 's' : '') + '.'; loadOrds(true); })
+        .catch(function (e) { $('ordsaid').textContent = e.message; });
+    };
+    // cost here
+    var w = r.walk || {}, cost = ordEl('div', 'ordcard');
+    cost.appendChild(ordEl('h3', '', 'What it costs this machine'));
+    var speed = w.rate ? w.rate + ' blocks/s walking' : r.help_rate ? r.help_rate + ' blocks/s scanning' : 'idle';
+    cost.appendChild(ordEl('div', 'ordcost', '<div><span class="muted" style="font-size:.84rem">Disk</span><b>'
+      + (r.disk ? bytes(r.disk) : 'nothing') + '</b><span class="muted" style="font-size:.8rem">' + (d.free != null ? bytes(d.free)
+      + ' free' : '') + '</span></div><div><span class="muted" style="font-size:.84rem">Cores</span><b>' + d.cores + ' of '
+      + d.machine + '</b><span class="muted" style="font-size:.8rem">' + (r.cores ? r.cores + ' at work on this chain' : '')
+      + '</span></div><div><span class="muted" style="font-size:.84rem">Speed</span><b>' + ordEsc(speed) + '</b></div>'));
+    box.appendChild(cost);
+    var more = ordEl('details', 'ordmore');
+    more.appendChild(ordEl('summary', '', 'Everything, in detail'));
+    more.appendChild(lines(ordDetails(r), 'muted'));
+    box.appendChild(more);
+  }
+  function loadOrds(force) {
+    if (!force && !document.querySelector('.admintab[data-tab="ords"].on')) return;
+    if (document.activeElement && document.activeElement.id === 'ordcores') return;   // typing: redraw later
     fetch('/admin/api/ords', {headers: {'Accept': 'application/json'}, cache: 'no-store'}).then(function (r) { return r.json(); })
       .then(function (d) {
-        var tb = $('ordrows'); tb.textContent = '';
+        ORD_DATA = d;
         var pick = $('ordlooknet');
         if (!pick.options.length) (d.rows || []).forEach(function (r) {
           var o = document.createElement('option'); o.value = r.net; o.textContent = r.title; pick.appendChild(o);
         });
-        if (document.activeElement !== $('ordcores')) $('ordcores').value = d.cores;
-        $('ordcores').max = d.machine;
-        $('ordmachine').textContent = 'of ' + d.machine + ' on this machine';
-        (d.rows || []).forEach(function (r) {
-          var tr = document.createElement('tr');
-          var name = text('td', r.title); name.className = 'ordwhat'; tr.appendChild(name);
-          var td = document.createElement('td'), sel = document.createElement('select');
-          sel.setAttribute('aria-label', r.title + ' ord index');
-          ['walk', 'help', 'read', 'off'].forEach(function (m) {
-            var o = document.createElement('option'); o.value = m; o.textContent = ORD_WORDS[m];
-            o.selected = r.mode === m; sel.appendChild(o);
-          });
-          sel.onchange = function () {
-            call('/admin/api/ords', {net: r.net, mode: sel.value})
-              .then(function () { $('ordsaid').textContent = r.title + ': ' + ORD_WORDS[sel.value] + '.'; loadOrds(); })
-              .catch(function (e) { $('ordsaid').textContent = e.message; });
-          };
-          td.appendChild(sel); tr.appendChild(td);
-          var st = text('td', 'block ' + num(r.base)); st.title = r.source; tr.appendChild(st);
-          var w = r.walk, line = [];
-          if (w) line.push(pct(r.walked_pct) + ' walked here (block ' + num(w.next) + ' of ' + num(r.tip) + ')');
-          if (r.mode !== 'off') line.push(pct(r.agreed_pct) + ' agreed by two arcades (' + num(r.agreed) + ' of ' + num(r.ready) + ' chunks)');
-          tr.appendChild(lines(line));
-          // A walker knows every inscription it passed; a helper counts the births in the chunks it read (2026-10-20:
-          // a test machine showed a dash and looked as if it had found nothing).
-          tr.appendChild(w ? lines([num(w.inscriptions) + ' inscriptions', num(w.tokens) + ' tokens, '
-                                    + num(w.holders) + ' holders', num((w.names || {}).spec) + ' names'])
-                           : r.found ? lines([num(r.found), 'in chunks read here']) : text('td', '\u2014'));
-          // Inscriptions in the chunks two or more arcades read the same way, and the confidence of every chunk: how many
-          // arcades agree on it (2026-10-20).
-          var conf = [];
-          if (r.mode !== 'off' || r.agreed) {
-            conf.push(num(r.agreed_births) + ' inscriptions agreed by two or more arcades');
-            Object.keys(r.levels || {}).forEach(function (k) {
-              var lv = r.levels[k];
-              if (!lv.chunks) return;
-              var who = k === '1' ? '1 arcade (unchecked)' : (Number(k) >= 5 ? '5 or more arcades' : k + ' arcades');
-              conf.push(who + ': ' + num(lv.chunks) + ' chunks, ' + num(lv.inscriptions) + ' inscriptions');
-            });
-            if (r.ready) conf.push(r.phase === 'audit' ? 'every chunk scanned once: auditing'
-                                   : 'scanned once: ' + num(r.covered) + ' of ' + num(r.ready) + ' chunks');
-          }
-          tr.appendChild(conf.length ? lines(conf) : text('td', '\u2014'));
-          tr.appendChild(text('td', r.disk ? bytes(r.disk) : '\u2014'));
-          var bits = [];
-          if (r.mode === 'off') bits.push('off');
-          if (r.mode === 'read') bits.push((r.walkers || []).length ? 'reads from arcade ' + r.walkers[0].node
-            + ' (walked to block ' + num(r.walkers[0].walked_to) + ')' : 'no linked arcade walks this chain yet');
-          (r.lanes || []).forEach(function (l) { bits.push('reading chunk ' + num(l.chunk) + ': ' + l.done + ' of ' + r.chunk + ' blocks'); });
-          if ((r.lanes || []).length && r.help_rate) bits.push(r.help_rate + ' blocks/s here');
-          if (w && w.rate) bits.push(w.rate + ' blocks/s');
-          if (r.helped) bits.push(num(r.helped) + ' chunks read here as help');
-          (r.leases || []).forEach(function (l) { bits.push('arcade ' + l.node + ' reads chunk ' + num(l.chunk) + ' (' + l.done + '/' + r.chunk + ')'); });
-          if (r.differ) bits.push(num(r.differ) + ' chunk' + (r.differ > 1 ? 's' : '') + ' read differently');
-          if (r.mode === 'walk' && r.borrowed) bits.push('no Core of this chain here: stitched from other arcades\u2019 notes');
-          var holders = (r.holders || []).map(function (h) { return h.node + ' (block ' + num(h.walked_to) + ')'; });
-          if (holders.length) bits.push('holding the full index: ' + holders.join(', '));
-          if (r.notes && r.notes.chunks) bits.push(num(r.notes.chunks) + ' chunks of notes kept (' + bytes(r.notes.bytes)
-                                                     + ') until every holder has stitched past them');
-          var sn = r.snapshot || {};
-          if (sn.fetching) bits.push('fetching the whole index from arcade ' + sn.fetching.from + ': '
-            + (sn.fetching.pieces ? num(sn.fetching.have) + ' of ' + num(sn.fetching.pieces) + ' pieces' : 'asking'));
-          else if (sn.said) bits.push(sn.said);
-          if (sn.made) bits.push('serves a copy of its index at block ' + num(sn.made));
-          if (r.rebuilt && r.rebuilt.why) bits.push('built again: ' + r.rebuilt.why);
-          if ((r.disputed || []).length) bits.push('needs you: ' + r.disputed.length + ' chunk(s) this index stitched from '
-            + 'another arcade\u2019s notes are now outvoted (first: chunk ' + num(r.disputed[0]) + '). The index past it may be '
-            + 'wrong; nothing was changed. Ask Claude before rebuilding.');
-          if (r.error) bits.push(r.error);
-          tr.appendChild(lines(bits, (r.differ || r.error) ? 'idx-bad' : 'muted'));
-          tb.appendChild(tr);
-        });
-        if (!tb.childNodes.length) {
-          var none = document.createElement('tr'), cell = text('td', 'This arcade reads none of the chains that have ords.', 'muted');
-          cell.colSpan = 8; none.appendChild(cell); tb.appendChild(none);
-        }
-      }).catch(function () { $('ordrows').textContent = 'Could not read the ord indexes.'; });
+        ordDraw();
+      }).catch(function () { $('ordchain').textContent = 'Could not read the ord indexes.'; });
   }
   $('ordlookgo').onclick = function () {
     var out = $('ordlooksaid'); out.textContent = 'Asking\u2026';
@@ -1149,11 +1317,6 @@ section.panel h2{margin-top:0}
         });
         out.textContent = lines.join('\n');
       }).catch(function (e) { out.textContent = String(e.message || e); });
-  };
-  $('ordcoressave').onclick = function () {
-    call('/admin/api/ords', {cores: Number($('ordcores').value)})
-      .then(function (j) { $('ordsaid').textContent = 'Ords help with ' + j.cores + ' core' + (j.cores > 1 ? 's' : '') + '.'; loadOrds(); })
-      .catch(function (e) { $('ordsaid').textContent = e.message; });
   };
   function loadOperators() {
     fetch('/admin/api/operators', {headers: {'Accept': 'application/json'}, cache: 'no-store'}).then(function (r) { return r.json(); })

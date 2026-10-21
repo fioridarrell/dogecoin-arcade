@@ -24137,6 +24137,12 @@ def create_app(state: AppState) -> FastAPI:
         _admin_check(request)
         from ..doginal_index import SETTLE, SOURCES, STARTS
         indexes = state.ord_indexes()
+        share = getattr(getattr(state, "mesh", None), "operators", None)
+        names = {r["node"]: r.get("tag") or "" for r in (share.status() if share is not None else [])}
+        try:
+            me_tag = (share.about() or {}).get("tag") or "" if share is not None else ""
+        except Exception:                                      # noqa: BLE001 -- shown without a name
+            me_tag = ""
         rows = []
         for chain in state.all_chains:
             net = chain.network
@@ -24153,16 +24159,33 @@ def create_app(state: AppState) -> FastAPI:
             span = max(1, tip - SETTLE - st["base"] + 1)
             walk = st.get("walk") or {}
             ready = st.get("ready") or 0
+            # The ring (Admin -> Ords, 2026-10-20): every whole copy of this chain's index -- for now each
+            # holding arcade keeps all of it -- with how far it reaches, by its operator's @name; and who helps.
+            frac = lambda h: round(min(1.0, max(0.0, (int(h or 0) - st["base"]) / span)), 4)   # noqa: E731
+            copies = sorted(({"node": h["node"], "me": h["node"] == "this arcade",
+                              "tag": me_tag if h["node"] == "this arcade" else names.get(h["node"], ""),
+                              "frac": frac(h["walked_to"]), "walked_to": h["walked_to"]}
+                             for h in st.get("holders") or []), key=lambda c: -c["frac"])
+            others = [{"node": n, "tag": names.get(n, ""), "mode": p.get("mode")}
+                      for n, p in (st.get("peers") or {}).items() if p.get("mode") in ("help", "read")
+                      and not any(c["node"] == n for c in copies)]
             rows.append({
                 **st, "net": net, "title": getattr(chain, "title", "") or chain.label, "label": chain.label,
                 "source": SOURCES.get(net, ""), "tip": tip, "borrowed": bool(getattr(chain, "borrowed", False)),
+                "icon": _coin_icon(net), "copies": copies, "others": others,
                 "walked_pct": round(100 * max(0, (walk.get("next") or st["base"]) - st["base"]) / span, 2) if walk else None,
                 "agreed_pct": round(100 * (st.get("agreed") or 0) / ready, 2) if ready else 0.0,
                 # What the index takes on disk, its write-ahead log included (2026-10-20).
                 "disk": _index_bytes(index),
             })
         import os
-        return JSONResponse({"rows": rows, "cores": state.ord_cores(), "machine": os.cpu_count() or 1},
+        import shutil
+        try:
+            free = shutil.disk_usage(state.home).free
+        except (OSError, TypeError):
+            free = None
+        return JSONResponse({"rows": rows, "cores": state.ord_cores(), "machine": os.cpu_count() or 1, "free": free,
+                             "me": me_tag},
                             headers={"Cache-Control": "no-store"})
 
     def _index_bytes(index) -> int:

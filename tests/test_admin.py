@@ -199,7 +199,8 @@ def test_the_ords_tab_lists_each_chain_with_its_official_start_and_saves_its_mod
     it is, and walk / help / off for each."""
     app, state = public
     page = app.get("/admin", headers=LOCAL)
-    assert page.status_code == 200 and 'data-tab="ords"' in page.text and 'id="ordrows"' in page.text
+    assert page.status_code == 200 and 'data-tab="ords"' in page.text and 'id="ordcoins"' in page.text \
+        and 'id="ordchain"' in page.text, "a coin for each chain, then that chain's panel (2026-10-20)"
     assert 'id="oprows"' in page.text, "Network -> Other operators"
     assert app.post("/admin/api/ords", headers={**LOCAL, **WRITE}, json={"net": "doge", "mode": "fly"}).status_code == 400
     assert app.post("/admin/api/ords", headers={**LOCAL, **WRITE}, json={"net": "btc", "mode": "off"}).status_code == 400
@@ -214,7 +215,10 @@ def test_the_ords_tab_lists_each_chain_with_its_official_start_and_saves_its_mod
         assert r["base"] == dx.STARTS[net] and r["source"]
     assert rows["main"]["mode"] == "help"
     assert all(isinstance(r["disk"], int) and r["disk"] >= 0 for r in rows.values()), "each index's size on disk"
-    assert "<th>On disk</th>" in page.text
+    assert all(isinstance(r["copies"], list) and isinstance(r["others"], list) for r in rows.values()), "the ring"
+    assert all(r["icon"].startswith("/coin-") for r in rows.values()), "each chain's coin"
+    said = app.get("/admin/api/ords", headers=LOCAL).json()
+    assert "free" in said and "me" in said, "free disk, and this arcade's own @name for the ring"
     assert app.get("/admin/api/ords", headers=EDGE).status_code != 200, "never shown to a stranger"
     assert "rows" in app.get("/admin/api/operators", headers=LOCAL).json()
     state.set_setting("ord_index:main", None)
@@ -225,7 +229,7 @@ def test_the_ords_tab_lists_each_chain_with_its_official_start_and_saves_its_mod
                     json={"cores": (os.cpu_count() or 1) + 1}).status_code == 400
     assert app.post("/admin/api/ords", headers={**LOCAL, **WRITE}, json={"cores": 1}).json()["cores"] == 1
     said = app.get("/admin/api/ords", headers=LOCAL).json()
-    assert said["cores"] == 1 and said["machine"] == (os.cpu_count() or 1) and 'id="ordcores"' in page.text
+    assert said["cores"] == 1 and said["machine"] == (os.cpu_count() or 1) and "ordcoressave" in page.text
     state.set_setting("ord_cores", None)
     # Read only, and the lookup box (2026-10-20).
     assert app.post("/admin/api/ords", headers={**LOCAL, **WRITE}, json={"net": "main", "mode": "read"}).json()["ok"]
