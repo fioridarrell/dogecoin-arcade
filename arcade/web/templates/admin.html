@@ -700,6 +700,7 @@ section.panel h2{margin-top:0}
       if (r.now === 'borrow') bits.push(m.sharers ? 'borrowed from ' + m.sharers + ' arcade' + (m.sharers > 1 ? 's' : '')
                                          : 'no sharing arcade linked yet');
       if (r.now === 'here') bits.push('runs here');
+      if (r.now === 'here' && r.catchup) bits.push(r.catchup);    // syncing: borrowed until it catches up, or why not
       if (r.now === 'off') bits.push(m.sharers ? 'off \u00b7 ' + m.sharers + ' linked arcade' + (m.sharers > 1 ? 's share' : ' shares') + ' it'
                                                : 'off \u00b7 no linked arcade shares it yet');
       if (r.now === 'borrow' && r.work !== 'checked') bits.push('blocks checked; proof of work is the sharer\u2019s word');

@@ -88,6 +88,33 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-21 · the operator's side · a Core that is behind borrows the chain until it catches up
+
+The operator (plan item 17): "If the block chain is being re-scanned or being synced on any arcade, it should automatically
+switch over to borrowing somebody else's core until the re-scan is finished." Branch claude/core-borrow-sync.
+- **One place:** `ChainContext.rpc()` (arcade/web/state.py). For a chain run here, while its Core is behind and a
+  linked arcade shares the chain, it hands out a `CatchingUpRpc` (new arcade/core_catchup.py): reads and broadcasts
+  (coreshare's `SERVED` + `MINED`, and `decoderawtransaction`) go through `BorrowedRpc`, proved as on a "borrow"
+  chain; everything else, the node's own wallet above all, stays on this Core. A broadcast is also handed to this
+  Core, quietly, so its wallet knows what it spent. `scantxoutset` is refused (-28) while behind: a part-synced coin
+  set is wrong, and the watcher falls back to reading the index's blocks. A client keeps its routing for its life.
+- **Behind:** error -28 (loading the block index, verifying, -reindex, -rescan at start); `getwalletinfo.scanning`;
+  `initialblockdownload` or `verificationprogress` < 0.9999; headers more than 6 ahead of blocks (0-2 is a block on
+  its way; `chain_sync` allows 2). The last two are overruled when this Core is within 2 blocks of the sharers' tip:
+  a quiet test chain's progress estimate sits below 0.9999 at its tip.
+- **Cheap:** checked every 30 s per chain on a thread of its own, and not at all while no linked arcade shares the
+  chain (Admin -> Chains still asks, to say it). Back to this Core after 2 caught-up checks in a row. One log line per switch (logger `arcade.cores`).
+- **No sharer:** this Core is used as it is. A chain set to "borrow" in Admin is untouched (`borrowed` stays the
+  only flag the wallet, fee and keywallet code read, so a catching-up chain keeps its own wallet).
+- **Not lent while behind:** `shared_cores` no longer offers a chain whose Core is behind, and serves only from the
+  Core itself (`local_rpc()`), so two arcades catching up never pass reads round in a loop.
+- **Admin -> Chains** says it on the chain's row: "syncing: borrowed from arcade a1b2c3d4e5f6 until it catches up
+  (block 100 of 6,000)", "caught up (...); reads come back to this Core after 1 more check (every 30 s)", or
+  "syncing (block 100 of 6,000); no linked arcade shares this chain, so this Core is used as it is" ("the mesh is
+  off" when it is).
+- **Limits:** a Core that is not answering at all is not "behind" (no switch); a wallet call on a Core still
+  loading gets its -28, as before. Tests: tests/test_core_catchup.py.
+- **SadFrog:** nothing to do; it works for every chain and face.
 ### 2026-10-21 · the operator's side · `arcade.contacts.add` / `remove`: a game adds a friend, with the player's yes
 
 ASHVALE asked (game-agnostic; the operator wants players "able to add in game friends"). Branch claude/contacts-add.

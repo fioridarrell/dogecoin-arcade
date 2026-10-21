@@ -865,6 +865,7 @@ def shared_cores(state):
     """Shared Cores (coreshare.py) for an arcade node: it answers for each chain whose Core runs on
     this machine unless its box is unticked in Admin -> Chains (`share:<net>`, on when not set), and
     borrows the chains it was told to (`core:<net>` = borrow, read at start)."""
+    from .. import core_catchup
     from .. import cores as coreslib
     from ..rpc import RpcError
     from .coreshare import CoreShare
@@ -877,7 +878,7 @@ def shared_cores(state):
         if chain is None:
             raise RuntimeError(f"{net} does not run here")
         out = []
-        with chain.rpc() as rpc:
+        with chain.local_rpc() as rpc:          # never a sharer's: a Core catching up here is not offered at all
             for method, params in calls:
                 try:
                     out.append({"r": rpc.call(method, *params)})
@@ -892,8 +893,10 @@ def shared_cores(state):
                 continue
             if not state.chain_ready(chain):
                 continue
+            if core_catchup.known_behind(chain.network):
+                continue                                   # syncing here: it borrows, it does not lend
             try:
-                with chain.rpc() as rpc:
+                with chain.local_rpc() as rpc:
                     best = rpc.call("getbestblockhash")
                     nets[chain.network] = {"h": int(rpc.call("getblockheader", best, True)["height"]), "b": best}
                 # Where those who use it pay its tenth: the operator account's address there, which its Wallet

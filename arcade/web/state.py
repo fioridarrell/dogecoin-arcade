@@ -238,8 +238,22 @@ class ChainContext:
         return found.credentials
 
     def rpc(self) -> RpcClient:
+        """The one door to this chain's Core, which every caller goes through. A chain set to "borrow" is read
+        through a sharer; a chain run here is read through its own Core -- or, while that Core is behind (syncing,
+        re-indexing, rescanning) and a linked arcade shares the chain, its reads and broadcasts go to the sharer
+        and its wallet stays here (arcade/core_catchup.py, 2026-10-20)."""
         if self.borrowed:
             return self._borrowed_rpc()
+        from .. import core_catchup
+        if core_catchup.borrowing(self):
+            try:
+                return core_catchup.CatchingUpRpc(self.local_rpc, self._borrowed_rpc())
+            except Exception:                                  # noqa: BLE001 -- the sharer is gone: this Core as it is
+                pass
+        return self.local_rpc()
+
+    def local_rpc(self) -> RpcClient:
+        """This arcade's own Core, never a sharer: what it shares with other arcades, and its wallet."""
         creds = self.credentials()
         client = RpcClient(creds)
         # Checks reality, not intent: a stray config must not silently point us
@@ -282,7 +296,7 @@ class ChainContext:
                     "blocks": info.get("blocks", 0),
                     "headers": info.get("headers", 0),
                     "synced": info.get("blocks") == info.get("headers"),
-                    "peers": rpc.call("getconnectioncount"),
+                    "peers": _peers(rpc),
                     "wallet": None,
                     "borrowed": self.borrowed,
                 }
@@ -298,6 +312,14 @@ class ChainContext:
                 return result
         except Exception as exc:
             return {"online": False, "error": str(exc)}
+
+
+def _peers(rpc) -> int | None:
+    """The Core's peer count; None from a Core still loading (its chain read from a sharer meanwhile)."""
+    try:
+        return rpc.call("getconnectioncount")
+    except Exception:                                          # noqa: BLE001
+        return None
 
 
 #: ChainContext.status answers, by node, until they go stale.

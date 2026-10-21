@@ -24530,8 +24530,19 @@ def create_app(state: AppState) -> FastAPI:
                 row["now"] = coreslib.OFF
                 row["chosen"] = coreslib.mode(state.settings(), row["net"], coreslib.OFF)
         index = check.status() if check else {}
+        from .. import core_catchup
         for row in rows:
             row["index"] = index.get(row["net"], {})
+            # A Core here that is behind (syncing, re-indexing, rescanning): read from a sharer until it catches up,
+            # or used as it is when none shares the chain, said in one line (arcade/core_catchup.py, 2026-10-21).
+            own = state.messaging if row["net"] == state.messaging.network else (
+                state.ledger if row["net"] == state.ledger.network else state.addon(row["net"]))
+            row["catchup"] = None
+            if own is not None and row["now"] == coreslib.HERE and not own.borrowed:
+                try:
+                    row["catchup"] = core_catchup.say(own, mesh_on=share is not None)
+                except Exception:                          # noqa: BLE001 -- never takes the panel down
+                    pass
             row["faucet"] = _admin_faucet_row(row["net"])
             # Whether the Wallet and the markets offer it yet (2026-10-18: Litecoin borrowed, and still grey with
             # nothing to say why): the same reading they use, the sharer's getblockchaininfo.
