@@ -88,6 +88,30 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-21 Admin -> Ords: the explorer follows the chain at the top, a viewer by number, tokens with a rich list (Claude)
+The operator: "In the ord admin panel The Explorer on the bottom should be picked by the coin type at the top ... search by
+number as well as TXID utxo:index ... display ord 0 of the chain that is selected with arrows to navigate by ord number
+... PRC and DRC token info and the ability to search by token ticker borrow the search tool from the token exchange ...
+a list rich list of the token holders paginated to 20 holders." Branch claude/ord-explorer.
+- **admin.html:** the Look up box lost its own chain select: the explorer uses the coin picked at the top of the Ords
+  tab, and a new pick there puts the viewer at that chain's #0 and empties the tokens. Search also takes a number (`7`,
+  `#7`) and `tick:1234`; answers are cards (raw JSON under "raw"); a number/id/coin opens in the viewer. Viewer:
+  Previous / number / Go / Next, content sandboxed as in the Wallet (`/content/<id>/fit`, `sandbox="allow-scripts"`),
+  text as text, other types a link. Tokens: "PRC-20" on main/test, "DRC-20" elsewhere; ticker search, token facts, rich
+  list 20 a page. The Names button reads the chain at the top too.
+- **Shared search tool:** the Exchange's Trade any pair boxes moved into `_pick.html` (`window.arcadePick(box, cfg)`,
+  same markup and classes); exchange.html and admin.html both include it.
+- **Routes** (operator only, `_admin_check`): `GET /admin/api/ords/inscription?net=&number=|&id=`,
+  `GET /admin/api/ords/ticks?net=&q=`, `GET /admin/api/ords/holders?net=&tick=&page=`.
+- **Index (doginal_index.py):** new question kinds `number` {number | id}, `ticks` {prefix}, `holders` {tick, page}
+  (`inscription()`, `ticks()`, `rich_list()`); the owner address is read from the walking arcade's own Core
+  (None without one). New index `bal_rich ON bal (tick, length(overall), overall)`, made in place on open (IF NOT
+  EXISTS); about 20 MB for a test machine's 532k Dogecoin balances (0.2% of 9.3 GB), built in 0.24 s. `token()` now takes its
+  top holders from it (it used to sort every holder in Python); `balances()` joins `tok` instead of calling `token()`.
+- **Older walkers** answer the new kinds "no such question": a read-only arcade then says the walker "runs an older
+  version"; the rich list's first page still comes from its `token` answer (no percentages, no later pages).
+- Tests: tests/test_ord_explorer.py, tests/test_ord_explorer_browser.py (new).
+- Need from you: nothing. Your arcade answers the new questions once it has this.
 ### 2026-10-21 app.dogecoinarcade.com down 16:13-: page threads all waiting on a borrowed chain (Claude)
 .25's Dogecoin Core is rescanning for @apple's import, so core_catchup borrows its reads from a sharer. `chain_sync`
 kept add-on chains' status in the background ONLY for a chain set to borrow; this Dogecoin (run here, borrowing for the

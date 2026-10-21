@@ -25396,6 +25396,10 @@ def create_app(state: AppState) -> FastAPI:
         q = said.lower()
         if INSCRIPTION_ID.match(q):
             question = {"what": "where", "id": q}
+        elif re.match(r"^#?[0-9]{1,12}$", said):             # an inscription number (2026-10-21)
+            question = {"what": "number", "number": int(said.lstrip("#"))}
+        elif q.startswith("tick:") and said[5:].strip():      # a tick of digits, which a plain number is not
+            question = {"what": "token", "tick": said[5:].strip()}
         elif re.match(r"^[0-9a-f]{64}:[0-9]{1,6}$", q):
             txid, vout = q.split(":")
             question = {"what": "on", "txid": txid, "vout": int(vout)}
@@ -25409,13 +25413,65 @@ def create_app(state: AppState) -> FastAPI:
         elif re.match(r"^[1-9A-HJ-NP-Za-km-z]{25,40}$", said):  # an address: its token balances
             question = {"what": "balances", "owner": said}
         else:
-            return JSONResponse({"detail": "an inscription id, a coin as txid:vout, a 4-character tick, a name "
-                                           "like jon.doge, an address, type:image/png, p:drc-20, or kinds"},
+            return JSONResponse({"detail": "an inscription number or id, a coin as txid:vout, a 4-character tick, a "
+                                           "name like jon.doge, an address, type:image/png, p:drc-20, or kinds"},
                                 status_code=400)
+        return _ords_ask(index, question)
+
+    def _ords_ask(index, question: dict):
+        """One question to a chain's index, answered by its own walk or a walking linked arcade (index.lookup); what
+        went wrong said in a 409 the box shows."""
         try:
             return JSONResponse(index.lookup(question), headers={"Cache-Control": "no-store"})
         except Exception as exc:                               # noqa: BLE001 -- said in the box
             return JSONResponse({"detail": str(exc)[:300]}, status_code=409)
+
+    def _ords_index(net: str):
+        index = state.ord_indexes().get(net)
+        if index is None:
+            raise HTTPException(status_code=404, detail="this arcade does not read that chain")
+        return index
+
+    @app.get("/admin/api/ords/inscription")
+    def admin_ords_inscription(request: Request, net: str = "doge", number: str = "", id: str = ""):
+        """Admin -> Ords -> the explorer's viewer (2026-10-21: "Below the search should display ord 0 of the
+        chain that is selected with arrows to navigate by ord number"): one inscription by number (or id), where it
+        sits, who holds it, and the last number known ({"what": "number"}, from the own walk or a walking peer)."""
+        _admin_check(request)
+        from ..doginals import INSCRIPTION_ID
+        index = _ords_index(net)
+        iid = (id or "").strip().lower()
+        if iid:
+            if not INSCRIPTION_ID.match(iid):
+                return JSONResponse({"detail": "an inscription id: <txid>i<n>"}, status_code=400)
+            return _ords_ask(index, {"what": "number", "id": iid})
+        said = (number or "0").strip().lstrip("#")
+        if not re.match(r"^[0-9]{1,12}$", said):
+            return JSONResponse({"detail": "an inscription number: 0, 1, 2 ..."}, status_code=400)
+        return _ords_ask(index, {"what": "number", "number": int(said)})
+
+    @app.get("/admin/api/ords/ticks")
+    def admin_ords_ticks(request: Request, net: str = "doge", q: str = ""):
+        """Admin -> Ords -> Tokens: the ticker search's suggestions (2026-10-21: "search by token ticker borrow
+        the search tool from the token exchange"), ticks starting with what is typed, a dozen at most."""
+        _admin_check(request)
+        index = _ords_index(net)
+        said = (q or "").strip()
+        if len(said) > 8 or any(ord(c) < 32 for c in said):
+            return JSONResponse({"detail": "the start of a tick: up to 8 characters"}, status_code=400)
+        return _ords_ask(index, {"what": "ticks", "prefix": said})
+
+    @app.get("/admin/api/ords/holders")
+    def admin_ords_holders(request: Request, net: str = "doge", tick: str = "", page: str = "0"):
+        """Admin -> Ords -> Tokens: a token's information and its rich list, 20 holders a page, biggest first."""
+        _admin_check(request)
+        index = _ords_index(net)
+        said = (tick or "").strip()
+        if not said or len(said) > 8 or any(ord(c) < 32 for c in said):
+            return JSONResponse({"detail": "a tick"}, status_code=400)
+        if not re.match(r"^[0-9]{1,7}$", (page or "").strip()):
+            return JSONResponse({"detail": "a page number: 0, 1, 2 ..."}, status_code=400)
+        return _ords_ask(index, {"what": "holders", "tick": said, "page": int(page)})
 
     @app.get("/admin/api/ords/names")
     def admin_ords_names(request: Request, net: str = "doge"):

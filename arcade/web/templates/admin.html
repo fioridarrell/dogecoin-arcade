@@ -319,20 +319,50 @@
   <div class="ordcoins" id="ordcoins" role="tablist" aria-label="Chain"></div>
   <div id="ordchain"><p class="muted">Loading&hellip;</p></div>
   <span class="muted" id="ordsaid"></span>
-  <h3 style="margin:14px 0 6px">Look up</h3>
-  <p class="muted" style="margin-top:0;font-size:.84rem">An inscription id (where it is now), a coin as
-    <code>txid:vout</code> (what sits on it), a 4-character DRC-20 / PRC-20 tick (its supply and holders), a name like
-    <code>jon.doge</code> (who claimed it first, under each reading), an address (its token balances),
+  {# 2026-10-21: "In the ord admin panel The Explorer on the bottom should be picked by the coin type at the top
+     you should be able to search by number as well as TXID utxo:index. Or whatever it is already. Below the search
+     should display ord 0 of the chain that is selected with arrows to navigate by ord number. Below that should be PRC
+     and DRC token info and the ability to search by token ticker borrow the search tool from the token exchange. When a
+     ticker is selected it should show information about token and a list rich list of the token holders paginated to
+     20 holders." One explorer for the chain picked at the top (no chain choice of its own), answered by this arcade's
+     own walk or, on Read only, by a linked arcade that walks the chain. #}
+  {% include "_pick.html" %}
+  <div class="ordcard ordx" id="ordexplorer">
+  <h3>Explorer: <span id="ordxchain">the chain above</span></h3>
+  <p class="muted" style="margin-top:0;font-size:.84rem">An inscription number (<code>0</code>, <code>1</code>,
+    &hellip;) or id, a coin as <code>txid:vout</code> (what sits on it), a 4-character tick (or <code>tick:1234</code>),
+    a name like <code>jon.doge</code> (who claimed it first, under each reading), an address (its token balances),
     <code>type:image/png</code> or <code>p:drc-20</code> (how many, and the first ones), or <code>kinds</code> (the
-    commonest types and protocols). Answered from
-    this arcade&rsquo;s own walk, or, on <b>Read only</b>, by a linked arcade that walks the chain.</p>
+    commonest types and protocols).</p>
   <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
-    <select id="ordlooknet" aria-label="Chain to look up on" style="font-size:16px"></select>
-    <input autocomplete="off" id="ordlookq" style="flex:1;min-width:260px;font-size:16px" placeholder="inscription id, or txid:vout"
-           aria-label="Inscription id or coin">
+    <input autocomplete="off" id="ordlookq" type="search" style="flex:1 1 220px;min-width:0;font-size:16px"
+           placeholder="number, inscription id, txid:vout, tick, name, address" aria-label="Look up">
     <button type="button" class="small" id="ordlookgo">Look up</button>
   </div>
-  <pre id="ordlooksaid" class="muted" style="white-space:pre-wrap;font-size:.84rem;margin:8px 0 0"></pre>
+  <div id="ordlooksaid" class="ordxsaid" aria-live="polite"></div>
+
+  <div class="ordxview" id="ordview" aria-label="Inscription viewer">
+    <div class="ordxnav">
+      <button type="button" class="small" id="ordprev" aria-label="Previous inscription">&lsaquo; Previous</button>
+      <label class="ordxjump"><span>#</span><input autocomplete="off" type="number" id="ordnum" min="0" step="1"
+             inputmode="numeric" aria-label="Inscription number"></label>
+      <button type="button" class="small" id="ordjump">Go</button>
+      <button type="button" class="small" id="ordnext" aria-label="Next inscription">Next &rsaquo;</button>
+    </div>
+    <div class="ordxbody">
+      <div class="ordxframe" id="ordframe"></div>
+      <dl class="ordxfacts" id="ordfacts"><dt>&nbsp;</dt><dd class="muted">Loading&hellip;</dd></dl>
+    </div>
+  </div>
+
+  <h3 id="ordtokh" style="margin-top:16px">Tokens</h3>
+  <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
+    <span class="pick" id="ordtickpick"><input type="search" class="pick-q" placeholder="Search a ticker"
+          autocomplete="off" role="combobox" aria-expanded="false" aria-label="Token ticker" style="font-size:16px"><span
+          class="pick-list" role="listbox" hidden></span></span>
+  </div>
+  <div id="ordtok" aria-live="polite"></div>
+  </div>
   {# 2026-10-20: "make sure that we are indexing the domains the correct way" -- every reading kept. #}
   <h3 style="margin:14px 0 6px">Names: where the readings disagree</h3>
   <p class="muted" style="margin-top:0;font-size:.84rem">A <code>"p":"dns"</code> name is claimed by an inscription;
@@ -486,6 +516,43 @@ section.panel h2{margin-top:0}
 #ords .ordcost b{display:block;font-size:1.05rem}
 #ords details.ordmore>summary{cursor:pointer;color:var(--muted);font-size:.9rem}
 #ords .ordline{display:block}
+/* The explorer (2026-10-21): stacks on a phone, nothing wider than the page; the frame scales to the width. */
+#ords .ordx h3{margin:0 0 6px}
+#ords .ordx code{word-break:break-all}
+#ords .ordxsaid{margin:8px 0 0;font-size:.9rem}
+#ords .ordxsaid .ordcard{margin:8px 0}
+#ords .ordxview{border-top:1px solid var(--line);margin-top:12px;padding-top:12px}
+#ords .ordxnav{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+#ords .ordxjump{display:flex;gap:4px;align-items:center}
+#ords .ordxjump input{width:8.5em;font-size:16px}
+#ords .ordxbody{display:grid;grid-template-columns:minmax(0,320px) minmax(0,1fr);gap:14px;align-items:start}
+#ords .ordxframe{width:100%;aspect-ratio:1;border:1px solid var(--line);border-radius:10px;overflow:hidden;
+  background:color-mix(in srgb,var(--fg) 4%,transparent);display:flex;align-items:center;justify-content:center}
+#ords .ordxframe iframe{width:100%;height:100%;border:0;display:block;background:transparent}
+#ords .ordxframe pre{margin:0;padding:10px;width:100%;height:100%;box-sizing:border-box;overflow:auto;white-space:pre-wrap;
+  word-break:break-word;font-size:.8rem;align-self:stretch}
+#ords .ordxframe .ordxnone{padding:14px;text-align:center;font-size:.88rem}
+#ords .ordxfacts{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:4px 12px;margin:0;font-size:.9rem}
+#ords .ordxfacts dt{color:var(--muted)}
+#ords .ordxfacts dd{margin:0;overflow-wrap:anywhere;word-break:break-word}
+#ords .ordxfacts dd code{font-size:.82rem}
+#ords .ordxlink{background:none;border:0;padding:0;box-shadow:none;min-height:0;color:var(--accent);cursor:pointer;font:inherit;text-decoration:underline;
+  overflow-wrap:anywhere;text-align:left}
+#ords .ordrich{width:100%;border-collapse:collapse;font-size:.88rem;margin-top:8px}
+#ords .ordrich th,#ords .ordrich td{text-align:left;padding:6px 8px;border-top:1px solid var(--line);vertical-align:top}
+#ords .ordrich td.n,#ords .ordrich th.n{text-align:right;white-space:nowrap}
+#ords .ordrich td.addr{overflow-wrap:anywhere;word-break:break-all}
+#ords .ordpager{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px}
+@media (max-width:640px){
+  #ords .ordxbody{grid-template-columns:minmax(0,1fr)}
+  #ords .ordrich thead{display:none}
+  #ords .ordrich,#ords .ordrich tbody{display:block;width:auto}
+  #ords .ordrich tr{display:flex;flex-wrap:wrap;gap:2px 12px;border-top:1px solid var(--line);padding:6px 0}
+  #ords .ordrich td{display:block;border:0;padding:0}
+  #ords .ordrich td.addr{flex:1 1 calc(100% - 4em);min-width:0}
+  #ords .ordrich td.n{text-align:left;font-size:.84rem}
+  #ords .ordrich td.n[data-l]::before{content:attr(data-l) " ";color:var(--muted)}
+}
 .quotagrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px 14px;margin-bottom:10px}
 .quotagrid label{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:.9rem}
 .quotagrid input{width:90px}
@@ -1231,6 +1298,7 @@ section.panel h2{margin-top:0}
     coins.textContent = ''; box.textContent = '';
     if (!rows.length) { box.appendChild(ordEl('p', 'muted', 'This arcade reads none of the chains that have ords.')); return; }
     var r = rows.filter(function (x) { return x.net === ORD_PICK; })[0] || rows.filter(function (x) { return x.mode !== 'off'; })[0] || rows[0];
+    ordxChain(r);                                     // the explorer follows the chain shown (2026-10-21)
     rows.forEach(function (x) {
       var b = ordEl('button', (x === r ? 'on' : '') + (x.mode === 'off' ? ' off' : ''));
       b.type = 'button'; b.title = x.title; b.setAttribute('aria-label', x.title); b.setAttribute('role', 'tab');
@@ -1360,24 +1428,288 @@ section.panel h2{margin-top:0}
     fetch('/admin/api/ords', {headers: {'Accept': 'application/json'}, cache: 'no-store'}).then(function (r) { return r.json(); })
       .then(function (d) {
         ORD_DATA = d;
-        var pick = $('ordlooknet');
-        if (!pick.options.length) (d.rows || []).forEach(function (r) {
-          var o = document.createElement('option'); o.value = r.net; o.textContent = r.title; pick.appendChild(o);
-        });
         ordDraw();
       }).catch(function () { $('ordchain').textContent = 'Could not read the ord indexes.'; });
   }
-  $('ordlookgo').onclick = function () {
-    var out = $('ordlooksaid'); out.textContent = 'Asking\u2026';
-    fetch('/admin/api/ords/lookup?net=' + encodeURIComponent($('ordlooknet').value) + '&q='
-          + encodeURIComponent($('ordlookq').value.trim()), {headers: {'Accept': 'application/json'}, cache: 'no-store'})
-      .then(function (r) { return r.json(); })
-      .then(function (j) { out.textContent = j.detail ? j.detail : JSON.stringify(j, null, 2); })
-      .catch(function (e) { out.textContent = String(e.message || e); });
-  };
+  // --- The explorer (2026-10-21): search, the viewer by number, and the tokens with their rich list, all on the
+  // chain the Ords tab shows. Changing that chain puts the viewer back at its #0 and empties the token section.
+  var ORDX = {net: null, title: '', number: 0, last: -1, tick: null, page: 0};
+  function ordxGet(path, args) {
+    var qs = Object.keys(args).map(function (k) { return k + '=' + encodeURIComponent(args[k]); }).join('&');
+    return fetch('/admin/api/ords/' + path + '?net=' + encodeURIComponent(ORDX.net) + '&' + qs,
+                 {headers: {'Accept': 'application/json'}, cache: 'no-store'})
+      .then(function (r) { return r.json().then(function (j) {
+        if (!r.ok) throw new Error(j.detail || ('HTTP ' + r.status));
+        return j;
+      }); });
+  }
+  function ordxStd(net) { return net === 'main' || net === 'test' ? 'PRC-20' : 'DRC-20'; }
+  function ordxUnits(units, dec) {                     // whole units (text, past 2^53) shown with the token's decimals
+    try {
+      var v = BigInt(String(units)), unit = BigInt(10) ** BigInt(dec || 0), w = (v / unit).toString(), f = v % unit;
+      w = w.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+      return f ? w + '.' + f.toString().padStart(Number(dec), '0').replace(/0+$/, '') : w;
+    } catch (e) { return String(units); }
+  }
+  function ordxAmount(t) {                             // "12345.6" as the index shows it, with thousands marks
+    var parts = String(t == null ? '' : t).split('.');
+    return parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',') + (parts[1] ? '.' + parts[1] : '');
+  }
+  function ordxPct(p) { return p == null ? '—' : (p >= 1 ? p.toFixed(2) : p >= 0.01 ? p.toFixed(3) : p > 0 ? '<0.01' : '0') + '%'; }
+  function ordxFrom(j) { return j && j.from ? ordEl('div', 'muted', '<span style="font-size:.8rem">Answered by ' + ordEsc(j.from)
+    + (j.walked_to ? ', walked to block ' + num(j.walked_to) : '') + '</span>') : ordEl('span'); }
+  function ordxLink(label, go) { var b = ordEl('button', 'ordxlink'); b.type = 'button'; b.textContent = label; b.onclick = go; return b; }
+  function ordxFacts(dl, facts) {
+    dl.textContent = '';
+    facts.forEach(function (f) {
+      if (f[1] == null || f[1] === '') return;
+      dl.appendChild(ordEl('dt', '', ordEsc(f[0])));
+      var dd = ordEl('dd');
+      if (f[1] instanceof Node) dd.appendChild(f[1]); else dd.textContent = String(f[1]);
+      dl.appendChild(dd);
+    });
+  }
+
+  function ordxChain(r) {
+    if (!r || r.net === ORDX.net) return;
+    ORDX.net = r.net; ORDX.title = r.title; ORDX.tick = null; ORDX.page = 0; ORDX.last = -1;
+    $('ordxchain').textContent = r.title;
+    $('ordtokh').textContent = ordxStd(r.net) + ' tokens on ' + r.title;
+    $('ordlooksaid').textContent = '';
+    $('ordtok').textContent = '';
+    ORDX_PICK.q.value = '';
+    ordxShow(0);
+  }
+
+  // The viewer: one inscription, by number (or by id, from a search), and the arrows.
+  function ordxContent(box, x) {
+    box.textContent = '';
+    var ct = String(x.content_type || '').toLowerCase(), src = '/content/' + encodeURIComponent(x.id);
+    if (/^image\//.test(ct) || /^text\/html/.test(ct)) {
+      // As the Wallet shows a Doginal (my_wallet.html doginalPic): sandboxed, scripts only, never this page's origin.
+      var frame = document.createElement('iframe');
+      frame.src = /^image\//.test(ct) ? src + '/fit' : src;
+      frame.title = 'Inscription ' + x.id; frame.loading = 'lazy';
+      frame.setAttribute('sandbox', 'allow-scripts'); frame.setAttribute('scrolling', 'no');
+      frame.setAttribute('referrerpolicy', 'no-referrer');
+      box.appendChild(frame);
+    } else if ((/^text\//.test(ct) || /json/.test(ct)) && (x.size || 0) <= 65536) {
+      var pre = ordEl('pre', '', ''); pre.textContent = 'Reading…'; box.appendChild(pre);
+      fetch(src, {cache: 'force-cache'}).then(function (r) { if (!r.ok) throw new Error(); return r.text(); })
+        .then(function (t) {
+          if (/json/.test(ct) || /^\s*[{\[]/.test(t)) { try { t = JSON.stringify(JSON.parse(t), null, 2); } catch (e) { /* as it is */ } }
+          pre.textContent = t.length > 8000 ? t.slice(0, 8000) + '\n…' : t;
+        })
+        .catch(function () { pre.textContent = 'The content could not be read here.'; });
+    } else {
+      var none = ordEl('div', 'ordxnone muted', ordEsc(ct || 'unknown type') + (x.size ? '<br>' + bytes(x.size) : '')
+        + '<br><a href="' + src + '" target="_blank" rel="noopener noreferrer">Open the content</a>');
+      box.appendChild(none);
+    }
+  }
+  function ordxDraw(j) {
+    var x = j.number && j.number.inscription, last = j.number ? j.number.last : ORDX.last;
+    ORDX.last = last == null ? -1 : last;
+    var facts = $('ordfacts'), frame = $('ordframe');
+    if (!x) {
+      frame.textContent = '';
+      frame.appendChild(ordEl('div', 'ordxnone muted', ORDX.last < 0 ? 'No inscriptions indexed on this chain yet.'
+        : 'No inscription #' + num(ORDX.number) + ' yet: the last one known is #' + num(ORDX.last) + '.'));
+      ordxFacts(facts, [['Number', '#' + num(ORDX.number)], ['Last known', ORDX.last < 0 ? 'none yet' : '#' + num(ORDX.last)]]);
+    } else {
+      ORDX.number = x.number;
+      ordxContent(frame, x);
+      var content = ordEl('a', '', ordEsc(x.id)); content.href = '/content/' + encodeURIComponent(x.id);
+      content.target = '_blank'; content.rel = 'noopener noreferrer';
+      var where = x.output ? ordEl('code', '', ordEsc(x.output) + (x.offset ? ' (koinu ' + num(x.offset) + ')' : '')) : 'fees (no output)';
+      ordxFacts(facts, [
+        ['Number', '#' + num(x.number) + (ORDX.last >= 0 ? ' of ' + num(ORDX.last) : '')],
+        ['Id', content],
+        ['Content type', x.content_type],
+        ['Size', x.size == null ? null : bytes(x.size) + (x.pieces > 1 ? ' in ' + x.pieces + ' pieces' : '')],
+        ['Block', num(x.height)],
+        ['Protocol', x.protocol || '—'],
+        ['Burned', x.burned ? 'yes' : 'no'],
+        ['Sits on', x.burned ? null : where],
+        ['Owner', x.burned ? null : (x.owner || 'not known here (the walking arcade has no Core to ask)')],
+        ['Moved at block', x.moved_at && x.moved_at !== x.height ? num(x.moved_at) : null]]);
+      facts.appendChild(ordEl('dt', '', '')); var dd = ordEl('dd'); dd.appendChild(ordxFrom(j)); facts.appendChild(dd);
+    }
+    $('ordnum').value = ORDX.number;
+    $('ordprev').disabled = ORDX.number <= 0;
+    $('ordnext').disabled = ORDX.last < 0 || ORDX.number >= ORDX.last;
+  }
+  function ordxShow(number, id) {
+    if (!ORDX.net) return;
+    var net = ORDX.net;
+    if (!id) ORDX.number = Math.max(0, Number(number) || 0);
+    $('ordprev').disabled = $('ordnext').disabled = true;
+    ordxGet('inscription', id ? {id: id} : {number: ORDX.number})
+      .then(function (j) { if (net === ORDX.net) ordxDraw(j); })
+      .catch(function (e) {
+        if (net !== ORDX.net) return;
+        $('ordframe').textContent = '';
+        $('ordframe').appendChild(ordEl('div', 'ordxnone muted', ordEsc(e.message)));
+        ordxFacts($('ordfacts'), [['Number', '#' + num(ORDX.number)]]);
+        $('ordprev').disabled = ORDX.number <= 0; $('ordnext').disabled = false;
+      });
+  }
+  $('ordprev').onclick = function () { if (ORDX.number > 0) ordxShow(ORDX.number - 1); };
+  $('ordnext').onclick = function () { ordxShow(ORDX.number + 1); };
+  $('ordjump').onclick = function () { ordxShow($('ordnum').value); };
+  $('ordnum').onkeydown = function (e) { if (e.key === 'Enter') { e.preventDefault(); ordxShow($('ordnum').value); } };
+
+  // Search: each kind of answer as a card; an inscription or a coin opens in the viewer, a tick in the tokens.
+  function ordxSaid(j) {
+    var out = $('ordlooksaid'); out.textContent = '';
+    var card = ordEl('div', 'ordcard');
+    if ('number' in j || 'where' in j) {
+      var x = j.number ? j.number.inscription : j.where;
+      if (!x) card.appendChild(ordEl('div', 'muted', 'Not found on ' + ordEsc(ORDX.title) + '.'));
+      else {
+        card.appendChild(ordEl('div', '', 'Inscription <b>#' + num(x.number) + '</b>: shown below.'));
+        if (j.number) ordxDraw(j); else ordxShow(null, x.id);
+      }
+    } else if ('on' in j) {
+      var on = j.on || [];
+      card.appendChild(ordEl('div', '', on.length ? '<b>' + on.length + '</b> inscription' + (on.length > 1 ? 's' : '')
+        + ' on this coin:' : 'No inscription sits on this coin.'));
+      on.forEach(function (x) {
+        var row = ordEl('div'); row.appendChild(ordxLink(x.id, function () { ordxShow(null, x.id); }));
+        if (x.offset) row.appendChild(ordEl('span', 'muted', ' at koinu ' + num(x.offset)));
+        card.appendChild(row);
+      });
+      if (on.length) ordxShow(null, on[0].id);
+    } else if ('kinds' in j) {
+      var k = j.kinds || {};
+      if ('count' in k) {
+        card.appendChild(ordEl('div', '', '<b>' + num(k.count) + '</b> inscriptions. The first ones:'));
+        var row = ordEl('div', 'row'); row.style.cssText = 'gap:10px;flex-wrap:wrap';
+        (k.first || []).forEach(function (x) { row.appendChild(ordxLink('#' + num(x.number), function () { ordxShow(x.number); })); });
+        card.appendChild(row);
+      } else {
+        [['Commonest content types', k.types], ['Commonest protocols', k.protocols]].forEach(function (g) {
+          card.appendChild(ordEl('h3', '', g[0]));
+          card.appendChild(lines((g[1] || []).map(function (t) { return t[0] + ': ' + num(t[1]); })));
+        });
+      }
+    } else if ('token' in j) {
+      if (!j.token) card.appendChild(ordEl('div', 'muted', 'No such tick on ' + ordEsc(ORDX.title) + '.'));
+      else { card.appendChild(ordEl('div', '', '<b>' + ordEsc(j.token.tick) + '</b>: shown under Tokens below.')); ordxTick(j.token.tick, 0); }
+    } else if ('name' in j) {
+      var n = j.name || {};
+      card.appendChild(ordEl('div', '', 'The name <b>' + ordEsc(n.name) + '</b>, under each reading:'));
+      Object.keys(n.readings || {}).forEach(function (rule) {
+        var w = n.readings[rule].winner, row = ordEl('div');
+        row.appendChild(ordEl('span', '', '<b>' + ordEsc(rule) + '</b>: '));
+        if (!w) row.appendChild(ordEl('span', 'muted', 'unclaimed'));
+        else {
+          row.appendChild(ordxLink('#' + num(w.number), function () { ordxShow(w.number); }));
+          row.appendChild(ordEl('span', 'muted', ' (' + ordEsc(w.kind) + (n.readings[rule].later_claims ? ', '
+            + num(n.readings[rule].later_claims) + ' later claims' : '') + ')'));
+        }
+        card.appendChild(row);
+      });
+    } else if ('balances' in j) {
+      var bs = j.balances || [];
+      card.appendChild(ordEl('div', '', bs.length ? 'Token balances of this address:' : 'This address holds no tokens here.'));
+      bs.forEach(function (b) {
+        var row = ordEl('div'); row.appendChild(ordxLink(b.tick, function () { ordxTick(b.tick, 0); }));
+        row.appendChild(ordEl('span', '', ': ' + ordxUnits(b.units, b.decimals) + (b.transferable_units && b.transferable_units !== '0'
+          ? ' <span class="muted">(' + ordxUnits(b.transferable_units, b.decimals) + ' transferable)</span>' : '')));
+        card.appendChild(row);
+      });
+    }
+    card.appendChild(ordxFrom(j));
+    var raw = ordEl('details', 'ordmore'); raw.appendChild(ordEl('summary', '', 'raw'));
+    var pre = ordEl('pre', 'muted'); pre.style.cssText = 'white-space:pre-wrap;word-break:break-all;font-size:.78rem;margin:4px 0 0';
+    pre.textContent = JSON.stringify(j, null, 2); raw.appendChild(pre); card.appendChild(raw);
+    out.appendChild(card);
+  }
+  function ordxLook() {
+    var out = $('ordlooksaid'), q = $('ordlookq').value.trim();
+    if (!q) return;
+    out.textContent = 'Asking…';
+    ordxGet('lookup', {q: q}).then(ordxSaid).catch(function (e) { out.textContent = e.message; });
+  }
+  $('ordlookgo').onclick = ordxLook;
+  $('ordlookq').onkeydown = function (e) { if (e.key === 'Enter') { e.preventDefault(); ordxLook(); } };
+
+  // Tokens: the Exchange's search box (_pick.html) on the index's ticks, then the token and its rich list.
+  var ORDX_WAIT = null;
+  var ORDX_PICK = window.arcadePick($('ordtickpick'), {
+    placeholder: 'Search a ticker',
+    shown: function () { return ORDX.tick || ''; },
+    choose: function (row) { ordxTick(row.value, 0); },
+    items: function (text, words, done) {
+      clearTimeout(ORDX_WAIT);
+      ORDX_WAIT = setTimeout(function () {
+        ordxGet('ticks', {q: text}).then(function (j) {
+          var t = j.ticks || {first: [], count: 0};
+          done(t.first.map(function (x) {
+            return {value: x.tick, label: x.tick, note: '#' + num(x.number) + ' · ' + ordxPct(x.minted_pct) + ' minted'};
+          }), t.count - t.first.length, text ? 'No tick starts with “' + text + '”.' : 'No tokens indexed yet.');
+        }).catch(function (e) { done([], 0, e.message); });
+      }, text ? 160 : 0);
+    }
+  });
+  function ordxTick(tick, page) {
+    var net = ORDX.net, box = $('ordtok');
+    ORDX.tick = tick; ORDX.page = page; ORDX_PICK.sync();
+    box.textContent = 'Reading…';
+    ordxGet('holders', {tick: tick, page: page}).then(function (j) {
+      if (net !== ORDX.net || tick !== ORDX.tick) return;
+      box.textContent = '';
+      var t = j.holders;
+      if (!t) { box.appendChild(ordEl('p', 'muted', 'No such tick on ' + ordEsc(ORDX.title) + '.')); return; }
+      var info = ordEl('div', 'ordcard');
+      info.appendChild(ordEl('h3', '', ordEsc(t.tick) + ' <span class="muted" style="font-weight:400">' + ordxStd(net) + '</span>'));
+      var dl = ordEl('dl', 'ordxfacts'); info.appendChild(dl);
+      ordxFacts(dl, [
+        ['Deploy', ordxLink(t.deploy, function () { ordxShow(null, t.deploy); $('ordview').scrollIntoView({block: 'start'}); })],
+        ['Number', '#' + num(t.number)],
+        ['Deployed at block', num(t.height)],
+        ['Deployer', t.deployer],
+        ['Max supply', ordxAmount(t.supply)],
+        ['Mint limit', ordxAmount(t.limit)],
+        ['Decimals', t.decimals],
+        ['Minted', ordxAmount(t.minted) + (t.minted_pct == null ? '' : ' (' + ordxPct(t.minted_pct) + ' of supply)')],
+        ['Holders', num(t.holders)]]);
+      box.appendChild(info);
+      var rich = ordEl('div', 'ordcard');
+      rich.appendChild(ordEl('h3', '', 'Rich list'));
+      if (j.older) rich.appendChild(ordEl('div', 'ordattn', ordEsc(j.older)));
+      if (!t.rows.length) rich.appendChild(ordEl('p', 'muted', 'Nobody holds any yet.'));
+      else {
+        var table = ordEl('table', 'ordrich', '<thead><tr><th class="n">Rank</th><th>Address</th><th class="n">Balance</th>'
+          + '<th class="n">Transferable</th><th class="n">% of supply</th></tr></thead>');
+        var body = ordEl('tbody');
+        t.rows.forEach(function (h) {
+          var tr = ordEl('tr');
+          [['n', '', '#' + h.rank], ['addr', '', h.owner], ['n', 'Balance', ordxAmount(h.balance)],
+           ['n', 'Transferable', ordxAmount(h.transferable)], ['n', '% of supply', ordxPct(h.pct)]].forEach(function (c) {
+            var td = ordEl('td', c[0]); td.textContent = c[2]; if (c[1]) td.setAttribute('data-l', c[1]); tr.appendChild(td);
+          });
+          body.appendChild(tr);
+        });
+        table.appendChild(body); rich.appendChild(table);
+      }
+      var pager = ordEl('div', 'ordpager');
+      var prev = ordEl('button', 'small', '&lsaquo; Previous'); prev.type = 'button'; prev.id = 'ordrichprev';
+      prev.disabled = t.page <= 0; prev.onclick = function () { ordxTick(tick, t.page - 1); };
+      var next = ordEl('button', 'small', 'Next &rsaquo;'); next.type = 'button'; next.id = 'ordrichnext';
+      next.disabled = t.page + 1 >= t.pages || !!j.older; next.onclick = function () { ordxTick(tick, t.page + 1); };
+      pager.appendChild(prev);
+      pager.appendChild(ordEl('span', 'muted', 'Page <b id="ordrichpage">' + (t.page + 1) + '</b> of ' + num(t.pages)));
+      pager.appendChild(next);
+      rich.appendChild(pager);
+      rich.appendChild(ordxFrom(j));
+      box.appendChild(rich);
+    }).catch(function (e) { if (net === ORDX.net) box.textContent = e.message; });
+  }
   $('ordnamesgo').onclick = function () {
     var out = $('ordnamessaid'); out.textContent = 'Reading\u2026';
-    fetch('/admin/api/ords/names?net=' + encodeURIComponent($('ordlooknet').value), {headers: {'Accept': 'application/json'},
+    fetch('/admin/api/ords/names?net=' + encodeURIComponent(ORDX.net || ''), {headers: {'Accept': 'application/json'},
                                                                                    cache: 'no-store'})
       .then(function (r) { return r.json(); })
       .then(function (j) {
