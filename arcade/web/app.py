@@ -23581,7 +23581,10 @@ def create_app(state: AppState) -> FastAPI:
         """Whether an import's read-back can start now: the chain readable, and for a Core rescan somebody to borrow
         its reads from meanwhile, and no failed rescan still waiting out its back-off."""
         if not _readable(chain):
-            return False
+            # A Core held at a rescan reads as offline itself (its queue full), yet its reads are borrowed: the batch
+            # is tried, finds it busy, and waits (utxos.CoreBusy), rather than the page saying nobody can be read.
+            if not (_core_rescan_on(chain) and catchuplib.held(chain.network) and catchuplib.can_borrow(chain)):
+                return False
         if not _core_rescan_on(chain):
             return True
         fails, until = _core_retry.get(chain.network, (0, 0.0))
@@ -23836,8 +23839,11 @@ def create_app(state: AppState) -> FastAPI:
         if (chain.network, address) in _rescan_queue:
             fails, until = _core_retry.get(chain.network, (0, 0.0)) if _core_rescan_on(chain) else (0, 0.0)
             sent = state.setting(f"core_rescan_sent:{chain.network}", None)
-            if (_core_rescan_on(chain) and not fails and catchuplib.held(chain.network)
-                    and isinstance(sent, dict)):
+            if _core_rescan_on(chain) and not fails and catchuplib.held(chain.network):
+                if not isinstance(sent, dict):
+                    # Begun before the arcade last restarted, with nothing kept of when or for whom: taken as this
+                    # wallet's, a whole rescan's length from now (the batch, once tried, keeps the real record).
+                    sent = {"at": time.time(), "addresses": [address]}
                 # The Core is at a whole-chain rescan (one an arcade restart cut the connection to goes on all the
                 # same), and waited for: said as what it is, with its countdown (2026-10-21: "the arcades node
                 # is re-scanning and give a estimate time until finished"), never as "no node to borrow".

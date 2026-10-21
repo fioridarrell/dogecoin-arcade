@@ -572,6 +572,10 @@ def test_a_core_still_rescanning_is_said_so_with_its_countdown(client, monkeypat
     state.set_setting("core_rescan_sent:ltctest", {"at": time.time() - 10, "addresses": ["someone else"]})
     said = app.post("/account/imported/rescan", json={"chain": "ltctest", "address": asked["address"]}).json()
     assert "one more rescan reads this wallet's coins" in said["says"]
+    # Nothing kept of when it began (an arcade restart before 2026-10-21's fix): still said as rescanning.
+    state.set_setting("core_rescan_sent:ltctest", None)
+    said = app.post("/account/imported/rescan", json={"chain": "ltctest", "address": asked["address"]}).json()
+    assert said["says"].startswith("This arcade's node is rescanning the whole chain"), said
 
 
 def test_a_core_that_does_not_answer_at_all_is_remembered_as_rescanning(client, monkeypatch):
