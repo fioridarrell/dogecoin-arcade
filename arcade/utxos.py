@@ -36,7 +36,7 @@ import time
 from typing import Any
 
 from .db import register_journalled_table
-from .rpc import RpcError
+from .rpc import RpcError, RpcTransportError
 from .script import OutputType, parse_output
 
 SCHEMA = """
@@ -206,7 +206,40 @@ SCAN_SECONDS = 1200.0
 CORE_RESCAN_SECONDS = 24 * 3600
 
 
-def seed_from_core_wallet(index, rpc, params, addresses, upto: int) -> dict[str, int] | None:
+class CoreBusy(Exception):
+    """The Core did not take the call: its queue is full or it is still at a rescan sent earlier (one an arcade
+    restart cut the connection to, which the Core finishes anyway). Not a failure of the import: asked again later,
+    and the reads stay borrowed meanwhile."""
+
+
+def _up_since(rpc) -> float | None:
+    """A time the Core has been running since, at the latest: its oldest peer connection (a Core keeps no uptime
+    in 1.14). None when it has no peers."""
+    try:
+        times = [int(p.get("conntime") or 0) for p in (rpc.call("getpeerinfo") or [])]
+    except (RpcError, RpcTransportError):
+        return None
+    times = [t for t in times if t > 0]
+    return float(min(times)) if times else None
+
+
+def _rescan_already_ran(rpc, addresses, sent) -> bool:
+    """Whether an `importmulti` rescan sent earlier (`sent`: {"at", "addresses"}) already covered these addresses
+    and ran to its end: every one sent then and watched now, and the Core not restarted since (a peer of its older
+    than the send). Then the coins are listed with no second rescan of the whole chain -- hours on Dogecoin."""
+    if not isinstance(sent, dict) or not set(addresses) <= set(sent.get("addresses") or ()):
+        return False
+    up = _up_since(rpc)
+    if up is None or up >= float(sent.get("at") or 0):
+        return False
+    try:
+        return all((rpc.call("validateaddress", a) or {}).get("iswatchonly") for a in addresses)
+    except (RpcError, RpcTransportError):
+        return False
+
+
+def seed_from_core_wallet(index, rpc, params, addresses, upto: int, *, sent=None,
+                          remember=None) -> dict[str, int] | None:
     """The coins an address holds now, from the Core's own WALLET: imported watch-only (never a key) with a rescan of
     the whole chain, then listed (2026-10-21: an imported wallet's coins from before the index's floor were
     never found on Dogecoin and Pepecoin, whose 1.14 Cores have no scantxoutset). `importmulti` with timestamp 0
@@ -215,25 +248,39 @@ def seed_from_core_wallet(index, rpc, params, addresses, upto: int) -> dict[str,
     wallet (then the caller reads blocks instead). Filed like seed_from_core's rows, at or below `upto` only.
     Every address in one call, so one rescan serves every import waiting for it (2026-10-21: "multiple people
     can import their wallets during a rescan, and during the next rescan, all of their wallet addresses will be
-    watched"). Returns {address: coins filed}."""
+    watched"). Returns {address: coins filed}.
+
+    `sent` is what `remember` was handed by an earlier call ({"at", "addresses"}), saved by the caller before the
+    `importmulti` goes: when that rescan already ran to its end for these addresses, it is not sent again. CoreBusy
+    when the Core does not take a call (queue full, still rescanning, its connection cut)."""
     addresses = sorted(set(addresses))
     try:
         rpc.call("getwalletinfo")
-    except RpcError:
+    except RpcTransportError as exc:
+        raise CoreBusy(str(exc)) from None
+    except RpcError as exc:
+        if exc.code == -28:                          # warming up
+            raise CoreBusy(str(exc)) from None
         return None                                  # -disablewallet
-    held = getattr(rpc, "_timeout", None)
-    if held is not None:
-        rpc._timeout = max(held, CORE_RESCAN_SECONDS)
-    try:
-        said = rpc.call("importmulti", [{"scriptPubKey": {"address": a}, "timestamp": 0, "watchonly": True,
-                                         "label": "arcade-import"} for a in addresses], {"rescan": True}) or []
-    finally:
+    if not _rescan_already_ran(rpc, addresses, sent):
+        if remember is not None:
+            remember({"at": time.time(), "addresses": addresses})
+        held = getattr(rpc, "_timeout", None)
         if held is not None:
-            rpc._timeout = held
-    refused = [(a, r) for a, r in zip(addresses, said) if not (r or {}).get("success")]
-    if len(said) != len(addresses) or refused:
-        raise RuntimeError(f"the Core would not watch {refused[0][0] if refused else 'every address'}: "
-                           f"{(refused[0][1] or {}).get('error') if refused else 'it answered for fewer'}")
+            rpc._timeout = max(held, CORE_RESCAN_SECONDS)
+        try:
+            said = rpc.call("importmulti", [{"scriptPubKey": {"address": a}, "timestamp": 0, "watchonly": True,
+                                             "label": "arcade-import"} for a in addresses], {"rescan": True}) or []
+        except RpcTransportError as exc:
+            # Never taken (queue full), or the connection went while the Core rescans on: the next try finds it.
+            raise CoreBusy(str(exc)) from None
+        finally:
+            if held is not None:
+                rpc._timeout = held
+        refused = [(a, r) for a, r in zip(addresses, said) if not (r or {}).get("success")]
+        if len(said) != len(addresses) or refused:
+            raise RuntimeError(f"the Core would not watch {refused[0][0] if refused else 'every address'}: "
+                               f"{(refused[0][1] or {}).get('error') if refused else 'it answered for fewer'}")
     tip = int(rpc.call("getblockcount"))
     filed = {a: 0 for a in addresses}
     with index.open() as db:

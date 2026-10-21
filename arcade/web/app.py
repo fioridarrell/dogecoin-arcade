@@ -23517,6 +23517,7 @@ def create_app(state: AppState) -> FastAPI:
     #: rescan its whole chain again at once: 10 minutes, then 20, then it stops until the arcade restarts.
     _core_retry: dict[str, tuple[int, float]] = {}
     CORE_RETRY_SECONDS, CORE_RETRY_MAX = 600.0, 3
+    CORE_BUSY_SECONDS = 180.0
     #: Blocks a Core rescans a second, until one is measured here (Dogecoin 1.14 on a spinning disk, cautious).
     CORE_RESCAN_RATE_GUESS = 600.0
 
@@ -23610,9 +23611,15 @@ def create_app(state: AppState) -> FastAPI:
             try:
                 catchuplib.hold(chain, "rescanning for wallet imports")
                 try:
-                    rpc = chain.local_rpc()
                     try:
-                        filed = utxoslib.seed_from_core_wallet(index, rpc, chain.params, batch, tip)
+                        rpc = chain.local_rpc()
+                    except Exception as exc:               # noqa: BLE001 -- not answering: still at a rescan
+                        raise utxoslib.CoreBusy(str(exc)) from None
+                    sent_key = f"core_rescan_sent:{chain.network}"
+                    try:
+                        filed = utxoslib.seed_from_core_wallet(
+                            index, rpc, chain.params, batch, tip, sent=state.setting(sent_key, None),
+                            remember=lambda said: state.set_setting(sent_key, said))
                     finally:
                         rpc.close()
                 finally:
@@ -23631,6 +23638,14 @@ def create_app(state: AppState) -> FastAPI:
                     log.info("imported wallets on %s: one rescan for %d, %.0f min", chain.network, len(batch),
                              took / 60)
                 state.bump_generation()
+            except utxoslib.CoreBusy as exc:
+                # The Core is busy (most often still at a rescan sent before an arcade restart): not a failure;
+                # asked again in a few minutes, the reads borrowed meanwhile, and that rescan is not sent twice.
+                fails = _core_retry.get(chain.network, (0, 0.0))[0]
+                _core_retry[chain.network] = (fails, time.time() + CORE_BUSY_SECONDS)
+                log.info("rescan for imported wallets on %s waits: the Core is busy (%s)", chain.network, exc)
+                for a in batch:
+                    _rescan_queue[(chain.network, a)] = time.time()
             except Exception as exc:                   # noqa: BLE001 -- queued again, after a back-off
                 fails = _core_retry.get(chain.network, (0, 0.0))[0] + 1
                 _core_retry[chain.network] = (fails, time.time() + CORE_RETRY_SECONDS * fails)

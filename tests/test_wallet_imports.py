@@ -498,3 +498,49 @@ def test_no_wallet_is_imported_on_pep_test(client, monkeypatch):
     refused = app.post("/account/imported/address", json=asked)
     assert refused.status_code == 400, refused.text      # "cannot be imported" where PEP TEST runs
     assert not W.entries(state.setting(W.setting_key("test", account)))
+
+
+class _BusyCore(_WalletCore):
+    """A Core still at a rescan sent before an arcade restart: its queue full until `free`, peers since `up`."""
+
+    def __init__(self, gate, up, watched=()):
+        super().__init__(gate)
+        self.free, self.up, self.watched = False, up, set(watched)
+
+    def call(self, method, *args):
+        from arcade.rpc import RpcTransportError
+        if not self.free:
+            raise RpcTransportError("non-JSON response from dogecoind (HTTP 500): 'Work queue depth exceeded'")
+        if method == "getpeerinfo":
+            return [{"conntime": int(self.up)}, {"conntime": int(self.up) + 500}]
+        if method == "validateaddress":
+            return {"isvalid": True, "iswatchonly": args[0] in self.watched}
+        return super().call(method, *args)
+
+
+def test_a_busy_core_is_waited_for_and_a_rescan_it_already_ran_is_not_sent_again(tmp_path):
+    """2026-10-21: an arcade restart cut the connection to a Dogecoin importmulti the Core went on with; the
+    retries met a full queue and counted as failures, and a free Core would have been sent the whole-chain rescan
+    again (hours). A busy Core is CoreBusy, and a rescan sent before that ran to its end is not sent twice."""
+    from arcade import utxos
+    from arcade.ledger import LedgerIndex
+    gate = threading.Event()
+    gate.set()
+    index = LedgerIndex(tmp_path / "t.sqlite", P, lambda: None)
+    a = W.address_of(P, _key(0xB001)[1], "p2pkh")
+    sent_at = time.time() - 3600
+    core = _BusyCore(gate, up=sent_at - 86400, watched={a})
+    kept = {}
+    with pytest.raises(utxos.CoreBusy):
+        utxos.seed_from_core_wallet(index, core, P, [a], 500, sent={"at": sent_at, "addresses": [a]},
+                                    remember=kept.update)
+    assert core.batches == [] and kept == {}
+    core.free = True
+    filed = utxos.seed_from_core_wallet(index, core, P, [a], 500, sent={"at": sent_at, "addresses": [a]},
+                                        remember=kept.update)
+    assert filed == {a: 1} and core.batches == [], "listed with no second rescan"
+    # Restarted since the send (no peer that old): sent again, and remembered first.
+    core.up = time.time() - 60
+    utxos.seed_from_core_wallet(index, core, P, [a], 500, sent={"at": sent_at, "addresses": [a]},
+                                remember=kept.update)
+    assert core.batches == [[a]] and kept["addresses"] == [a]
