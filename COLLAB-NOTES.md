@@ -88,6 +88,23 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-21 · the operator's side · ord index layout 3: whole copies, slimmer (PEP Main 2.10 -> 1.38 GB)
+
+The operator chose "whole copies, slimmer" over splitting the index around the ring: the split would save only ~15% a
+holder, because every holder must follow every inscription's moves anyway (ord's reinscription rule: a birth counts
+only when no inscription sits on input 0's first koinu, and any inscription can be moved onto one). Rings A and B stay
+whole copies held by big machines. Branch claude/ord-slimmer.
+- **Layout 3:** the id and coin lookups keyed by the txid's first 8 bytes (`insc_id8`, `at_out8`; the whole txid is
+  still compared -- a query must say `substr(tx, 1, 8) = ?` to use them); no content-type, protocol or number lookups
+  (Admin `type:` / `p:` searches scan: 0.3 s for PEP's 6.7M; rows are kept in number order, rid = number + 1, tested).
+  Converted in place by the index thread from layout 1 or 2 (Store.upgrade; lookups built after the rows). Real PEP
+  Main copy: 15 s, 2.10 -> 1.38 GB, 3,000 ids and 500 coins looked up the same before and after.
+- Snapshots are offered as "sn<layout>" ("sn3"), so an arcade of another layout never fetches one it cannot read.
+- **Notes wait only for holders within 20,000 blocks of the furthest** (one further behind fetches the whole index or
+  walks from its Core); the cap is 512 MB, was 3 GB. A test machine had kept 588 MB of Dogecoin notes for a holder whose walk
+  had not left the chain's first block.
+- SadFrog / tbuuol: nothing to do; your arcades convert by themselves after the update.
+
 ### 2026-10-21 · the operator's side · `POST /r/send` takes a `ref`: a retry is never a second send
 
 ASHVALE asked (game-agnostic): a game's `POST /r/send` reached the node, Safari lost the reply ("Load failed"),

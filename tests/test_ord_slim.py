@@ -255,7 +255,9 @@ def test_a_snapshot_of_another_layout_is_never_fetched_nor_kept(tmp_path):
     index = _walker(tmp_path, chain)
     index.heard("peer", {"op": "hi", "rules": ord_rules.RULES, "sn": {"id": "a" * 64, "h": 9, "n": 1, "have": "all"}})
     assert "peer" not in index.snapshots.offers, "a layout-1 arcade's offer (sn) is not one this arcade can read"
-    index.heard("peer", {"op": "hi", "rules": ord_rules.RULES, "sn2": {"id": "b" * 64, "h": 9, "n": 1, "have": "all"}})
+    index.heard("peer", {"op": "hi", "rules": ord_rules.RULES, "sn2": {"id": "d" * 64, "h": 9, "n": 1, "have": "all"}})
+    assert "peer" not in index.snapshots.offers, "nor a layout-2 arcade's (sn2)"
+    index.heard("peer", {"op": "hi", "rules": ord_rules.RULES, f"sn{dx.LAYOUT}": {"id": "b" * 64, "h": 9, "n": 1, "have": "all"}})
     assert index.snapshots.offers["peer"]["id"] == "b" * 64
     snaps = index.snapshots
     snaps.manifest_path.write_text(json.dumps({"manifest": {"size": 3, "at": 0}, "id": "c" * 64}))
@@ -277,3 +279,83 @@ def test_a_snapshot_nobody_fetches_from_is_let_go_of(tmp_path, monkeypatch, idle
         monkeypatch.setattr(ord_snapshot.time, "time", lambda: made["manifest"]["at"] + ord_snapshot.SNAP_IDLE + 5)
     index.snapshots.tidy()
     assert index.snapshots.snap_path.exists() is not idle
+
+
+# --------------------------------------------------------------------------- layout 3 (2026-10-21, "whole copies, slimmer")
+
+LAYOUT_2_INDEXES = """
+    CREATE UNIQUE INDEX insc_id ON insc (tx, n);
+    CREATE INDEX insc_number ON insc (number);
+    CREATE INDEX insc_ct ON insc (ct, number);
+    CREATE INDEX insc_proto ON insc (proto, number) WHERE proto IS NOT NULL;
+    CREATE INDEX at_out ON at (tx, vout);
+"""
+
+
+def _indexes(path):
+    db = sqlite3.connect(path)
+    try:
+        return sorted(r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='index' AND sql IS NOT NULL"))
+    finally:
+        db.close()
+
+
+def test_an_index_of_layout_2_is_converted_to_the_slimmer_lookups_and_walks_on_the_same(tmp_path):
+    chain = Chain()
+    names = _tx([(FUND, 0, _envelope(b"text/plain", parts=((0, b"kit.doge"),)))], [100_000], tag=b"n")
+    img = _tx([(FUND, 1, _envelope(b"image/png", parts=((2, b"P" * 200),), total=3))], [100_000], tag=b"i")
+    chain.add([names, img])
+    chain.add([_tx([(names[1], 0, b""), (FUND, 2, b"")], [60_000, 50_000], tag=b"m"),
+               _tx([(img[1], 0, _more(((1, b"Q" * 200),)))], [100_000], tag=b"i2")])
+    walked = _walker(tmp_path, chain)
+    walked.walker.step(chain, dx.BASE + 1, budget=60)
+    # the same index as layout 2 had it: the old lookups, layout 2 said
+    src = sqlite3.connect(walked.store.path)
+    src.execute("VACUUM INTO ?", (str(tmp_path / "two.sqlite"),))
+    src.close()
+    db = sqlite3.connect(tmp_path / "two.sqlite", isolation_level=None)
+    for name in ("insc_id8", "at_out8"):
+        db.execute(f"DROP INDEX {name}")
+    db.executescript(LAYOUT_2_INDEXES)
+    db.execute("UPDATE meta SET v='2' WHERE k='layout'")
+    db.close()
+    two = dx.DoginalIndex(tmp_path / "two.sqlite", lambda: chain, lambda: "walk")
+    assert two.store.old_layout and two.where(f"{names[1]}i0") is None
+    two.step()
+    assert not two.store.old_layout and two.store.meta("layout") == dx.LAYOUT == 3
+    assert _indexes(two.store.path) == _indexes(walked.store.path), "the slimmer lookups, the old ones gone"
+    assert not set(dx.OLD_INDEXES) & set(_indexes(two.store.path))
+    assert _dump(two) == _dump(walked)
+    assert two.where(f"{names[1]}i0") == walked.where(f"{names[1]}i0")
+    assert two.on(*walked.where(f"{names[1]}i0")["output"].split(":")[0:1], 0) == \
+        walked.on(walked.where(f"{names[1]}i0")["output"].split(":")[0], 0)
+    chain.add([_tx([(chain_last_img(chain), 0, _more(((0, b"R" * 200),)))], [100_000], tag=b"i3")])
+    for idx in (walked, two):
+        idx.walker.tracked = None
+        idx.walker.step(chain, dx.BASE + 2, budget=60)
+    assert _dump(two) == _dump(walked)
+
+
+def chain_last_img(chain):
+    """The txid of the latest piece of the image in the test above (block 1's second transaction)."""
+    raw = chain.blocks[1][1]
+    block = rawchain.read_block(raw, chain.blocks[1][0])
+    return block.txs[2].txid
+
+
+def test_inscriptions_are_kept_in_number_order(tmp_path):
+    """Layout 3 has no number lookup: rows are kept in number order (rid = number + 1), so "the first ones" read
+    in rid order, and a lookup by number is a lookup by rid."""
+    chain = Chain()
+    txs = [_tx([(FUND, k, _envelope(b"text/plain", parts=((0, b"n%d" % k),)))], [100_000], tag=b"t%d" % k)
+           for k in range(6)]
+    chain.add(txs[:3])
+    chain.add(txs[3:])
+    index = _walker(tmp_path, chain)
+    index.walker.step(chain, dx.BASE + 1, budget=60)
+    index.walker.rollback(dx.BASE + 1)
+    index.walker.step(chain, dx.BASE + 1, budget=60)
+    rows = index.store.q("SELECT rid, number FROM insc ORDER BY rid")
+    assert len(rows) == 6 and all(rid == number + 1 for rid, number in rows)
+    first = index.kinds(ctype="text/")["first"]
+    assert [f["number"] for f in first] == list(range(6))

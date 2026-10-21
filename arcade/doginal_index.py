@@ -71,13 +71,16 @@ UNDO_BLOCKS = 300
 #: functionality"): ids and txids as bytes, content types by number, a body still arriving kept as its envelope's
 #: state (not its pieces), undo packed. An index of layout 1 is converted in place by the index thread (Store.upgrade).
 #: Nothing peers compare depends on it -- chunk hashes and moves are the same either way.
-LAYOUT = 2
+LAYOUT = 3
+# 3 (2026-10-21, the operator: "whole copies, slimmer"): the id and coin lookups keyed by the txid's first 8 bytes (the
+# whole txid is still compared); no content-type, protocol or number lookups (the Admin type: / p: searches scan,
+# and rows are kept in number order: rid = number + 1).
 #: How many chunks past the walk an arcade holding the index asks its peers for at once, each from another peer
 #: (2026-10-20: served "torrent style").
 PREFETCH = 8
 #: Spend notes kept here when no arcade holds the index (and so nobody stitches them): beyond this the furthest are
 #: let go -- they can be scanned again. Notes everybody holding the index has stitched past are let go at once.
-NOTES_MAX_BYTES = 3 * 1024 ** 3
+NOTES_MAX_BYTES = 512 * 1024 ** 2
 #: walk: the whole index here; help: chunks for the shared list; read: no index here, its questions asked of a linked
 #: arcade that walks (2026-10-20: "read only. Where it can read the index, but it doesn't hold the index on
 #: its own copy of arcade"); off.
@@ -241,8 +244,8 @@ def ready_chunks(tip: int, base: int | None = None) -> int:
     return max(0, (tip - SETTLE + 1 - (BASE if base is None else base)) // CHUNK)
 
 
-#: The index's tables (layout LAYOUT). meta is made first, on its own.
-SCHEMA = """
+#: The index's tables (layout LAYOUT). meta is made first, on its own; the lookups (INDEXES) after.
+TABLES = """
             -- every block a walker or a helper read: its hash, its line in the chunk hash, births seen in it
             CREATE TABLE IF NOT EXISTS block (height INTEGER PRIMARY KEY, hash TEXT NOT NULL, line TEXT NOT NULL,
                                               n INTEGER NOT NULL DEFAULT 0, moves TEXT);
@@ -255,16 +258,11 @@ SCHEMA = """
                                              number INTEGER NOT NULL, height INTEGER NOT NULL, txpos INTEGER NOT NULL,
                                              ct INTEGER NOT NULL, proto TEXT, size INTEGER,
                                              pieces INTEGER NOT NULL DEFAULT 1, burned INTEGER);
-            CREATE UNIQUE INDEX IF NOT EXISTS insc_id ON insc (tx, n);
-            CREATE INDEX IF NOT EXISTS insc_number ON insc (number);
-            CREATE INDEX IF NOT EXISTS insc_ct ON insc (ct, number);
-            CREATE INDEX IF NOT EXISTS insc_proto ON insc (proto, number) WHERE proto IS NOT NULL;
             -- every content type seen, by number (a few hundred, for millions of inscriptions)
             CREATE TABLE IF NOT EXISTS ctypes (ct INTEGER PRIMARY KEY, ctype TEXT NOT NULL UNIQUE);
             -- where each one is now (walker): the output and the koinu inside it
             CREATE TABLE IF NOT EXISTS at (rid INTEGER PRIMARY KEY, tx BLOB NOT NULL, vout INTEGER NOT NULL,
                                            off INTEGER NOT NULL, height INTEGER NOT NULL);
-            CREATE INDEX IF NOT EXISTS at_out ON at (tx, vout);
             -- a body still arriving, keyed by the txid of its latest piece: its envelope's state (content type, pieces
             -- still to come), its size so far and pieces so far, and the body itself only while a rule could still
             -- read it (ord_rules.body_matters; NULL once let go of -- the content is read from the chain when wanted)
@@ -284,9 +282,6 @@ SCHEMA = """
             CREATE TABLE IF NOT EXISTS names (rid INTEGER PRIMARY KEY, number INTEGER NOT NULL, height INTEGER NOT NULL,
                                               kind TEXT NOT NULL, raw TEXT NOT NULL, spec TEXT, json TEXT,
                                               doge2023 TEXT);
-            CREATE INDEX IF NOT EXISTS names_spec ON names (spec, number);
-            CREATE INDEX IF NOT EXISTS names_json ON names (json, number);
-            CREATE INDEX IF NOT EXISTS names_doge2023 ON names (doge2023, number);
             -- each block's undo: every row's old value, packed (_pack)
             CREATE TABLE IF NOT EXISTS undo (height INTEGER PRIMARY KEY, doc BLOB NOT NULL);
             -- every arcade's word about every chunk, this one's included
@@ -302,6 +297,19 @@ SCHEMA = """
             CREATE TABLE IF NOT EXISTS stitched (chunk INTEGER PRIMARY KEY, node TEXT NOT NULL, hash TEXT NOT NULL,
                                                  nd TEXT NOT NULL);
         """
+#: The lookups. An inscription's id and a coin are found by the first 8 bytes of their txid, then the whole txid
+#: compared (a query must say substr(tx, 1, 8) = ? to use them: see _tx8).
+INDEXES = """
+            CREATE INDEX IF NOT EXISTS insc_id8 ON insc (substr(tx, 1, 8), n);
+            CREATE INDEX IF NOT EXISTS at_out8 ON at (substr(tx, 1, 8), vout);
+            CREATE INDEX IF NOT EXISTS names_spec ON names (spec, number);
+            CREATE INDEX IF NOT EXISTS names_json ON names (json, number);
+            CREATE INDEX IF NOT EXISTS names_doge2023 ON names (doge2023, number);
+"""
+SCHEMA = TABLES + INDEXES
+#: Layout 2's lookups, dropped by the conversion to 3.
+OLD_INDEXES = ("insc_id", "insc_number", "insc_ct", "insc_proto", "at_out")
+
 
 
 def _pack(doc: Any) -> bytes:
@@ -355,7 +363,9 @@ class Store:
             self.set_meta("rules", ord_rules.RULES)
         # An index of layout 1 (before 2026-10-20's slimming) stays as it is until the index thread converts it;
         # until then nothing reads its walk tables (old_layout).
-        self.old_layout = "id" in [r[1] for r in self._db.execute("PRAGMA table_info(insc)").fetchall()]
+        cols = [r[1] for r in self._db.execute("PRAGMA table_info(insc)").fetchall()]
+        self.layout = 1 if "id" in cols else int(self.meta("layout") or 2) if cols else LAYOUT
+        self.old_layout = self.layout != LAYOUT
         self.upgrading = ""
         if not self.old_layout:
             self._db.executescript(SCHEMA)
@@ -428,13 +438,20 @@ class Store:
             db.execute("PRAGMA synchronous=OFF")
             db.execute("ATTACH DATABASE ? AS old", (str(self.path),))
             db.execute("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)")
-            db.executescript(SCHEMA)
+            db.executescript(TABLES)                   # the lookups are made once the rows are in: much faster
             self._columns_added(db)
+            source = self.layout
 
             def copy(table: str) -> None:
                 cols = ",".join(d[1] for d in db.execute(f"PRAGMA old.table_info({table})").fetchall())
                 db.execute(f"INSERT INTO main.{table} ({cols}) SELECT {cols} FROM old.{table}")
             db.execute("BEGIN")
+            if source >= 2:                            # layout 2: the same rows, only the lookups change
+                for table in ("ctypes", "insc", "at", "pending", "undo") + self.SAME:
+                    self.upgrading = table
+                    copy(table)
+                self._upgrade_finish(db, new)
+                return
             self.upgrading = "content types"
             db.execute("INSERT INTO ctypes (ctype) SELECT DISTINCT ctype FROM old.insc ORDER BY ctype")
             cts = dict(db.execute("SELECT ctype, ct FROM ctypes").fetchall())
@@ -488,27 +505,7 @@ class Store:
                 doc = json.loads(db.execute("SELECT doc FROM old.undo WHERE height=?", (h,)).fetchone()[0])
                 doc["rows"] = [[t, key, row_of(t, old)] for t, key, old in doc["rows"]]
                 db.execute("INSERT INTO undo VALUES (?,?)", (h, _pack(doc)))
-            db.execute("COMMIT")
-            self.upgrading = "the last of it"
-            with self._lock:
-                db.execute("BEGIN")
-                for table in self.LIVE:
-                    db.execute(f"DELETE FROM main.{table}")
-                    copy(table)
-                db.execute("INSERT OR REPLACE INTO meta VALUES ('layout', ?)", (json.dumps(LAYOUT),))
-                db.execute("COMMIT")
-                db.execute("DETACH DATABASE old")
-                db.close()
-                fd = os.open(new, os.O_RDONLY)
-                try:
-                    os.fsync(fd)
-                finally:
-                    os.close(fd)
-                was = os.path.getsize(self.path)
-                self.swap(new)
-                self.old_layout = False
-            log.info("ord index %s: converted to layout %d, %.1f GB -> %.1f GB", self.path.name, LAYOUT, was / 1e9,
-                     os.path.getsize(self.path) / 1e9)
+            self._upgrade_finish(db, new)
         except BaseException:
             try:
                 db.close()
@@ -517,6 +514,35 @@ class Store:
             raise
         finally:
             self.upgrading = ""
+
+    def _upgrade_finish(self, db, new: Path) -> None:
+        """The rows are in (an open transaction on `db`, the new file): the lookups, then what the mesh may have written
+        meanwhile, copied under the lock, and the new file swapped in."""
+        import os
+        db.execute("COMMIT")
+        self.upgrading = "the lookups"
+        db.executescript(INDEXES)
+        self.upgrading = "the last of it"
+        with self._lock:
+            db.execute("BEGIN")
+            for table in self.LIVE:
+                db.execute(f"DELETE FROM main.{table}")
+                cols = ",".join(d[1] for d in db.execute(f"PRAGMA old.table_info({table})").fetchall())
+                db.execute(f"INSERT INTO main.{table} ({cols}) SELECT {cols} FROM old.{table}")
+            db.execute("INSERT OR REPLACE INTO meta VALUES ('layout', ?)", (json.dumps(LAYOUT),))
+            db.execute("COMMIT")
+            db.execute("DETACH DATABASE old")
+            db.close()
+            fd = os.open(new, os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            was = os.path.getsize(self.path)
+            self.swap(new)
+            self.old_layout = False
+        log.info("ord index %s: converted to layout %d, %.1f GB -> %.1f GB", self.path.name, LAYOUT, was / 1e9,
+                 os.path.getsize(self.path) / 1e9)
 
     def x(self, sql: str, args: tuple = ()) -> None:
         with self._lock:
@@ -842,7 +868,8 @@ class Walker:
                         iid, otx = f"{origin}i0", bytes.fromhex(origin)
                         # A body let go of on the way could not matter to any rule: read as empty, it matters to none.
                         body = got["body"] if got["body"] is not None else b""
-                        if not w.db.execute("SELECT 1 FROM insc WHERE tx=? AND n=0", (otx,)).fetchone():
+                        if not w.db.execute("SELECT 1 FROM insc WHERE substr(tx, 1, 8)=? AND tx=? AND n=0",
+                                            (otx[:8], otx)).fetchone():
                             rid, next_rid = next_rid, next_rid + 1
                             w.put("insc", (rid,), {"rid": rid, "tx": otx, "n": 0, "number": next_number, "height": h,
                                                     "txpos": pos, "ct": self._ct(w.db, ctype.decode("utf-8", "replace")),
@@ -854,7 +881,8 @@ class Walker:
                             carried.append((rid, 0, True, ""))
                 for b in taproot:                                    # Litecoin's witness envelopes
                     btx = bytes.fromhex(tx.txid)
-                    if w.db.execute("SELECT 1 FROM insc WHERE tx=? AND n=?", (btx, b["n"])).fetchone():
+                    if w.db.execute("SELECT 1 FROM insc WHERE substr(tx, 1, 8)=? AND tx=? AND n=?",
+                                    (btx[:8], btx, b["n"])).fetchone():
                         continue
                     rid, next_rid = next_rid, next_rid + 1
                     w.put("insc", (rid,), {"rid": rid, "tx": btx, "n": b["n"], "number": next_number, "height": h,
@@ -1440,6 +1468,13 @@ class DoginalIndex:
             self._check_stitched()
         # Only holders that stitch notes wait for them: an arcade from before the notes (v2) never will.
         held = [(n, h) for n, h in self.holders() if not n or int((self.chunks.peers.get(n) or {}).get("v") or 0) >= 3]
+        # ... and only holders within WORTH_BLOCKS of the furthest: one further behind fetches the whole index (or
+        # walks from its Core) rather than wait on notes (2026-10-21: a test machine kept 588 MB of Dogecoin notes for a
+        # holder whose walk had not left the chain's first block).
+        from .ord_snapshot import WORTH_BLOCKS
+        if held:
+            front = max(h for _n, h in held)
+            held = [(n, h) for n, h in held if front - h < WORTH_BLOCKS]
         if held:
             behind = min(h for _n, h in held)
             self.store.x("DELETE FROM notes WHERE chunk < ?", (chunk_of(behind, self.base),))
@@ -1599,9 +1634,9 @@ class DoginalIndex:
             self.chunks.peers[node] = {k: header.get(k) for k in ("mode", "walk", "helped", "v", "rules")} | \
                 {"at": time.time()}
             if header.get("rules") == ord_rules.RULES:
-                # "sn2": a snapshot of layout 2. Said under its own key so an arcade of layout 1, which reads "sn",
-                # never fetches one it cannot read; "sn" (layout 1) is no use here.
-                self.snapshots.heard_offer(node, header.get("sn2"))
+                # "sn<layout>": a snapshot of this layout, said under its own key so an arcade of another layout
+                # never fetches one it cannot read ("sn" was layout 1, "sn2" layout 2).
+                self.snapshots.heard_offer(node, header.get(f"sn{LAYOUT}"))
             return
         if op == "sq":                                   # a linked arcade far behind asks for a snapshot
             self._snap_asked = True
@@ -1636,7 +1671,7 @@ class DoginalIndex:
                 "rules": ord_rules.RULES}
         offer = self.snapshots.offer()
         if offer is not None:
-            said["sn2"] = offer
+            said[f"sn{LAYOUT}"] = offer
         return said
 
     # --- for people ------------------------------------------------------------------------------------------------
@@ -1805,7 +1840,7 @@ class DoginalIndex:
             return None
         row = self.store.q("SELECT i.tx, i.n, i.number, i.height, c.ctype, i.proto, i.size, i.burned, a.tx, a.vout, "
                            "a.off FROM insc i JOIN ctypes c ON c.ct = i.ct LEFT JOIN at a ON a.rid = i.rid "
-                           "WHERE i.tx=? AND i.n=?", key)
+                           "WHERE substr(i.tx, 1, 8)=? AND i.tx=? AND i.n=?", (key[0][:8],) + key)
         if not row:
             return None
         tx, n, number, height, ctype, proto, size, burned, at, vout, off = row[0]
@@ -1821,7 +1856,8 @@ class DoginalIndex:
             where, val = (("ct IN (SELECT ct FROM ctypes WHERE ctype LIKE ?)", ctype + "%") if ctype
                           else ("proto = ?", proto))
             n = self.store.q(f"SELECT COUNT(*) FROM insc WHERE {where}", (val,))[0][0]
-            ids = self.store.q(f"SELECT number, tx, n FROM insc WHERE {where} ORDER BY number LIMIT ?", (val, first))
+            # Rows are kept in number order (rid = number + 1): no sort, and the scan stops at the first ones.
+            ids = self.store.q(f"SELECT number, tx, n FROM insc WHERE {where} ORDER BY rid LIMIT ?", (val, first))
             return {"count": n, "first": [{"number": a, "id": iid_of(t, k)} for a, t, k in ids]}
         return {"types": self.store.q("SELECT c.ctype, COUNT(*) n FROM insc i JOIN ctypes c ON c.ct = i.ct "
                                       "GROUP BY i.ct ORDER BY n DESC LIMIT 25"),
@@ -1892,8 +1928,9 @@ class DoginalIndex:
         if self.store.old_layout:
             return []
         return [{"id": iid_of(r[0], r[1]), "offset": r[2]} for r in self.store.q(
-            "SELECT i.tx, i.n, a.off FROM at a JOIN insc i ON i.rid = a.rid WHERE a.tx=? AND a.vout=? ORDER BY a.off",
-            (bytes.fromhex(txid), vout))]
+            "SELECT i.tx, i.n, a.off FROM at a JOIN insc i ON i.rid = a.rid "
+            "WHERE substr(a.tx, 1, 8)=? AND a.tx=? AND a.vout=? ORDER BY a.off",
+            (bytes.fromhex(txid)[:8], bytes.fromhex(txid), vout))]
 
 
 class Runner:
