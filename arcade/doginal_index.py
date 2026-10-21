@@ -58,11 +58,20 @@ SETTLE = 12
 #: How many different arcades must say the same hash before a chunk is `agreed` (fewer than 5 arcades: every chunk
 #: is scanned twice).
 AGREE = 2
+#: The audit raises a chunk's confidence to this many arcades agreeing, and no further (2026-10-20: "two nodes
+#: in agreement ... legitimate; if three or four or more nodes are in agreement then the confidence score can go up").
+AUDIT_MAX = 5
 #: A lease lasts this long unless renewed by progress; a helper that goes quiet loses its chunk to the next one.
 LEASE_SECONDS = 600
 PROGRESS_EVERY = 10              # blocks between two progress words
 #: Undo kept for this many blocks back, so a reorg rolls the walker back instead of stopping it.
 UNDO_BLOCKS = 300
+#: How many chunks past the walk an arcade holding the index asks its peers for at once, each from another peer
+#: (2026-10-20: served "torrent style").
+PREFETCH = 8
+#: Spend notes kept here when no arcade holds the index (and so nobody stitches them): beyond this the furthest are
+#: let go -- they can be scanned again. Notes everybody holding the index has stitched past are let go at once.
+NOTES_MAX_BYTES = 3 * 1024 ** 3
 #: walk: the whole index here; help: chunks for the shared list; read: no index here, its questions asked of a linked
 #: arcade that walks (2026-10-20: "read only. Where it can read the index, but it doesn't hold the index on
 #: its own copy of arcade"); off.
@@ -79,12 +88,14 @@ def default_cores() -> int:
     return max(1, n // 2) if n >= BIG_FROM_CORES else 1
 
 
-def _parse(job: tuple) -> tuple[str, str, int]:
-    """One block's (hash, line, births) from its raw hex, in a worker process (a lane of a helper on many cores)."""
+def _parse(job: tuple) -> tuple[str, str, int, bytes]:
+    """One block's (hash, line, births, notes) from its raw hex, in a worker process (a lane of a helper on many
+    cores)."""
+    from . import ord_notes
     raw_hex, block_hash, taproot, mweb = job
     block = rawchain.read_block(bytes.fromhex(raw_hex), block_hash, mweb=mweb)
     found = births(block, taproot)
-    return block.hash, block_hash_of(block.hash, found), len(found)
+    return block.hash, block_hash_of(block.hash, found), len(found), ord_notes.one_block(block, taproot)
 
 
 # --------------------------------------------------------------------------- reading a block
@@ -232,6 +243,10 @@ class Store:
         self.base = BASE if base is None else base
         self._lock = threading.RLock()                 # the one writer connection
         self._readers = threading.local()              # a read connection per thread (q)
+        self._gen = 0                                  # bumped when the file is swapped (a snapshot installed)
+        self._open()
+
+    def _open(self) -> None:
         self._db = sqlite3.connect(self.path, timeout=60, check_same_thread=False, isolation_level=None)
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.execute("PRAGMA synchronous=NORMAL")
@@ -284,16 +299,54 @@ class Store:
             -- every arcade's word about every chunk, this one's included
             CREATE TABLE IF NOT EXISTS seen (chunk INTEGER NOT NULL, node TEXT NOT NULL, hash TEXT NOT NULL,
                                              births INTEGER NOT NULL, at REAL NOT NULL, PRIMARY KEY (chunk, node));
+            -- spend notes (ord_notes): each block's as it is read, until its chunk is whole; then the chunk's, packed,
+            -- whose they are ("" this arcade's own scan), until every arcade holding the index has stitched past them
+            CREATE TABLE IF NOT EXISTS pnote (height INTEGER PRIMARY KEY, raw BLOB NOT NULL);
+            CREATE TABLE IF NOT EXISTS notes (chunk INTEGER PRIMARY KEY, blob BLOB NOT NULL, nd TEXT NOT NULL,
+                                              src TEXT NOT NULL, at REAL NOT NULL);
+            -- chunks the walk stitched from another arcade's notes, and what that arcade said of them: should the
+            -- audit outvote it, the index is built again
+            CREATE TABLE IF NOT EXISTS stitched (chunk INTEGER PRIMARY KEY, node TEXT NOT NULL, hash TEXT NOT NULL,
+                                                 nd TEXT NOT NULL);
         """)
+        # A chunk's word carries its notes' digest too (2026-10-20); an index from before gains the column.
+        if "nd" not in [r[1] for r in self._db.execute("PRAGMA table_info(seen)").fetchall()]:
+            self._db.execute("ALTER TABLE seen ADD COLUMN nd TEXT")
 
     def q(self, sql: str, args: tuple = ()) -> list:
         """A read, on this thread's own connection: never waits for a write in progress (WAL lets readers through) nor
         for another reader (2026-10-20: page threads queued here behind the mesh's chunk words, and the site's pages
         waited with them)."""
         db = getattr(self._readers, "db", None)
-        if db is None:
+        if db is None or getattr(self._readers, "gen", -1) != self._gen:
+            if db is not None:
+                db.close()
             db = self._readers.db = sqlite3.connect(self.path, timeout=60, isolation_level=None)
+            self._readers.gen = self._gen
         return db.execute(sql, args).fetchall()
+
+    def close(self) -> None:
+        with self._lock:
+            self._db.close()
+        db = getattr(self._readers, "db", None)
+        if db is not None:
+            db.close()
+            self._readers.db = None
+
+    def swap(self, other: Path) -> None:
+        """Put another index file in this one's place (a snapshot fetched from peers), and read from it from now on:
+        the writer reopens at once, every thread's reader on its next read."""
+        import os
+        with self._lock:
+            self._db.close()
+            for tail in ("-wal", "-shm"):
+                try:
+                    os.remove(str(self.path) + tail)
+                except FileNotFoundError:
+                    pass
+            os.replace(other, self.path)
+            self._gen += 1
+            self._open()
 
     def x(self, sql: str, args: tuple = ()) -> None:
         with self._lock:
@@ -323,16 +376,61 @@ class Store:
             return None
         return chunk_hash_of([r[1] for r in rows]), sum(r[2] for r in rows)
 
-    def say(self, c: int, node: str, hash_: str, n: int) -> bool:
-        """File an arcade's hash for a chunk (node "" is this arcade). True when it is new."""
-        was = self.q("SELECT hash FROM seen WHERE chunk=? AND node=?", (c, node))
-        if was and was[0][0] == hash_:
+    def say(self, c: int, node: str, hash_: str, n: int, nd: str | None = None) -> bool:
+        """File an arcade's hash for a chunk (node "" is this arcade), and its notes' digest when it has one. True when
+        it is new."""
+        was = self.q("SELECT hash, nd FROM seen WHERE chunk=? AND node=?", (c, node))
+        if was and was[0][0] == hash_ and (nd is None or was[0][1] == nd):
             return False
-        self.x("INSERT OR REPLACE INTO seen VALUES (?,?,?,?,?)", (c, node, hash_, n, time.time()))
+        self.x("INSERT OR REPLACE INTO seen (chunk, node, hash, births, at, nd) VALUES (?,?,?,?,?,?)",
+               (c, node, hash_, n, time.time(), nd if nd is not None else (was[0][1] if was else None)))
         return True
+
+    # --- spend notes -----------------------------------------------------------------------------------------------
+
+    def note_block(self, h: int, raw: bytes) -> None:
+        self.x("INSERT OR REPLACE INTO pnote VALUES (?,?)", (h, raw))
+
+    def finish_notes(self, c: int) -> tuple[str, int] | None:
+        """Chunk c's notes from its blocks' (when all of them are here): kept as this arcade's own, the block notes
+        let go. (digest, packed size), or None."""
+        from . import ord_notes
+        lo, hi = chunk_range(c, self.base)
+        rows = self.q("SELECT raw FROM pnote WHERE height>=? AND height<? ORDER BY height", (lo, hi))
+        if len(rows) != CHUNK:
+            return None
+        notes = ord_notes.finish([r[0] for r in rows])
+        nd, blob = ord_notes.digest(notes), ord_notes.pack(notes)
+        with self.tx() as db:
+            db.execute("INSERT OR REPLACE INTO notes VALUES (?,?,?,?,?)", (c, blob, nd, "", time.time()))
+            db.execute("DELETE FROM pnote WHERE height>=? AND height<?", (lo, hi))
+        return nd, len(blob)
+
+    #: What a reset clears: everything the walk built. The words (`seen`) stay -- what each arcade said is still so.
+    BUILT = ("insc", "at", "pending", "tok", "bal", "xfer", "names", "undo", "block", "notes", "pnote", "stitched")
+
+    def reset(self) -> None:
+        """Start the index again from the chain's first block (its words kept)."""
+        with self.tx() as db:
+            for table in self.BUILT:
+                db.execute(f"DELETE FROM {table}")
+            db.execute("DELETE FROM seen WHERE node=''")
+            db.execute("DELETE FROM meta WHERE k IN ('walk_next', 'next_number', 'lanes', 'lease', 'said_upto')")
+
+    def notes_of(self, c: int) -> tuple[bytes, str, str] | None:
+        """(packed notes, digest, whose) for chunk c, if they are kept here."""
+        row = self.q("SELECT blob, nd, src FROM notes WHERE chunk=?", (c,))
+        return (bytes(row[0][0]), row[0][1], row[0][2]) if row else None
 
     def words(self, c: int) -> dict[str, str]:
         return {r[0]: r[1] for r in self.q("SELECT node, hash FROM seen WHERE chunk=?", (c,))}
+
+    def all_notes_words(self, below: int) -> dict[int, dict[str, tuple[str, str | None, int]]]:
+        """Every arcade's word on every chunk under `below`: chunk -> node -> (hash, notes digest, births)."""
+        out: dict[int, dict[str, tuple[str, str | None, int]]] = {}
+        for c, node, h, nd, n in self.q("SELECT chunk, node, hash, nd, births FROM seen WHERE chunk < ?", (below,)):
+            out.setdefault(c, {})[node] = (h, nd, n)
+        return out
 
     def all_words(self, below: int) -> dict[int, dict[str, str]]:
         out: dict[int, dict[str, str]] = {}
@@ -440,6 +538,9 @@ class Walker:
     def owner_of(self, script: bytes) -> str:
         """Who holds an output: its address, or a script's hash when it has none (drc20 ScriptKey)."""
         from .script import b58check_encode, hash160
+        from .ord_notes import Hashed
+        if isinstance(script, Hashed):                   # from spend notes: the script's hash, kept instead of it
+            return "script:" + script.hex()
         p = self.params
         if p is not None:
             if len(script) == 25 and script[:3] == b"\x76\xa9\x14" and script[23:] == b"\x88\xac":
@@ -448,8 +549,12 @@ class Walker:
                 return b58check_encode(p.scripthash_version, script[2:22])
         return "script:" + hash160(script).hex()
 
-    def step(self, rpc, tip: int, budget: float = 5.0) -> int:
-        """Walk on for about `budget` seconds, never past tip - SETTLE. Returns the blocks walked."""
+    def step(self, rpc, tip: int, budget: float = 5.0, notes: Callable[[int], Any] | None = None) -> int:
+        """Walk on for about `budget` seconds, never past tip - SETTLE. Returns the blocks walked.
+
+        `notes(chunk)` says where each chunk's blocks come from (2026-10-20: scanned in line by whoever is free,
+        stitched here in order): ([blocks], this arcade's own scan?) from its spend notes; False to wait for them;
+        None (or no `notes`) to read each block from `rpc`."""
         if self.tracked is None:
             self._load()
         start, done = time.monotonic(), 0
@@ -457,22 +562,33 @@ class Walker:
             h = self.next_height()
             if h > tip - SETTLE or (done and time.monotonic() - start >= budget):
                 break
-            block_hash = rpc.call("getblockhash", h)
-            block = rawchain.read_block(bytes.fromhex(rpc.call("getblock", block_hash, 0)), block_hash, mweb=self.mweb)
+            c = chunk_of(h, self.base)
+            got = notes(c) if notes is not None else None
+            if got is False:
+                break                                    # the notes are coming: wait for them
+            if got is not None:
+                block, own = got[0][h - chunk_range(c, self.base)[0]], got[1]
+            else:
+                block_hash = rpc.call("getblockhash", h)
+                block = rawchain.read_block(bytes.fromhex(rpc.call("getblock", block_hash, 0)), block_hash,
+                                            mweb=self.mweb)
+                own = True
             if h > self.base:
                 before = self.store.q("SELECT hash FROM block WHERE height=?", (h - 1,))
                 if before and before[0][0] != block.prev:
                     self.rollback(h - 1)
                     continue
-            self.walk_block(rpc, h, block)
+            self.walk_block(rpc, h, block, own=own)
             done += 1
         took = time.monotonic() - start
         if done:
             self.rate = done / max(took, 1e-6)
         return done
 
-    def walk_block(self, rpc, h: int, block: rawchain.Block) -> list[str]:
-        """One block, filed with its undo. Returns the moves lines (for tests)."""
+    def walk_block(self, rpc, h: int, block, own: bool = True) -> list[str]:
+        """One block, filed with its undo. Returns the moves lines (for tests). `own`: read here (from this arcade's
+        Core, or notes of its own scan) -- only then is the chunk's word this arcade's, and its notes written; a block
+        stitched from another arcade's notes is that arcade's word, not a second one."""
         tracked = self.tracked
         assert tracked is not None
         moves: list[str] = []
@@ -571,13 +687,17 @@ class Walker:
             db.execute("DELETE FROM undo WHERE height<?", (h - UNDO_BLOCKS,))
             db.execute("INSERT OR REPLACE INTO meta VALUES ('walk_next', ?)", (json.dumps(h + 1),))
             db.execute("INSERT OR REPLACE INTO meta VALUES ('next_number', ?)", (json.dumps(next_number),))
-            if (h + 1 - self.base) % CHUNK == 0:
-                c = chunk_of(h, self.base)
-                rows = db.execute("SELECT line, n FROM block WHERE height>=? AND height<=? ORDER BY height",
-                                  (chunk_range(c, self.base)[0], h)).fetchall()
-                if len(rows) == CHUNK:
-                    db.execute("INSERT OR REPLACE INTO seen VALUES (?,?,?,?,?)",
-                               (c, "", chunk_hash_of([r[0] for r in rows]), sum(r[1] for r in rows), time.time()))
+            if own and isinstance(block, rawchain.Block):
+                from . import ord_notes
+                db.execute("INSERT OR REPLACE INTO pnote VALUES (?,?)", (h, ord_notes.one_block(block, self.taproot)))
+        if own and (h + 1 - self.base) % CHUNK == 0:
+            c = chunk_of(h, self.base)
+            rows = self.store.q("SELECT line, n FROM block WHERE height>=? AND height<=? ORDER BY height",
+                                (chunk_range(c, self.base)[0], h))
+            if len(rows) == CHUNK:
+                kept = self.store.notes_of(c)
+                nd = kept[1] if kept and kept[2] == "" else (self.store.finish_notes(c) or (None,))[0]
+                self.store.say(c, "", chunk_hash_of([r[0] for r in rows]), sum(r[1] for r in rows), nd)
         return moves
 
     # --- DRC-20 / PRC-20 -----------------------------------------------------------------------------------------
@@ -703,6 +823,8 @@ class Walker:
             db.execute("DELETE FROM block WHERE height=?", (h,))
             db.execute("DELETE FROM undo WHERE height=?", (h,))
             db.execute("DELETE FROM seen WHERE chunk=? AND node=''", (chunk_of(h, self.base),))
+            db.execute("DELETE FROM pnote WHERE height>=?", (h,))
+            db.execute("DELETE FROM notes WHERE chunk>=? AND src=''", (chunk_of(h, self.base),))
             db.execute("INSERT OR REPLACE INTO meta VALUES ('walk_next', ?)", (json.dumps(h),))
             db.execute("INSERT OR REPLACE INTO meta VALUES ('next_number', ?)", (json.dumps(undo["next_number"]),))
         log.warning("ord index: block %d was replaced (reorg); walked back", h)
@@ -737,37 +859,61 @@ class Chunks:
             held.pop(node, None)
 
     def wanted(self, c: int, now: float, words: dict[str, str] | None = None) -> int:
-        """How many more scans chunk c wants, counting the leases running on it."""
+        """How many more scans chunk c wants now, counting the leases running on it: one while it has none (the
+        cover); once every chunk has one, up to AUDIT_MAX agreeing (the audit). None from this arcade twice."""
         words = self.store.words(c) if words is None else words
         if "" in words:
             return 0
+        busy = sum(1 for until, _at in self.leases.get(c, {}).values() if until > now)
+        if not words:
+            return max(0, 1 - busy)
         tally: dict[str, int] = {}
         for h in words.values():
             tally[h] = tally.get(h, 0) + 1
-        best = max(tally.values(), default=0)
-        busy = sum(1 for until, _at in self.leases.get(c, {}).values() if until > now)
-        return max(0, AGREE - best - busy)
+        return max(0, AUDIT_MAX - max(tally.values()) - busy)
 
-    def choose(self, ready: int, now: float, exclude: set | frozenset = frozenset()) -> int | None:
-        """The next chunk to take: one that some arcade has already said (so it becomes agreed) first, then the lowest
-        nobody has; a random one of the first few either way, so two helpers rarely take the same."""
+    def choose(self, ready: int, now: float, exclude: set | frozenset = frozenset(),
+               first: list[int] | tuple = ()) -> int | None:
+        """The next chunk to take (2026-10-20: "none of them should be assigned the same blocks until ... the
+        entire index has been created; at that point ... the nodes can audit each other's work").
+
+        Cover first: the lowest chunk in line that nobody has said and nobody holds, so a fast arcade simply takes the
+        next and the next. Only when every chunk under the tip has been said once, the audit: a chunk this arcade has
+        not said, the fewest agreeing first (a random one of the first few, so auditors spread)."""
         said = self.store.all_words(ready)
-        first = [c for c in sorted(said) if c not in exclude and self.wanted(c, now, said[c]) > 0][:16]
-        if not first:
-            c = 0
-            while c < ready and len(first) < 16:
-                if c not in said and c not in exclude and self.wanted(c, now, {}) > 0:
-                    first.append(c)
-                c += 1
-        return random.choice(first) if first else None
+        held = {c for c, by in self.leases.items() for until, _at in by.values() if until > now}
+        for c in first:                                  # the walk here needs these, and nobody can send their notes
+            if c < ready and c not in exclude:
+                return c
+        for c in range(ready):
+            if c not in said and c not in held and c not in exclude:
+                return c
+        if any(c not in said for c in range(ready)):
+            return None                                  # the rest of the cover is in hand: wait for it
+        audit = []
+        for c, words in said.items():
+            if c in exclude or c in held or "" in words:
+                continue
+            tally: dict[str, int] = {}
+            for h in words.values():
+                tally[h] = tally.get(h, 0) + 1
+            best = max(tally.values())
+            if best < AUDIT_MAX:
+                audit.append((best, c))
+        if not audit:
+            return None
+        audit.sort()
+        least = audit[0][0]
+        return random.choice([c for best, c in audit[:16] if best == least])
 
 
-def scan_block(rpc, h: int, taproot: bool = False, mweb: bool = False) -> tuple[str, str, int]:
-    """(block hash, its line, births in it) for one block, read raw and proved (rawchain)."""
+def scan_block(rpc, h: int, taproot: bool = False, mweb: bool = False) -> tuple[str, str, int, bytes]:
+    """(block hash, its line, births in it, its spend notes) for one block, read raw and proved (rawchain)."""
+    from . import ord_notes
     block_hash = rpc.call("getblockhash", h)
     block = rawchain.read_block(bytes.fromhex(rpc.call("getblock", block_hash, 0)), block_hash, mweb=mweb)
     found = births(block, taproot)
-    return block.hash, block_hash_of(block.hash, found), len(found)
+    return block.hash, block_hash_of(block.hash, found), len(found), ord_notes.one_block(block, taproot)
 
 
 # --------------------------------------------------------------------------- the worker
@@ -793,6 +939,7 @@ class DoginalIndex:
                              token_protocol="prc-20" if net in ("main", "test") else "drc-20")
         self.chunks = Chunks(self.store)
         self.share: Any = None                       # DxShare, when the mesh runs
+        self.me: str | None = None                   # this arcade's node id on the mesh (DxShare sets it)
         self.tip = 0
         self.helped = int(self.store.meta("helped", 0))
         self.help_rate = 0.0
@@ -810,11 +957,11 @@ class DoginalIndex:
         try:
             with self.rpc_factory() as rpc:
                 self.tip = int(rpc.call("getblockcount"))
-                if mode == "walk" and self.own_core():
-                    self._let_go()
-                    self.walker.step(rpc, self.tip, budget)
+                if mode == "walk":
+                    self._walk(rpc, budget)
                 else:
                     self._help(rpc, budget)
+                self._prune_notes()
             self.error = ""
         except Reorg as exc:
             self.error = str(exc)
@@ -832,24 +979,261 @@ class DoginalIndex:
             return 0.05
         return max(0.5, took)
 
+    # --- holding the index: scan ahead on the spare cores, fetch what others scanned, stitch in order ------------
+
+    def _walk(self, rpc, budget: float) -> None:
+        """One pass of an arcade that holds the whole index (2026-10-20). Its spare cores scan the chunks in
+        line ahead of the walk (a lane each); chunks other arcades scanned are fetched from them; the walk stitches
+        whatever notes are here, in order, and reads a block from its own Core only when nobody has or is about to
+        have that chunk's notes."""
+        snaps = self.snapshots
+        if getattr(self, "_snap_asked", False) and snaps.want_made():
+            self._snap_asked = False
+            snaps.make()
+        snaps.step(self.share)
+        if snaps.fetch is not None:
+            return                                       # the whole index is on its way: no walk until it is here
+        self._ask_for_snapshot()
+        own = self.own_core()
+        lanes = self._lanes_wanted() - 1 if own else 0
+        if lanes > 0:
+            self._help(rpc, budget / 2, lanes=lanes)
+        else:
+            self._let_go()
+        self._fetch_ahead()
+        self.walker.step(rpc, self.tip, budget, notes=self._notes_for)
+
+    @property
+    def snapshots(self):
+        if getattr(self, "_snapshots", None) is None:
+            from .ord_snapshot import Snapshots
+            self._snapshots = Snapshots(self)
+        return self._snapshots
+
+    def _ask_for_snapshot(self) -> None:
+        """Far behind the furthest holder, and nobody offers a snapshot: ask that holder to make one."""
+        from .ord_snapshot import SNAP_EVERY, WORTH_BLOCKS
+        walkers = self.walkers()
+        if not walkers or self.share is None or not hasattr(self.share, "post_to"):
+            return
+        node, h = walkers[0]
+        if h - self.walker.next_height() < WORTH_BLOCKS or self.snapshots.best_offer() is not None:
+            return
+        if time.time() - getattr(self, "_snap_wished", 0.0) < SNAP_EVERY / 6:
+            return
+        self._snap_wished = time.time()
+        self.share.post_to(node, {"op": "sq"})
+
+    def install(self, path: Path) -> None:
+        """A whole index fetched from peers and checked: in this one's place, the walk on from its block."""
+        self.store.swap(path)
+        for tail in ("-wal", "-shm"):
+            try:
+                Path(str(path) + tail).unlink()
+            except FileNotFoundError:
+                pass
+        self.walker.tracked = None
+        self._decoded = None
+        self.chunks.lanes = []
+        self._said_upto = -1
+        self.store.set_meta("said_upto", -1)
+        self._status_kept = None
+        self._counts_kept = None
+
+    def _notes_for(self, c: int):
+        """For the walk: ([blocks], own scan?) from chunk c's notes; False to wait for them (a lane here or a peer is
+        on it, or they are on their way); None to read the chunk from this arcade's Core."""
+        cached = getattr(self, "_decoded", None)
+        if cached is not None and cached[0] == c:
+            return cached[1]
+        got = self.store.notes_of(c)
+        if got is not None:
+            from . import ord_notes
+            try:
+                said = (ord_notes.decode(ord_notes.unpack(got[0])), got[2] == "")
+            except ord_notes.NotesError as exc:
+                log.warning("ord index: chunk %d's notes do not read (%s); let go", c, exc)
+                self.store.x("DELETE FROM notes WHERE chunk=?", (c,))
+                return False
+            self._decoded = (c, said)
+            if got[2] != "":
+                word = self.store.q("SELECT hash FROM seen WHERE chunk=? AND node=?", (c, got[2]))
+                self.store.x("INSERT OR REPLACE INTO stitched VALUES (?,?,?,?)",
+                             (c, got[2], word[0][0] if word else "", got[1]))
+            return said
+        if c >= ready_chunks(self.tip, self.base):
+            return None                                  # not a whole chunk yet: nobody scans it; its few blocks read
+        if any(lane["c"] == c for lane in self.chunks.lanes) or c in self._fetching():
+            return False
+        if self.own_core() and self._lanes_wanted() > 1:
+            return False                                 # the lanes here take every chunk in line, this one too
+        lo = chunk_range(c, self.base)[0]
+        now = time.time()
+        for node, (until, at) in self.chunks.leases.get(c, {}).items():
+            if until > now and at - lo >= CHUNK // 2:
+                return False                             # another arcade is past half way: its notes come soon
+        if not self.own_core():
+            return False
+        if getattr(self, "_reading", None) != c:          # reading it here: say so, so no helper takes it too
+            self._reading = c
+            self._say_lease({"c": c, "at": self.walker.next_height()})
+        return None
+
+    def _needed(self) -> list[int]:
+        """Chunks just ahead of the walk with no notes here, none on their way, and nobody to send them -- said only by
+        an arcade that keeps no notes (an older one), or by ones that let them go: the lanes here scan them first."""
+        first = chunk_of(self.walker.next_height(), self.base)
+        ready = ready_chunks(self.tip, self.base)
+        words = self.store.all_notes_words(min(ready, first + PREFETCH))
+        failed = self.__dict__.get("_notes_failed", {})
+        out = []
+        for c in range(first, min(ready, first + PREFETCH)):
+            if c in self._fetching() or self.store.notes_of(c) is not None:
+                continue
+            by = words.get(c) or {}
+            if by and not any(n and nd and n not in failed.get(c, set()) for n, (_h, nd, _b) in by.items()):
+                out.append(c)
+        return out
+
+    def _fetching(self) -> dict:
+        return self.__dict__.setdefault("_asked_notes", {})
+
+    def _fetch_ahead(self) -> None:
+        """Ask peers for the notes of the chunks in line past the walk, each chunk of another peer where it can."""
+        share = self.share
+        if share is None or not hasattr(share, "fetch_notes"):
+            return
+        now = time.time()
+        asked = self._fetching()
+        for c, at in list(asked.items()):
+            if now - at[0] > 120:
+                asked.pop(c, None)                       # never answered: ask again, elsewhere
+        failed = self.__dict__.setdefault("_notes_failed", {})
+        first = chunk_of(self.walker.next_height(), self.base)
+        ready = ready_chunks(self.tip, self.base)
+        words = self.store.all_notes_words(min(ready, first + PREFETCH))
+        for c in range(first, min(ready, first + PREFETCH)):
+            if c in asked or self.store.notes_of(c) is not None or any(l["c"] == c for l in self.chunks.lanes):
+                continue
+            offers = sorted(n for n, (_h, nd, _b) in (words.get(c) or {}).items()
+                            if n and nd and n not in failed.get(c, set()))
+            if not offers:
+                continue
+            node = offers[c % len(offers)]
+            h, nd, _b = words[c][node]
+            asked[c] = (now, node)
+            share.fetch_notes(c, node, nd, h)
+
+    def got_notes(self, node: str, c: int, blob: bytes, nd: str, hash_: str) -> bool:
+        """Notes a peer sent for chunk c: kept when they are what it said of the chunk -- their digest, and the births
+        hash the blocks in them make (each block proved by its merkle root)."""
+        from . import ord_notes
+        self._fetching().pop(c, None)
+        try:
+            notes = ord_notes.unpack(blob)
+            if ord_notes.digest(notes) != nd:
+                raise ord_notes.NotesError("not the digest it said")
+            blocks = ord_notes.decode(notes)
+            if len(blocks) != CHUNK:
+                raise ord_notes.NotesError(f"{len(blocks)} blocks, not {CHUNK}")
+            if chunk_hash_of([block_hash_of(b.hash, births(b, self.taproot)) for b in blocks]) != hash_:
+                raise ord_notes.NotesError("its blocks do not make the hash it said")
+        except ord_notes.NotesError as exc:
+            log.warning("ord index: arcade %s sent chunk %d's notes that are wrong: %s", node[:12], c, exc)
+            self.fetch_failed(node, c)
+            return False
+        self.store.x("INSERT OR REPLACE INTO notes VALUES (?,?,?,?,?)", (c, blob, nd, node, time.time()))
+        return True
+
+    def fetch_failed(self, node: str, c: int) -> None:
+        self._fetching().pop(c, None)
+        self.__dict__.setdefault("_notes_failed", {}).setdefault(c, set()).add(node)
+
+    def notes_blob(self, c: int) -> tuple[bytes, str] | None:
+        """Chunk c's notes for a peer that asked: (packed, digest), when kept here."""
+        got = self.store.notes_of(c)
+        return (got[0], got[1]) if got else None
+
+    def holders(self) -> list[tuple[str, int]]:
+        """Arcades holding this chain's whole index, with the block each has walked to ("" this one)."""
+        out = [(node, h) for node, h in self.walkers()]
+        if self.mode() == "walk":
+            out.append(("", self.walker.next_height()))
+        return out
+
+    def _check_stitched(self) -> None:
+        """A chunk stitched from another arcade's notes that the audit has since outvoted -- more arcades agree on
+        another hash or other notes, two of them at least -- means the index past it may be wrong: build it again."""
+        rows = self.store.q("SELECT s.chunk, s.hash, s.nd FROM stitched s")
+        if not rows:
+            return
+        words = self.store.all_notes_words(max(c for c, _h, _n in rows) + 1)
+        for c, h, nd in rows:
+            tally: dict[tuple, int] = {}
+            for wh, wnd, _b in (words.get(c) or {}).values():
+                key = (wh, wnd) if wnd else (wh, None)
+                tally[key] = tally.get(key, 0) + 1
+            ours = sum(n for (wh, wnd), n in tally.items() if wh == h and wnd in (nd, None))
+            against = max((n for (wh, wnd), n in tally.items() if wh != h or (wnd and wnd != nd)), default=0)
+            if against >= AGREE and against > ours:
+                self.error = (f"chunk {c} (blocks {chunk_range(c, self.base)[0]:,}+) was stitched from notes the "
+                              f"other arcades have outvoted: building the index again")
+                log.warning("ord index %s: %s", self.net, self.error)
+                self.store.reset()
+                self.store.set_meta("rebuilt", {"at": time.time(), "why": self.error})
+                self.walker.tracked = None
+                self._decoded = None
+                self.chunks.lanes = []
+                self._said_upto = -1
+                return
+
+    def _prune_notes(self) -> None:
+        """Let go of the notes every arcade holding the index has stitched past (2026-10-20: "Delete after
+        stitch"); with nobody holding it, keep at most NOTES_MAX_BYTES, the nearest chunks first."""
+        now = time.monotonic()
+        if now - getattr(self, "_pruned", 0.0) < 60:
+            return
+        self._pruned = now
+        if self.mode() == "walk":
+            self._check_stitched()
+        held = self.holders()
+        if held:
+            behind = min(h for _n, h in held)
+            self.store.x("DELETE FROM notes WHERE chunk < ?", (chunk_of(behind, self.base),))
+        # Block notes of a chunk this arcade is no longer reading (a lane let go, somebody else said it): not needed.
+        busy = {lane["c"] for lane in self.chunks.lanes}
+        if self.mode() == "walk":
+            busy.add(chunk_of(self.walker.next_height(), self.base))
+        for (c,) in self.store.q("SELECT DISTINCT (height - ?) / ? FROM pnote", (self.base, CHUNK)):
+            if c not in busy and (self.store.q("SELECT 1 FROM seen WHERE chunk=? LIMIT 1", (c,))
+                                  or self.store.notes_of(c) is not None):
+                lo, hi = chunk_range(c, self.base)
+                self.store.x("DELETE FROM pnote WHERE height>=? AND height<?", (lo, hi))
+        total = 0
+        for c, size in self.store.q("SELECT chunk, LENGTH(blob) FROM notes ORDER BY chunk"):
+            total += size
+            if total > NOTES_MAX_BYTES:
+                self.store.x("DELETE FROM notes WHERE chunk >= ?", (c,))
+                break
+
     def _lanes_wanted(self) -> int:
         try:
             return max(1, int(self.cores()))
         except (TypeError, ValueError):
             return 1
 
-    def _help(self, rpc, budget: float) -> None:
+    def _help(self, rpc, budget: float, lanes: int | None = None) -> None:
         """Help with as many chunks at once as this arcade gives cores (a lane each): their next blocks are fetched
         side by side and read in worker processes, a block a lane at a time (2026-10-20: dedicate cores)."""
         now = time.time()
         ready = ready_chunks(self.tip, self.base)
+        want = self._lanes_wanted() if lanes is None else max(1, lanes)
         lanes = self.chunks.lanes
-        want = self._lanes_wanted()
         while len(lanes) > want:                                  # fewer cores now: the newest lanes let go
             self._drop_lane(lanes[-1])
         held = {lane["c"] for lane in lanes}
         while len(lanes) < want:
-            c = self.chunks.choose(ready, now, exclude=held)
+            c = self.chunks.choose(ready, now, exclude=held, first=self._needed() if self.mode() == "walk" else ())
             if c is None:
                 break
             lane = {"c": c, "at": chunk_range(c, self.base)[0]}
@@ -865,10 +1249,13 @@ class DoginalIndex:
             if not todo:
                 break
             heights = [lane["at"] for lane in todo]
-            stored = {h for h in heights if self.store.q("SELECT 1 FROM block WHERE height=?", (h,))}
-            for h, (block_hash, line, n) in self._scan_many(rpc, [h for h in heights if h not in stored]).items():
-                self.store.x("INSERT OR REPLACE INTO block (height, hash, line, n) VALUES (?,?,?,?)",
-                             (h, block_hash, line, n))
+            stored = {h for h in heights if self.store.q("SELECT 1 FROM pnote WHERE height=?", (h,))}
+            for h, (block_hash, line, n, notes) in self._scan_many(rpc, [h for h in heights if h not in stored]).items():
+                with self.store.tx() as db:
+                    if not db.execute("SELECT 1 FROM block WHERE height=?", (h,)).fetchone():
+                        db.execute("INSERT INTO block (height, hash, line, n) VALUES (?,?,?,?)",
+                                   (h, block_hash, line, n))
+                    db.execute("INSERT OR REPLACE INTO pnote VALUES (?,?)", (h, notes))
             for lane in todo:
                 lo = chunk_range(lane["c"], self.base)[0]
                 lane["at"] += 1
@@ -883,7 +1270,9 @@ class DoginalIndex:
             if lane["at"] >= chunk_range(c, self.base)[1]:
                 got = self.store.chunk_line(c)
                 if got is not None:
-                    self.store.say(c, "", got[0], got[1])
+                    kept = self.store.notes_of(c)
+                    nd = kept[1] if kept and kept[2] == "" else (self.store.finish_notes(c) or (None,))[0]
+                    self.store.say(c, "", got[0], got[1], nd)
                     self.helped += 1
                     self.store.set_meta("helped", self.helped)
                 self._drop_lane(lane)
@@ -943,16 +1332,17 @@ class DoginalIndex:
         """This arcade's hashes it has not said yet, to every linked arcade."""
         if self.share is None:
             return
-        rows = self.store.q("SELECT rowid, chunk, hash, births FROM seen WHERE node='' AND rowid > ? "
+        rows = self.store.q("SELECT rowid, chunk, hash, births, nd FROM seen WHERE node='' AND rowid > ? "
                             "ORDER BY rowid LIMIT 500", (self._said_upto,))
         if not rows:
             return
-        self.share.post({"op": "dn", "rows": [[c, h, n] for _r, c, h, n in rows]})
+        self.share.post({"op": "dn", "rows": [[c, h, n] + ([nd] if nd else []) for _r, c, h, n, nd in rows]})
         self._said_upto = int(rows[-1][0])
         self.store.set_meta("said_upto", self._said_upto)
 
     def all_mine(self) -> list[list]:
-        return [[c, h, n] for c, h, n in self.store.q("SELECT chunk, hash, births FROM seen WHERE node=''")]
+        return [[c, h, n] + ([nd] if nd else [])
+                for c, h, n, nd in self.store.q("SELECT chunk, hash, births, nd FROM seen WHERE node=''")]
 
     # --- what the mesh heard ---------------------------------------------------------------------------------------
 
@@ -961,28 +1351,44 @@ class DoginalIndex:
         if op == "hi":
             self.chunks.peers[node] = {k: header.get(k) for k in ("mode", "walk", "helped", "v", "rules")} | \
                 {"at": time.time()}
+            if header.get("rules") == ord_rules.RULES:
+                self.snapshots.heard_offer(node, header.get("sn"))
+            return
+        if op == "sq":                                   # a linked arcade far behind asks for a snapshot
+            self._snap_asked = True
             return
         if (self.chunks.peers.get(node) or {}).get("rules") != ord_rules.RULES:
             return                         # an arcade on other rules (or not heard from yet): its chunks are not ours
         if op == "ls":
-            self.chunks.lease_from(node, int(header["c"]), int(header.get("at") or 0),
-                                   min(float(header.get("until") or 0), time.time() + LEASE_SECONDS))
+            c, at = int(header["c"]), int(header.get("at") or 0)
+            self.chunks.lease_from(node, c, at, min(float(header.get("until") or 0), time.time() + LEASE_SECONDS))
+            # Two arcades took the same chunk at the same moment: the one further behind lets go (the same node id
+            # decides a tie, so exactly one of them does), and its lane takes the next in line.
+            for lane in list(self.chunks.lanes):
+                if lane["c"] == c and (lane["at"] < at or (lane["at"] == at and node < (self.me or ""))):
+                    self._drop_lane(lane)
+                    self._keep_lanes()
         elif op == "ld":
             self.chunks.drop_from(node, int(header["c"]))
         elif op == "dn":
             for row in (header.get("rows") or [])[:1000]:
                 try:
                     c, h, n = int(row[0]), str(row[1]), int(row[2])
+                    nd = str(row[3]) if len(row) > 3 and row[3] else None
                 except (TypeError, ValueError, IndexError):
                     continue
-                if 0 <= c and len(h) == 64:
-                    self.store.say(c, node, h, n)
+                if 0 <= c and len(h) == 64 and (nd is None or len(nd) == 64):
+                    self.store.say(c, node, h, n, nd)
                     self.chunks.drop_from(node, c)
 
     def hello(self) -> dict:
-        return {"op": "hi", "net": self.net, "base": self.base, "mode": self.mode(),
-                "walk": self.walker.next_height() if self.mode() == "walk" else None, "helped": self.helped, "v": 2,
+        said = {"op": "hi", "net": self.net, "base": self.base, "mode": self.mode(),
+                "walk": self.walker.next_height() if self.mode() == "walk" else None, "helped": self.helped, "v": 3,
                 "rules": ord_rules.RULES}
+        offer = self.snapshots.offer()
+        if offer is not None:
+            said["sn"] = offer
+        return said
 
     # --- for people ------------------------------------------------------------------------------------------------
 
@@ -1034,11 +1440,17 @@ class DoginalIndex:
             born[(c, h)] = n
         agreed = differ = one = agreed_births = 0
         differs = []
+        # Confidence (2026-10-20): how many arcades said the same of a chunk -- 1 found, 2 legitimate, more
+        # raises it. Chunks and the inscriptions in them, at each level (AUDIT_MAX and over together).
+        levels = {k: {"chunks": 0, "inscriptions": 0} for k in range(1, AUDIT_MAX + 1)}
         for c, words in per.items():
             tally: dict[str, int] = {}
             for h in words.values():
                 tally[h] = tally.get(h, 0) + 1
             best = max(tally, key=tally.get)
+            level = levels[min(tally[best], AUDIT_MAX)]
+            level["chunks"] += 1
+            level["inscriptions"] += born.get((c, best), 0)
             if tally[best] >= AGREE:
                 agreed += 1
                 # The births two arcades said with the same hash (2026-10-20: the inscriptions agreed on, in a
@@ -1069,7 +1481,21 @@ class DoginalIndex:
                     "names": counts.get("names", {}),
                     "rate": round(self.walker.rate, 2), "error": self.walker.error}
         found = self._counts()["found"]
-        return {"net": self.net, "found": found, "mode": self.mode(), "base": self.base, "source": SOURCES.get(self.net, ""), "chunk": CHUNK, "tip": self.tip, "ready": ready,
+        kept = self.store.q("SELECT COUNT(*), COALESCE(SUM(LENGTH(blob)), 0), "
+                            "COALESCE(SUM(src = ''), 0) FROM notes")[0]
+        covered = sum(1 for c in range(ready) if c in per)
+        snaps = self.snapshots
+        f = snaps.fetch
+        snapshot = {"said": snaps.said, "single": snaps.single,
+                    "made": snaps.made["manifest"]["height"] if snaps.made else None,
+                    "fetching": ({"from": f["from"][:12], "have": len(f["have"]),
+                                  "pieces": len(f["manifest"]["pieces"]) if f.get("manifest") else None}
+                                 if f else None)}
+        return {"net": self.net, "levels": levels, "covered": covered, "snapshot": snapshot,
+                "rebuilt": self.store.meta("rebuilt"),
+                "phase": "cover" if covered < ready else "audit",
+                "notes": {"chunks": kept[0], "bytes": kept[1], "own": kept[2]},
+                "holders": [{"node": n[:12] or "this arcade", "walked_to": h} for n, h in self.holders()], "found": found, "mode": self.mode(), "base": self.base, "source": SOURCES.get(self.net, ""), "chunk": CHUNK, "tip": self.tip, "ready": ready,
                 "agreed": agreed, "agreed_births": agreed_births, "one": one, "none": max(0, ready - len(per)), "differ": differ, "differs": differs,
                 "lease": ({"chunk": mine["c"], "blocks": list(chunk_range(mine["c"], self.base)), "at": mine["at"],
                            "done": mine["at"] - chunk_range(mine["c"], self.base)[0]} if mine else None),
@@ -1100,6 +1526,10 @@ class DoginalIndex:
             return {"name": self.name(str(question.get("name") or ""))}
         if what == "on":
             return {"on": self.on(str(question.get("txid") or ""), int(question.get("vout") or 0))}
+        if what == "moves":                              # a snapshot being checked: this walk's moves, chunk by chunk
+            from .ord_snapshot import MOVES_SAMPLE, moves_digest
+            chunks = [int(c) for c in (question.get("chunks") or [])[:MOVES_SAMPLE]]
+            return {"moves": {str(c): moves_digest(self.store, c, self.base, CHUNK) for c in chunks}}
         raise ValueError("no such question")
 
     def lookup(self, question: dict) -> dict:

@@ -88,6 +88,32 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-20 · the operator's side · ord index: cover in line, spend notes stitched, audit after, the whole index torrent-style; own machine opens as its operator
+
+Branch claude/ord-cover-stitch. The operator asked for this design in his own words (the operator's
+~/docs/doginals-index-plan.md, "Redesign"), then "build it and test it".
+- **Spend notes** (arcade/ord_notes.py): a chunk cut down to what the walk reads: header, txids (proved by the merkle
+  root), inputs, outputs as value + owner, input 0's script where it can open or continue an envelope. Content
+  that cannot matter (no "p", token op or name) is zeroed at its own length. Canonical, so `digest` is a second word
+  on each chunk (`seen.nd`, "dn" rows gain a 4th field). Measured on real Dogecoin: ~5.6 KB a block packed,
+  ~10 GB for the whole chain, kept only until every holder has stitched past.
+- **Walk = hold the full index.** Spare cores scan the chunks in line ahead; notes others scanned are fetched
+  (ng/nb frames, each chunk from another peer, checked against the digest and births hash); the walk stitches
+  them (`Walker.step(notes=...)`), reading its own Core only when nobody has or is about to have a chunk. Stitched
+  from another's notes = that arcade's word, never a second one; if the audit later outvotes those notes the
+  index is built again. A holder with no Core of its own stitches from notes.
+- **Chunks.choose**: cover first, the lowest chunk nobody has said or holds; the audit (chunks this arcade did not
+  say, fewest agreeing first, up to AUDIT_MAX=5) only once every chunk is said. Two arcades on one chunk: the one
+  behind lets go. Status gains confidence `levels`, `phase`, `notes`, `holders`, `snapshot`.
+- **The whole index on request** (arcade/ord_snapshot.py): a holder far behind asks ("sq"); a big holder makes a
+  snapshot (VACUUM INTO, 1 MiB pieces, a manifest of piece hashes); "hi" carries `sn`; pieces come from every arcade
+  that has them, partial fetchers included (g/gb frames); the copy is checked against chunks two arcades agree on
+  and a second holder's moves, then swapped in (Store.swap).
+- Ords panel: modes "Hold the full index" / "Help scan" / "Read only" / "Off"; confidence per level; holders; notes.
+- Own machine: with nobody signed in, the arcade opens as its operator account (`_operator_here` in signed_in) --
+  the operator on a test machine: other operators saw @strawberry, its own page drew the nameless built-in wallet. Not for a
+  public request, not after /view/node, not after signing out there (`arcade_out` cookie; /view/account clears).
+
 ### 2026-10-20 · the operator's side · Admin -> Ords: each index's size on disk; the index redesign planned
 
 The operator: "Each index should show their size on disc in the ORD panel". /admin/api/ords rows carry `disk` (the

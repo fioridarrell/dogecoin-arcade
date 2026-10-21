@@ -386,6 +386,9 @@ PAGE_TOKENS = 50
 #: Which wallet the node's own machine is showing: "node" for its built-in
 #: wallet, absent for the signed-in account's (app._account_view).
 VIEW_COOKIE = "arcade_view"
+#: Set when somebody signs out on the arcade's own machine, so it does not open as its operator account again at
+#: once (_operator_here); /view/account clears it.
+OUT_COOKIE = "arcade_out"
 #: The other accounts signed in on this browser, on the node's own machine
 #: only: their session tokens, newest first (2026-09-30: "a way to have
 #: multiple wallets imported into the local web ui").
@@ -1009,6 +1012,7 @@ def create_app(state: AppState) -> FastAPI:
                               samesite="strict")
         else:
             answer.delete_cookie(VIEW_COOKIE)
+            answer.delete_cookie(OUT_COOKIE)
         return answer
 
     def _again(where: str, **context: Any) -> RedirectResponse:
@@ -10119,12 +10123,32 @@ def create_app(state: AppState) -> FastAPI:
                 or request.url.scheme) == "https"
 
     def signed_in(request: Request):
-        """The account this request belongs to, or None. Touches the seat."""
+        """The account this request belongs to, or None. Touches the seat. On the arcade's own machine with nobody
+        signed in, its operator account (_operator_here)."""
         try:
-            return state.accounts().session(
+            found = state.accounts().session(
                 request.cookies.get(SESSION_COOKIE, ""))
         except Exception:
             return None
+        return found if found is not None else _operator_here(request)
+
+    def _operator_here(request: Request):
+        """The arcade's own machine, nobody signed in: the arcade IS its operator account (2026-10-20: on the
+        a test machine "Other operators are seeing my operator name as strawberry, but in my your arcade page it says I have not
+        claimed a name" -- the page drew the installer's built-in wallet, which has no name). Never for a public
+        request; not after the browser switched to the built-in wallet (/view/node) or signed out here (OUT_COOKIE);
+        not for an operator with no wallet of its own (a username and password: that operator IS the node)."""
+        if not state.operator or request.cookies.get(VIEW_COOKIE) == "node" or request.cookies.get(OUT_COOKIE):
+            return None
+        if _public_request(request):
+            return None
+        try:
+            account = state.accounts().account(state.operator)
+        except Exception:                                  # noqa: BLE001 -- no accounts here yet
+            return None
+        if account is None or not account.seated or not _account_address(account.pubkey, _account_chain()):
+            return None
+        return account
 
     @app.get("/bip39-english.txt")
     def bip39_wordlist():
@@ -10291,6 +10315,8 @@ def create_app(state: AppState) -> FastAPI:
         state.accounts().logout(request.cookies.get(SESSION_COOKIE, ""))
         answer = JSONResponse({"pubkey": None})
         answer.delete_cookie(SESSION_COOKIE)
+        if not _public_request(request):                   # signed out on purpose: not the operator again at once
+            answer.set_cookie(OUT_COOKIE, "1", max_age=365 * 86400, httponly=True, samesite="strict")
         return answer
 
     def _account_row(token: str, current: bool) -> dict | None:

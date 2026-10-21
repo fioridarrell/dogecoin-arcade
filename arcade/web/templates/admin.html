@@ -303,18 +303,22 @@
 <section class="panel" id="ords">
   <h2>Ords</h2>
   <p class="muted" style="margin-top:0">Every inscription on each chain, read from its blocks by the arcades themselves,
-    from the first block that chain&rsquo;s ord indexer starts at. <b>Walk</b> reads every block here, in order, and knows
-    where each inscription is now (it needs that chain&rsquo;s Core on this machine). <b>Help</b> takes 100 blocks at a
-    time from the shared list, reads them a block at a time, and says their hash; two arcades with the same hash for a
-    chunk agree on it. A chunk whose arcade goes quiet for 10 minutes goes to the next one.</p>
+    from the first block that chain&rsquo;s ord indexer starts at. The chain is cut into chunks of 100 blocks, handed
+    out in line: whoever is free takes the next one, so no two arcades scan the same blocks until every chunk has been
+    scanned once. Then the arcades audit each other&rsquo;s chunks: two that agree make a chunk legitimate, and three,
+    four or more raise its confidence. A chunk whose arcade goes quiet for 10 minutes goes to the next one.
+    <b>Hold the full index</b> keeps every inscription, its owner and every token balance here: it stitches the
+    chunks&rsquo; notes together in order (scanned by its own spare cores or fetched from the arcades that scanned
+    them), and when it is far behind it fetches the whole index from the arcades that hold it, a piece from each.
+    <b>Help scan</b> scans chunks for the others. <b>Read only</b> keeps no index and asks an arcade that holds one.</p>
   <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap;margin:4px 0 10px">
     <label for="ordcores"><b>Cores for ords:</b></label>
     <input autocomplete="off" type="number" id="ordcores" min="1" step="1" inputmode="numeric" style="width:5.5em;font-size:16px">
     <span class="muted" id="ordmachine"></span>
     <button type="button" class="small" id="ordcoressave">Save</button>
   </div>
-  <p class="muted" style="margin:0 0 10px;font-size:.84rem">Each core helps with a chunk of its own, side by side.
-    Walking a chain is block after block, so it uses one core whatever this says. One core on a small machine rests
+  <p class="muted" style="margin:0 0 10px;font-size:.84rem">Each core scans a chunk of its own, side by side. Holding
+    the index, one core stitches and the rest scan the chunks in line ahead of it. One core on a small machine rests
     between passes, so the arcade&rsquo;s pages stay quick.</p>
   <div class="tablewrap"><table class="admintable">
     <thead><tr><th>Chain</th><th>Index</th><th>Starts at</th><th>Indexed</th><th>Inscriptions</th><th>Agreed</th><th>On disk</th><th>Now</th></tr></thead>
@@ -1016,7 +1020,7 @@ section.panel h2{margin-top:0}
   }
   loadSwaps(); setInterval(loadSwaps, 15000);
   // --- Ords (2026-10-20): each chain's own ord index, every 5 s while the tab shows; and Network -> Other operators.
-  var ORD_WORDS = {walk: 'Walk', help: 'Help', read: 'Read only', off: 'Off'};
+  var ORD_WORDS = {walk: 'Hold the full index', help: 'Help scan', read: 'Read only', off: 'Off'};
   function pct(x) { return (x == null ? '\u2014' : Number(x).toFixed(x < 10 ? 2 : 1) + '%'); }
   function num(x) { return Number(x || 0).toLocaleString(); }
   function bytes(n) {
@@ -1068,9 +1072,21 @@ section.panel h2{margin-top:0}
           tr.appendChild(w ? lines([num(w.inscriptions) + ' inscriptions', num(w.tokens) + ' tokens, '
                                     + num(w.holders) + ' holders', num((w.names || {}).spec) + ' names'])
                            : r.found ? lines([num(r.found), 'in chunks read here']) : text('td', '\u2014'));
-          // Inscriptions in the chunks two or more arcades read the same way (2026-10-20).
-          tr.appendChild(r.mode === 'off' && !r.agreed ? text('td', '\u2014')
-                           : lines([num(r.agreed_births) + ' inscriptions', 'agreed by two or more arcades']));
+          // Inscriptions in the chunks two or more arcades read the same way, and the confidence of every chunk: how many
+          // arcades agree on it (2026-10-20).
+          var conf = [];
+          if (r.mode !== 'off' || r.agreed) {
+            conf.push(num(r.agreed_births) + ' inscriptions agreed by two or more arcades');
+            Object.keys(r.levels || {}).forEach(function (k) {
+              var lv = r.levels[k];
+              if (!lv.chunks) return;
+              var who = k === '1' ? '1 arcade (unchecked)' : (Number(k) >= 5 ? '5 or more arcades' : k + ' arcades');
+              conf.push(who + ': ' + num(lv.chunks) + ' chunks, ' + num(lv.inscriptions) + ' inscriptions');
+            });
+            if (r.ready) conf.push(r.phase === 'audit' ? 'every chunk scanned once: auditing'
+                                   : 'scanned once: ' + num(r.covered) + ' of ' + num(r.ready) + ' chunks');
+          }
+          tr.appendChild(conf.length ? lines(conf) : text('td', '\u2014'));
           tr.appendChild(text('td', r.disk ? bytes(r.disk) : '\u2014'));
           var bits = [];
           if (r.mode === 'off') bits.push('off');
@@ -1082,14 +1098,24 @@ section.panel h2{margin-top:0}
           if (r.helped) bits.push(num(r.helped) + ' chunks read here as help');
           (r.leases || []).forEach(function (l) { bits.push('arcade ' + l.node + ' reads chunk ' + num(l.chunk) + ' (' + l.done + '/' + r.chunk + ')'); });
           if (r.differ) bits.push(num(r.differ) + ' chunk' + (r.differ > 1 ? 's' : '') + ' read differently');
-          if (r.mode === 'walk' && r.borrowed) bits.push('walking needs this chain\u2019s Core here: helping instead');
+          if (r.mode === 'walk' && r.borrowed) bits.push('no Core of this chain here: stitched from other arcades\u2019 notes');
+          var holders = (r.holders || []).map(function (h) { return h.node + ' (block ' + num(h.walked_to) + ')'; });
+          if (holders.length) bits.push('holding the full index: ' + holders.join(', '));
+          if (r.notes && r.notes.chunks) bits.push(num(r.notes.chunks) + ' chunks of notes kept (' + bytes(r.notes.bytes)
+                                                     + ') until every holder has stitched past them');
+          var sn = r.snapshot || {};
+          if (sn.fetching) bits.push('fetching the whole index from arcade ' + sn.fetching.from + ': '
+            + (sn.fetching.pieces ? num(sn.fetching.have) + ' of ' + num(sn.fetching.pieces) + ' pieces' : 'asking'));
+          else if (sn.said) bits.push(sn.said);
+          if (sn.made) bits.push('serves a copy of its index at block ' + num(sn.made));
+          if (r.rebuilt && r.rebuilt.why) bits.push('built again: ' + r.rebuilt.why);
           if (r.error) bits.push(r.error);
           tr.appendChild(lines(bits, (r.differ || r.error) ? 'idx-bad' : 'muted'));
           tb.appendChild(tr);
         });
         if (!tb.childNodes.length) {
           var none = document.createElement('tr'), cell = text('td', 'This arcade reads none of the chains that have ords.', 'muted');
-          cell.colSpan = 6; none.appendChild(cell); tb.appendChild(none);
+          cell.colSpan = 8; none.appendChild(cell); tb.appendChild(none);
         }
       }).catch(function () { $('ordrows').textContent = 'Could not read the ord indexes.'; });
   }
