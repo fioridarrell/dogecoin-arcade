@@ -397,16 +397,27 @@ class Store:
         self._db.execute("PRAGMA journal_size_limit=67108864")
         self._db.execute("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)")
         # Kept under other rules (or none, before 2026-10-20's): cut again from the start.
+        # All or nothing (2026-10-21, rules 3 on .25: PEP's index was left with 5 of its tables and the new rules,
+        # taken for layout 2, so the rest were never made): the drop, the meta and the new marks in one transaction.
         if self.meta("rules") != ord_rules.RULES:
-            for (table,) in self._db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name != 'meta'"
-                                             ).fetchall():
-                self._db.execute(f"DROP TABLE IF EXISTS {table}")
-            self._db.execute("DELETE FROM meta")
-            self.set_meta("rules", ord_rules.RULES)
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                for (table,) in self._db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name != 'meta'"
+                                                 ).fetchall():
+                    self._db.execute(f"DROP TABLE IF EXISTS {table}")
+                self._db.execute("DELETE FROM meta")
+                self._db.execute("INSERT OR REPLACE INTO meta VALUES ('layout', ?)", (json.dumps(LAYOUT),))
+                self._db.execute("INSERT OR REPLACE INTO meta VALUES ('rules', ?)", (json.dumps(ord_rules.RULES),))
+                self._db.execute("COMMIT")
+            except BaseException:
+                self._db.execute("ROLLBACK")
+                raise
         # An index of layout 1 (before 2026-10-20's slimming) stays as it is until the index thread converts it;
-        # until then nothing reads its walk tables (old_layout).
+        # until then nothing reads its walk tables (old_layout). One with no inscription in it has nothing to convert:
+        # it is of this layout, and whatever of its tables is missing is made below.
         cols = [r[1] for r in self._db.execute("PRAGMA table_info(insc)").fetchall()]
-        self.layout = 1 if "id" in cols else int(self.meta("layout") or 2) if cols else LAYOUT
+        empty = not cols or not self._db.execute("SELECT 1 FROM insc LIMIT 1").fetchone()
+        self.layout = LAYOUT if empty else 1 if "id" in cols else int(self.meta("layout") or 2)
         self.old_layout = self.layout != LAYOUT
         self.upgrading = ""
         if not self.old_layout:

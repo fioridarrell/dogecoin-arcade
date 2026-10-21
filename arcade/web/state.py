@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import dataclasses
 import secrets
+import logging
 import threading
 import time
 from dataclasses import dataclass, field
@@ -1727,11 +1728,17 @@ class AppState:
             net = chain.network
             if net in kept or net not in STARTS:
                 continue
-            kept[net] = DoginalIndex(Path(self.home) / f"ord-{net}.sqlite", chain.rpc,
-                                     (lambda n=net: self.ord_mode(n)),
-                                     own_core=(lambda c=chain: not getattr(c, "borrowed", False)),
-                                     net=net, mweb=bool(getattr(chain.params, "mweb", False)), cores=self.ord_cores,
-                                     walk_share=self.ord_share)
+            try:
+                kept[net] = DoginalIndex(Path(self.home) / f"ord-{net}.sqlite", chain.rpc,
+                                         (lambda n=net: self.ord_mode(n)),
+                                         own_core=(lambda c=chain: not getattr(c, "borrowed", False)),
+                                         net=net, mweb=bool(getattr(chain.params, "mweb", False)),
+                                         cores=self.ord_cores, walk_share=self.ord_share)
+            except Exception:                                  # noqa: BLE001 -- e.g. the file still locked by the
+                # worker this one replaces, mid-reset (2026-10-21): this chain is opened again at the next ask, and
+                # the others go on meanwhile.
+                logging.getLogger("arcade.web").warning("ord index of %s not opened yet; asked again later", net,
+                                                         exc_info=True)
         return dict(kept)
 
     def doginal_index(self):

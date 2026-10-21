@@ -102,6 +102,11 @@ replaced on "partial"). A fresh walk of 293,190-293,220 with the fix gives exact
   (the same walker, wonky-ord's rule) is rebuilt too. **SadFrog / tbuuol: update, and your ord indexes rebuild.**
 - Test: tests/test_doginal_index.py `test_a_spend_of_a_pieces_change_first_does_not_end_its_envelope` (fails on the
   old code).
+- **Half-made after the reset (fixed 18:5x):** on .25 PEP's index came out with 5 of its 15 tables and rules 3
+  (most likely the reset ran beside the worker being replaced), was then taken for layout 2 (its layout mark gone), so
+  the rest were never made: Admin -> Ords 500 "no such table: main.seen". Now the reset is one transaction (drop,
+  meta, layout and rules marks), an index with no inscription in it is always this layout (missing tables made), and
+  `state.ord_indexes` opens each chain on its own (one that fails is asked again, the others go on).
 - **Old files:** an index of other rules is emptied in place (its tables dropped; SQLite keeps the file's size and the
   rebuild reuses the space). A snapshot kept beside it (`.snap`, GBs) is now let go of at start when its manifest's
   rules are not these (ord_snapshot.Snapshots: it checked only the layout; a fetching arcade refused it already).

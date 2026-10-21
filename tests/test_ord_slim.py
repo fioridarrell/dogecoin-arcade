@@ -387,3 +387,35 @@ def test_the_walk_says_its_real_pace_not_its_burst(tmp_path, monkeypatch):
         index._note_pace()
         clock[0] += 10.0
     assert abs(index.walk_pace() - 1.5) < 0.01
+
+
+def test_an_index_left_half_made_by_a_reset_is_made_whole(tmp_path):
+    """2026-10-21, rules 3 on .25: PEP's index was left with five of its tables and the new rules, taken for layout 2,
+    so the rest were never made and Admin -> Ords failed ("no such table: main.seen"). An index with no inscription in
+    it is of this layout: its missing tables are made."""
+    path = tmp_path / "half.sqlite"
+    db = sqlite3.connect(path)
+    db.execute("CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)")
+    db.execute("INSERT INTO meta VALUES ('rules', ?)", (json.dumps(ord_rules.RULES),))
+    db.executescript("CREATE TABLE block (height INTEGER PRIMARY KEY, hash TEXT NOT NULL, line TEXT NOT NULL, "
+                     "n INTEGER NOT NULL DEFAULT 0, moves TEXT); "
+                     "CREATE TABLE insc (rid INTEGER PRIMARY KEY, tx BLOB, n INTEGER, number INTEGER, height INTEGER, "
+                     "txpos INTEGER, ct INTEGER, proto TEXT, size INTEGER, pieces INTEGER, burned INTEGER);")
+    db.commit()
+    db.close()
+    store = dx.Store(path)
+    assert not store.old_layout and store.layout == dx.LAYOUT
+    names = {r[0] for r in store.q("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert {"seen", "pending", "tok", "bal", "notes"} <= names
+
+
+def test_a_reset_for_new_rules_is_all_or_nothing(tmp_path):
+    path = tmp_path / "old.sqlite"
+    store = dx.Store(path)
+    store.x("INSERT INTO block (height, hash, line) VALUES (1, 'h', 'l')")
+    store.set_meta("rules", ord_rules.RULES - 1)
+    store._db.close()
+    fresh = dx.Store(path)
+    assert fresh.meta("rules") == ord_rules.RULES and fresh.meta("layout") == dx.LAYOUT
+    assert fresh.q("SELECT COUNT(*) FROM block")[0][0] == 0, "cut again from the start"
+    assert {"seen", "pending"} <= {r[0] for r in fresh.q("SELECT name FROM sqlite_master WHERE type='table'")}
