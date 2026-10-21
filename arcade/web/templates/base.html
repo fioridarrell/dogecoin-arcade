@@ -1813,7 +1813,7 @@ function arcadeFileCost(bytes){
   }
 
   function offer(text) {
-    // The one case the page cannot take in place: the site's own code changed. Offer it.
+    // Only the feed's "New posts are in" now (far down it, where moving the ground would lose the reader's place).
     if (document.getElementById('newposts')) return;
     var u = document.createElement('a');
     u.id = 'newposts'; u.href = location.pathname + location.search; u.textContent = text;
@@ -1862,8 +1862,13 @@ function arcadeFileCost(bytes){
         }
         fetching = true; lastPage = Date.now();
         return page().then(function (doc) {
+          // No "tap to refresh" bar (2026-10-21: "This button comes up too often and seemingly for no reason
+          // can we just remove it?"). New site code is taken at the next page opened; until then this page keeps
+          // patching itself only while the code is the same (a page of other code is not patched by position), and
+          // a page with no baseline yet just takes this one as it -- it used to offer the bar, which on a busy
+          // arcade, never quiet long enough to take a baseline, was nearly every change.
           if (base && version(doc) !== version(base)) {
-            offer('The site was updated — tap to refresh');
+            /* another version: left as it is until the next page */
           } else if (base && document.body.dataset.selfRefreshing) {
             // A page that draws itself from the browser (/me, messages, the
             // wallet) redraws on arcade:changed below; patching its server HTML
@@ -1872,8 +1877,6 @@ function arcadeFileCost(bytes){
           } else if (base) {
             if (document.title !== doc.title) document.title = doc.title;
             apply(document.body, base.body, doc.body);
-          } else {
-            offer('Updated — tap to refresh');
           }
           base = doc;
           known = parseInt(doc.body.dataset.generation || data.generation, 10) || data.generation;

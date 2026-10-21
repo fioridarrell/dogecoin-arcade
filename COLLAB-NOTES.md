@@ -88,6 +88,14 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-21 No "tap to refresh" bar (Claude)
+The operator: "This button comes up too often and seemingly for no reason can we just remove it?" base.html's live update no
+longer offers "The site was updated — tap to refresh" (new code is taken at the next page opened; a page of other code
+is not patched in place) nor "Updated — tap to refresh". The second was the "no reason" one: it showed whenever the
+page had no baseline yet, and a busy arcade is seldom quiet for the 5 s poll that takes one, so nearly every change
+offered it; now a page with no baseline takes that answer as its baseline. The feed's "New posts are in" stays.
+tests/test_live_update.py says no bar and no reload.
+
 ### 2026-10-21 Admin -> Ords: the explorer follows the chain at the top, a viewer by number, tokens with a rich list (Claude)
 The operator: "In the ord admin panel The Explorer on the bottom should be picked by the coin type at the top ... search by
 number as well as TXID utxo:index ... display ord 0 of the chain that is selected with arrows to navigate by ord number
