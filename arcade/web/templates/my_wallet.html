@@ -204,6 +204,8 @@ a.wl-act:hover{text-decoration:none}
 .wl-collhead{display:flex;align-items:center;gap:12px;margin:4px 0 4px}
 .wl-collhead .wl-mosaic{width:60px;flex:none}
 .wl-collhead b{font-size:1.1rem;display:block}
+.wl-dgpager{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:12px}
+.wl-dgpager select{flex:1 1 140px;min-width:0}
 .wl-pieces{display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:8px;margin-top:8px}
 .wl-piece{display:block;aspect-ratio:1;border-radius:12px;overflow:hidden;position:relative;background:var(--code);max-width:100%}
 .wl-piece em{position:absolute;left:0;right:0;bottom:0;padding:4px 6px;font-style:normal;font-size:.7rem;font-weight:700;color:#fff;
@@ -990,10 +992,12 @@ function showTab(which) {
   }
   try { sessionStorage.setItem("arcade.wallet.tab", which); } catch (e) {}
   if (pickedNow() && which !== "activity") {
-    // Tokens, NFTs and inscriptions are the account's own wallet's, for now.
+    // Tokens and arcade NFTs are the account's own wallet's, for now; an imported wallet's Doginals and Pepinals are
+    // shown (2026-10-21: 1,500 of them in one).
     $("panel-" + which).replaceChildren(el("div", "wl-empty",
-      "Tokens and NFTs are shown for your arcade wallet. Choose it above to see them."));
-    $("doginals").hidden = true;
+      "Tokens and arcade NFTs are shown for your arcade wallet. Choose it above to see them."));
+    if (which === "nfts") drawDoginals().catch((e) => { $("doginals").replaceChildren(el("div", "wl-empty", String(e.message || e))); });
+    else $("doginals").hidden = true;
     return;
   }
   if (which === "activity") loadActivity().catch(showError("panel-activity"));
@@ -1932,7 +1936,7 @@ async function drawCollection() {
  */
 
 const DG_TX = "arcade.inscriptions.v2.";         // + network + "." + txid: the chain's answer (v1 held an outside index's)
-let dg = {net: null, coins: null, answers: {}, failed: 0, asking: false};
+let dg = {net: null, addr: "", coins: null, answers: {}, failed: 0, asking: false, page: 0};
 
 function dgKept(net, txid) {
   try { return JSON.parse(localStorage.getItem(DG_TX + net + "." + txid) || "null"); } catch (e) { return null; }
@@ -2037,26 +2041,85 @@ async function strayDoginals(box) {
   };
 }
 
+/* 2026-10-21: "I have like over 1500 doginals in that wallet. Make sure they have good pagination. And lazy
+ * loading and caching ... whatever is lightest weight for the server ... right now it looks like the doginals in my
+ * Wallet load like three times when I'm looking at them". So: only small coins (Doginal postage) are asked about, a
+ * hundred transactions a call, one call at a time (/account/doginal-txs), every answer kept in this browser for good;
+ * DG_PAGE cards a page, and a page's cards (each a picture frame) are built only when what is on it changes -- an
+ * answer coming in, a block, or a redraw no longer rebuilds them, which reloaded every picture each time. */
+const DG_PAGE = 30, DG_BATCH = 100, DG_POSTAGE = 1000000;   // doginals.POSTAGE_MAX
+const DG_PAGEKEY = "arcade.wallet.dgpage:";
+let dgUi = null;                      // {head, status, notes, stray, grid, pager, shown, paged}
+
+async function dgAskMany(net, address, txids) {
+  const r = await fetch("/account/doginal-txs", {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({chain: net, address, txids})});
+  const said = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(said.detail || `the node could not read them (${r.status})`);
+  const out = {};
+  for (const t of txids) {
+    const one = (said.txs || {})[t];
+    if (one === undefined) { out[t] = []; continue; }           // not this wallet's any more: nothing to show
+    if (one === null) { out[t] = null; continue; }               // unreadable just now
+    const held = one.filter((i) => i && i.vout != null)
+      .map((i) => ({vout: Number(i.vout), id: i.inscription_id == null ? null : String(i.inscription_id),
+                    offset: i.sat_offset ?? null, unknown: !!i.unknown}));
+    if (!held.some((i) => i.unknown)) {
+      try { localStorage.setItem(DG_TX + net + "." + t, JSON.stringify(held)); } catch (e) { /* asked again later */ }
+    }
+    out[t] = held;
+  }
+  return out;
+}
+
+function dgPageGo(n) {
+  dg.page = n;
+  try { sessionStorage.setItem(DG_PAGEKEY + dg.net + ":" + (dg.addr || ""), String(n)); } catch (e) {}
+  drawDoginals().catch(() => {});
+  if (dgUi) dgUi.head.scrollIntoView({block: "start", behavior: "smooth"});
+}
+
 async function drawDoginals() {
   const box = $("doginals");
   const c = chainNow();
   if (NODE_SIDE || tab !== "nfts" || !c || (c.network !== "doge" && c.network !== "main")) { box.hidden = true; return; }
   box.hidden = false;
   const doge = c.network === "doge";
-  if (dg.net !== c.network) dg = {net: c.network, coins: null, answers: {}, failed: 0, asking: false};
+  // An imported wallet's own Doginals too (they are shown; sending one from it comes later).
+  const w = pickedNow(), addr = w ? w.address : "";
+  if (dg.net !== c.network || (dg.addr || "") !== addr) {
+    let page = 0;
+    try { page = Number(sessionStorage.getItem(DG_PAGEKEY + c.network + ":" + addr) || 0) || 0; } catch (e) {}
+    dg = {net: c.network, addr, coins: null, answers: {}, failed: 0, asking: false, page};
+    dgUi = null;
+  }
   // Pepinals (2026-10-17: "Add pepinals support"): the same ord inscriptions on Pepecoin mainnet.
   const W = doge ? "Doginal" : "Pepinal", C = doge ? "DOGE" : "PEP";
-  const head = el("h2", "", `${W}s`); head.id = "dg-title";
   const coinWord = doge ? "Dogecoin" : "PEP";
+  if (!dgUi || !box.contains(dgUi.head)) {
+    const head = el("h2", "", `${W}s`); head.id = "dg-title";
+    dgUi = {head, status: el("div", ""), notes: el("div", ""), stray: el("div", ""), grid: el("div", "wl-pieces"),
+            pager: el("div", "wl-dgpager"), shown: null, paged: null};
+    box.replaceChildren(head, el("p", "wl-note dg-credit", "Read from the chain by this arcade's node."),
+                        dgUi.status, dgUi.notes, dgUi.stray, dgUi.grid, dgUi.pager);
+    if (doge && !w) strayDoginals(dgUi.stray).catch(() => {});
+  }
+  const ui = dgUi;
   if (!dg.coins) {
-    box.replaceChildren(head, el("div", "wl-empty", `Reading your ${coinWord} coins…`));
-    const r = await fetch(`/account/coins?chain=${encodeURIComponent(c.network)}`, {cache: "no-store"});
+    ui.status.replaceChildren(el("div", "wl-empty", `Reading your ${coinWord} coins…`));
+    const only = addr ? `&address=${encodeURIComponent(addr)}` : "";
+    const r = await fetch(`/account/coins?chain=${encodeURIComponent(c.network)}${only}`, {cache: "no-store"});
     const got = await r.json();
     if (!r.ok) throw new Error(got.detail || "the node would not say");
-    dg.coins = got.coins || []; dg.answers = {}; dg.failed = 0;
+    if (dgUi !== ui) return;                                     // the wallet changed meanwhile
+    // Only coins small enough to be Doginal postage can carry one: the rest are never asked about.
+    dg.coins = (got.coins || []).filter((x) => Number(x.value) <= DG_POSTAGE);
+    dg.answers = {}; dg.failed = 0;
   }
   const txids = [...new Set(dg.coins.map((x) => x.txid))];
-  for (const t of txids) { const kept = dgKept(c.network, t); if (kept) dg.answers[t] = kept; }
+  for (const t of txids) {
+    if (!dg.answers[t]) { const kept = dgKept(c.network, t); if (kept) dg.answers[t] = kept; }
+  }
   const left = txids.filter((t) => !dg.answers[t]);
   const found = [], unread = [];
   for (const coin of dg.coins) {
@@ -2066,62 +2129,70 @@ async function drawDoginals() {
       else found.push({...i, txid: coin.txid, vout: coin.vout, value: coin.value, doginal: true});
     }
   }
-  box.replaceChildren(head, el("p", "wl-note dg-credit", "Read from the chain by this arcade's node."));
+  // The few lines above the cards: redrawn freely, they hold no pictures.
+  const status = [];
   if (dg.failed) {
-    box.append(el("div", "msg err", `Inscriptions can't be checked right now: the node could not read `
+    status.push(el("div", "msg err", `Inscriptions can't be checked right now: the node could not read `
       + `${dg.failed} transaction${dg.failed === 1 ? "" : "s"}. Those coins are not shown, and not spent, until it can.`));
     const again = el("button", "ghost wl-more", "Try again"); again.type = "button";
     again.onclick = () => { dg.failed = 0; drawDoginals().catch(() => {}); };
-    box.append(again);
+    status.push(again);
   } else if (left.length) {
-    box.append(el("p", "wl-note", `Reading ${left.length} of your ${txids.length} transaction`
-      + `${txids.length === 1 ? "" : "s"} from the chain…`));
+    status.push(el("p", "wl-note", `Checking ${(txids.length - left.length).toLocaleString()} of `
+      + `${txids.length.toLocaleString()} small coins' transactions… (each is checked once, then remembered)`));
   }
   if (unread.length) {
-    box.append(el("p", "wl-note", `${unread.length} small coin${unread.length === 1 ? "" : "s"} could not be traced all `
+    status.push(el("p", "wl-note", `${unread.length} small coin${unread.length === 1 ? "" : "s"} could not be traced all `
       + "the way back, so they are kept out of ordinary sends in case they carry one."));
   }
   if (!left.length && !dg.failed && !found.length) {
-    box.append(el("div", "wl-empty", `No ${W}s on your ${doge ? "Dogecoin" : "PEP"} coins.`));
+    status.push(el("div", "wl-empty", `No ${W}s on ${w ? w.name + "'s" : "your"} ${coinWord} coins.`));
   }
-  // Kept across redraws: this box is drawn again as each transaction is read.
-  if (doge) {
-    if (!dg.stray) { dg.stray = el("div", ""); strayDoginals(dg.stray).catch(() => {}); }
-    box.append(dg.stray);
-  }
+  ui.status.replaceChildren(...status);
   // Moving a Doginal costs Dogecoin on top of it (2026-10-15: "grayed out unless they have a balance of Dogecoin on
   // top of their asset"): the send's fee, or the swap lock's fee and reserve. `spendable` already leaves the Doginals out.
   const free = Number(c.spendable || 0);
-  const sendShort = free < Number(c.doginal_send_need || 0);
-  const swapShort = free < Number(c.doginal_lock_need || 0);
-  if (found.length && (sendShort || swapShort)) {
+  const sendShort = !w && free < Number(c.doginal_send_need || 0);
+  const swapShort = !w && free < Number(c.doginal_lock_need || 0);
+  const notes = [];
+  if (w && found.length) {
+    notes.push(el("p", "wl-note", `These are ${w.name}'s. Sending or swapping a ${W} from an imported wallet is not `
+      + "ready yet: choose your arcade wallet above to send one of its own."));
+  } else if (found.length && (sendShort || swapShort)) {
     const need = sendShort ? c.doginal_send_need : c.doginal_lock_need;
-    box.append(el("p", "wl-note dg-need", sendShort
+    notes.push(el("p", "wl-note dg-need", sendShort
       ? `To send ${doge ? "or swap " : ""}a ${W} you need some ${C} besides it for the network fee: about `
         + `${coinsOf(doge ? c.doginal_lock_need : c.doginal_send_need)} ${C}${doge ? ` (${coinsOf(c.doginal_send_need)} to send)` : ""}. `
         + `This wallet has ${coinsOf(free)} ${C} to spend.`
       : `To swap a Doginal you need about ${coinsOf(need)} DOGE besides it (the network fee and the coin that moves it out of `
         + `the swap's lock). This wallet has ${coinsOf(free)} DOGE to spend.`));
   }
-  if (found.length) {
-    const grid = el("div", "wl-pieces");
-    for (const g of found) {
+  ui.notes.replaceChildren(...notes);
+  // One page of cards, built only when what is on it changed.
+  const pages = Math.max(1, Math.ceil(found.length / DG_PAGE));
+  const page = Math.min(Math.max(0, dg.page | 0), pages - 1);
+  const here = found.slice(page * DG_PAGE, (page + 1) * DG_PAGE);
+  const shown = JSON.stringify([here.map((g) => g.id + ":" + g.txid + ":" + g.vout), sendShort, swapShort, !!w]);
+  if (ui.shown !== shown) {
+    ui.shown = shown;
+    const cards = [];
+    for (const g of here) {
       const card = el("div", "wl-piececard");
       card.dataset.doginal = g.id;
       const id = el("div", "wl-dgid", g.id); id.title = g.id;
       card.append(doginalPic(g), id);
-      const send = el("button", "wl-piecesend", "Send"); send.type = "button";
-      send.setAttribute("aria-label", `Send ${W} ${g.id}`);
-      send.onclick = () => openSend("", g);
-      if (sendShort) { send.disabled = true; send.title = `Needs ${C} besides the ${W} for the network fee`; }
-      card.append(send);
-      if (!doge) {
-        // Sold for PEP on the Exchange's Pepinals tab (the seller signs once; the buyer completes it).
-        const list = el("a", "wl-piecesend ghost", "List");
-        list.href = "/exchange?tab=pepinals"; list.setAttribute("aria-label", `List Pepinal ${g.id}`);
-        card.append(list);
-      }
-      {
+      if (!w) {
+        const send = el("button", "wl-piecesend", "Send"); send.type = "button";
+        send.setAttribute("aria-label", `Send ${W} ${g.id}`);
+        send.onclick = () => openSend("", g);
+        if (sendShort) { send.disabled = true; send.title = `Needs ${C} besides the ${W} for the network fee`; }
+        card.append(send);
+        if (!doge) {
+          // Sold for PEP on the Exchange's Pepinals tab (the seller signs once; the buyer completes it).
+          const list = el("a", "wl-piecesend ghost", "List");
+          list.href = "/exchange?tab=pepinals"; list.setAttribute("aria-label", `List Pepinal ${g.id}`);
+          card.append(list);
+        }
         // Priced in any coin or token through lock scripts (2026-10-15; Pepinals too, 2026-10-17): its own market.
         const swap = el("a", "wl-piecesend ghost", "Swap");
         swap.setAttribute("aria-label", `Swap ${W} ${g.id}`);
@@ -2131,21 +2202,45 @@ async function drawDoginals() {
         } else swap.href = `/exchange/swap/${c.network}-doginal-${encodeURIComponent(g.id)}/${doge ? "doge" : "main"}-coin`;
         card.append(swap);
       }
-      grid.append(card);
+      cards.push(card);
     }
-    box.append(grid);
+    ui.grid.replaceChildren(...cards);
+    ui.grid.style.display = cards.length ? "" : "none";
+  }
+  const paged = `${page}/${pages}/${found.length}`;
+  if (ui.paged !== paged) {
+    ui.paged = paged;
+    ui.pager.replaceChildren();
+    if (pages > 1) {
+      const prev = el("button", "ghost small", "‹ Previous"); prev.type = "button";
+      prev.disabled = page === 0; prev.onclick = () => dgPageGo(page - 1);
+      const next = el("button", "ghost small", "Next ›"); next.type = "button";
+      next.disabled = page >= pages - 1; next.onclick = () => dgPageGo(page + 1);
+      const pick = el("select"); pick.setAttribute("aria-label", `Page of ${W}s`);
+      for (let n = 0; n < pages; n++) {
+        const o = el("option", "", `Page ${n + 1} of ${pages}`); o.value = String(n); o.selected = n === page;
+        pick.append(o);
+      }
+      pick.onchange = () => dgPageGo(Number(pick.value));
+      ui.pager.append(prev, pick, next, el("span", "wl-note", `${found.length.toLocaleString()} ${W}s`));
+    }
   }
   if (left.length && !dg.asking && !dg.failed) {
+    // One call at a time, a hundred transactions each: the lightest the node can be asked.
     dg.asking = true;
-    const net = c.network, queue = left.slice();
-    const worker = async () => {
-      while (queue.length) {
-        const t = queue.shift();
-        try { dg.answers[t] = await dgAsk(net, t); } catch (e) { dg.failed += 1; }
-        drawDoginals().catch(() => {});
+    const mine = dg, queue = left.slice();
+    (async () => {
+      while (queue.length && dg === mine && !mine.failed) {
+        const batch = queue.splice(0, DG_BATCH);
+        try {
+          const got = await dgAskMany(mine.net, mine.addr, batch);
+          for (const [t, held] of Object.entries(got)) {
+            if (held === null) mine.failed += 1; else mine.answers[t] = held;
+          }
+        } catch (e) { mine.failed += batch.length; }
+        if (dg === mine) drawDoginals().catch(() => {});
       }
-    };
-    Promise.all([worker(), worker(), worker(), worker()]).finally(() => { dg.asking = false; });
+    })().finally(() => { mine.asking = false; });
   }
 }
 

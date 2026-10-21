@@ -88,6 +88,19 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-21 Wallet Doginals: pages, one batched read, frames built once (Claude)
+The operator: "over 1500 doginals in that wallet ... good pagination ... lazy loading and caching ... whatever is lightest
+weight for the server ... right now it looks like the doginals in my Wallet load like three times when I'm looking at
+them". `drawDoginals` (my_wallet.html) now asks only coins of Doginal postage size, a hundred transactions per
+`POST /account/doginal-txs` (own coins read once per call, not once per transaction; one call at a time), keeps each
+answer in localStorage as before, shows 30 cards a page (Previous / page picker / Next, page remembered per wallet),
+and builds a page's cards only when what is on it changes. Before, every answer and every block rebuilt the whole grid,
+so every picture frame loaded again. An imported wallet's Doginals and Pepinals now show too (view only: Send and Swap
+from an imported wallet are not built yet; `/account/doginal/send` is the main address only). Also in this bundle: a
+busy Core during an import rescan is waited for rather than counted as a failure, and a whole-chain rescan the Core
+already ran for those addresses (an arcade restart cut the connection to it) is not sent again (utxos.CoreBusy,
+`core_rescan_sent:<net>`).
+
 ### 2026-10-21 · the operator's side · imported wallets follow the account to every arcade it signs into
 
 The operator: "an imported wallet needs to be automatically broadcast to other arcades that you are signed in with. So all

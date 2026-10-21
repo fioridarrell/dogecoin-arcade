@@ -13568,6 +13568,50 @@ def create_app(state: AppState) -> FastAPI:
                              "doge": bool(one.is_doge), "ltc": bool(one.is_ltc),
                              "ltctest": bool(one.is_ltc_test), "coins": coins})
 
+    #: Transactions one /account/doginal-txs call reads at most: a wallet of 1,500 Doginals is 15 calls, once (each
+    #: answer is kept by the node and by the browser).
+    DOGINAL_TXS_MAX = 100
+
+    @app.post("/account/doginal-txs")
+    def account_doginal_txs(request: Request, payload: Any = Body(None)):
+        """What sits on many transactions' outputs at once, for the Wallet's Doginals (2026-10-21: "I have like
+        over 1500 doginals in that wallet ... whatever is lightest weight for the server"): one call for up to
+        DOGINAL_TXS_MAX transactions, the wallet's coins read once for all of them, where /account/doginal-tx read them
+        once per transaction. `address`: one of this account's own (an imported wallet's), else its main one. Each
+        answer is {txid: [{vout, inscription_id, sat_offset, unknown}]}, or {txid: null} when the chain could not be
+        read for it just now (asked again later)."""
+        from .. import doginals as D
+        account = _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        one = next((c for c in state.token_chains if c.network == str(said.get("chain") or "doge")), None)
+        if one is None:
+            return JSONResponse({"detail": "no such chain here"}, status_code=404)
+        address = _own_address_asked(account, one, str(said.get("address") or ""))
+        guard = fundinglib.guard_for(address) if address else None
+        if guard is None:
+            return JSONResponse({"detail": "this node does not check inscriptions on that chain"}, status_code=404)
+        txids = said.get("txids")
+        if not isinstance(txids, list) or not 0 < len(txids) <= DOGINAL_TXS_MAX or not all(
+                isinstance(t, str) and re.fullmatch(r"[0-9a-f]{64}", t) for t in txids):
+            return JSONResponse({"detail": f"1 to {DOGINAL_TXS_MAX} transaction ids"}, status_code=400)
+        try:
+            mine = {c["txid"] for c in _own_coins(account, one, address)}
+        except Exception as exc:                          # noqa: BLE001 -- a node still catching up
+            return JSONResponse({"detail": f"this node cannot read your coins yet: {exc}"}, status_code=503)
+        out: dict[str, Any] = {}
+        for txid in dict.fromkeys(txids):
+            if txid not in mine:
+                continue                                  # only transactions holding this wallet's own coins
+            try:
+                held = guard.held(txid)
+            except D.Unknown:
+                out[txid] = None
+                continue
+            out[txid] = [{"vout": vout, "inscription_id": i.get("id"), "sat_offset": i.get("offset"),
+                          "unknown": bool(i.get("unknown"))} for vout, on in sorted(held.items()) for i in on]
+        return JSONResponse({"chain": one.network, "address": address, "txs": out},
+                            headers={"Cache-Control": "no-store"})
+
     @app.get("/account/doginal-tx/{txid}")
     def account_doginal_tx(request: Request, txid: str, chain: str = "doge"):
         """What sits on one transaction's outputs, read from the chain by this node (doginals.trace), for the Wallet's
