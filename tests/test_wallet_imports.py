@@ -534,7 +534,12 @@ def test_a_busy_core_is_waited_for_and_a_rescan_it_already_ran_is_not_sent_again
     with pytest.raises(utxos.CoreBusy):
         utxos.seed_from_core_wallet(index, core, P, [a], 500, sent={"at": sent_at, "addresses": [a]},
                                     remember=kept.update)
-    assert core.batches == [] and kept == {}
+    assert core.batches == []
+    # Busy with nothing remembered (a restart cut the connection to the rescan it sent): remembered as sent now.
+    fresh = {}
+    with pytest.raises(utxos.CoreBusy):
+        utxos.seed_from_core_wallet(index, core, P, [a], 500, sent=None, remember=fresh.update)
+    assert fresh["addresses"] == [a] and abs(fresh["at"] - time.time()) < 5
     core.free = True
     filed = utxos.seed_from_core_wallet(index, core, P, [a], 500, sent={"at": sent_at, "addresses": [a]},
                                         remember=kept.update)

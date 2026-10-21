@@ -257,6 +257,12 @@ def seed_from_core_wallet(index, rpc, params, addresses, upto: int, *, sent=None
     try:
         rpc.call("getwalletinfo")
     except RpcTransportError as exc:
+        # Busy since at least now: most often at a rescan an earlier call sent (an arcade restart cut its
+        # connection, so nothing here remembers sending it). Remembered as sent now, so that once the Core answers,
+        # addresses it watches already and a Core not restarted since are listed, not rescanned again.
+        if remember is not None and not (isinstance(sent, dict)
+                                         and set(addresses) <= set(sent.get("addresses") or ())):
+            remember({"at": time.time(), "addresses": addresses})
         raise CoreBusy(str(exc)) from None
     except RpcError as exc:
         if exc.code == -28:                          # warming up
