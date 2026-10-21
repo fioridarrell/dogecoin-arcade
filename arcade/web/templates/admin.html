@@ -40,6 +40,9 @@
     <span><span class="ringwrap"><svg viewBox="0 0 36 36" aria-hidden="true"><circle class="track" cx="18" cy="18" r="16"/>
       <circle class="arc" cx="18" cy="18" r="16" stroke-dasharray="67 100.5" transform="rotate(-90 18 18)"/></svg>
       <img class="coin" src="{{ coin_icon('main') }}" alt=""></span> ord index, the ring how much of its chain is walked</span>
+    <span><span class="ringwrap"><svg viewBox="0 0 36 36" aria-hidden="true"><circle class="track help" cx="18" cy="18" r="16"/></svg>
+      <img class="coin" src="{{ coin_icon('main') }}" alt=""></span> helping: scans chunks for the arcades holding it</span>
+    <span><img class="coin unshared" src="{{ coin_icon('main') }}" alt=""> read only: asks the holders, keeps none</span>
   </div>
 </section>
 <section class="panel" id="nodeswitch">
@@ -510,6 +513,7 @@ section.panel h2{margin-top:0}
 #arcades .ringwrap circle{fill:none;stroke-width:3}
 #arcades .ringwrap .track{stroke:var(--line)}
 #arcades .ringwrap .arc{stroke:var(--accent);stroke-linecap:round}
+#arcades .ringwrap .track.help{stroke:var(--accent);stroke-dasharray:3.5 3}
 #arcades .link{font-size:.86rem;white-space:nowrap}
 #arcades .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:var(--muted);vertical-align:middle}
 #arcades .dot.linked{background:var(--ok)}
@@ -1470,17 +1474,31 @@ section.panel h2{margin-top:0}
   }
   function ordRing(o) {
     var NS = 'http://www.w3.org/2000/svg', C = 2 * Math.PI * 16;
+    if (o.role === 'read') {
+      // Reads the index from the arcades holding it and keeps none (2026-10-21: "or read only").
+      var rd = text('span', '', 'ord'), ri = coinImg(o, 'unshared'); ri.width = 22; ri.height = 22;
+      rd.title = (o.label || o.net) + ' ord index: read only, asked of the arcades holding it';
+      rd.append(ri, 'read only'); return rd;
+    }
     var w = text('span', '', 'ord'), r = text('span', '', 'ringwrap'), svg = document.createElementNS(NS, 'svg');
     svg.setAttribute('viewBox', '0 0 36 36'); svg.setAttribute('aria-hidden', 'true');
     var t = document.createElementNS(NS, 'circle'), a = document.createElementNS(NS, 'circle');
     [t, a].forEach(function (k) { k.setAttribute('cx', 18); k.setAttribute('cy', 18); k.setAttribute('r', 16); });
     t.setAttribute('class', 'track'); a.setAttribute('class', 'arc');
-    var f = o.pct == null ? 0 : Math.max(0, Math.min(100, o.pct)) / 100;
+    var helping = o.role === 'help';
+    // Helping (2026-10-21): scans chunks of the index for the arcades holding it -- a whole dashed ring.
+    var f = helping ? 1 : o.pct == null ? 0 : Math.max(0, Math.min(100, o.pct)) / 100;
+    if (helping) t.setAttribute('class', 'track help');
     a.setAttribute('stroke-dasharray', (f * C).toFixed(1) + ' ' + C.toFixed(1));
     a.setAttribute('transform', 'rotate(-90 18 18)');
-    svg.append(t); if (f > 0) svg.append(a);
+    svg.append(t); if (f > 0 && !helping) svg.append(a);
     var img = coinImg(o); img.width = 22; img.height = 22;
     r.append(svg, img);
+    if (helping) {
+      w.title = (o.label || o.net) + ' ord index: helping, scanning chunks for the arcades holding it'
+        + (o.helped ? ' (' + Number(o.helped).toLocaleString() + ' blocks scanned)' : '');
+      w.append(r, 'helping'); return w;
+    }
     w.title = (o.label || o.net) + ' ord index, walked to block ' + Number(o.walked_to || 0).toLocaleString();
     w.append(r, o.pct == null ? 'walking' : (o.pct >= 99.95 ? '100' : String(o.pct)) + '%');
     return w;

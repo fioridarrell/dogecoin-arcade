@@ -8,6 +8,7 @@ operator is otherwise an account like any other.
 
 import pathlib
 import sys
+import time
 
 import pytest
 from nacl.signing import SigningKey
@@ -422,6 +423,15 @@ def test_overview_lists_every_arcade_this_one_first_with_its_cores_ords_and_link
 
         def holders(self):
             return [(fast, base + 500), ("", base + 1000)]
+
+        def mode(self):
+            return "walk"
+        helped = 0
+
+        class chunks:                                    # 2026-10-21: helping, or read only
+            peers = {slow: {"mode": "help", "helped": 4200, "at": time.time()},
+                     gone: {"mode": "read", "at": time.time()},
+                     me: {"mode": "help", "at": time.time() - 900}}   # stale: not shown
     monkeypatch.setattr(state, "ord_indexes", lambda: {"main": Index()})
     monkeypatch.setattr(state, "operator_tag", lambda: "strawberry")
     state.set_setting("share:regtest", False)
@@ -444,7 +454,7 @@ def test_overview_lists_every_arcade_this_one_first_with_its_cores_ords_and_link
     cores = {c["net"]: c for c in mine["cores"]}
     assert cores["main"]["shared"] is True and cores["regtest"]["shared"] is False, "shared, or running unshared"
     assert cores["regtest"]["switch"] is False and cores["main"]["icon"] == "/coin-pep.png"
-    assert mine["ords"] == [{"net": "main", "label": "Pepecoin", "icon": "/coin-pep.png", "pct": 100.0,
+    assert mine["ords"] == [{"net": "main", "label": "Pepecoin", "icon": "/coin-pep.png", "role": "walk", "pct": 100.0,
                              "walked_to": base + 1000}]
     assert [r["node"] for r in rows[1:]] == [fast[:12], slow[:12], gone[:12]], "linked fastest first, then the rest"
     f, s, g = rows[1:]
@@ -453,6 +463,8 @@ def test_overview_lists_every_arcade_this_one_first_with_its_cores_ords_and_link
     assert f["cores"][1]["icon"] == "/coin-doge.png"
     assert f["ords"][0]["pct"] == 50.0 and f["link"] == {"state": "linked", "ms": 48.2}
     assert s["tag"] == "" and s["cores"] == [] and s["link"]["state"] == "slow", "over a second is slow"
+    assert [(o["role"], o["helped"]) for o in s["ords"]] == [("help", 4200)], "helping on the PEP index"
+    assert [o["role"] for o in g["ords"]] == ["read"], "read only"
     assert g["link"] == {"state": "none"} and g["cores"] == [], "a Core is known only from an arcade linked now"
     assert g["tag"] == "faraway", "what an arcade said stays shown after its link is down"
     assert app.get("/admin/api/arcades", headers=EDGE).status_code != 200, "never shown to a stranger"

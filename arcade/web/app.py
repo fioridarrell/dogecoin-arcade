@@ -25898,7 +25898,22 @@ def create_app(state: AppState) -> FastAPI:
             for node, walked in held:
                 pct = (round(100 * min(1.0, max(0.0, (int(walked or 0) - base) / span)), 1) if known else None)
                 ords.setdefault(node or me or "this arcade", []).append(
-                    {**coin(chain.network), "pct": pct, "walked_to": int(walked or 0)})
+                    {**coin(chain.network), "role": "walk", "pct": pct, "walked_to": int(walked or 0)})
+            # The arcades taking part without holding the whole index (2026-10-21: "an indicator that shows if
+            # an arcade is helping on one of the ord indexes ... or read only"): "help" scans chunks of it for the
+            # holders, "read" asks the holders and keeps none; each as it said in its last "hi" (five minutes).
+            try:
+                peers = dict(index.chunks.peers)
+                mode_here, helped_here = index.mode(), int(index.helped or 0)
+            except Exception:                              # noqa: BLE001 -- the roles next time
+                peers, mode_here, helped_here = {}, "", 0
+            part = [(node, p.get("mode"), int(p.get("helped") or 0)) for node, p in peers.items()
+                    if time.time() - float(p.get("at") or 0) < 300]
+            part.append(("", mode_here, helped_here))
+            for node, mode, helped in part:
+                if mode in ("help", "read"):
+                    ords.setdefault(node or me or "this arcade", []).append(
+                        {**coin(chain.network), "role": mode, "pct": None, "helped": helped})
         rows = [{"me": True, "node": me[:12], "tag": state.operator_tag(),
                  "host": (list(state.public_hosts) or [""])[0], "cores": mine_cores,
                  "ords": ords.get(me or "this arcade", []), "link": {"state": "me"}}]
