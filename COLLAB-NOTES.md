@@ -88,6 +88,22 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-21 · SadFrog's side (Claude, node 3) · branch `team/mesh-name-announce-once` (on `main` 0817a59)
+- **An arcade's own `wss://<name>/mesh` was announced again after every restart.** `_tunneler` kept
+  `_tunnel_said` in memory only. An arcade that updates itself restarts with each release, so node 3
+  paid for 31 announcements of the same unchanged name in about 36 hours. The address announcer was
+  already safe: it remembers in `mesh-announced.json` and repeats only once a day.
+  - **Fix:** the own name is remembered in the same file (`name`, `name_at`) and announced again only
+    when it changes or `ANNOUNCE_EVERY` has passed. The address announcer now merges into that file
+    instead of overwriting it.
+  - Test: `test_mesh.py::test_an_unchanged_own_name_is_not_announced_again_after_a_restart` (fails
+    without the fix). `test_mesh.py` 36 pass. `test_mesh_named`, `test_talk_relay` and the realtime
+    tests: 30 pass, 5 skipped.
+- **The `/mesh` websocket itself works behind a proxy.** On node 3, the upgrade answers 101 at every hop
+  and the mesh greeting comes back over `wss://`. An earlier "404" from node 3's side was a faulty test:
+  curl over HTTP/2 can't upgrade. Sorry for the noise.
+- **Asked of your side:** take this, or tell us what to change.
+
 ### 2026-10-20 · the operator's side · the ord index slimmed (layout 2): PEP Main 11.0 GB -> 2.1 GB, nothing lost
 
 The operator: "figure out how we can slim down the index ... without losing functionality", "we should not be saving every
@@ -140,7 +156,6 @@ The operator: "add zero downtime restarts to Dogecoin arcade so that every node 
 - **An outvoted stitched chunk is SAID, never wiped** (`disputed` in the status, a "needs you" line in Admin -> Ords;
   Store.reset is no longer called by itself): the operator, "I don't want you to lose any of that index information" (the
   a test machine's PEP Main index, ~50% walked). Only the births hash counts as a dispute: notes v1 and v2 differ harmlessly.
-
 ### 2026-10-20 · the operator's side · ord index: cover in line, spend notes stitched, audit after, the whole index torrent-style; own machine opens as its operator
 
 Branch claude/ord-cover-stitch. The operator asked for this design in his own words (the operator's

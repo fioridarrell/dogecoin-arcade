@@ -396,6 +396,18 @@ class MeshService:
             except OSError:
                 pass
 
+    def _name_said_lately(self, url: str) -> bool:
+        """Whether `url` is the own name this node announced within ANNOUNCE_EVERY, across restarts too.
+
+        Kept in the same file as the address (2026-10-21, node 3): in memory only, every restart announced the
+        unchanged name again, and an arcade that updates itself restarts with every release -- 31 paid
+        announcements of one name in a day and a half."""
+        last = self.last_announced or {}
+        return last.get("name") == url and time.time() - float(last.get("name_at") or 0) < ANNOUNCE_EVERY
+
+    def _said_name(self, url: str) -> None:
+        self._keep({**(self.last_announced or {}), "name": url, "name_at": int(time.time())})
+
     async def where_am_i(self) -> tuple[str, int] | None:
         """The public address this node can be reached at, proved, or None."""
         if self.announce_at:
@@ -433,7 +445,7 @@ class MeshService:
             return False
         await asyncio.to_thread(self._announce_locked, host, port)
         log.info("mesh: announced this node at %s:%s", host, port)
-        self._keep({"host": host, "port": port, "at": int(time.time())})
+        self._keep({**last, "host": host, "port": port, "at": int(time.time())})   # the own name's entry stays
         return True
 
     async def _tunneler(self) -> None:
@@ -455,10 +467,12 @@ class MeshService:
                     if self._tunnel_proc is not None:
                         await self._tunnel_stop()
                     self.tunnel_url = named
-                    if self.tunnel_url != self._tunnel_said and self.announce is not None:
+                    # Again only when the name changed or a day has passed, whatever restarted in between.
+                    if self.announce is not None and not self._name_said_lately(self.tunnel_url):
                         await asyncio.to_thread(self._announce_locked, self.tunnel_url, 443)
-                        self._tunnel_said = self.tunnel_url
+                        self._said_name(self.tunnel_url)
                         log.info("mesh: announced this node's own name %s", self.tunnel_url)
+                    self._tunnel_said = self.tunnel_url
                     await asyncio.sleep(TUNNEL_EVERY)
                     continue
                 if not self.tunnel_cmd:
