@@ -709,8 +709,21 @@ class LedgerIndex:
             last = db.conn.execute("SELECT MAX(rowid) FROM arcade_tx").fetchone()[0]
         memo = getattr(self, "_trades_memo", None)
         if not (memo and memo[0] == (tip, last, since_height)):
-            memo = ((tip, last, since_height), self._trades_uncached(5000, since_height))
-            self._trades_memo = memo
+            # One reader at a time (2026-10-21, app.dogecoinarcade.com's /feed 57 s): after a block every page counting
+            # its notifications (_notif_events) read the whole table at once, on a disk busy with a Core rescan. The
+            # one that takes the lock reads; the others are given what was known a block ago, or wait when nothing is.
+            lock = self.__dict__.setdefault("_trades_lock", threading.Lock())
+            if memo and memo[0][2] == since_height and not lock.acquire(blocking=False):
+                return list(memo[1][:max(1, min(limit, 5000))])
+            if not (memo and memo[0][2] == since_height):
+                lock.acquire()
+            try:
+                memo = getattr(self, "_trades_memo", None)
+                if not (memo and memo[0] == (tip, last, since_height)):
+                    memo = ((tip, last, since_height), self._trades_uncached(5000, since_height))
+                    self._trades_memo = memo
+            finally:
+                lock.release()
         return list(memo[1][:max(1, min(limit, 5000))])
 
     def _trades_uncached(self, limit: int, since_height: int) -> list[dict]:

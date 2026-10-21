@@ -88,6 +88,14 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-21 Trades read once a block, not by every page at once (Claude)
+.25's /feed stalled 49-57 s at 17:32: every request thread was in `render -> _account_counts -> _notif_events ->
+index.trades() -> _trades_uncached` (the pre-existing stall noted this morning). The memo (per tip and newest row) was
+recomputed by EVERY page that asked after a block, all reading the whole transaction table at once on a disk busy with
+the Dogecoin Core's rescan. `LedgerIndex.trades` now lets one thread read (`_trades_lock`); the others get what was
+known a block ago at once (or wait, when nothing is known yet for that `since_height`).
+tests/test_trades_one_reader.py.
+
 ### 2026-10-21 No "tap to refresh" bar (Claude)
 The operator: "This button comes up too often and seemingly for no reason can we just remove it?" base.html's live update no
 longer offers "The site was updated — tap to refresh" (new code is taken at the next page opened; a page of other code
