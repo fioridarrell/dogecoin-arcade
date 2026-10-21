@@ -11492,6 +11492,9 @@ def create_app(state: AppState) -> FastAPI:
 
     #: Addresses whose past coins are being read right now (utxos.backfill).
     _backfilling: set = set()
+    #: The same read-backs, by address, with what a wait is worked out from (plan item 18): the chain, the blocks
+    #: from and to, how far it has got (utxos.backfill_many's `progress`) and when it began.
+    _backfill_runs: dict[str, dict] = {}
 
     @app.post("/account/coins/backfill")
     def account_coins_backfill(request: Request, payload: Any = Body(None)):
@@ -11530,6 +11533,8 @@ def create_app(state: AppState) -> FastAPI:
                 state.set_setting(key, 0)
                 continue
             _backfilling.add(address)
+            _backfill_runs[address] = {"network": chain.network, "start": start, "end": end, "progress": {},
+                                       "began": time.time()}
 
             def run(chain=chain, address=address, key=key, start=start, end=end, index=index):
                 try:
@@ -11547,7 +11552,8 @@ def create_app(state: AppState) -> FastAPI:
                             utxoslib.seed_from_core(index, rpc, chain.params, {address},
                                                     index.indexed_height() or 0)
                         if filed is None:
-                            filed = utxoslib.backfill(index, rpc, chain.params, address, start, end)
+                            filed = utxoslib.backfill(index, rpc, chain.params, address, start, end,
+                                                      progress=(_backfill_runs.get(address) or {}).get("progress"))
                     state.set_setting(key, filed)
                     state.bump_generation()
                     log.info("backfill: %s held %d coins before this node watched it",
@@ -11556,6 +11562,7 @@ def create_app(state: AppState) -> FastAPI:
                     log.warning("backfill of %s stopped: %s", address, exc)
                 finally:
                     _backfilling.discard(address)
+                    _backfill_runs.pop(address, None)
 
             threading.Thread(target=run, daemon=True, name=f"backfill {address}").start()
             started.append({"chain": chain.network, "address": address,
@@ -13517,10 +13524,11 @@ def create_app(state: AppState) -> FastAPI:
                              "number": row["number"], "chain": chain.network,
                              **unsigned.as_json()})
 
-    def _own_coins(account, chain) -> list[dict]:
+    def _own_coins(account, chain, address: str = "") -> list[dict]:
         """The coins this account can spend on `chain`: the index's, less what
-        this node has already broadcast away, plus change it has not filed yet."""
-        address = _account_address(account.pubkey, chain)
+        this node has already broadcast away, plus change it has not filed yet.
+        `address`, one of the account's own (checked by the caller), else its main one."""
+        address = address or _account_address(account.pubkey, chain)
         if not address:
             return []
         gone = _flights.spent_by(account.pubkey, chain.network)
@@ -13539,7 +13547,7 @@ def create_app(state: AppState) -> FastAPI:
         return out
 
     @app.get("/account/coins")
-    def account_coins(request: Request, chain: str = ""):
+    def account_coins(request: Request, chain: str = "", address: str = ""):
         """The account's own coins on one chain, one row per output.
 
         [Claude 2026-10-15] For the Wallet's Doginals check (2026-10-14: "We have to have the wallet check its own utxo
@@ -13550,11 +13558,13 @@ def create_app(state: AppState) -> FastAPI:
             one = _chain_asked({"chain": chain})
         except ValueError as exc:
             return JSONResponse({"detail": str(exc)}, status_code=400)
+        # One of this account's own addresses only (an imported wallet's, plan item 18); a 403 for any other.
+        address = _own_address_asked(account, one, address)
         try:
-            coins = _own_coins(account, one)
+            coins = _own_coins(account, one, address)
         except Exception as exc:                          # noqa: BLE001 -- a node still catching up
             return JSONResponse({"detail": f"this node cannot read those coins yet: {exc}"}, status_code=503)
-        return JSONResponse({"chain": one.network, "address": _account_address(account.pubkey, one),
+        return JSONResponse({"chain": one.network, "address": address,
                              "doge": bool(one.is_doge), "ltc": bool(one.is_ltc),
                              "ltctest": bool(one.is_ltc_test), "coins": coins})
 
@@ -14023,7 +14033,7 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.get("/account/activity")
     def account_activity(request: Request, chain: str = "", before: int | None = None,
-                         limit: int = 50):
+                         limit: int = 50, address: str = ""):
         """What happened to this account's coins on one chain, newest first.
 
         The Wallet tab's history (2026-10-08: "It needs to give feedback when
@@ -14043,7 +14053,9 @@ def create_app(state: AppState) -> FastAPI:
         if picked is None:
             return JSONResponse({"detail": f"no chain called {chain} here"},
                                 status_code=404)
-        address = _account_address(account.pubkey, picked)
+        # `address=`: one of this account's own (an imported wallet's, plan item 18), else a 403; none, the main one.
+        main = _account_address(account.pubkey, picked)
+        address = _own_address_asked(account, picked, address)
         said: dict[str, Any] = {"chain": picked.network, "label": picked.label,
                                 "address": address, "since": None, "tip": 0,
                                 "rows": [], "more": False}
@@ -14063,7 +14075,7 @@ def create_app(state: AppState) -> FastAPI:
         said["more"] = len(rows) > limit
         rows = rows[:limit]
         # What happened before this arcade followed the address, from the arcade that did (2026-10-19).
-        if not said["more"] and said["since"] is not None and len(rows) < limit:
+        if not said["more"] and said["since"] is not None and len(rows) < limit and address == main:
             tag = (state.vault().by_pubkey(account.pubkey) or {}).get("tag") or ""
             older = _history_elsewhere(tag, picked, address,
                                        min([said["since"]] + [r["height"] for r in rows] + ([before] if before else [])),
@@ -23468,6 +23480,411 @@ def create_app(state: AppState) -> FastAPI:
         return JSONResponse({"address": addr, "chain": chain.network,
                              "balance": bal, "watched": watched})
 
+    # --- imported wallets (plan item 18, 2026-10-20) ---------------------------------------------------------
+    #
+    # "We should be able to import any with private key or 12 word seed phrase, even if that wallet has not been used
+    # in Dogecoin arcade." The key or phrase stays in the browser, sealed under the account's password in a second
+    # record (/account/imported, accounts.ImportedWallets). This node is told only each imported ADDRESS, with a
+    # signature by its key (wallet_imports.check_proof), and from then on treats it as the account's own: it watches
+    # it, reads back the coins it already held, answers its balance, coins and history to this account only, and
+    # builds unsigned sends from it. The vault blob that /signin hands out is not touched.
+
+    from .. import wallet_imports as importslib
+
+    #: One import, removal or read-back start at a time: the cap, the "one read-back per chain" check and the start
+    #: it guards happen together (an RLock: a start inside a registration takes it again).
+    _imports_lock = threading.RLock()
+    #: Imported addresses waiting for their read-back: (network, address) -> when they were queued. Either the chain
+    #: cannot be read right now (no Core here, none to borrow) or another read-back of that chain runs first. One
+    #: thread starts them once it can (`_rescan_queue_runner`).
+    _rescan_queue: dict[tuple[str, str], float] = {}
+    _rescan_queue_running = threading.Event()
+
+    def _imported(account, chain) -> list[dict]:
+        return importslib.entries(state.setting(importslib.setting_key(chain.network, account.pubkey), []))
+
+    def _imported_entry(account, chain, address: str) -> dict | None:
+        return next((e for e in _imported(account, chain) if e["a"] == address), None)
+
+    def _account_own_addresses(account, chain) -> dict[str, str]:
+        """Every address on `chain` that is this account's own, and what it is: "main" (the words it signed up
+        with), "segwit" (the same words' SegWit kinds, registered on the Wallet page) or "imported". Nothing an
+        account names freely: the main one is the browser's derivation at sign-up, the others were registered by
+        this account (an imported one with its key's signature)."""
+        out: dict[str, str] = {}
+        main = _account_address(account.pubkey, chain)
+        if main:
+            out[main] = "main"
+        for kind in ("p2wpkh", "p2sh-p2wpkh"):
+            seg = str(state.setting(_segwit_setting(account, chain, kind), "") or "")
+            if seg:
+                out.setdefault(seg, "segwit")
+        for entry in _imported(account, chain):
+            out.setdefault(entry["a"], "imported")
+        return out
+
+    def _own_address_asked(account, chain, address: str) -> str:
+        """`address` when it is one of this account's own on `chain` ("" means the main one); a 403 otherwise. The
+        one check every `address=` read goes through: an account never reads another's address here."""
+        address = (address or "").strip()
+        if not address:
+            return _account_address(account.pubkey, chain)
+        if address not in _account_own_addresses(account, chain):
+            raise HTTPException(403, "that is not one of your own wallets on this chain")
+        return address
+
+    def _rescan_floor(chain) -> int:
+        """The first block a read-back reads, the same floor the account read-back uses."""
+        return max(chain.params.messaging_start_height, chain.params.activation_height or 0)
+
+    def _rescan_done(chain, address: str) -> bool:
+        """Whether this node already has the address's whole past: read back before, or watched from the floor."""
+        if state.setting(f"backfilled:{chain.network}:{address}", None) is not None:
+            return True
+        with contextlib.closing(state.token_index(chain).open()) as db:
+            since = utxoslib.since(db, address)
+        return since is not None and since <= _rescan_floor(chain)
+
+    def _run_left(run: dict) -> float:
+        """Seconds a read-back still needs: the blocks it has left at the measured pace."""
+        progress = run.get("progress") or {}
+        chain = next((c for c in _account_chains() if c.network == run.get("network")), None)
+        per = float(progress.get("per_block") or (utxoslib.read_rate(chain.params) if chain is not None
+                                                  else utxoslib.READ_RATE_GUESS))
+        at = progress.get("height")
+        left = int(run.get("end", 0)) - (int(at) if at is not None else int(run.get("start", 0))) + 1
+        return max(0, left) * per
+
+    def _chain_rescan(network: str) -> dict | None:
+        """The read-back running on that chain, if one is: an account's or an import's."""
+        return next((dict(r, address=a) for a, r in list(_backfill_runs.items()) if r.get("network") == network),
+                    None)
+
+    def _wait_for(address: str) -> float:
+        """Seconds until the read-back of `address` is done: its own blocks, and every read-back ahead of it (one
+        reads at a time, in the whole process: utxos._BACKFILL_ONE)."""
+        mine = _backfill_runs.get(address)
+        total = _run_left(mine) if mine else 0.0
+        began = (mine or {}).get("began", time.time())
+        for other, run in list(_backfill_runs.items()):
+            if other != address and ((run.get("progress") or {}).get("height") is not None
+                                     or run.get("began", 0) < began):
+                total += _run_left(run)
+        return total
+
+    def _readable(chain) -> bool:
+        """Whether this chain can be read now: its Core here, or a sharer's when it is borrowed (status, kept 10 s)."""
+        try:
+            return bool((chain.status() or {}).get("online"))
+        except Exception:                                  # noqa: BLE001
+            return False
+
+    def _rescan_says(chain, address: str) -> dict:
+        """Where an imported address's read-back stands, with what to tell the person:
+        "ready", "rescan" (reading back now or next in line), "none" (no node to read the chain), "stopped" (never
+        finished, e.g. cut short by a restart: POST /account/imported/rescan starts it again)."""
+        if address in _backfill_runs:
+            eta = _wait_for(address)
+            return {"state": "rescan", "eta": int(eta),
+                    "says": f"The arcade is reading back this wallet's coins; check back in "
+                            f"{importslib.say_wait(eta)}."}
+        if (chain.network, address) in _rescan_queue:
+            if not _readable(chain):
+                return {"state": "none",
+                        "says": (f"There is no node to borrow right now: this arcade cannot read {chain.title} "
+                                 "by itself, and no other arcade is sharing it. The read-back of this wallet's "
+                                 "coins is queued and starts by itself as soon as one is available; its balance "
+                                 "shows then. You can close this page.")}
+            running = _chain_rescan(chain.network)
+            eta = (_wait_for(running["address"]) if running else 0.0) + _run_left(
+                {"network": chain.network, "start": _rescan_floor(chain),
+                 "end": state.token_index(chain).indexed_height() or 0})
+            return {"state": "rescan", "eta": int(eta),
+                    "says": f"The arcade is reading back this wallet's coins; check back in "
+                            f"{importslib.say_wait(eta)}."}
+        if _rescan_done(chain, address):
+            return {"state": "ready", "says": "Ready: this arcade has this wallet's coins."}
+        return {"state": "stopped", "says": "This wallet's coins were not read back yet."}
+
+    def _rescan_start(chain, address: str) -> None:
+        """Read back the coins `address` already held, on a thread: the Core's coin set where it has one
+        (`scantxoutset`), else the blocks from the floor to where watching began. Another arcade is NOT asked for an
+        imported address: the arcades answer by @tag only, and a public "what does this address hold here" would
+        tell anybody which addresses this arcade's accounts imported."""
+        key = f"backfilled:{chain.network}:{address}"
+        index = state.token_index(chain)
+        with contextlib.closing(index.open()) as db:
+            since = utxoslib.since(db, address)
+        end = since if since is not None else (index.indexed_height() or 0)
+        start = _rescan_floor(chain)
+        if end < start:
+            state.set_setting(key, 0)
+            return
+        run = {"network": chain.network, "start": start, "end": end, "progress": {}, "began": time.time(),
+               "imported": True}
+        _backfilling.add(address)
+        _backfill_runs[address] = run
+
+        def go() -> None:
+            try:
+                with chain.rpc() as rpc:
+                    filed = None
+                    if not chain.borrowed:
+                        filed = utxoslib.seed_from_core(index, rpc, chain.params, {address},
+                                                        index.indexed_height() or 0)
+                    if filed is None:
+                        filed = utxoslib.backfill(index, rpc, chain.params, address, start, end,
+                                                  progress=run["progress"])
+                state.set_setting(key, filed)
+                state.bump_generation()
+                log.info("imported wallet %s on %s: read back, %d coins", address, chain.network, filed)
+            except Exception as exc:                       # noqa: BLE001 -- the chain went away: queued again
+                log.warning("read-back of imported %s stopped: %s; queued", address, exc)
+                _rescan_queue[(chain.network, address)] = time.time()
+            finally:
+                _backfilling.discard(address)
+                _backfill_runs.pop(address, None)
+                _rescan_queue_wake()
+
+        threading.Thread(target=go, daemon=True, name=f"import read-back {address}").start()
+
+    def _still_imported(network: str, address: str) -> bool:
+        """Whether any account still lists `address` among its imports on that chain."""
+        prefix = f"extra_address:{network}:"
+        return any(name.startswith(prefix) and any(e["a"] == address for e in importslib.entries(value))
+                   for name, value in state.settings().items())
+
+    def _rescan_queue_runner() -> None:
+        """Starts each queued read-back once its chain can be read and nothing else reads that chain; every 20 s
+        while anything waits."""
+        try:
+            while _rescan_queue:
+                for (network, address) in sorted(_rescan_queue, key=_rescan_queue.get):
+                    chain = next((c for c in _account_chains() if c.network == network), None)
+                    if chain is None or not _still_imported(network, address):
+                        _rescan_queue.pop((network, address), None)
+                        continue
+                    if address in _backfill_runs or _rescan_done(chain, address):
+                        _rescan_queue.pop((network, address), None)
+                        continue
+                    if not _readable(chain):
+                        continue
+                    with _imports_lock:
+                        if _chain_rescan(network) is None and (network, address) in _rescan_queue:
+                            _rescan_queue.pop((network, address), None)
+                            _rescan_start(chain, address)
+                time.sleep(20)
+        except Exception:                                  # noqa: BLE001 -- woken again by the next queue
+            log.warning("the imported-wallet queue stopped", exc_info=True)
+        finally:
+            _rescan_queue_running.clear()
+
+    def _rescan_queue_wake() -> None:
+        if _rescan_queue and not _rescan_queue_running.is_set():
+            _rescan_queue_running.set()
+            threading.Thread(target=_rescan_queue_runner, daemon=True, name="import read-back queue").start()
+
+    def _rescan_begin(chain, address: str) -> dict:
+        """Start the read-back of an imported address now, or queue it; and say where it stands."""
+        with _imports_lock:
+            if not (address in _backfill_runs or _rescan_done(chain, address)):
+                if _chain_rescan(chain.network) is None and _readable(chain):
+                    _rescan_queue.pop((chain.network, address), None)
+                    _rescan_start(chain, address)
+                else:
+                    _rescan_queue.setdefault((chain.network, address), time.time())
+                    _rescan_queue_wake()
+        return _rescan_says(chain, address)
+
+    def _imported_view(account, chain) -> list[dict]:
+        """This account's imported addresses on one chain, each with its balance and where its read-back stands."""
+        out = []
+        gone = _flights.spent_by(account.pubkey, chain.network)
+        index = state.token_index(chain)
+        for entry in _imported(account, chain):
+            address = entry["a"]
+            with contextlib.closing(index.open()) as db:
+                coins = utxoslib.unspent(db, address)
+                since = utxoslib.since(db, address)
+            coins += [dict(c) for c in _flights.change_for(account.pubkey, chain.network)
+                      if c.get("address") == address]
+            seen, spendable = set(), 0
+            for c in coins:
+                outpoint = (c["txid"], int(c["vout"]))
+                if outpoint in gone or outpoint in seen:
+                    continue
+                seen.add(outpoint)
+                spendable += int(c["value"])
+            out.append({"address": address, "kind": entry["k"], "since": since, "spendable": spendable,
+                        "registered": entry["t"], **_rescan_says(chain, address)})
+        return out
+
+    @app.get("/account/imported")
+    def account_imported(request: Request):
+        """This account's sealed record of imported wallets, for its browser to open; the main wallet's sealed
+        blob beside it (the same one /signin hands anybody), so the browser can check a password against it before
+        it seals anything; each chain's imported addresses and where they stand; the main wallet's names."""
+        account = _signed_in_account(request)
+        have = state.imported_wallets().get(account.pubkey) or {"blob": "", "updated": 0}
+        vault = state.vault().by_pubkey(account.pubkey)
+        chains: dict[str, Any] = {}
+        names: dict[str, str] = {}
+        for chain in _account_chains():
+            names[chain.network] = str(state.setting(importslib.name_key(chain.network, account.pubkey), "") or "")
+            try:
+                chains[chain.network] = _imported_view(account, chain)
+            except Exception:                              # noqa: BLE001 -- a chain with no index yet
+                chains[chain.network] = []
+        return JSONResponse({"blob": have["blob"], "updated": have["updated"],
+                             "vault": json.loads(vault["blob"]) if vault else None,
+                             "chains": chains, "names": names, "cap": importslib.CAP_PER_CHAIN})
+
+    @app.post("/account/imported")
+    def account_imported_put(request: Request, payload: Any = Body(None)):
+        """Keep this account's sealed record of imported wallets (accounts.ImportedWallets): ciphertext the browser
+        sealed under the account's password, replaced only if nothing else wrote it since the browser read it
+        (`base`; a 409 says read it again). The main vault is never touched here."""
+        account = _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        blob = said.get("blob")
+        if not state.vault().by_pubkey(account.pubkey):
+            return JSONResponse({"detail": "this arcade keeps no sealed wallet for your account, so there is no "
+                                           "password to seal imported wallets under here"}, status_code=404)
+        try:
+            text = json.dumps(blob, separators=(",", ":")) if isinstance(blob, dict) else str(blob or "")
+            out = state.imported_wallets().put(account.pubkey, text, int(said.get("base") or 0))
+        except accountslib.ImportedMoved as exc:
+            return JSONResponse({"detail": str(exc), "updated": exc.updated}, status_code=409)
+        except (accountslib.AccountError, ValueError, TypeError) as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        return JSONResponse(out)
+
+    @app.post("/account/imported/address")
+    def account_imported_address(request: Request, payload: Any = Body(None)):
+        """Register an imported wallet's address for this account, with its key's signature over the account and the
+        address (wallet_imports.check_proof), and start reading back its coins.
+
+        Refused, with nothing kept, past CAP_PER_CHAIN on the chain, past PER_DAY a day, and while another read-back
+        runs on that chain ("a rescan is currently happening ..."). An address this node already has whole is ready
+        at once; otherwise it is read back now, or queued when no node can read the chain."""
+        account = _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        try:
+            chain = _chain_asked(said)
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        address = str(said.get("address") or "").strip()
+        kind = str(said.get("kind") or "p2pkh")
+        try:
+            importslib.check_proof(chain.params, account.pubkey, chain.network, address,
+                                   str(said.get("pubkey") or ""), kind, str(said.get("signature") or ""))
+        except importslib.ImportRefused as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        with _imports_lock:
+            listed = _imported(account, chain)
+            if any(e["a"] == address for e in listed):
+                return JSONResponse({"address": address, "chain": chain.network, "already": True,
+                                     **_rescan_begin(chain, address)})
+            if _account_own_addresses(account, chain).get(address):
+                return JSONResponse({"detail": "that is already your arcade wallet's own address on this chain"},
+                                    status_code=400)
+            if len(listed) >= importslib.CAP_PER_CHAIN:
+                return JSONResponse({"detail": f"An account can import at most {importslib.CAP_PER_CHAIN} wallets "
+                                               f"on {chain.title}. Remove one first."}, status_code=400)
+            day_key = f"import_day:{account.pubkey}"
+            day = importslib.recent(state.setting(day_key, []))
+            if len(day) >= importslib.PER_DAY:
+                return JSONResponse({"detail": f"{importslib.PER_DAY} imports in a day is the most one account can "
+                                               "make. Try again tomorrow."}, status_code=429)
+            try:
+                done = _rescan_done(chain, address)
+            except Exception as exc:                       # noqa: BLE001
+                return JSONResponse({"detail": f"the index is not ready: {exc}"}, status_code=503)
+            if not done:
+                running = _chain_rescan(chain.network)
+                if running is not None:
+                    return JSONResponse(
+                        {"busy": True, "detail": (
+                            "A rescan is currently happening; come back in "
+                            f"{importslib.say_wait(_wait_for(running['address']))} and try again. "
+                            "Nothing of this import was kept.")}, status_code=409)
+            try:
+                _watch(address, f"imported by account {account.pubkey[:12]}", chain=chain)
+            except Exception as exc:                       # noqa: BLE001
+                return JSONResponse({"detail": f"the index is not ready: {exc}"}, status_code=503)
+            listed.append({"a": address, "k": kind, "p": str(said.get("pubkey") or "").lower(),
+                           "t": int(time.time())})
+            state.set_setting(importslib.setting_key(chain.network, account.pubkey), listed)
+            state.set_setting(day_key, day + [int(time.time())])
+            if done:
+                return JSONResponse({"address": address, "chain": chain.network, "state": "ready",
+                                     "says": "Imported. This arcade was already watching this address, so it is "
+                                             "ready now."})
+            return JSONResponse({"address": address, "chain": chain.network, **_rescan_begin(chain, address)})
+
+    @app.post("/account/imported/rescan")
+    def account_imported_rescan(request: Request, payload: Any = Body(None)):
+        """Where an imported address's read-back stands; one that never finished (a restart) is started again, or
+        queued behind the one running on its chain. Only this account's own imported addresses."""
+        account = _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        try:
+            chain = _chain_asked(said)
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        address = str(said.get("address") or "").strip()
+        if _imported_entry(account, chain, address) is None:
+            return JSONResponse({"detail": "that is not one of your imported wallets on this chain"},
+                                status_code=403)
+        return JSONResponse({"address": address, "chain": chain.network, **_rescan_begin(chain, address)})
+
+    @app.post("/account/imported/forget")
+    def account_imported_forget(request: Request, payload: Any = Body(None)):
+        """Take an imported address off this account. Its coins are not touched: they stay where they are on the
+        chain, and the key in the browser's record (removed there first) still spends them anywhere. The node stops
+        watching the address unless another account, or anything else here, still wants it."""
+        account = _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        try:
+            chain = _chain_asked(said)
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        address = str(said.get("address") or "").strip()
+        with _imports_lock:
+            listed = _imported(account, chain)
+            kept = [e for e in listed if e["a"] != address]
+            if len(kept) == len(listed):
+                return JSONResponse({"address": address, "removed": False})
+            state.set_setting(importslib.setting_key(chain.network, account.pubkey), kept or None)
+            wanted = _still_imported(chain.network, address) or any(
+                isinstance(value, str) and value == address and name.startswith(("address:", "segwit_watch:"))
+                for name, value in state.settings().items())
+            if not wanted:
+                _rescan_queue.pop((chain.network, address), None)
+                try:
+                    with contextlib.closing(state.token_index(chain).open()) as db:
+                        db.conn.execute("DELETE FROM watched WHERE address = ? AND why LIKE 'imported by %'",
+                                        (address,))
+                    # Watched again later, its past is read back again: what arrived meanwhile was not filed.
+                    state.set_setting(f"backfilled:{chain.network}:{address}", None)
+                except Exception:                          # noqa: BLE001 -- still watched; nothing lost
+                    log.warning("could not stop watching %s", address, exc_info=True)
+        return JSONResponse({"address": address, "removed": True, "watched": wanted})
+
+    @app.post("/account/imported/name")
+    def account_imported_name(request: Request, payload: Any = Body(None)):
+        """Name this account's MAIN wallet on one chain (an imported wallet's name is in its sealed record). Not a
+        secret: the drop-down shows it instead of the address. An empty name clears it."""
+        account = _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        try:
+            chain = _chain_asked(said)
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        name = importslib.clean_name(said.get("name"))
+        state.set_setting(importslib.name_key(chain.network, account.pubkey), name or None)
+        return JSONResponse({"chain": chain.network, "name": name})
+
     @app.post("/account/send")
     def account_send(request: Request, payload: Any = Body(None)):
         """Offer to send coins. Nothing is broadcast here.
@@ -23494,7 +23911,20 @@ def create_app(state: AppState) -> FastAPI:
         # and funding.spend_for flags the inputs segwit. This chain's only.
         want_from = str(said.get("from") or "").strip()
         keyhash = None
-        if want_from:
+        # An imported wallet of this account (plan item 18): only an address it registered with its key's signature.
+        # Its coins only, its change back to it; the browser signs with that wallet's key.
+        imported = _imported_entry(account, chain, want_from) if want_from else None
+        if imported is not None:
+            if imported["k"] != "p2pkh" and getattr(chain.params, "real_coins", False):
+                return JSONResponse({"detail": "segwit is on test chains only for now"}, status_code=400)
+            if imported["k"] == "p2sh-p2wpkh":
+                try:
+                    keyhash = hash160(bytes.fromhex(imported["p"]))
+                except ValueError:
+                    return JSONResponse({"detail": "import this wallet again: its key was not kept here"},
+                                        status_code=400)
+            address = want_from
+        elif want_from:
             kind = _segwit_kind(chain, want_from)
             if kind is None:
                 return JSONResponse(
@@ -23538,7 +23968,10 @@ def create_app(state: AppState) -> FastAPI:
                     what=(f"send {format_amount(amount, True)} "
                           f"{chain.label.lower()} to {to}"),
                     exclude=_flights.spent_by(account.pubkey, chain.network),
-                    extra=_flights.change_for(account.pubkey, chain.network),
+                    # Change not yet in a block, of the address being sent FROM only: another address's coin
+                    # here is a transaction its key cannot sign.
+                    extra=[c for c in _flights.change_for(account.pubkey, chain.network)
+                           if c.get("address", address) == address],
                     keyhash=keyhash)
             _quota(account, "send")
         except (taglib.TagError, fundinglib.FundingError, AmountError,
@@ -23659,6 +24092,16 @@ def create_app(state: AppState) -> FastAPI:
             return bytes([0x00, len(program)]) + program
         return txbuild.p2pkh_script(to)
 
+    def _flight_address(account, chain, unsigned) -> str:
+        """Whose change a broadcast made: an imported P2PKH wallet's when every input was its (a send from it,
+        plan item 18), else the account's main address, as always."""
+        spent_from = {str(c.get("address") or "") for c in unsigned.inputs}
+        if len(spent_from) == 1:
+            entry = _imported_entry(account, chain, next(iter(spent_from)))
+            if entry is not None and entry["k"] == "p2pkh":
+                return entry["a"]
+        return _account_address(account.pubkey, chain)
+
     @app.post("/account/sign")
     def account_sign(request: Request, payload: Any = Body(None)):
         """Take the signatures, check what they make, and broadcast it."""
@@ -23710,8 +24153,7 @@ def create_app(state: AppState) -> FastAPI:
             # Remembered until the index reads it, so the next transaction
             # this account builds does not offer the coin this one just spent
             # or miss the change it just made.
-            _flights.add(account.pubkey, txid, offer.unsigned,
-                         _account_address(account.pubkey, chain),
+            _flights.add(account.pubkey, txid, offer.unsigned, _flight_address(account, chain, offer.unsigned),
                          network=chain.network)
 
             # Somewhere to write the txid down, if the route that built this

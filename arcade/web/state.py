@@ -703,6 +703,11 @@ class AppState:
         from ..accounts import Mailbox
         return Mailbox(self.accounts())
 
+    def imported_wallets(self):
+        """Each account's imported wallets, sealed by its browser (plan item 18): bytes this node cannot read."""
+        from ..accounts import ImportedWallets
+        return ImportedWallets(self.accounts())
+
     def screen(self):
         """Content screening (arcade/moderation.py): the `moderation` setting names a
         model to ask. Off when unset. Rebuilt only when the setting changes."""

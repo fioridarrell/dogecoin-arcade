@@ -88,6 +88,37 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-21 · the operator's side · import any wallet (a private key or a 12-word phrase), several named wallets a coin
+
+The operator (plan item 18): "We should be able to import any with private key or 12 word seed phrase, even if that wallet
+has not been used in Dogecoin arcade." Branch claude/wallet-import.
+- **Wallet page:** a wallet drop-down under the coin icons: the account's own wallet, then its imported ones, by name
+  (never by address; an unnamed one is "Wallet N", the lowest number free, kept until renamed; the main one is
+  nameable too), "+ Import a wallet" last. The address is under Receive (QR + copy). Rename; Remove from list (imported
+  only; no coins touched). Tokens/NFTs stay the main wallet's for now.
+- **The secret never leaves the browser unsealed.** coins.js `fromWif` (base58check, the chain's WIF byte -- another
+  chain's key is refused saying whose -- compressed flag honoured) or a BIP39 phrase (12-24 words, checksum checked)
+  derived at the arcade's own path (m/44'/coin'/0'/0/0; on L test the SegWit kinds too, as the main words offer).
+  Sealed in a SECOND record, `imported_wallets` table (accounts.ImportedWallets), by wallet.js `sealText`: the same
+  AES-256-GCM / PBKDF2-SHA512 600k / {kdf, iterations, salt, nonce, sealed} as `seal`, under the same password, opened
+  at sign-in, kept open in sessionStorage + the tab BroadcastChannel beside the open words, cleared on lock/sign-out.
+  **The vault blob, `seal()`, /signup and /signin are unchanged byte for byte** (older arcades read them).
+- **The node learns only the address,** with a signature by its key over the account and the address
+  (arcade/wallet_imports.py `check_proof`), so nobody registers an address whose key they do not hold. Setting
+  `extra_address:<net>:<account>`, at most 20 a chain (and 40 imports a day an account); watched (`_watch`, and the
+  watcher's account pickup). `/account/coins` and `/account/activity` take `address=`, which must be one of the
+  account's own (main, SegWit, imported) or 403. `/account/send` with `from` = an imported address takes only its
+  coins, change back to it; the browser signs with its key through the same verifyOffer/signInput path.
+- **Read-back:** already watched from the floor (or read back before) is ready at once; else the Core's coin set
+  (`scantxoutset`) or the paced block read-back, with "The arcade is reading back this wallet's coins; check back in
+  about N minutes" (blocks left x the measured rate). One per chain: an import while one runs is refused, NOTHING
+  kept. No Core here and none to borrow: "There is no node to borrow right now ..." -- queued, started by itself.
+  Another arcade is NOT asked for an imported address: arcades answer by @tag, and a public by-address answer would
+  tell anybody which addresses an arcade's accounts imported.
+- Routes: GET/POST `/account/imported`, POST `/account/imported/{address,rescan,forget,name}` (door.py PUBLIC_POST).
+  Tests: tests/test_wallet_imports.py, tests/test_wallet_imports_browser.py, tests/test_wallet_imports_restore_browser.py.
+- **SadFrog:** nothing to do; it works for every chain and face.
+
 ### 2026-10-21 · the operator's side · a Core that is behind borrows the chain until it catches up
 
 The operator (plan item 17): "If the block chain is being re-scanned or being synced on any arcade, it should automatically

@@ -70,6 +70,7 @@ PUBLIC_PAGES = frozenset({
     "/account/escrows",       # an account's own escrows (needs a session)
     "/account/doginals",      # this account's own Doginals on Dogecoin, to list (needs a session)
     "/account/segwit/balance",  # the account's registered segwit address (native or P2SH), test chains (needs a session)
+    "/account/imported",      # the account's own sealed record of imported wallets, and their addresses (needs a session)
     "/account/doge-stray",    # coins at the account's testnet key's Dogecoin address, to move home (2026-10-17)
     "/doginals/listings",     # Doginals listed for DOGE (the Exchange's Doginals tab)
     "/launch",
@@ -438,6 +439,10 @@ PUBLIC_POST = ("/auth/challenge", "/auth/login", "/auth/logout",
                "/account/sign",
                # the account's own segwit address (native or P2SH), watched (test chains only)
                "/account/segwit/register",
+               # imported wallets (plan item 18): the account's own sealed record, an address registered with its
+               # key's signature, its read-back, taking one off, the main wallet's name -- each the caller's own only
+               "/account/imported", "/account/imported/address", "/account/imported/rescan",
+               "/account/imported/forget", "/account/imported/name",
                # starring a market: the caller's own list of favorites, nothing else
                "/account/favorites",
                # the page holding this account's listed swaps is open (order_presence)

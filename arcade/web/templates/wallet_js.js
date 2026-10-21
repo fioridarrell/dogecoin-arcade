@@ -359,6 +359,8 @@ async function _signIn(tag, password, {network, version}) {
     throw new Error("that wallet does not match this name. Nothing was opened.");
   }
   const result = await seatWith(wallet);
+  // The imported wallets open with the same password (plan item 18), in the second sealed record.
+  await openImportsWith(wallet, password);
   // Any chain whose coins were never read back here (a read-back cut short by a restart): finished now. A chain
   // already done costs the node nothing (2026-10-19).
   fetch("/account/coins/backfill", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"})
@@ -451,6 +453,7 @@ async function _openFile(said, password, {network, version}) {
       + "Nothing was opened.");
   }
   const result = await seatWith(wallet);
+  await openImportsWith(wallet, password);
   fetch("/account/coins/backfill", {method: "POST"}).catch(() => {});
   return {...result, tag: (said && said.tag) || "", wallet};
 }
@@ -2317,6 +2320,36 @@ function keepOpen(phrase) {
   try { sessionStorage.setItem(OPEN_WALLETS, JSON.stringify(kept.slice(0, 6))); } catch (e) {}
 }
 
+/* The wallets an account imported (plan item 18), once its sealed record is open: where the open words are, for as
+ * long (this tab, shared with the site's other tabs below, gone on lock and sign-out), by account, because one tab
+ * can hold several accounts. {<account pubkey>: {updated, wallets: [...]}} -- `stale` when the record was sealed under
+ * an earlier password and is not open. */
+const OPEN_IMPORTS = "arcade-open-imports";
+/** The key the record is sealed with, while this page is open and only after the password was typed here and proved
+ *  against the main wallet: {account, key (a non-extractable AES key), salt, iterations}. Never the password, never
+ *  in storage; a new page asks again. */
+let importKey = null;
+
+function openImportsAll() {
+  try { return JSON.parse(sessionStorage.getItem(OPEN_IMPORTS) || "{}") || {}; } catch (e) { return {}; }
+}
+
+function mergeImports(given) {
+  const all = openImportsAll();
+  for (const [who, got] of Object.entries(given || {})) {
+    const have = all[who];
+    if (!have || Number(got.updated || 0) >= Number(have.updated || 0)) all[who] = got;
+  }
+  try { sessionStorage.setItem(OPEN_IMPORTS, JSON.stringify(all)); } catch (e) {}
+}
+
+function keepImports(account, opened) {
+  const all = openImportsAll();
+  all[String(account).toLowerCase()] = opened;
+  try { sessionStorage.setItem(OPEN_IMPORTS, JSON.stringify(all)); } catch (e) {}
+  try { if (TABS) TABS.postMessage({imports: {[String(account).toLowerCase()]: opened}}); } catch (e) {}
+}
+
 /* Unlocked once, unlocked everywhere (2026-09-26: "If you unlock on one
  * page, it should stay unlocked on all pages"). The open wallet lives in THIS
  * tab's sessionStorage, which a navigation keeps and a new tab does not have. So
@@ -2337,12 +2370,19 @@ if (TABS) {
       let phrase = null;
       try { phrase = sessionStorage.getItem(OPEN_WALLET); } catch (x) {}
       if (phrase) TABS.postMessage({phrase});
+      // The imported wallets open in this tab go with it (plan item 18): the same place, the same lifetime.
+      const imports = openImportsAll();
+      if (phrase && Object.keys(imports).length) TABS.postMessage({imports});
     } else if (m.phrase) {
       try {
         if (!sessionStorage.getItem(OPEN_WALLET)) sessionStorage.setItem(OPEN_WALLET, m.phrase);
       } catch (x) {}
+    } else if (m.imports) {
+      mergeImports(m.imports);
     } else if (m.locked) {
       try { sessionStorage.removeItem(OPEN_WALLET); } catch (x) {}
+      try { sessionStorage.removeItem(OPEN_IMPORTS); } catch (x) {}
+      importKey = null;
     } else if (m.switched && m.from !== THIS_PAGE) {
       // Another tab switched accounts: this one is showing the old one. Not
       // this page, which may hold more than one copy of this module.
@@ -2392,6 +2432,9 @@ export function forgetOpen() {
   let phrase = null;
   try { phrase = sessionStorage.getItem(OPEN_WALLET); } catch (e) {}
   try { sessionStorage.removeItem(OPEN_WALLET); } catch (e) {}
+  // Locked means the imported wallets too, in every tab (the `locked` message below clears theirs).
+  try { sessionStorage.removeItem(OPEN_IMPORTS); } catch (e) {}
+  importKey = null;
   if (phrase) {
     try { sessionStorage.setItem(OPEN_WALLETS,
             JSON.stringify(openWallets().filter((p) => p !== phrase))); } catch (e) {}
@@ -3604,4 +3647,326 @@ export function startTradeRunner(chain, beat = TRADE_BEAT) {
 export function kickTrades() {
   if (globalThis.__arcadeTradeRunner) tradePass();
   else if (kicks) kicks.postMessage("kick");
+}
+
+/* --- imported wallets (plan item 18, 2026-10-20) --------------------------------------------------------
+ *
+ * "We should be able to import any with private key or 12 word seed phrase, even if that wallet has not been used
+ * in Dogecoin arcade." A key (WIF) or a phrase typed into the Wallet page becomes a wallet beside the account's own,
+ * by name. Its secret never leaves this browser unsealed: the account keeps a SECOND sealed record on the node
+ * (/account/imported), made with `sealText` -- the same AES-256-GCM under PBKDF2-SHA512 at KDF_ITERATIONS as `seal`,
+ * under the same password -- and opened with it at sign-in. The main wallet's blob, which older arcades read, is not
+ * changed in any way. The node is told the imported ADDRESS only, with a signature by its key, so it can watch it.
+ */
+
+/** The record's text sealed with a key made from the password (`keyed`: {key, salt, iterations}). The parameters
+ *  travel with it, as `seal`'s do; unlike `seal`, the text is kept exactly (a private key is case-sensitive). */
+async function sealText(text, keyed) {
+  const nonce = crypto.getRandomValues(new Uint8Array(12));
+  const sealed = await crypto.subtle.encrypt({name: "AES-GCM", iv: nonce}, keyed.key, enc.encode(text));
+  return {kdf: "PBKDF2-SHA512", iterations: keyed.iterations, salt: hex(keyed.salt), nonce: hex(nonce),
+          sealed: hex(sealed)};
+}
+
+async function openText(blob, keyed) {
+  try {
+    const plain = await crypto.subtle.decrypt({name: "AES-GCM", iv: unhex(blob.nonce)}, keyed.key,
+                                              unhex(blob.sealed));
+    return new TextDecoder().decode(plain);
+  } catch (e) {
+    throw new Error("that password does not open your imported wallets.");
+  }
+}
+
+/** The key for a record: the password through the same KDF `seal` uses, over the record's own salt (a new record
+ *  gets a new random one). */
+async function recordKey(password, blob) {
+  if (blob && blob.kdf !== "PBKDF2-SHA512") throw new Error("your imported wallets are sealed in a way this page does not know");
+  const salt = blob ? unhex(blob.salt) : crypto.getRandomValues(new Uint8Array(16));
+  const iterations = blob ? Number(blob.iterations) : KDF_ITERATIONS;
+  return {key: await keyFrom(password, salt, iterations), salt, iterations};
+}
+
+/** What the node keeps for this account's imports: the sealed record (parsed), when it was written, the main
+ *  wallet's sealed blob, each chain's imported addresses with balance and read-back state, the main wallets' names. */
+export async function importedOnNode() {
+  const got = await fetch("/account/imported", {cache: "no-store"});
+  const said = await got.json().catch(() => ({}));
+  if (!got.ok) throw new Error(said.detail || "this arcade did not answer about your imported wallets");
+  let record = null;
+  try { record = said.blob ? JSON.parse(said.blob) : null; } catch (e) { record = null; }
+  return {...said, record};
+}
+
+/** The account's imported wallets open in this tab: {updated, wallets} or {stale: true}, or null when not open. */
+export function importsOpen(account) {
+  return openImportsAll()[String(account || "").toLowerCase()] || null;
+}
+
+/** Open the record with the password that just opened the main wallet (sign-in, a backup file). Never fails a
+ *  sign-in: a record sealed under an earlier password (the Restore page set a new one) is marked `stale`. */
+async function openImportsWith(wallet, password) {
+  try {
+    const said = await importedOnNode();
+    if (!said.record) { keepImports(wallet.pubkey, {updated: 0, wallets: []}); return; }
+    const keyed = await recordKey(password, said.record);
+    let opened;
+    try {
+      opened = JSON.parse(await openText(said.record, keyed));
+    } catch (e) {
+      keepImports(wallet.pubkey, {updated: said.updated, stale: true, wallets: []});
+      return;
+    }
+    importKey = {account: wallet.pubkey, ...keyed};
+    keepImports(wallet.pubkey, {updated: said.updated, wallets: (opened && opened.wallets) || []});
+  } catch (e) { /* the record is read again on the Wallet page */ }
+}
+
+/** Open a record sealed under an EARLIER password (after a Restore), with that password. Only opens it in this
+ *  tab: the next change seals it again under the current password. */
+export async function openStaleImports(wallet, oldPassword) {
+  const said = await importedOnNode();
+  if (!said.record) throw new Error("you have no imported wallets on this arcade");
+  const opened = JSON.parse(await openText(said.record, await recordKey(oldPassword, said.record)));
+  keepImports(wallet.pubkey, {updated: said.updated, wallets: (opened && opened.wallets) || [], reseal: true});
+  return opened.wallets || [];
+}
+
+/** The record's key for a change: the one this page already proved, else from `password` -- which must open the
+ *  main wallet to the words open in this tab (so an import is never sealed under a mistyped password nobody could
+ *  open again). `{reseal}` when the node's record was sealed under an earlier password and is re-sealed now. */
+async function keyForChange(wallet, said, password) {
+  const record = said.record;
+  if (importKey && importKey.account === wallet.pubkey
+      && (!record || hex(importKey.salt) === String(record.salt))) return {keyed: importKey};
+  if (!password) {
+    const e = new Error("Type your password to seal your imported wallets.");
+    e.needsPassword = true;
+    throw e;
+  }
+  if (!said.vault) {
+    throw new Error("This arcade keeps no sealed copy of your wallet, so there is no password to seal imported "
+      + "wallets under here.");
+  }
+  const words = await open(said.vault, password).catch(() => {
+    const e = new Error("That is not your password.");
+    e.needsPassword = true;
+    throw e;
+  });
+  if (signer.normalise(words) !== signer.normalise(wallet.phrase)) {
+    throw new Error("That password opens a different wallet than the one open here. Nothing was changed.");
+  }
+  if (record) {
+    const keyed = await recordKey(password, record);
+    try {
+      await openText(record, keyed);
+      importKey = {account: wallet.pubkey, ...keyed};
+      return {keyed: importKey};
+    } catch (e) {
+      // Sealed under an earlier password: sealed again, under this one, from the copy open in this tab.
+      const here = importsOpen(wallet.pubkey);
+      if (!here || !here.reseal || Number(here.updated) !== Number(said.updated)) {
+        throw new Error("Your imported wallets were sealed under an earlier password. Open them with that password "
+          + "first; they are sealed under your new one from then on.");
+      }
+      importKey = {account: wallet.pubkey, ...(await recordKey(password, null))};
+      return {keyed: importKey, reseal: here.wallets};
+    }
+  }
+  importKey = {account: wallet.pubkey, ...(await recordKey(password, null))};
+  return {keyed: importKey};
+}
+
+/** Change the record: read it, open it, apply `change` to its wallets, seal it, hand it back -- read again and
+ *  retried when another tab or device wrote it in between (the node's 409), so neither loses the other's change. */
+async function changeImports(wallet, change, password) {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const said = await importedOnNode();
+    const {keyed, reseal} = await keyForChange(wallet, said, password);
+    let wallets = reseal ? JSON.parse(JSON.stringify(reseal)) : [];
+    if (said.record && !reseal) wallets = (JSON.parse(await openText(said.record, keyed)).wallets) || [];
+    const out = await change(wallets);
+    const blob = await sealText(JSON.stringify({v: 1, wallets}), keyed);
+    const put = await fetch("/account/imported", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({blob, base: said.updated || 0}),
+    });
+    const got = await put.json().catch(() => ({}));
+    if (put.status === 409) continue;
+    if (!put.ok) throw new Error(got.detail || "your imported wallets were not saved");
+    keepImports(wallet.pubkey, {updated: got.updated, wallets});
+    return out;
+  }
+  throw new Error("Your imported wallets kept changing in another tab. Close the other tabs and try again.");
+}
+
+const KIND_IDS = {legacy: "p2pkh", "p2sh-p2wpkh": "p2sh-p2wpkh", p2wpkh: "p2wpkh"};
+
+/** The keys an imported wallet signs with on its chain, shaped as a wallet's `on[network]` (so `checked` and
+ *  `confirm` take it as they take the account's own): from its private key, or its phrase at the arcade's own
+ *  path (m/44'/<coin>'/0'/0/0), or the SegWit kind's path (m/49', m/84'), as the main wallet derives them. */
+export async function importedKeys(entry, chain) {
+  const network = chain.network;
+  const kind = addressKinds(network).find((k) => k.id === (entry.addr_kind || "legacy")) || {id: "legacy"};
+  let key, pubkey;
+  if (entry.kind === "wif") {
+    const got = await coins.fromWif(entry.secret, network);
+    if (kind.id !== "legacy" && !got.compressed) throw new Error("a SegWit address needs a compressed key");
+    ({key, pubkey} = got);
+  } else {
+    const wrong = await signer.complaint(entry.secret);
+    if (wrong) throw new Error(wrong);
+    const seed = await signer.toSeed(signer.normalise(entry.secret));
+    const made = kind.id === "p2wpkh" ? await coins.nativeSegwitKey(seed, network, 0)
+      : kind.id === "p2sh-p2wpkh" ? await coins.p2shSegwitKey(seed, network, 0)
+      : await coins.coinKey(seed, network, 0);
+    ({key, pubkey} = made);
+  }
+  const address = kind.id === "p2wpkh" ? await coins.p2wpkhAddress(pubkey, kind.hrp)
+    : kind.id === "p2sh-p2wpkh" ? await coins.p2shSegwitAddress(pubkey, kind.scripthash)
+    : await coins.address(pubkey, chain.version);
+  const keys = {network, version: chain.version, key, pubkey, address, ...(kind.id === "p2sh-p2wpkh" ? {nested: true} : {})};
+  return {on: {[network]: keys}, kind: KIND_IDS[kind.id] || "p2pkh"};
+}
+
+/** "Wallet N", N the lowest number no wallet name on that chain uses (2026-10-20). */
+export function nextWalletName(names) {
+  const used = new Set((names || []).map((n) => (/^Wallet (\d+)$/.exec(String(n || "")) || [])[1])
+    .filter(Boolean).map(Number));
+  let n = 1;
+  while (used.has(n)) n++;
+  return "Wallet " + n;
+}
+
+const cleanName = (text) => String(text || "").split(/\s+/).filter(Boolean).join(" ").slice(0, 40);
+
+/** Import a wallet on `chain` ({network, version}): `kind` "wif" or "phrase", its `secret`, an optional `name`, and
+ *  `addrKind` (a SegWit kind where the chain has them). `otherNames`: every other wallet name on that chain, for the
+ *  next free "Wallet N". The node registers the address first: an import it refuses (a rescan running on that
+ *  chain, the cap) keeps NOTHING. Then the record is sealed with the secret in it; should that fail, the address is
+ *  taken off again. Returns the node's word on its read-back and the new wallet. */
+export async function importWallet(chain, {kind, secret, name = "", addrKind = "legacy", otherNames = [], password = ""}) {
+  return working(async () => {
+    const wallet = await opened(chain);
+    if (!wallet) throw new Error("Unlock your wallet first.");
+    const text = kind === "phrase" ? signer.normalise(secret) : String(secret || "").trim();
+    if (kind === "phrase") {
+      const wrong = await signer.complaint(text);
+      if (wrong) throw new Error(wrong);
+    } else if (kind !== "wif") throw new Error("Paste a private key or a seed phrase.");
+    const entry = {id: hex(crypto.getRandomValues(new Uint8Array(8))), chain: chain.network, kind, secret: text,
+                   addr_kind: addrKind || "legacy", name: "", made: Date.now()};
+    const keys = await importedKeys(entry, chain);
+    const mine = keys.on[chain.network];
+    if (wallet.on[chain.network] && wallet.on[chain.network].address === mine.address) {
+      throw new Error("That is your arcade wallet's own key on this coin, already here.");
+    }
+    // Before anything is registered: the password, when this page does not hold the record's key yet.
+    const said = await importedOnNode();
+    await keyForChange(wallet, said, password);
+    const here = importsOpen(wallet.pubkey);
+    const dupe = ((here && here.wallets) || []).find((w) => w.chain === chain.network && w.address === mine.address);
+    if (dupe) throw new Error(`That wallet is already here, as “${dupe.name}”.`);
+    const proof = await coins.importProof(wallet.pubkey, chain.network, mine.address, mine.pubkey);
+    const signature = hex(await coins.signHash(mine.key, proof));
+    const asked = await fetch("/account/imported/address", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({chain: chain.network, address: mine.address, kind: keys.kind,
+                            pubkey: hex(mine.pubkey), signature}),
+    });
+    const answer = await asked.json().catch(() => ({}));
+    if (!asked.ok) {
+      const e = new Error(answer.detail || "this arcade did not take that wallet");
+      e.busy = !!answer.busy;
+      throw e;
+    }
+    entry.address = mine.address;
+    try {
+      await changeImports(wallet, (wallets) => {
+        if (wallets.some((w) => w.chain === chain.network && w.address === mine.address)) return;
+        const names = otherNames.concat(wallets.filter((w) => w.chain === chain.network).map((w) => w.name));
+        entry.name = cleanName(name) || nextWalletName(names);
+        wallets.push(entry);
+      }, password);
+    } catch (e) {
+      if (!answer.already) {
+        fetch("/account/imported/forget", {method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({chain: chain.network, address: mine.address})}).catch(() => {});
+      }
+      throw e;
+    }
+    return {...answer, wallet: {...entry, secret: undefined}};
+  });
+}
+
+/** Rename an imported wallet ("" gives it the lowest free "Wallet N"). */
+export async function renameImported(chain, id, name, {otherNames = [], password = ""} = {}) {
+  const wallet = await opened(chain);
+  if (!wallet) throw new Error("Unlock your wallet first.");
+  return changeImports(wallet, (wallets) => {
+    const it = wallets.find((w) => w.id === id);
+    if (!it) throw new Error("That wallet is not in your imported wallets any more.");
+    it.name = "";
+    const names = otherNames.concat(wallets.filter((w) => w.chain === it.chain && w.id !== id).map((w) => w.name));
+    it.name = cleanName(name) || nextWalletName(names);
+    return it.name;
+  }, password);
+}
+
+/** Take an imported wallet off: out of the sealed record first, then the node stops watching its address. Its coins
+ *  are not touched. */
+export async function removeImported(chain, id, {password = ""} = {}) {
+  const wallet = await opened(chain);
+  if (!wallet) throw new Error("Unlock your wallet first.");
+  let gone = null;
+  await changeImports(wallet, (wallets) => {
+    const at = wallets.findIndex((w) => w.id === id);
+    if (at >= 0) gone = wallets.splice(at, 1)[0];
+  }, password);
+  if (gone && gone.address) {
+    await fetch("/account/imported/forget", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({chain: gone.chain, address: gone.address})}).catch(() => {});
+  }
+  return gone ? {...gone, secret: undefined} : null;
+}
+
+/** Name the account's MAIN wallet on one chain (not a secret: kept by the node). */
+export async function nameMainWallet(network, name) {
+  const asked = await fetch("/account/imported/name", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({chain: network, name: cleanName(name)}),
+  });
+  const said = await asked.json().catch(() => ({}));
+  if (!asked.ok) throw new Error(said.detail || "that name was not saved");
+  return said.name;
+}
+
+/** Whether this page holds the record's key (so a change needs no password). */
+export function importsKeyHere(account) {
+  return !!(importKey && importKey.account === String(account || "").toLowerCase());
+}
+
+/** Open the record in this tab with the account's password (a tab that was unlocked before imports existed, or
+ *  whose copy was lost). A password that opens the main wallet and not the record means the record was sealed under
+ *  an earlier one: said so (`stale`), and `openStaleImports` takes that earlier password. */
+export async function openImports(wallet, password) {
+  const said = await importedOnNode();
+  if (!said.record) { keepImports(wallet.pubkey, {updated: 0, wallets: []}); return []; }
+  const keyed = await recordKey(password, said.record);
+  try {
+    const opened = JSON.parse(await openText(said.record, keyed));
+    importKey = {account: wallet.pubkey, ...keyed};
+    keepImports(wallet.pubkey, {updated: said.updated, wallets: (opened && opened.wallets) || []});
+    return opened.wallets || [];
+  } catch (e) {
+    const main = said.vault ? await open(said.vault, password).catch(() => null) : null;
+    if (main && signer.normalise(main) === signer.normalise(wallet.phrase)) {
+      keepImports(wallet.pubkey, {updated: said.updated, stale: true, wallets: []});
+      const stale = new Error("Your imported wallets were sealed under an earlier password (before it was changed). "
+        + "Type that earlier password to open them.");
+      stale.stale = true;
+      throw stale;
+    }
+    throw new Error("That is not your password.");
+  }
 }

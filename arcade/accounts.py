@@ -35,6 +35,8 @@ PyNaCl's `VerifyKey` takes, and its signature is the same 64.
 from __future__ import annotations
 
 import hashlib
+import json
+import re
 import secrets
 import sqlite3
 import threading
@@ -1085,6 +1087,94 @@ class Mailbox:
             "ON CONFLICT(pubkey) DO UPDATE SET blob = excluded.blob, "
             "updated = excluded.updated", ((pubkey or "").lower(), blob, stamp))
         return {"updated": stamp}
+
+
+IMPORTED_SCHEMA = """
+CREATE TABLE IF NOT EXISTS imported_wallets (
+    pubkey  TEXT PRIMARY KEY,            -- the account it belongs to
+    blob    TEXT NOT NULL,               -- ciphertext and KDF parameters only
+    updated INTEGER NOT NULL
+);
+"""
+
+#: The most one account's sealed record of imported wallets may take here, as stored text: twenty wallets on each
+#: chain, each a key or a phrase and a name, sealed, is a few kilobytes.
+IMPORTED_MAX = 64 * 1024
+_IMPORTED_LOCK = threading.RLock()
+
+
+def _sealed_shape(blob: str) -> bool:
+    """Whether `blob` is what wallet.js `sealText` makes: {kdf, iterations, salt, nonce, sealed}, hex, nothing else.
+    Checked so the node never keeps something a browser would choke on; it still cannot read it."""
+    try:
+        said = json.loads(blob)
+    except ValueError:
+        return False
+    return (isinstance(said, dict) and set(said) == {"kdf", "iterations", "salt", "nonce", "sealed"}
+            and said["kdf"] == "PBKDF2-SHA512"
+            and isinstance(said["iterations"], int) and not isinstance(said["iterations"], bool)
+            and said["iterations"] >= 100000
+            and all(isinstance(said[k], str) and re.fullmatch(r"(?:[0-9a-f]{2})+", said[k])
+                    for k in ("salt", "nonce", "sealed")))
+
+
+class ImportedWallets:
+    """Each account's SECOND sealed record: the wallets it imported (plan item 18, 2026-10-21).
+
+    Keys and phrases the account typed in, sealed in its browser under the same password as its main wallet
+    (wallet.js `sealText`: the same AES-256-GCM under PBKDF2-SHA512 as `seal`). Kept beside the vault, never in
+    it: the vault's blob is read by older arcades (`/signin/{tag}`), so its format does not change. This node
+    stores bytes it cannot open, exactly as it does the vault and the mailbox.
+    """
+
+    def __init__(self, accounts: "Accounts"):
+        self.conn = accounts.conn
+        self.conn.executescript(IMPORTED_SCHEMA)
+
+    def get(self, pubkey: str) -> dict | None:
+        row = self.conn.execute("SELECT blob, updated FROM imported_wallets WHERE pubkey = ?",
+                                ((pubkey or "").lower(),)).fetchone()
+        return {"blob": row[0], "updated": int(row[1])} if row else None
+
+    def put(self, pubkey: str, blob: str, base: int, now: int | None = None) -> dict:
+        """Replace the record, if it has not changed since the browser read it.
+
+        `base` is the `updated` the browser read (0 for none). A newer record written by another tab or device in
+        between is refused (ImportedMoved), never overwritten, so two tabs never lose each other's imports. An
+        empty blob removes the record."""
+        blob = str(blob or "")
+        if len(blob) > IMPORTED_MAX:
+            raise AccountError(f"your imported wallets are {len(blob):,} bytes sealed and this node keeps at most "
+                               f"{IMPORTED_MAX:,} per account")
+        if blob and not _sealed_shape(blob):
+            raise AccountError("that is not a sealed record")
+        now = int(now if now is not None else time.time())
+        who = (pubkey or "").lower()
+        # One check-and-write at a time: the register's statement lock (an RLock, so the statements inside take it
+        # again); two tabs saving at once cannot both pass the `base` check.
+        with getattr(self.conn, "_lock", None) or _IMPORTED_LOCK:
+            have = self.get(who)
+            was = (have or {}).get("updated", 0)
+            if int(base or 0) != was:
+                raise ImportedMoved(was)
+            if not blob:
+                self.conn.execute("DELETE FROM imported_wallets WHERE pubkey = ?", (who,))
+                return {"updated": 0}
+            stamp = max(now, was + 1)
+            self.conn.execute(
+                "INSERT INTO imported_wallets (pubkey, blob, updated) VALUES (?,?,?) "
+                "ON CONFLICT(pubkey) DO UPDATE SET blob = excluded.blob, updated = excluded.updated",
+                (who, blob, stamp))
+        return {"updated": stamp}
+
+
+class ImportedMoved(AccountError):
+    """Another tab or device of the same account wrote the record first."""
+
+    def __init__(self, updated: int):
+        super().__init__("your imported wallets changed in another tab or on another device; "
+                         "read them again and try once more")
+        self.updated = updated
 
 
 class MailboxMoved(AccountError):

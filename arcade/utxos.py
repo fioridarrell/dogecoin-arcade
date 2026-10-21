@@ -108,7 +108,7 @@ SPENDABLE = (OutputType.PUBKEYHASH, OutputType.SCRIPTHASH,
              OutputType.WITNESS_V0_KEYHASH)
 
 
-def backfill(index, rpc, params, address: str, start: int, end: int) -> int:
+def backfill(index, rpc, params, address: str, start: int, end: int, progress: dict | None = None) -> int:
     """The coins an address already held when it started being watched: the
     one exception to "never retroactive", for an account brought here from
     another node (2026-09-30: "he has zero balance ... has @tag"), whose coins
@@ -119,7 +119,19 @@ def backfill(index, rpc, params, address: str, start: int, end: int) -> int:
     see -- in a later block, or read by the indexer meanwhile -- cannot leave a
     coin counted that is gone. Returns how many coins it filed.
     """
-    return backfill_many(index, rpc, params, {address}, start, end)
+    return backfill_many(index, rpc, params, {address}, start, end, progress=progress)
+
+
+#: Seconds one block of a read-back takes here, pacing included, by chain (Params.name): measured by each pass, for
+#: saying how long the next one will take (plan item 18). A guess until a pass has run.
+READ_RATE: dict[str, float] = {}
+#: The guess: a few blocks a second with the pacing above.
+READ_RATE_GUESS = 0.25
+
+
+def read_rate(params) -> float:
+    """Seconds a block of a read-back takes on this chain: the last pass's measure, else a guess."""
+    return READ_RATE.get(getattr(params, "name", ""), READ_RATE_GUESS)
 
 
 #: One read-back at a time, in the whole process, and at a pace (2026-10-19: an account brought to pepecoinarcade.com
@@ -130,20 +142,28 @@ _BACKFILL_ONE = threading.Lock()
 BACKFILL_REST = 1.5
 
 
-def backfill_many(index, rpc, params, addresses: set[str], start: int, end: int) -> int:
+def backfill_many(index, rpc, params, addresses: set[str], start: int, end: int,
+                  progress: dict | None = None) -> int:
     """`backfill` for several addresses in ONE pass over the blocks (2026-10-17: every account's Dogecoin address at
     once, which read block by block per address would be thousands of reads each). One pass at a time, paced, so
-    the arcade's own pages keep answering while it runs."""
+    the arcade's own pages keep answering while it runs.
+
+    `progress`, when given, is kept up to date for whoever is waiting (plan item 18): "height" (the block being
+    read, absent until this pass has the lock) and "per_block" (seconds a block takes, pacing included)."""
     addresses = set(addresses)
     if not addresses:
         return 0
     with _BACKFILL_ONE:
-        return _backfill_many(index, rpc, params, addresses, start, end)
+        return _backfill_many(index, rpc, params, addresses, start, end, progress)
 
 
-def _backfill_many(index, rpc, params, addresses: set[str], start: int, end: int) -> int:
+def _backfill_many(index, rpc, params, addresses: set[str], start: int, end: int,
+                   progress: dict | None = None) -> int:
     found = []
+    began, done = time.monotonic(), 0
     for height in range(int(start), int(end) + 1):
+        if progress is not None:
+            progress["height"] = height
         took = time.perf_counter()
         block = rpc.get_block(rpc.get_block_hash(height), 2)
         for tx in block.get("tx") or []:
@@ -159,6 +179,12 @@ def _backfill_many(index, rpc, params, addresses: set[str], start: int, end: int
                                   int(round(float(out.get("value", 0)) * 100_000_000)), height))
         if BACKFILL_REST:
             time.sleep(min(1.0, (time.perf_counter() - took) * BACKFILL_REST))
+        done += 1
+        if done >= 20:
+            per = (time.monotonic() - began) / done
+            READ_RATE[getattr(params, "name", "")] = per
+            if progress is not None:
+                progress["per_block"] = per
     filed = 0
     with index.open() as db:
         for txid, vout, address, value, height in found:
