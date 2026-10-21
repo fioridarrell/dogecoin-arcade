@@ -23614,11 +23614,23 @@ def create_app(state: AppState) -> FastAPI:
         """At start (and a minute after, once the chains answer): every imported wallet on a chain that rescans in the
         Core and has not had its whole past read yet -- one imported before 2026-10-21, a batch cut short by a
         restart -- goes on the queue, and the next batch takes them all."""
-        time.sleep(60)
+        # A chain whose Core is busy at a rescan is not counted ready at first (_account_chains): tried again each
+        # minute, for an hour, until every chain an import may wait on has been swept (2026-10-21: @apple's Dogecoin
+        # import sat off the queue after a restart while its Core rescanned).
+        swept: set[str] = set()
+        for _ in range(60):
+            time.sleep(60)
+            _sweep_once(swept)
+            if all(chain.network in swept for chain in (state.doge, state.ledger)
+                   if chain is not None and _core_rescan_on(chain)):
+                return
+
+    def _sweep_once(swept: set) -> None:
         try:
             for chain in _account_chains():
-                if not _core_rescan_on(chain):
+                if not _core_rescan_on(chain) or chain.network in swept:
                     continue
+                swept.add(chain.network)
                 prefix = f"extra_address:{chain.network}:"
                 for name, value in list(state.settings().items()):
                     if not name.startswith(prefix):

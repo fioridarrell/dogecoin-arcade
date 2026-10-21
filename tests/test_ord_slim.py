@@ -359,3 +359,19 @@ def test_inscriptions_are_kept_in_number_order(tmp_path):
     assert len(rows) == 6 and all(rid == number + 1 for rid, number in rows)
     first = index.kinds(ctype="text/")["first"]
     assert [f["number"] for f in first] == list(range(6))
+
+
+def test_the_walk_says_its_real_pace_not_its_burst(tmp_path, monkeypatch):
+    """2026-10-21: the panel said 12,000 blocks a second on PEP main, which moved about 15. `rate` is now the
+    pace over wall time, rests and waits included; the speed inside a pass is `burst`."""
+    chain = Chain()
+    index = dx.DoginalIndex(tmp_path / "pace.sqlite", lambda: chain, lambda: "walk")
+    clock = [1000.0]
+    monkeypatch.setattr(dx.time, "monotonic", lambda: clock[0])
+    index.walker.rate = 12000.0
+    heights = iter(range(100, 10_000, 15))
+    monkeypatch.setattr(index.walker, "next_height", lambda: next(heights))
+    for _ in range(12):                                  # a pass every 10 s moving 15 blocks
+        index._note_pace()
+        clock[0] += 10.0
+    assert abs(index.walk_pace() - 1.5) < 0.01

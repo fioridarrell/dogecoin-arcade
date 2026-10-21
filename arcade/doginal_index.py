@@ -1238,6 +1238,7 @@ class DoginalIndex:
         self.tip = 0
         self.helped = int(self.store.meta("helped", 0))
         self.help_rate = 0.0
+        self._paced: list[tuple[float, int]] = []    # (when, next height) after each pass: the walk's real pace
         self.error = ""
         self._said_upto = int(self.store.meta("said_upto", -1))
 
@@ -1279,6 +1280,8 @@ class DoginalIndex:
             log.debug("doginal index pass failed", exc_info=True)
             return 30.0
         self._tell_new_chunks()
+        if mode == "walk":
+            self._note_pace()
         took = time.monotonic() - started
         # Paced by the share of the machine the operator gives the walk (2026-10-21): work `took`, rest so that
         # the work is that share of the time. All of it: straight on (2026-10-20: a test machine "shouldn't be pacing").
@@ -1294,6 +1297,23 @@ class DoginalIndex:
     def _big() -> bool:
         import os
         return (os.cpu_count() or 1) >= BIG_FROM_CORES
+
+    #: The window the walk's pace is measured over (seconds of wall time, its rests and waits for notes included).
+    PACE_WINDOW = 120.0
+
+    def _note_pace(self) -> None:
+        now = time.monotonic()
+        self._paced = [p for p in self._paced if now - p[0] <= self.PACE_WINDOW] + [(now, self.walker.next_height())]
+
+    def walk_pace(self) -> float:
+        """Blocks a second the walk really moves on, over the last PACE_WINDOW (2026-10-21: the panel said
+        12,000 a second on PEP main while it moved about 15): `walker.rate` is only the speed inside a pass, where
+        blocks already scanned stitch in thousands a second; the pace also counts the rests and the waits for the
+        scans ahead."""
+        if len(self._paced) < 2 or self._paced[-1][0] - self._paced[0][0] < 10:
+            return 0.0
+        (t0, h0), (t1, h1) = self._paced[0], self._paced[-1]
+        return max(0.0, (h1 - h0) / (t1 - t0))
 
     def pass_budget(self) -> float:
         """How long one pass may hold the web process: short bursts on a small machine, so a page waits a second at
@@ -1835,7 +1855,8 @@ class DoginalIndex:
                     "inscriptions": counts.get("inscriptions", 0), "burned": counts.get("burned", 0),
                     "tokens": counts.get("tokens", 0), "holders": counts.get("holders", 0),
                     "names": counts.get("names", {}),
-                    "rate": round(self.walker.rate, 2), "error": self.walker.error}
+                    "rate": round(self.walk_pace(), 2), "burst": round(self.walker.rate, 2),
+                    "error": self.walker.error}
         found = self._counts()["found"]
         kept = self.store.q("SELECT COUNT(*), COALESCE(SUM(LENGTH(blob)), 0), "
                             "COALESCE(SUM(src = ''), 0) FROM notes")[0]
