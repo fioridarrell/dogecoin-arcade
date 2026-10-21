@@ -8075,8 +8075,12 @@ def create_app(state: AppState) -> FastAPI:
                 state.pagestore.remove(page, body.get("key", ""))
             elif op == "clear":
                 state.pagestore.clear(page)
+            elif op == "history":
+                key = body.get("key")
+                return JSONResponse({"ok": True, "history": state.pagestore.history(
+                    page, None if key in (None, "") else str(key))})
             else:
-                raise StoreError("op must be set, remove or clear")
+                raise StoreError("op must be set, remove, clear or history")
         except StoreError as exc:
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
         return JSONResponse({"ok": True})

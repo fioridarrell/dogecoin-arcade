@@ -2012,13 +2012,54 @@ const SHELF_KEYS = 1000;
 const SHELF_VALUE = 65536;            // pagestore's MAX_VALUE, as characters
 const SHELF_TOTAL = 1048576;          // and its MAX_TOTAL
 
+const SHELF_HISTORY = 10;             // pagestore's HISTORY: earlier values kept per key
+
+// Whose shelf this is. Only a clear answer from /account picks one: a stranger (signed out) gets the
+// "anon" shelf, but an /account that did not answer -- a restart, a timeout -- REFUSES the call. It used
+// to fall back to "anon", which handed a signed-in player's game an empty shelf: the game took them for a
+// new player and saved the new one over the old in its own records (@tbuuol, ASHVALE, 2026-10-20).
 async function shelfName(page) {
-  let who = "anon";
-  try {
-    const asked = await fetch("/account", {cache: "no-store"});
-    if (asked.ok) who = (await asked.json()).address || "anon";
-  } catch (e) { /* a stranger's browser is its own shelf */ }
-  return "arcade.pagestore." + who + "." + page;
+  let asked;
+  try { asked = await fetch("/account", {cache: "no-store"}); }
+  catch (e) { asked = null; }
+  if (!asked || !asked.ok)
+    throw new Error("the wallet did not answer: try again in a moment");
+  let said;
+  try { said = await asked.json(); }
+  catch (e) { throw new Error("the wallet did not answer: try again in a moment"); }
+  return "arcade.pagestore." + ((said && said.address) || "anon") + "." + page;
+}
+
+// The history sits beside the shelf, not under its prefix: "arcade.pagehistory.<who>.<page>".
+function historyName(name) { return "arcade.pagehistory." + name.slice("arcade.pagestore.".length); }
+
+// File what the shelf is about to lose for `key`, newest first, HISTORY per key and SHELF_TOTAL in all.
+// The history is a nicety: a browser that will not hold it drops the oldest, never the save itself.
+function shelfKeep(name, items, key, next) {
+  if (!Object.prototype.hasOwnProperty.call(items, key) || items[key] === next) return;
+  const slot = historyName(name);
+  let hist = {};
+  try { hist = JSON.parse(localStorage.getItem(slot) || "{}") || {}; } catch (e) { hist = {}; }
+  const now = Date.now() / 1000;
+  hist[key] = [{value: items[key], replaced: now}].concat(hist[key] || []).slice(0, SHELF_HISTORY);
+  const all = [];
+  Object.keys(hist).forEach((k) => hist[k].forEach((h) => all.push([h.replaced, k, h])));
+  all.sort((a, b) => b[0] - a[0]);
+  let total = 0;
+  all.forEach(([, k, h]) => {
+    total += k.length + String(h.value).length;
+    if (total > SHELF_TOTAL) hist[k] = hist[k].filter((x) => x !== h);
+  });
+  Object.keys(hist).forEach((k) => { if (!hist[k].length) delete hist[k]; });
+  for (;;) {
+    try { localStorage.setItem(slot, JSON.stringify(hist)); return; }
+    catch (e) {
+      const oldest = all.filter(([, k, h]) => hist[k] && hist[k].includes(h)).pop();
+      if (!oldest) { try { localStorage.removeItem(slot); } catch (e2) {} return; }
+      hist[oldest[1]] = hist[oldest[1]].filter((x) => x !== oldest[2]);
+      if (!hist[oldest[1]].length) delete hist[oldest[1]];
+    }
+  }
 }
 
 export async function storageDoor(page, ask) {
@@ -2028,6 +2069,14 @@ export async function storageDoor(page, ask) {
   try { items = JSON.parse(localStorage.getItem(name) || "{}"); }
   catch (e) { items = {}; }
   if (op === "load") return {items: items};
+  if (op === "history") {
+    let hist = {};
+    try { hist = JSON.parse(localStorage.getItem(historyName(name)) || "{}") || {}; } catch (e) { hist = {}; }
+    const only = ask.key === undefined || ask.key === null || ask.key === "" ? null : String(ask.key);
+    if (only === null) return {history: hist};
+    return {history: hist[only] ? {[only]: hist[only]} : {}};
+  }
+  const before = Object.assign({}, items);
   if (op === "set") {
     const key = String(ask.key === undefined ? "" : ask.key);
     const value = String(ask.value === undefined ? "" : ask.value);
@@ -2048,8 +2097,9 @@ export async function storageDoor(page, ask) {
   } else if (op === "clear") {
     items = {};
   } else {
-    throw new Error("op must be set, remove or clear");
+    throw new Error("op must be set, remove, clear or history");
   }
+  Object.keys(before).forEach((k) => { if (before[k] !== items[k]) shelfKeep(name, before, k, items[k]); });
   try {
     if (Object.keys(items).length) localStorage.setItem(name, JSON.stringify(items));
     else localStorage.removeItem(name);

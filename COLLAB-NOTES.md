@@ -88,6 +88,18 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-20 · the operator's side · arcade.storage keeps each key's last 10 values; no empty shelf on a failed /account
+
+@tbuuol lost his ASHVALE character: during a restart /account failed, wallet.js shelfName() fell back to the
+"anon" shelf, his game got an empty shelf and started him as new. The operator: "Yes, last 10".
+- shelfName() now REFUSES the storage call ("the wallet did not answer") unless /account answers 200; a
+  signed-out visitor (200, no address) still gets the anon shelf. Games: treat a refused/not-ready storage
+  as "not loaded", never as "new player".
+- Every set/remove/clear files the value a key loses: node pagestore table item_history, browser shelf
+  "arcade.pagehistory.<who>.<page>" (beside the shelf, not under its prefix). 10 per key, newest first,
+  at most MAX_TOTAL per page; the browser drops the oldest history, never the save. Read with
+  `arcade.storage.history(key)` (op "history") -> {key: [{value, replaced}, ...]}.
+
 ### 2026-10-20 · the operator's side · realtime players lost their seat one way; ord index stops stalling
 
 Ashvale reported @apple seeing @makwa while makwa could not see him; the operator: "Ship it".
