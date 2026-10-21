@@ -25952,6 +25952,21 @@ def create_app(state: AppState) -> FastAPI:
           * Link: this arcade, linked with its round trip (node.rtts, ms; None until the first pong), or not linked.
         """
         _admin_check(request)
+        return JSONResponse(_arcades_view(), headers={"Cache-Control": "no-store"})
+
+    @app.get("/account/arcades")
+    def account_arcades(request: Request):
+        """The same Arcades card for a signed-in account's Your arcade page (2026-10-21: "Below that should be a
+        copy of the arcades card in the admin overview page"): what /admin/api/arcades says, less this arcade's own
+        Share switches (`switch`), which are the operator's settings, not what the mesh can see."""
+        _signed_in_account(request)
+        said = _arcades_view()
+        for row in said["rows"]:
+            for core in row["cores"]:
+                core.pop("switch", None)
+        return JSONResponse(said, headers={"Cache-Control": "no-store"})
+
+    def _arcades_view() -> dict:
         from .. import cores as coreslib
         from ..doginal_index import SETTLE
         mesh = getattr(state, "mesh", None)
@@ -26038,9 +26053,8 @@ def create_app(state: AppState) -> FastAPI:
         others.sort(key=lambda r: (r["link"]["state"] == "none",
                                    r["link"].get("ms") if r["link"].get("ms") is not None else 9e9,
                                    r["tag"] or "~" + r["node"]))
-        return JSONResponse({"ok": up, "running": running["running"], "linked": running["linked"],
-                             "total": 1 + running["running"], "rows": rows + others},
-                            headers={"Cache-Control": "no-store"})
+        return {"ok": up, "running": running["running"], "linked": running["linked"],
+                "total": 1 + running["running"], "rows": rows + others}
 
     @app.get("/admin/api/cards")
     def admin_cards(request: Request):

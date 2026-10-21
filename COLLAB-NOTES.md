@@ -88,6 +88,18 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-21 Your arcade: the wallets a row of coins, and the Arcades card (Claude)
+The operator: "On the client side, your arcade tab the Wallet selection should just be a row of the icons and have them lit
+up when enabled and grayed out when disabled. Below that should be a copy of the arcades card in the admin overview
+page." me.html: `#wallet-chains` is a row of `button.wchip` (aria-pressed; grey and faded when hidden), saved through
+`/account/wallets` as before; the per-chain number lines (/account/chain-stats, still served) are gone from the page.
+The Arcades card moved into `_arcades_panel.html` (markup, styles and its own script scope, `window.arcadesPanel.draw`)
+and is included by admin.html and me.html; new `GET /account/arcades` (signed in; door PUBLIC_PAGES) is
+`_arcades_view()` less this arcade's Share switches. The node side's page reads /admin/api/arcades.
+- **Fixed on the way:** admin.html had two `function ordRing` in one script (the Ords tab's ring and the Arcades
+  card's, 030b4d9): the later one replaced the first, so the Ords tab's ring was drawn by the wrong function. The
+  card's now lives in its own scope.
+
 ### 2026-10-21 Admin -> Affiliates: your sites to share, and other operators' sites to show (Claude)
 The operator: "I want an admin affiliate panel. It should show the operators published URLs with a check box next to each to
 share with affiliates. It should have a list of shared URLs from other node operators, each with a checkmark to share

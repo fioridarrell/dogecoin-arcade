@@ -102,3 +102,32 @@ def test_at_phone_width_each_arcade_is_a_card_and_nothing_scrolls_sideways(brows
             "return document.documentElement.scrollWidth <= window.innerWidth"), "no sideways scroll"
     finally:
         browser.set_window_size(1200, 900)
+
+
+def test_your_arcade_has_a_row_of_wallet_coins_and_the_arcades_card(browser, served):
+    """2026-10-21: on Your arcade the wallets are a row of coins, lit when shown and grey when hidden, and the
+    Arcades card from Admin -> Overview sits below it. Tapping a coin greys it and keeps it so."""
+    browser.set_window_size(390, 844)
+    try:
+        browser.get(served + "/")
+        rows = WebDriverWait(browser, 15).until(
+            lambda d: d.find_elements(By.CSS_SELECTOR, "#arcrows .arcrow:not(.archead)") or None)
+        assert len(rows) == 2 and "@strawberry" in rows[0].text
+        chips = browser.find_elements(By.CSS_SELECTOR, "#wallet-chains .wchip")
+        assert chips and all(c.get_attribute("aria-pressed") == "true" for c in chips)
+        assert browser.execute_script(
+            "return document.documentElement.scrollWidth <= window.innerWidth"), "no sideways scroll"
+        chips[0].click()
+        WebDriverWait(browser, 10).until(lambda d: "hidden" in d.find_element(By.ID, "wallet-chains-said").text)
+        img = chips[0].find_element(By.CSS_SELECTOR, "img")
+        WebDriverWait(browser, 5).until(lambda d: float(img.value_of_css_property("opacity")) == pytest.approx(0.35))
+        browser.get(served + "/")
+        WebDriverWait(browser, 15).until(lambda d: d.find_elements(By.CSS_SELECTOR, "#wallet-chains .wchip"))
+        assert browser.find_elements(By.CSS_SELECTOR, "#wallet-chains .wchip")[0].get_attribute("aria-pressed") == "false"
+        shots = "/tmp/claude-1000/-home-robin/55cfedea-2658-4819-80e4-33320972c0bb/scratchpad/"
+        browser.find_element(By.ID, "wallet-chains").screenshot(shots + "me-wallets.png")
+        WebDriverWait(browser, 15).until(
+            lambda d: d.find_elements(By.CSS_SELECTOR, "#arcrows .arcrow:not(.archead)") or None)
+        browser.find_element(By.ID, "arcades").screenshot(shots + "me-arcades.png")
+    finally:
+        browser.set_window_size(1200, 900)

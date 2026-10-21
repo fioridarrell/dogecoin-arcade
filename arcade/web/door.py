@@ -131,6 +131,7 @@ PUBLIC_PAGES = frozenset({
     "/account/inscribe/unfinished",
     "/account/dust",                  # coins in this account's own payload outputs
     "/account/coins",                 # this account's own coins on one chain (the Doginals check)
+    "/account/arcades",               # the arcades on the mesh, for the Your arcade page's Arcades card
     "/account/favorites",             # the markets this account starred (Exchange, 2026-10-17)
     "/account/orders/delegated",      # where this account's node-filled orders stand (2026-10-17)
     "/account/talk/inbox",            # sealed swap messages the mesh brought this page (talk_relay)
