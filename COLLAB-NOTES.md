@@ -88,6 +88,32 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-21 · the operator's side · an imported wallet's whole past, from a Core rescan, reads borrowed meanwhile
+
+The operator imported a Dogecoin wallet and asked whether the arcade borrows another node while it rescans. It did not, and
+it only found a week's coins: Dogecoin and Pepecoin Core 1.14 have no `scantxoutset`, and the block read-back goes
+down to the index's floor only (Dogecoin: block 6,415,000). Now, on Dogecoin and PEP Main (setting
+`import_core_rescan:<net>` switches a chain on or off; PEP TEST stays on the read-back because the @ashvale Bank's
+wallet lives in that Core and a rescan makes it wait):
+- **The address is imported WATCH-ONLY into this node's Core** (`importmulti`, timestamp 0, never a key) **with a
+  rescan of the whole chain**, then its coins are listed (`listunspent`) into the ledger (utxos.seed_from_core_wallet).
+- **Reads are borrowed meanwhile:** a 1.14 Core holds its lock for the whole rescan and answers nothing, so the
+  import tells core_catchup itself (`hold`): the chain's reads and broadcasts go to a linked arcade's shared Core, the
+  wallet stays here. The hold is kept in settings (`core_rescan_holds`), so a restart mid-rescan still borrows; it goes
+  once no import runs here and the Core answers a check again. Never started with nobody to borrow from (then queued,
+  "no node to borrow").
+- **Back to back, batched** (the operator: "multiple people can import their wallets during a rescan, and during the next
+  rescan, all of their wallet addresses will be watched"): an import during a rescan is never refused; it joins the
+  next rescan, which starts as soon as this one is done and takes every wallet imported meanwhile in one `importmulti`.
+- **Told how long, every time** (the operator: "the client just needs to be notified with how long it's going to take"):
+  the import sheet says a rescan is running before anything is typed (GET /account/imported/busy), the import's answer
+  and the wallet's line count down from the chain's length at the last measured rate (`core_rescan_rate:<net>`, kept
+  after each rescan); an overrun says "taking longer than expected; still running". The Cores' own progress lines are
+  in logs only their system users can read on .25.
+- **A failing rescan backs off** (10 min, 20 min, then stops until a restart): a Core is never made to rescan its
+  whole chain again at once.
+- At start, every imported wallet on these chains without its whole past read goes on the queue.
+
 ### 2026-10-21 · the operator's side · idea parked for later: trace each inscription to where it is, in parallel
 
 The operator: "Can't we split up the walk work so that the identified TXIDs that are an ORD are each traced to their current

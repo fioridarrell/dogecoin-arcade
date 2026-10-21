@@ -202,6 +202,57 @@ def _backfill_many(index, rpc, params, addresses: set[str], start: int, end: int
 SCAN_SECONDS = 1200.0
 
 
+#: How long a Core may take to rescan its whole chain for a watch-only import (Dogecoin 1.14 on a spinning disk).
+CORE_RESCAN_SECONDS = 24 * 3600
+
+
+def seed_from_core_wallet(index, rpc, params, addresses, upto: int) -> dict[str, int] | None:
+    """The coins an address holds now, from the Core's own WALLET: imported watch-only (never a key) with a rescan of
+    the whole chain, then listed (2026-10-21: an imported wallet's coins from before the index's floor were
+    never found on Dogecoin and Pepecoin, whose 1.14 Cores have no scantxoutset). `importmulti` with timestamp 0
+    rescans from the first block and holds the Core's lock until done -- hours on a big chain -- so the caller borrows
+    the chain's reads meanwhile (core_catchup.hold). Returns how many coins it filed, or None when this Core has no
+    wallet (then the caller reads blocks instead). Filed like seed_from_core's rows, at or below `upto` only.
+    Every address in one call, so one rescan serves every import waiting for it (2026-10-21: "multiple people
+    can import their wallets during a rescan, and during the next rescan, all of their wallet addresses will be
+    watched"). Returns {address: coins filed}."""
+    addresses = sorted(set(addresses))
+    try:
+        rpc.call("getwalletinfo")
+    except RpcError:
+        return None                                  # -disablewallet
+    held = getattr(rpc, "_timeout", None)
+    if held is not None:
+        rpc._timeout = max(held, CORE_RESCAN_SECONDS)
+    try:
+        said = rpc.call("importmulti", [{"scriptPubKey": {"address": a}, "timestamp": 0, "watchonly": True,
+                                         "label": "arcade-import"} for a in addresses], {"rescan": True}) or []
+    finally:
+        if held is not None:
+            rpc._timeout = held
+    refused = [(a, r) for a, r in zip(addresses, said) if not (r or {}).get("success")]
+    if len(said) != len(addresses) or refused:
+        raise RuntimeError(f"the Core would not watch {refused[0][0] if refused else 'every address'}: "
+                           f"{(refused[0][1] or {}).get('error') if refused else 'it answered for fewer'}")
+    tip = int(rpc.call("getblockcount"))
+    filed = {a: 0 for a in addresses}
+    with index.open() as db:
+        for coin in rpc.call("listunspent", 1, 99_999_999, addresses) or []:
+            address = coin.get("address")
+            height = tip - int(coin.get("confirmations") or 0) + 1
+            value = int(round(float(coin.get("amount", 0)) * 100_000_000))
+            if address not in filed or height <= 0 or height > int(upto) or value <= 0:
+                continue
+            parsed = parse_output(str(coin.get("scriptPubKey", "")), 0, params)
+            if parsed.type not in SPENDABLE or parsed.address != address:
+                continue
+            cur = db.conn.execute(
+                "INSERT OR IGNORE INTO utxo (txid, vout, address, value, height) VALUES (?,?,?,?,?)",
+                (str(coin["txid"]), int(coin["vout"]), address, value, height))
+            filed[address] += cur.rowcount
+    return filed
+
+
 def seed_from_core(index, rpc, params, addresses: set[str], upto: int) -> int | None:
     """The coins these addresses hold now, from the Core's own coin set (`scantxoutset`), at any height
     up to `upto` (2026-10-18). An index reads only from its floor up, so coins an address got below it

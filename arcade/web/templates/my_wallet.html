@@ -656,11 +656,20 @@ async function openedKeys() {
   return keys;
 }
 
-function openImport() {
+async function openImport() {
   const c = chainNow();
   if (!c) return;
+  // A rescan running on this coin: said before anything is typed (2026-10-21), and the import still goes
+  // ahead -- it joins the next rescan, back to back with this one.
+  let waitNote = "";
+  try {
+    const r = await fetch("/account/imported/busy?chain=" + encodeURIComponent(c), {cache: "no-store"});
+    const said = r.ok ? await r.json() : null;
+    if (said && said.busy) waitNote = said.says;
+  } catch (err) { /* not known: the import's own answer says where it stands */ }
   const s = sheet();
   const body = s.set("Import a wallet");
+  if (waitNote) { const note = el("div", "wl-wstate wait", waitNote); note.id = "imp-wait"; body.append(note); }
   body.append(el("p", "wl-note", `Any ${coinOf(c)} wallet, even one never used on an arcade. The key stays in this `
     + "browser, sealed with your password; the arcade only learns the address, so it can watch it."));
   const seg = el("div", "wl-segk"); seg.setAttribute("role", "group"); seg.setAttribute("aria-label", "What you have");

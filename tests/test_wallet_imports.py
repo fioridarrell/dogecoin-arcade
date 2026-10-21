@@ -7,6 +7,7 @@ spends only its own addresses; a send from an imported wallet takes only its coi
 one read-back per chain, and an import that would start a second keeps nothing; the sealed record round-trips and
 the main vault blob is never touched.
 """
+import hashlib
 import json
 import pathlib
 import sys
@@ -23,7 +24,7 @@ from test_litecoin_testnet import _with_ltc_test                  # noqa: E402
 from cryptography.hazmat.primitives import hashes, serialization  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric import ec, utils   # noqa: E402
 
-from arcade import script, wallet_imports as W                   # noqa: E402
+from arcade import script, txbuild, wallet_imports as W          # noqa: E402
 from arcade.config import NETWORKS                               # noqa: E402
 from arcade.rpc import RpcError                                  # noqa: E402
 
@@ -225,7 +226,8 @@ def test_a_send_from_an_imported_wallet_takes_only_its_coins_and_gives_change_ba
 
 # --- one read-back per chain ----------------------------------------------------------------------------------------
 
-def test_one_read_back_per_chain_and_a_refused_import_keeps_nothing(client, monkeypatch):
+def test_an_import_during_a_read_back_is_kept_and_read_back_next(client, monkeypatch):
+    """2026-10-21: an import while a read-back runs is not refused -- it waits its turn, back to back."""
     gate = threading.Event()
     app, state, chain, account = _ready(client, monkeypatch, online=True, gate=gate)
     _tip(state, chain, P.messaging_start_height + 40)
@@ -235,25 +237,86 @@ def test_one_read_back_per_chain_and_a_refused_import_keeps_nothing(client, monk
         assert said.status_code == 200, said.text
         assert said.json()["state"] == "rescan"
         assert said.json()["says"].startswith("The arcade is reading back this wallet's coins; check back in ")
-
+        busy = app.get("/account/imported/busy?chain=ltctest").json()
+        assert busy["busy"] and busy["says"].startswith("A rescan is running on this coin right now. You can still "
+                                                         "import: your wallet joins the next rescan")
         second = _proof(account, 0x8002)
-        refused = app.post("/account/imported/address", json=second)
-        assert refused.status_code == 409, refused.text
-        detail = refused.json()["detail"]
-        assert detail.startswith("A rescan is currently happening; come back in ")
-        assert detail.endswith("and try again. Nothing of this import was kept.")
+        queued = app.post("/account/imported/address", json=second)
+        assert queued.status_code == 200, queued.text
+        assert queued.json()["state"] == "rescan" and "check back in" in queued.json()["says"]
         listed = [e["a"] for e in W.entries(state.setting(W.setting_key("ltctest", account)))]
-        assert listed == [first["address"]]
-        from arcade import utxos
-        with state.token_index(chain).open() as db:
-            assert second["address"] not in utxos.watching(db)
+        assert listed == [first["address"], second["address"]]
     finally:
         gate.set()
-    done = _wait_ready(app, first["address"])
-    assert done["state"] == "ready"
-    assert state.setting(f"backfilled:ltctest:{first['address']}") == 0
-    # The chain is free again: the second one goes through now.
-    assert app.post("/account/imported/address", json=_proof(account, 0x8002)).status_code == 200
+    assert _wait_ready(app, first["address"])["state"] == "ready"
+    assert _wait_ready(app, second["address"])["state"] == "ready"
+    assert state.setting(f"backfilled:ltctest:{second['address']}") == 0
+    assert app.get("/account/imported/busy?chain=ltctest").json()["busy"] is False
+
+
+class _WalletCore:
+    """A 1.14 Core with a wallet: importmulti holds until `gate` is set (the rescan), then lists one coin each."""
+
+    def __init__(self, gate, tip=500):
+        self.gate, self.tip, self.batches = gate, tip, []
+        self._timeout = 120.0
+
+    def close(self):
+        pass
+
+    def call(self, method, *args):
+        if method == "getwalletinfo":
+            return {"walletversion": 130000}
+        if method == "importmulti":
+            self.batches.append(sorted(r["scriptPubKey"]["address"] for r in args[0]))
+            assert args[1] == {"rescan": True} and all(r["watchonly"] and r["timestamp"] == 0 for r in args[0])
+            self.gate.wait(20)
+            return [{"success": True} for _ in args[0]]
+        if method == "getblockcount":
+            return self.tip
+        if method == "listunspent":
+            return [{"txid": hashlib.sha256(a.encode()).hexdigest(), "vout": 0, "address": a, "confirmations": 200,
+                     "amount": 1.5, "scriptPubKey": txbuild.p2pkh_script(a).hex()}
+                    for i, a in enumerate(args[2])]
+        raise AssertionError(method)
+
+
+def test_on_a_core_rescan_chain_every_import_waiting_joins_one_rescan_back_to_back(client, monkeypatch):
+    """Dogecoin and Pepecoin 1.14 have no scantxoutset: an import is watched in the Core's wallet with a rescan of the
+    whole chain, reads borrowed meanwhile; every wallet imported during a rescan joins the next one, together."""
+    from arcade import core_catchup
+    from arcade.web.state import ChainContext
+    gate = threading.Event()
+    app, state, chain, account = _ready(client, monkeypatch, online=True)
+    state.set_setting("import_core_rescan:ltctest", True)
+    core = _WalletCore(gate)
+    monkeypatch.setattr(ChainContext, "local_rpc", lambda self: core)
+    monkeypatch.setattr(core_catchup, "can_borrow", lambda chain: True)
+    _tip(state, chain, 400)
+    try:
+        a = _proof(account, 0xA001)
+        assert app.post("/account/imported/address", json=a).json()["state"] == "rescan"
+        until = time.time() + 5
+        while not core.batches and time.time() < until:
+            time.sleep(0.05)
+        assert core.batches == [[a["address"]]], "the first rescan, for the first import"
+        assert core_catchup.held("ltctest") == "rescanning for wallet imports", "reads borrowed while it rescans"
+        said = app.post("/account/imported/rescan", json={"chain": "ltctest", "address": a["address"]}).json()
+        assert said["state"] == "rescan" and said["says"].startswith(
+            "This arcade's node is rescanning the whole chain for this wallet's coins")
+        b, c = _proof(account, 0xA002), _proof(account, 0xA003)
+        for one in (b, c):
+            got = app.post("/account/imported/address", json=one)
+            assert got.status_code == 200 and got.json()["state"] == "rescan", got.text
+    finally:
+        gate.set()
+    for one in (a, b, c):
+        _wait_ready(app, one["address"])
+    assert core.batches == [[a["address"]], sorted([b["address"], c["address"]])], "the next rescan takes both"
+    for one in (a, b, c):
+        assert state.setting(f"core_rescanned:ltctest:{one['address']}")
+        assert state.setting(f"backfilled:ltctest:{one['address']}") == 1, "its coin, filed"
+    assert state.setting("core_rescan_rate:ltctest") is None, "a test rescan is too quick to measure"
 
 
 def test_with_no_node_to_read_the_chain_the_read_back_waits_its_turn(client, monkeypatch):
@@ -389,3 +452,30 @@ def test_the_listed_entries_are_read_defensively():
     assert W.entries(None) == [] and W.entries("not json") == [] and W.entries([{"a": 1}]) == []
     assert W.entries([{"a": "x", "k": "p2pkh"}]) == [{"a": "x", "k": "p2pkh", "p": "", "t": 0}]
     assert W.entries([{"a": "x", "k": "taproot"}]) == []
+
+
+def test_a_failing_core_rescan_backs_off_instead_of_rescanning_again_at_once(client, monkeypatch):
+    """A Core that keeps failing the import must not be made to rescan its whole chain back to back: ten minutes,
+    then longer, and after three failures it stops and says so."""
+    from arcade import core_catchup
+    from arcade.web.state import ChainContext
+    app, state, chain, account = _ready(client, monkeypatch, online=True)
+    state.set_setting("import_core_rescan:ltctest", True)
+
+    class _Failing(_WalletCore):
+        def call(self, method, *args):
+            if method == "importmulti":
+                self.batches.append(1)
+                raise RpcError(-4, "disk full")
+            return super().call(method, *args)
+
+    core = _Failing(threading.Event())
+    monkeypatch.setattr(ChainContext, "local_rpc", lambda self: core)
+    monkeypatch.setattr(core_catchup, "can_borrow", lambda chain: True)
+    _tip(state, chain, 400)
+    a = _proof(account, 0xB001)
+    app.post("/account/imported/address", json=a)
+    time.sleep(1.5)
+    assert core.batches == [1], "tried once, then waits: never straight into another whole-chain rescan"
+    said = app.post("/account/imported/rescan", json={"chain": "ltctest", "address": a["address"]}).json()
+    assert said["state"] == "rescan" and "tries again" in said["says"], said

@@ -97,6 +97,68 @@ class Catchup:
 _STATES: dict[str, Catchup] = {}
 _STATES_LOCK = threading.Lock()
 
+#: Chains whose Core is rescanning for a wallet import (2026-10-21): network -> why. A 1.14 Core holds its
+#: lock for the whole rescan and answers nothing, not even "how far are you?", so a check would only see a Core that
+#: does not answer and would not switch: the import says so here instead. Kept by `store` (the arcade's settings),
+#: so a restart mid-rescan still borrows. Let go of only when no import is running here (`_running`) and the Core
+#: answers a check again.
+HOLDS: dict[str, str] = {}
+_running: set[str] = set()
+#: (load() -> dict, save(dict)), set by the app; None in tests that do not keep them.
+store: tuple[Callable[[], dict], Callable[[dict], None]] | None = None
+_loaded = False
+
+
+def _load() -> None:
+    global _loaded
+    if not _loaded and store is not None:
+        try:
+            HOLDS.update(store[0]() or {})
+        except Exception:                                      # noqa: BLE001 -- kept from now on
+            pass
+        _loaded = True
+
+
+def _save() -> None:
+    if store is not None:
+        try:
+            store[1](dict(HOLDS))
+        except Exception:                                      # noqa: BLE001
+            log.warning("could not keep the rescan holds", exc_info=True)
+
+
+def hold(chain, why: str) -> bool:
+    """`chain`'s Core is about to rescan: borrow its reads from now on (True when a linked arcade shares it)."""
+    _load()
+    HOLDS[chain.network] = why
+    _running.add(chain.network)
+    _save()
+    peers, tip = _sharers(_share(), chain.network)
+    st = _state(chain.network)
+    with st.lock:
+        st.reading, st.checked, st.caught_up = Reading(True, why), time.monotonic(), 0
+        st.sharers, st.tip, st.sharer = len(peers), tip, (peers[0] if peers else "")
+        if peers and not st.borrowing:
+            st.borrowing = True
+            log.warning("%s: this Core is %s; reading the chain from arcade %s until it is done",
+                        chain.params.label, why, peers[0][:12])
+    return bool(peers)
+
+
+def finished(network: str) -> None:
+    """The import's own call into the Core came back. The hold goes at the next check that the Core answers."""
+    _running.discard(network)
+
+
+def held(network: str) -> str | None:
+    _load()
+    return HOLDS.get(network)
+
+
+def can_borrow(chain) -> bool:
+    """Whether a linked arcade shares `chain` right now."""
+    return bool(_sharers(_share(), chain.network)[0])
+
 
 def _state(network: str) -> Catchup:
     with _STATES_LOCK:
@@ -167,18 +229,30 @@ def check(chain, share=None, client: Callable[[Any], Any] | None = None) -> Catc
     """One check of `chain`'s own Core, and the switch it implies. Synchronous."""
     share = share if share is not None else _share()
     st = _state(chain.network)
-    try:
-        rpc = (client or _local_client)(chain)
-    except Exception as exc:                                   # noqa: BLE001 -- no credentials: not asked
-        reading = Reading(None, str(exc))
+    _load()
+    why = HOLDS.get(chain.network)
+    if why is not None and chain.network in _running:
+        reading = Reading(True, why)                         # rescanning here, now: the Core is not even asked
     else:
         try:
-            reading = read_core(rpc)
-        finally:
+            rpc = (client or _local_client)(chain)
+        except Exception as exc:                               # noqa: BLE001 -- no credentials: not asked
+            reading = Reading(None, str(exc))
+        else:
             try:
-                rpc.close()
-            except Exception:                                  # noqa: BLE001
-                pass
+                reading = read_core(rpc)
+            finally:
+                try:
+                    rpc.close()
+                except Exception:                              # noqa: BLE001
+                    pass
+        if why is not None:
+            if reading.behind is None:
+                reading = Reading(True, why)                 # still busy (a rescan from before a restart)
+            else:
+                HOLDS.pop(chain.network, None)               # it answers again: the rescan is over
+                _save()
+                log.warning("%s: the Core's rescan is over", chain.params.label)
     peers, tip = _sharers(share, chain.network)
     if (reading.behind and reading.blocks is not None and tip is not None and reading.why != "rescanning its wallet"
             and (reading.headers or 0) - reading.blocks <= HEADERS_AHEAD and reading.blocks >= tip - AT_TIP):
@@ -252,6 +326,9 @@ def borrowing(chain) -> bool:
         peers, _ = _sharers(share, chain.network)
         if not peers:
             return False
+    if held(chain.network) and not (st and st.checked):
+        check_soon = _refresh(chain, share, wait=FIRST_WAIT)     # a hold from before a restart: decided at once
+        return check_soon.borrowing
     st = _refresh(chain, share, wait=FIRST_WAIT)
     return st.borrowing
 

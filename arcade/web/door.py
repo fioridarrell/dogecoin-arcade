@@ -71,6 +71,7 @@ PUBLIC_PAGES = frozenset({
     "/account/doginals",      # this account's own Doginals on Dogecoin, to list (needs a session)
     "/account/segwit/balance",  # the account's registered segwit address (native or P2SH), test chains (needs a session)
     "/account/imported",      # the account's own sealed record of imported wallets, and their addresses (needs a session)
+    "/account/imported/busy", # whether an import on a chain must wait for a rescan (needs a session)
     "/account/doge-stray",    # coins at the account's testnet key's Dogecoin address, to move home (2026-10-17)
     "/doginals/listings",     # Doginals listed for DOGE (the Exchange's Doginals tab)
     "/launch",
