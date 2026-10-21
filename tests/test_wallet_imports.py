@@ -572,3 +572,26 @@ def test_a_core_still_rescanning_is_said_so_with_its_countdown(client, monkeypat
     state.set_setting("core_rescan_sent:ltctest", {"at": time.time() - 10, "addresses": ["someone else"]})
     said = app.post("/account/imported/rescan", json={"chain": "ltctest", "address": asked["address"]}).json()
     assert "one more rescan reads this wallet's coins" in said["says"]
+
+
+def test_a_core_that_does_not_answer_at_all_is_remembered_as_rescanning(client, monkeypatch):
+    """The connection check itself fails on a Core at a rescan (its queue full): the batch is remembered as sent then,
+    so the page says the node is rescanning, and the rescan is not sent twice."""
+    from arcade import core_catchup
+    from arcade.web.state import ChainContext
+    app, state, chain, account = _ready(client, monkeypatch, online=True)
+    state.set_setting("import_core_rescan:ltctest", True)
+
+    def busy(self):
+        raise RuntimeError("non-JSON response from dogecoind (HTTP 500): 'Work queue depth exceeded'")
+    monkeypatch.setattr(ChainContext, "local_rpc", busy)
+    monkeypatch.setattr(core_catchup, "can_borrow", lambda chain: True)
+    _tip(state, chain, 400)
+    asked = _proof(account, 0xA101)
+    app.post("/account/imported/address", json=asked)
+    until = time.time() + 10
+    while not state.setting("core_rescan_sent:ltctest") and time.time() < until:
+        time.sleep(0.05)
+    assert state.setting("core_rescan_sent:ltctest")["addresses"] == [asked["address"]]
+    said = app.post("/account/imported/rescan", json={"chain": "ltctest", "address": asked["address"]}).json()
+    assert said["says"].startswith("This arcade's node is rescanning the whole chain"), said

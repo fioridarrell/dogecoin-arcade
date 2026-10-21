@@ -23655,11 +23655,16 @@ def create_app(state: AppState) -> FastAPI:
             try:
                 catchuplib.hold(chain, "rescanning for wallet imports")
                 try:
+                    sent_key = f"core_rescan_sent:{chain.network}"
                     try:
                         rpc = chain.local_rpc()
                     except Exception as exc:               # noqa: BLE001 -- not answering: still at a rescan
+                        # Remembered as sent now, as seed_from_core_wallet does for a busy Core: no second rescan
+                        # once it answers, and the page's countdown starts from here.
+                        sent = state.setting(sent_key, None)
+                        if not (isinstance(sent, dict) and set(batch) <= set(sent.get("addresses") or ())):
+                            state.set_setting(sent_key, {"at": time.time(), "addresses": sorted(batch)})
                         raise utxoslib.CoreBusy(str(exc)) from None
-                    sent_key = f"core_rescan_sent:{chain.network}"
                     try:
                         filed = utxoslib.seed_from_core_wallet(
                             index, rpc, chain.params, batch, tip, sent=state.setting(sent_key, None),
