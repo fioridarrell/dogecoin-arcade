@@ -288,6 +288,7 @@ meaning matches.
 | `/r/send` | **asks** the wallet to send coins, tokens or an inscription; the person approves. Give it a `ref` and a retry is never a second send |
 | `/r/tx/<txid>` | whether a transaction is confirmed, and how deep |
 | `/r/storage.js` | `arcade.storage`: what the wallet remembers for the page, since a sandbox has no `localStorage` |
+| `/r/contacts.js` | `arcade.contacts`: the signed-in player's address book. `list()` (asked once per game), and `add({address, name})` / `remove(address)`, each only after the player taps yes on a card |
 | `/r/node.js` | `arcade.node`: node-to-node messages sent as the wallet the page runs in, and the replies to them |
 | `/r/swap.js` | `arcade.swap`: a shop page's listings, and a buy button that ends in one transaction both sides signed |
 | `/r/owner.js` | `arcade.owner`: a page sending, unasked, from the wallet that created it and holds it |

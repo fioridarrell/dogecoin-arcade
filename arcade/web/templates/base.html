@@ -1174,7 +1174,8 @@ function arcadeAutoSigns(page, shown, most){
   arcadeAutoSpent.set(page, spent + leaving);
   return true;
 }
-function arcadeAsk(title, detail, yes = "Yes"){
+// `nope` names the other button (2026-10-21: a page adding a contact asks "Add" / "No"); "Cancel" when left out.
+function arcadeAsk(title, detail, yes = "Yes", nope = "Cancel"){
   return new Promise(function(answer){
     var back = document.createElement('div');
     back.className = 'askcard-back';
@@ -1191,7 +1192,7 @@ function arcadeAsk(title, detail, yes = "Yes"){
     var ok = document.createElement('button');
     ok.type = 'button'; ok.textContent = yes;
     var no = document.createElement('button');
-    no.type = 'button'; no.className = 'ghost'; no.textContent = 'Cancel';
+    no.type = 'button'; no.className = 'ghost'; no.textContent = nope;
     row.append(ok, no);
     card.append(h, p, row);
     back.append(card);

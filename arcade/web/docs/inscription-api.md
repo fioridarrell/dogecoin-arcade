@@ -508,6 +508,59 @@ same refusals word for word. It does not sync to the account's other devices
 and a cleared browser forgets it; what a page must *prove* belongs on the
 chain, which is where storage was never going to help it.
 
+### The reader's contacts
+
+The address book of the account signed in and looking at your page. It lives
+in that person's browser and nowhere else, so your page asks the viewer
+around it, and every answer is theirs to give:
+
+```html
+<script src="/r/contacts.js"></script>
+<script>
+arcade.contacts.list().then(function (people) {      // [{address, tag}]
+  people.forEach(function (p) { console.log('@' + p.tag, p.address); });
+});
+
+arcade.contacts.add({address: '@alice', name: 'Alice'})
+  .then(function (r) { /* {ok: true, status: "added" | "already"} */ },
+        function (e) { /* e.message: "declined", "sign in first ...", ... */ });
+
+arcade.contacts.remove('@alice')
+  .then(function (r) { /* {ok: true, status: "removed" | "absent"} */ });
+</script>
+```
+
+* **`list()`** asks the person once per game whether it may see their
+  contacts, and the browser remembers the answer. Until they say yes, and for
+  a guest or a page opened on its own, it resolves `[]`. Only names and
+  addresses come back, nothing else of the book.
+* **`add({address, name})`** puts one person in the book. `address` is an
+  address or an `@tag`; only names claimed on the chain go in an address book,
+  so an address nobody holds a name for is refused. `name` is optional,
+  trimmed and cut to 60 characters, and is kept as the player's private note
+  on them, the same note the Address book lets them write by hand.
+* **`remove(address)`** takes one person out, by address or `@tag`. Only the
+  contact goes: messages, saves and everything else stay as they are.
+* **The player says yes to every change.** The viewer shows a card naming your
+  game and the change ("Add @alice (nAlice1…) to your address book as
+  “Alice”?" / "Remove @alice from your address book?") with Add or Remove, and
+  No. Nothing is written without that tap. What a game adds is an ordinary
+  contact on the Address book page.
+* **Nothing to change, nothing asked.** Adding somebody already in the book
+  resolves `{ok: true, status: "already"}`, and removing somebody who is not
+  there resolves `"absent"`, with no card either way. So calling `add` every
+  time two players meet is fine.
+* **One card at a time.** While a contacts card from your page is open, another
+  `add` or `remove` is refused at once with `busy` rather than queued. Ask
+  again once the first is answered.
+* **Rejections** are an `Error` whose message starts with the reason:
+  `declined` (the player said No), `sign in first` (a guest, or the node's own
+  wallet view), `not an address`, `busy`, `no viewer` (the page was opened on
+  its own), or what the chain said about the name (`nobody holds @x on this
+  chain`, `they have not published a messaging key ...`).
+* **Adding and removing never read the book**, and a yes to an add is not a
+  yes to `list()`: that keeps its own question.
+
 ### Talking to another node
 
 Your page cannot fetch anything off the machine it runs on (§2). What it can

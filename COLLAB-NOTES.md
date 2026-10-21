@@ -88,6 +88,29 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-21 · the operator's side · `arcade.contacts.add` / `remove`: a game adds a friend, with the player's yes
+
+ASHVALE asked (game-agnostic; the operator wants players "able to add in game friends"). Branch claude/contacts-add.
+- **SDK** (`/r/contacts.js`, beside `list()`): `arcade.contacts.add({address, name})` and
+  `arcade.contacts.remove(address)`. Both resolve `{ok: true, status}`: `added` / `already`, `removed` / `absent`;
+  or reject with an Error starting with the reason: `declined`, `sign in first`, `not an address`, `busy`,
+  `no viewer`, or what `/account/who` said (`nobody holds @x ...`, no messaging key).
+- **Same book, same writes** as the Address book: the viewer (`_page_doors.js.html`, contactsChange) resolves an
+  address or @tag with messaging.js `lookUp`, then `addToBook(tag)`; `name` (trimmed, 60 characters, the Address
+  book's note limit) goes in with `updateBookEntry(tag, {note})`; remove is `removeFromBook(tag)` (with its
+  tombstone, so a synced copy does not bring them back). Browser IndexedDB, nothing on the node. Only claimed names
+  go in, as on the Address book page.
+- **Consent:** every change is one tap on an `arcadeAsk` card naming the game ("Add @alice (nAlice1…) to your address
+  book as “Alice”?" / "Remove @alice from your address book?", Add or Remove / No). `arcadeAsk` takes an optional
+  4th argument for its No button (default still "Cancel"). Already in / not in the book: answered with no card.
+  A yes to an add does not grant `list()`; add/remove never return anything of the book.
+- **One card per page:** a second add/remove while a contacts card (the list permission question included) is open
+  is refused `busy`, not queued.
+- A guest, or the node's own wallet view, is refused `sign in first`; a page opened on its own rejects `no viewer`
+  at once (5 minutes if a parent never answers).
+- Docs: inscription-api.md "The reader's contacts" (list() was not documented before either), guide.md table.
+  Tests: tests/test_contacts_add_browser.py (Firefox, no chain), tests/test_contacts_bridge.py.
+- SadFrog: nothing to do beyond taking it.
 ### 2026-10-21 · the operator's side · ord index layout 3: whole copies, slimmer (PEP Main 2.10 -> 1.38 GB)
 
 The operator chose "whole copies, slimmer" over splitting the index around the ring: the split would save only ~15% a
