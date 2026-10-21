@@ -217,6 +217,12 @@ def test_the_ords_tab_lists_each_chain_with_its_official_start_and_saves_its_mod
     assert all(isinstance(r["disk"], int) and r["disk"] >= 0 for r in rows.values()), "each index's size on disk"
     assert all(isinstance(r["copies"], list) and isinstance(r["others"], list) for r in rows.values()), "the ring"
     assert all(r["icon"].startswith("/coin-") for r in rows.values()), "each chain's coin"
+    # 2026-10-21: before the tip is known (just started) no percentage, never "61,750,500% indexed"
+    for r in rows.values():
+        assert r["walked_pct"] is None or 0 <= r["walked_pct"] <= 100
+        assert all(c["frac"] is None or 0 <= c["frac"] <= 1 for c in r["copies"])
+        if not r["tip_known"]:
+            assert r["walked_pct"] is None and all(c["frac"] is None for c in r["copies"])
     said = app.get("/admin/api/ords", headers=LOCAL).json()
     assert "free" in said and "me" in said, "free disk, and this arcade's own @name for the ring"
     assert app.get("/admin/api/ords", headers=EDGE).status_code != 200, "never shown to a stranger"

@@ -24654,16 +24654,20 @@ def create_app(state: AppState) -> FastAPI:
                     tip = int(state.chain_sync(chain).get("blocks") or 0)
                 except Exception:                              # noqa: BLE001 -- not answering: no percentage
                     tip = 0
+            # The tip not known yet (an arcade just started, its Core still answering slowly): no percentages rather
+            # than nonsense (2026-10-21: a test machine read "61,750,500% indexed" for a minute after a restart).
+            known = tip > st["base"]
             span = max(1, tip - SETTLE - st["base"] + 1)
             walk = st.get("walk") or {}
             ready = st.get("ready") or 0
             # The ring (Admin -> Ords, 2026-10-20): every whole copy of this chain's index -- for now each
             # holding arcade keeps all of it -- with how far it reaches, by its operator's @name; and who helps.
-            frac = lambda h: round(min(1.0, max(0.0, (int(h or 0) - st["base"]) / span)), 4)   # noqa: E731
+            frac = lambda h: (round(min(1.0, max(0.0, (int(h or 0) - st["base"]) / span)), 4)   # noqa: E731
+                              if known else None)
             copies = sorted(({"node": h["node"], "me": h["node"] == "this arcade",
                               "tag": me_tag if h["node"] == "this arcade" else names.get(h["node"], ""),
                               "frac": frac(h["walked_to"]), "walked_to": h["walked_to"]}
-                             for h in st.get("holders") or []), key=lambda c: -c["frac"])
+                             for h in st.get("holders") or []), key=lambda c: -(c["frac"] or 0))
             others = [{"node": n, "tag": names.get(n, ""), "mode": p.get("mode")}
                       for n, p in (st.get("peers") or {}).items() if p.get("mode") in ("help", "read")
                       and not any(c["node"] == n for c in copies)]
@@ -24671,7 +24675,9 @@ def create_app(state: AppState) -> FastAPI:
                 **st, "net": net, "title": getattr(chain, "title", "") or chain.label, "label": chain.label,
                 "source": SOURCES.get(net, ""), "tip": tip, "borrowed": bool(getattr(chain, "borrowed", False)),
                 "icon": _coin_icon(net), "copies": copies, "others": others,
-                "walked_pct": round(100 * max(0, (walk.get("next") or st["base"]) - st["base"]) / span, 2) if walk else None,
+                "walked_pct": (round(min(100.0, 100 * max(0, (walk.get("next") or st["base"]) - st["base"]) / span), 2)
+                               if walk and known else None),
+                "tip_known": known,
                 "agreed_pct": round(100 * (st.get("agreed") or 0) / ready, 2) if ready else 0.0,
                 # What the index takes on disk, its write-ahead log included (2026-10-20).
                 "disk": _index_bytes(index),

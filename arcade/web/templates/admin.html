@@ -1085,9 +1085,9 @@ section.panel h2{margin-top:0}
       var t = p(-.014, rad);
       svg += '<text x="' + t[0] + '" y="' + (t[1] + 4) + '" text-anchor="end" style="font:700 11px system-ui;fill:var(--muted)">' + L + '</text>';
       if (!c) return;
-      var f = Math.max(c.frac, .004), id = 'ordarc-' + r.net + '-' + k;
+      var f = Math.max(c.frac || 0, .004), id = 'ordarc-' + r.net + '-' + k;
       svg += '<path id="' + id + '" d="' + arc(0, f, rad) + '" fill="none" stroke="' + ORD_COLORS[k] + '" stroke-width="22"/>';
-      var label = ordName(c) + ' ' + Math.round(c.frac * 100) + '%';
+      var label = ordName(c) + (c.frac == null ? '' : ' ' + Math.round(c.frac * 100) + '%');
       if (f * 2 * Math.PI * rad > label.length * 6.2 + 12) {
         svg += '<text dy="4" style="font:600 10.5px system-ui;fill:#fff"><textPath href="#' + id + '" startOffset="50%" '
           + 'text-anchor="middle">' + ordEsc(label) + '</textPath></text>';
@@ -1097,7 +1097,7 @@ section.panel h2{margin-top:0}
       }
     });
     // copies: 2+ green, 1 amber, none red, past the furthest copy grey (not indexed yet)
-    var cuts = [0, 1].concat(copies.map(function (c) { return c.frac; })).sort(function (a, b) { return a - b; });
+    var cuts = [0, 1].concat(copies.map(function (c) { return c.frac || 0; })).sort(function (a, b) { return a - b; });
     var two = 0, top = copies.length ? copies[0].frac : 0;
     for (var i = 0; i + 1 < cuts.length; i++) {
       var s0 = cuts[i], e0 = cuts[i + 1], m = (s0 + e0) / 2;
@@ -1118,6 +1118,8 @@ section.panel h2{margin-top:0}
   function ordAttention(r) {
     var out = [], copies = r.copies || [];
     if (r.upgrading) out.push(['', r.upgrading + '. Lookups wait until it is done; nothing is walked again.']);
+    if (r.tip_known === false) out.push(['', 'Waiting for this chain\u2019s tip from its Core (it has just started, or is busy): '
+      + 'the percentages show once it answers.']);
     if ((r.disputed || []).length) out.push(['bad', r.disputed.length + ' chunk(s) this index stitched from another '
       + 'arcade’s notes are now outvoted (first: chunk ' + num(r.disputed[0]) + '). The index past it may be wrong; '
       + 'nothing was changed. Ask Claude before rebuilding.']);
@@ -1194,7 +1196,7 @@ section.panel h2{margin-top:0}
     // how complete
     var three = 0;
     Object.keys(r.levels || {}).forEach(function (k) { if (Number(k) >= 3) three += r.levels[k].chunks; });
-    var best = copies.length ? copies[0].frac * 100 : 0;
+    var best = copies.length ? (copies[0].frac || 0) * 100 : 0;
     var boxes = [
       [r.mode === 'walk' ? 'Indexed here' : 'Indexed (best copy)', r.mode === 'walk' && r.walked_pct != null ? r.walked_pct : best,
        '#3c8dbc', r.mode === 'walk' && mine ? 'block ' + num(mine.walked_to) + ' of ' + num(r.tip) : (copies.length ? 'by ' + ordName(copies[0]) : 'nobody holds it yet')],
@@ -1224,7 +1226,8 @@ section.panel h2{margin-top:0}
       return '<div style="display:flex;gap:8px;align-items:baseline;margin:4px 0"><span style="width:12px;height:12px;border-radius:3px;'
         + 'flex:none;background:' + (k < 3 ? ORD_COLORS[k] : 'var(--line)') + '"></span><span><b>' + ordEsc(ordName(c)) + '</b>'
         + (c.me ? ' (this arcade)' : ' <span class="muted">arcade ' + ordEsc(c.node) + '</span>') + ': ring '
-        + (k < 3 ? 'ABC'[k] : '–') + ', ' + Math.round(c.frac * 100) + '% (block ' + num(c.walked_to) + ')</span></div>';
+        + (k < 3 ? 'ABC'[k] : '–') + ', ' + (c.frac == null ? 'waiting for the tip' : Math.round(c.frac * 100) + '%')
+        + ' (block ' + num(c.walked_to) + ')</span></div>';
     }).join('');
     var others = (r.others || []).map(function (o) { return '<b>' + ordEsc(ordName(o)) + '</b> (' + (o.mode === 'help' ? 'helps scan' : 'read only') + ')'; });
     ring.appendChild(ordEl('div', '', legend + (others.length ? '<div class="muted" style="margin-top:6px">Also linked, holding '
