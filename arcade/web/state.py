@@ -126,6 +126,9 @@ class SendQueue:
 #: from the chains' own Params (`addon`), so a chain added there is an add-on everywhere.
 ADDON_NETWORKS = tuple(name for name, p in NETWORKS.items() if p.addon)
 
+#: Made once, so every request shares one SendRefs and its per-ref locks.
+_SEND_REFS_MADE = threading.Lock()
+
 
 @dataclass
 class ChainContext:
@@ -1539,6 +1542,16 @@ class AppState:
             from ..approvals import Requests
             self._approvals = Requests(self.home / "approvals.sqlite")
         return self._approvals
+
+    @property
+    def send_refs(self):
+        """The refs pages gave their /r/send asks, so a retry is not a second send (send_refs.py)."""
+        if getattr(self, "_send_refs", None) is None:
+            from ..send_refs import SendRefs
+            with _SEND_REFS_MADE:                    # one store, so one set of per-ref locks
+                if getattr(self, "_send_refs", None) is None:
+                    self._send_refs = SendRefs(self.home / "send-refs.sqlite")
+        return self._send_refs
 
     @property
     def pagestore(self):

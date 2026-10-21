@@ -285,7 +285,7 @@ meaning matches.
 | `/r/balances/<address>` | token balances at any address |
 | `/r/tag/<name>`, `/r/address/<address>` | who holds a @tag, and the other way |
 | `/r/wallet` | which wallet is looking — can be switched off |
-| `/r/send` | **asks** the wallet to send coins, tokens or an inscription; the person approves |
+| `/r/send` | **asks** the wallet to send coins, tokens or an inscription; the person approves. Give it a `ref` and a retry is never a second send |
 | `/r/tx/<txid>` | whether a transaction is confirmed, and how deep |
 | `/r/storage.js` | `arcade.storage`: what the wallet remembers for the page, since a sandbox has no `localStorage` |
 | `/r/node.js` | `arcade.node`: node-to-node messages sent as the wallet the page runs in, and the replies to them |

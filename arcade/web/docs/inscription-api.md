@@ -327,6 +327,7 @@ preflight is answered):
 | `from` | optional: which of the wallet's addresses pays. Left out, the wallet chooses |
 | `label` | optional: what your page calls itself, shown in quotes to the person |
 | `note` | optional: why, in a sentence, shown in quotes to the person |
+| `ref` | optional: your page's own name for this send, a string of 1 to 64 characters (anything else is a `400`). Asked again with the same `ref`, by the same wallet on the same chain, within 7 days, nothing new is filed or sent: see *Asking again safely* below |
 | `silent` | optional: `true` and the person is never shown a card. What a test chain lets a game do unasked -- a token its creator issued, or a piece its creator inscribed, sent back to that creator, from the page open as itself -- goes through; anything else fails at once with `this needs the player's say-so`. The same flag works on `claim` and `inscribe` messages |
 
 ```js
@@ -346,6 +347,25 @@ waiting. Then poll:
 const answer = await (await fetch('/r/send/' + asked.id)).json();
 // status: 'pending' | 'sent' (with txid) | 'denied' | 'failed' (with error) | 'expired'
 ```
+
+**Asking again safely (`ref`).** A browser can lose the reply to a POST that
+reached the node ("Load failed" in Safari), and a page that simply asks again
+files a second request, which can mean paying twice. Give each send a `ref` of
+your own (an order number, `deposit-<save id>-<n>`) and send the same `ref`
+when you retry. A repeat is answered `200` with `"repeat": true` and the
+**first** request as it stands now: the same `id` (so your polling of
+`/r/send/<id>` carries on), and its current `status`, with the `txid` once it
+is sent. The body of a repeat is not read again: a `ref` names one send, so
+use a new `ref` for a new one. A `ref` belongs to the wallet that would send
+(the signed-in reader on a public arcade, the node's own wallet otherwise) and
+to the chain, so two players using the same `ref` get a request each. Only a
+request that was filed is remembered: a `400` is not, so a corrected retry with
+the same `ref` is judged afresh, while one that was filed and then failed
+(`this needs the player's say-so`, a broadcast error) answers that failure
+again. Two POSTs with the same `ref` at the same moment: the second waits for
+the first and gets its answer. Refs are kept 7 days and across restarts, and
+`/r/send/<id>` of a request filed with a `ref` still answers after the arcade
+restarts.
 
 A request nobody answers within an hour expires. What is approved is priced
 against the wallet as it is when the person looks, not when you asked; a

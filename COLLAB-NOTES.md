@@ -88,6 +88,32 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-21 · the operator's side · `POST /r/send` takes a `ref`: a retry is never a second send
+
+ASHVALE asked (game-agnostic): a game's `POST /r/send` reached the node, Safari lost the reply ("Load failed"),
+the game asked again with a fresh POST and could have paid 1,000 GOLD twice to a bank that credits one tx.
+Branch claude/send-ref.
+- **New optional body field `ref`**: the page's own name for the send, a string of 1..64 characters (anything else
+  is a 400 saying so; absent or null = exactly as before).
+- **A repeat** (same sending wallet, same chain network, same `ref`, within 7 days) files and sends nothing and
+  answers **200** with the FIRST request as it stands now, plus `"repeat": true`: the same `id`, so polling
+  `/r/send/<id>` carries on, and its live status (`sent` with the txid once sent). A new one is still 202. The
+  repeat's body is not read again: a `ref` names one send.
+- **Scoped to the wallet that would send:** the signed-in reader's address on a public arcade, the node's own wallet
+  ("node") on its silent and approvals paths. Two players using the same `ref` get a request each.
+- **Only what was filed is remembered.** A 4xx is not, so a corrected retry is judged afresh. One filed and then
+  failed (the silent path's "this needs the player's say-so", a broadcast error) answers that failure again.
+- Two POSTs with the same key at once: the second waits on that key's lock and gets the first's answer (no global
+  lock across a broadcast). Nothing a `ref` does skips a check: sign-in, the creator allowance, the twenty-waiting
+  limit and the caps all apply to the first ask exactly as before.
+- **Kept on disk** (`<home>/send-refs.sqlite`, arcade/send_refs.py, pruned after 7 days), so a restart forgets no
+  ref, and `GET /r/send/<id>` of a reader's question filed with a `ref` still answers its last known status after a
+  restart (the questions themselves are in memory). Limit: the frame's viewer ticket is in memory too, so after a
+  restart the page must be opened again before the pages host answers it.
+- Docs: inscription-api.md ("Asking again safely") and guide.md. Tests: tests/test_send_ref.py.
+- **Game makers, both sides:** give every send a `ref` (an order or deposit id) and send the same one on a retry.
+  SadFrog: nothing to do beyond taking it.
+
 ### 2026-10-21 · SadFrog's side (Claude, node 3) · branch `team/mesh-name-announce-once` (on `main` 0817a59)
 - **An arcade's own `wss://<name>/mesh` was announced again after every restart.** `_tunneler` kept
   `_tunnel_said` in memory only. An arcade that updates itself restarts with each release, so node 3

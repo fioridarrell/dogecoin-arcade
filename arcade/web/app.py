@@ -54,6 +54,7 @@ from .. import bids as bidslib
 from .. import standing as standinglib
 from .. import collections as collectionlib
 from .. import approvals as approvalslib
+from .. import send_refs as sendrefs
 from .. import payload as P
 from .. import referee as refereelib
 from .. import escrow as escrowlib
@@ -7765,12 +7766,39 @@ def create_app(state: AppState) -> FastAPI:
         """
         if not isinstance(body, dict):
             return contentlib._json({"error": "send a JSON object"}, status=400)
+        try:
+            ref = sendrefs.check_ref(body.get("ref"))
+        except ValueError as exc:
+            return contentlib._json({"error": str(exc)}, status=400)
         chain, _ = _token_chain()
         if state.public or doorlib.from_outside(request.headers, request.headers.get("host", ""),
                                                 state.public_hosts):
-            return _ask_the_reader(request, chain, body)
-        if body.get("silent") is True:
-            return _node_silent_send(request, chain, body)
+            # The reader's own wallet is the scope; nobody signed in has none, and is
+            # told so by _ask_the_reader as before.
+            scope, source = _viewer_of(request, chain), "reader"
+            ask = lambda: _ask_the_reader(request, chain, body)   # noqa: E731
+        else:
+            scope, source = sendrefs.NODE, "node"
+            ask = ((lambda: _node_silent_send(request, chain, body)) if body.get("silent") is True
+                   else (lambda: _file_node_request(body)))
+        if ref is None or not scope:
+            return ask()
+        # A page's retry of a send it named (2026-10-21): the same (wallet, chain, ref)
+        # answers with the first request as it stands now. The lock is this ref's
+        # alone, so a second POST waits for the first and nothing else does.
+        key = (scope, chain.network, ref)
+        refs = state.send_refs
+        with refs.held(key):
+            first = refs.find(*key)
+            if first is not None:
+                return contentlib._json({**_send_ref_now(first), "repeat": True}, status=200)
+            answer = ask()
+            if answer.status_code == 202:             # filed: remembered, even if it failed
+                told = json.loads(answer.body)
+                refs.remember(*key, request_id=str(told["id"]), source=source, told=told)
+            return answer
+
+    def _file_node_request(body: dict):
         try:
             filed = _file_request("page", body)
         except approvalslib.RequestError as exc:
@@ -7779,6 +7807,28 @@ def create_app(state: AppState) -> FastAPI:
             return contentlib._json({"error": f"could not file the request: {exc}"},
                                     status=503)
         return contentlib._json(filed, status=202)
+
+    def _send_ref_now(kept: dict) -> dict:
+        """A remembered request as it stands now: the live row where there is one (the
+        approvals queue is kept on disk; a reader's question lives in memory until a
+        restart), else the last answer kept with the ref."""
+        rid = kept["request_id"]
+        if rid in _page_sends:
+            return _page_send_told(_page_sends[rid])
+        if kept["source"] == "node":
+            row = state.approvals.get(rid)
+            if row is not None:
+                return _described(row)
+        told = dict(kept["told"])
+        if told.get("status") == "pending" and kept["source"] == "reader" \
+                and time.time() - kept["created"] > PAGE_SEND_FOR:
+            told["status"] = "expired"            # as the question in memory would have
+        if told.get("status") == "sent" and told.get("txid"):
+            status = _tx_status(state.chain_named(kept["network"]), told["txid"])
+            if status is not None:
+                told["confirmations"] = status["confirmations"]
+                told["confirmed"] = status["confirmed"]
+        return told
 
     def _node_silent_send(request: Request, chain, body: dict):
         """A page asks the node's own wallet to send with {silent: true}: the node
@@ -7967,6 +8017,9 @@ def create_app(state: AppState) -> FastAPI:
             row.update(status=status, error=str(said.get("error") or "")[:200])
         else:
             return JSONResponse({"detail": "sent, denied or failed"}, status_code=400)
+        # A question a page named with a ref keeps its answer past a restart.
+        state.send_refs.update(row["id"], status=row["status"], txid=row["txid"],
+                               error=row["error"])
         return JSONResponse({"ok": True})
 
     @app.options("/r/send")
@@ -8028,9 +8081,12 @@ def create_app(state: AppState) -> FastAPI:
         if request_id in _page_sends:              # a question for a signed-in reader
             return contentlib._json(_page_send_told(_page_sends[request_id]))
         row = state.approvals.get(request_id)
-        if row is None:
+        if row is not None:
+            return contentlib._json(_described(row))
+        kept = state.send_refs.by_id(request_id)  # a named question, after a restart
+        if kept is None:
             return contentlib._missing("no such request")
-        return contentlib._json(_described(row))
+        return contentlib._json(_send_ref_now(kept))
 
     @app.get("/r/contacts.js")
     def r_contacts_js():
