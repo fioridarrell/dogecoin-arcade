@@ -88,6 +88,20 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-21 app.dogecoinarcade.com down 16:13-: page threads all waiting on a borrowed chain (Claude)
+.25's Dogecoin Core is rescanning for @apple's import, so core_catchup borrows its reads from a sharer. `chain_sync`
+kept add-on chains' status in the background ONLY for a chain set to borrow; this Dogecoin (run here, borrowing for the
+rescan) was asked on the request threads themselves, every thread at once each minute when the 60 s cache went stale,
+each through `_borrowed_rpc`'s `verify_connected_chain` over the mesh (up to ~3 min per sharer tried). The stall
+watchdog showed every AnyIO worker in `chain_ready -> _sync_now -> _borrowed_rpc -> getblockchaininfo`; the worker then
+ignored SIGTERM (waiting on those threads).
+- state.chain_sync: EVERY add-on chain's status is refreshed on one thread of its own (`arcade-sync-<net>`); a page
+  gets what is known at once (3 s wait only when nothing is known yet).
+- state._borrowed_rpc: the sharers' chain check runs on one thread at a time (`_BORROWED_LOCKS`); a thread arriving
+  meanwhile, or within 30 s of a failed check (`_BORROWED_FAILED`), is told at once that the chain cannot be read now.
+- Tests: tests/test_core_rescan_hold.py (eight pages answered at once and asked once; the single check and its
+  remembered failure).
+
 ### 2026-10-21 Your arcade: the wallets a row of coins, and the Arcades card (Claude)
 The operator: "On the client side, your arcade tab the Wallet selection should just be a row of the icons and have them lit
 up when enabled and grayed out when disabled. Below that should be a copy of the arcades card in the admin overview

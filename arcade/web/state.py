@@ -34,7 +34,7 @@ from ..messaging.derive import (
 )
 from ..messaging.keys import Identity
 from ..messaging.store import MessageStore
-from ..rpc import RpcClient
+from ..rpc import RpcClient, RpcTransportError
 
 #: The wallet this node signs with, which is the lane every send in `app.py`
 #: claims until it is told otherwise. An account's lane is its own public key.
@@ -267,8 +267,21 @@ class ChainContext:
         from ..mesh import coreshare
         client = coreshare.BorrowedRpc(coreshare.CURRENT, self.params)
         if _BORROWED_SEEN.get(self.network, 0) < time.time():
-            verify_connected_chain(client, self.params)
-            _BORROWED_SEEN[self.network] = time.time() + 300
+            # One check at a time, and a failed one remembered half a minute (2026-10-21): every other thread asking
+            # meanwhile is told at once that the chain cannot be read now, rather than each waiting minutes on the mesh.
+            if time.time() < _BORROWED_FAILED.get(self.network, 0):
+                raise RpcTransportError(f"{self.label}: the arcades sharing it did not answer just now")
+            lock = _BORROWED_LOCKS.setdefault(self.network, threading.Lock())
+            if not lock.acquire(blocking=False):
+                raise RpcTransportError(f"{self.label}: being checked with the arcades sharing it")
+            try:
+                verify_connected_chain(client, self.params)
+                _BORROWED_SEEN[self.network] = time.time() + 300
+            except Exception:
+                _BORROWED_FAILED[self.network] = time.time() + 30
+                raise
+            finally:
+                lock.release()
         return client
 
     #: How long one node's status is kept (2026-10-13: pages felt slow tab to tab; the
@@ -326,6 +339,8 @@ def _peers(rpc) -> int | None:
 _STATUS_KEPT: dict = {}
 #: Borrowed chains checked lately: network -> until when (ChainContext._borrowed_rpc).
 _BORROWED_SEEN: dict = {}
+_BORROWED_FAILED: dict = {}               # network -> until when a failed check of the sharers is not tried again
+_BORROWED_LOCKS: dict = {}                # network -> the one check of the sharers running
 
 
 @dataclass
@@ -1415,21 +1430,22 @@ class AppState:
         kept = self._sync.get(chain.network)
         if kept and kept[0] > now:
             return kept[1]
-        if getattr(chain, "borrowed", False):
-            # A borrowed chain answers over the mesh, from another arcade: up to a minute when that arcade is far or
-            # busy, and a page drawing its chain menu waited for it (2026-10-19: pepecoinarcade.com's Exchange took
-            # 25 s, its feed 3-7 s). The page gets what is known now; the asking happens on a thread of its own.
-            if kept:
-                self._refresh_sync_later(chain)
-                return kept[1]
-            # Nothing known yet (just started): a few seconds for the first answer, so a page drawn right after a
-            # restart does not gray out a chain that is fine (2026-10-19, pepecoinarcade.com's D and L icons).
-            asked = self._refresh_sync_later(chain)
-            if asked is not None:
-                asked.join(self.FIRST_SYNC_WAIT)
-            kept = self._sync.get(chain.network)
-            return kept[1] if kept else {"ready": False, "progress": 0.0, "online": False, "blocks": 0, "headers": 0}
-        return self._sync_now(chain)
+        # A borrowed chain answers over the mesh, from another arcade: up to a minute when that arcade is far or
+        # busy, and a page drawing its chain menu waited for it (2026-10-19: pepecoinarcade.com's Exchange took
+        # 25 s, its feed 3-7 s). The page gets what is known now; the asking happens on a thread of its own.
+        # Every add-on chain, not only one set to borrow (2026-10-21, app.dogecoinarcade.com down 16:13-16:45): a
+        # Dogecoin run here but borrowing while its Core rescans (core_catchup) was asked on every request thread
+        # at once each minute, each waiting minutes on the mesh, until no thread was left to answer a page.
+        if kept:
+            self._refresh_sync_later(chain)
+            return kept[1]
+        # Nothing known yet (just started): a few seconds for the first answer, so a page drawn right after a
+        # restart does not gray out a chain that is fine (2026-10-19, pepecoinarcade.com's D and L icons).
+        asked = self._refresh_sync_later(chain)
+        if asked is not None:
+            asked.join(self.FIRST_SYNC_WAIT)
+        kept = self._sync.get(chain.network)
+        return kept[1] if kept else {"ready": False, "progress": 0.0, "online": False, "blocks": 0, "headers": 0}
 
     def _refresh_sync_later(self, chain: ChainContext) -> "threading.Thread | None":
         asking = self.__dict__.setdefault("_sync_asking", {})

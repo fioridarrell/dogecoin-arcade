@@ -5,6 +5,8 @@ hold is kept in the arcade's settings, and it is let go of only once no import r
 """
 from types import SimpleNamespace
 
+import pathlib
+
 import pytest
 
 from arcade import core_catchup as cc
@@ -70,3 +72,66 @@ def test_finished_lets_the_next_check_ask_the_core(fresh):
     cc.finished("doge")
     cc.check(CHAIN, share=object(), client=lambda chain: _Core(answers=True))
     assert cc.held("doge") is None
+
+
+def test_a_chain_borrowing_while_its_core_rescans_is_never_asked_on_a_page(tmp_path, monkeypatch):
+    """2026-10-21, app.dogecoinarcade.com down 16:13: a Dogecoin run here but borrowing while its Core rescanned was
+    asked on every request thread at once, each waiting minutes on the mesh. Its status is kept and refreshed on one
+    thread of its own; a page gets what is known at once."""
+    import threading
+    import time as _time
+    from arcade.web.state import AppState, ChainContext
+    state = AppState(home=tmp_path,
+                     messaging=ChainContext(network="regtest", role="messaging", label="Testnet",
+                                            datadir=pathlib.Path("/nonexistent")),
+                     ledger=ChainContext(network="main", role="ledger", label="Mainnet",
+                                         datadir=pathlib.Path("/nonexistent")),
+                     doge=ChainContext(network="doge", role="ledger", label="Dogecoin",
+                                       datadir=pathlib.Path("/nonexistent")))
+    gate, asked = threading.Event(), []
+
+    def slow(chain):
+        asked.append(threading.current_thread().name)
+        gate.wait(10)
+        return {"ready": True}
+    monkeypatch.setattr(AppState, "_sync_now", lambda self, chain: slow(chain))
+    state._sync["doge"] = (_time.time() - 1, {"ready": True, "online": True})      # known, gone stale
+    took = []
+    def page():
+        t = _time.monotonic(); state.chain_sync(state.doge); took.append(_time.monotonic() - t)
+    pages = [threading.Thread(target=page) for _ in range(8)]
+    for p in pages:
+        p.start()
+    for p in pages:
+        p.join(5)
+    gate.set()
+    assert max(took) < 1.0, "every page answered at once from what is known"
+    assert len(asked) == 1 and asked[0].startswith("arcade-sync-"), "asked once, on a thread of its own"
+
+
+def test_one_check_of_the_sharers_at_a_time_and_a_failure_remembered(monkeypatch):
+    from arcade.web import state as statemod
+    from arcade.rpc import RpcTransportError
+    chain = statemod.ChainContext(network="doge", role="ledger", label="Dogecoin", datadir=pathlib.Path("/nonexistent"))
+    calls = []
+
+    def verify(client, params):
+        calls.append(1)
+        raise RpcTransportError("no arcade sharing doge answered")
+    monkeypatch.setattr(statemod, "verify_connected_chain", verify)
+    monkeypatch.setitem(statemod._BORROWED_SEEN, "doge", 0)
+    statemod._BORROWED_FAILED.pop("doge", None)
+    with pytest.raises(RpcTransportError):
+        chain._borrowed_rpc()
+    with pytest.raises(RpcTransportError, match="did not answer just now"):
+        chain._borrowed_rpc()
+    assert len(calls) == 1, "a failed check is not asked again for half a minute"
+    statemod._BORROWED_FAILED.pop("doge", None)
+    lock = statemod._BORROWED_LOCKS.setdefault("doge", __import__("threading").Lock())
+    lock.acquire()
+    try:
+        with pytest.raises(RpcTransportError, match="being checked"):
+            chain._borrowed_rpc()
+    finally:
+        lock.release()
+    assert len(calls) == 1, "a thread arriving while one checks is told at once"
