@@ -88,6 +88,28 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-21 Admin -> Affiliates: your sites to share, and other operators' sites to show (Claude)
+The operator: "I want an admin affiliate panel. It should show the operators published URLs with a check box next to each to
+share with affiliates. It should have a list of shared URLs from other node operators, each with a checkmark to share
+on client side affiliate tab." Which URLs: "Arcade's names + ones I add"; then "The second list should be a list of
+operators and their published URLs that they shared with the affiliates." Branch claude/affiliates-panel.
+- **New `arcade/affiliates.py`** (validation, settings, the client tab's list). Settings: `affiliates_mine`
+  [{url,name,about,share}] (the old fixed app.py AFFILIATES = affiliates.SEED until the operator saves a list, so
+  antidoginaldogs.com stays on the tab), `affiliates_hosts_shared` [url] (which https://<public_hosts> are shared),
+  `affiliates_heard` {peer id: {at, tag, sites}} (what linked arcades share; kept 90 days, at most 200 peers,
+  rewritten only on change or hourly), `affiliates_shown` [url] (others' sites ticked to show; off by default).
+- **Mesh:** operators "me" gains optional `sites` [{url,name,about}], <=20, this operator's ticked names + sites, always
+  a list (empty = "forget mine"). On receipt: not a list or >20 -> ignored whole; each entry via affiliates.clean_site:
+  https only, <=200 chars, urllib-parsed, a DNS name host with a letter TLD, no userinfo, port or IP literal, no
+  whitespace/control/quote/angle/backslash; name 1-60, about 0-200 plain text; bad entries dropped. Older arcades lack
+  the field: nothing changes. `MeshService.say_who_runs_this()` re-sends "me" now after an Admin save.
+- **Admin:** new tab Affiliates (Your sites: published names, not deletable, + added sites with add/edit/remove, each
+  "Share with other arcades"; Shared by other arcades: one block per operator, @tag or mesh id + last heard, per-site
+  "Show on my Affiliates tab" and a Show all toggle). `GET/POST /admin/api/affiliates`, _admin_check (write header).
+- **Client /affiliates:** own added sites, then ticked sites still shared and heard within 30 days under "Shared by
+  @tag"; each URL once; this arcade's own names never; links rel="noopener noreferrer nofollow"; autoescaped.
+- Tests: tests/test_affiliates_panel.py (new), tests/test_affiliates.py (rel assert updated).
+- Need from you: nothing; once on main your arcade can share and show sites with ours.
 ### 2026-10-21 Import rescans on a busy Core, the walk's real pace, copies with nothing new (Claude)
 Follow-ups deployed on .25 the same day after @apple's Dogecoin import (DCHxodk...) met a Core still rescanning
 from an `importmulti` an arcade restart had cut the connection to (the Core goes on with it; its RPC queue stays full).

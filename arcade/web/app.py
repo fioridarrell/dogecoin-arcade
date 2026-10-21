@@ -8490,19 +8490,15 @@ def create_app(state: AppState) -> FastAPI:
         """
         return RedirectResponse("/docs/features.md", status_code=307)
 
-    #: The arcade's affiliates (2026-10-15): (name, link, what they do). An outside Doginals index was one until
-    #: the operator removed it the same day, with its API.
-    #: explorer is where this arcade reads Doginals from (arcade/doginals.py).
-    AFFILIATES = (
-        ("Anti Doginal Dogs", "https://antidoginaldogs.com",
-         "Recursive transformative art on Dogecoin."),
-    )
-
     @app.get("/affiliates", response_class=HTMLResponse)
     def affiliates(request: Request):
-        """The Affiliates tab, between the Exchange and the Docs (2026-10-15)."""
-        return render(request, "affiliates.html",
-                      affiliates=[{"name": n, "url": u, "about": a} for n, u, a in AFFILIATES])
+        """The Affiliates tab, between the Exchange and the Docs (2026-10-15): the operator's own added sites, then the
+        sites linked arcades share that the operator ticked in Admin -> Affiliates, under who shares them (the operator
+        2026-10-21; arcade/affiliates.py). The fixed list it had (antidoginaldogs.com) is affiliates.SEED, what an
+        operator who never saved a list has. Every field is plain text through autoescaping, never |safe."""
+        from .. import affiliates as affiliateslib
+        tab = affiliateslib.for_tab(state)
+        return render(request, "affiliates.html", affiliates=tab["own"], shared=tab["groups"])
 
     @app.get("/docs", response_class=HTMLResponse)
     def docs_index(request: Request):
@@ -25440,6 +25436,49 @@ def create_app(state: AppState) -> FastAPI:
         share = getattr(getattr(state, "mesh", None), "operators", None)
         return JSONResponse({"mesh": share is not None, "rows": share.status() if share is not None else []},
                             headers={"Cache-Control": "no-store"})
+
+    @app.get("/admin/api/affiliates")
+    def admin_affiliates(request: Request):
+        """Admin -> Affiliates (2026-10-21: "show the operators published URLs with a check box next to each to
+        share with affiliates ... a list of shared URLs from other node operators, each with a checkmark to share on
+        client side affiliate tab"; then "The second list should be a list of operators and their published URLs that
+        they shared"): this arcade's names and added sites with their share ticks, and each sharing arcade's sites
+        with their show ticks (arcade/affiliates.py)."""
+        _admin_check(request)
+        from .. import affiliates as affiliateslib
+        mesh = getattr(state, "mesh", None)
+        share = getattr(mesh, "operators", None)
+        live = dict(getattr(share, "peers", {}) or {}) if share is not None else {}
+        linked = set(getattr(getattr(mesh, "node", None), "links", None) or {}) if mesh is not None else set()
+        others = affiliateslib.others(state, live)
+        for row in others:
+            row["linked"] = row["peer"] in linked
+        return JSONResponse({"hosts": affiliateslib.host_sites(state), "mine": affiliateslib.mine(state),
+                             "others": others, "mesh": share is not None,
+                             "limits": {"sites": affiliateslib.MAX_SITES, "url": affiliateslib.MAX_URL,
+                                        "name": affiliateslib.MAX_NAME, "about": affiliateslib.MAX_ABOUT,
+                                        "heard_days": affiliateslib.HEARD_DAYS}},
+                            headers={"Cache-Control": "no-store"})
+
+    @app.post("/admin/api/affiliates")
+    def admin_affiliates_save(request: Request, payload: Any = Body(None)):
+        """Save any of `mine` [{url, name, about, share}], `hosts_shared` [url] and `shown` [url], checked the way a
+        linked arcade's sites are (affiliates.clean_site), then say "me" again so linked arcades hear the new list now."""
+        _admin_check(request, write=True)
+        from .. import affiliates as affiliateslib
+        said = payload if isinstance(payload, dict) else {}
+        try:
+            affiliateslib.save(state, said)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        mesh = getattr(state, "mesh", None)
+        told = False
+        if mesh is not None and ("mine" in said or "hosts_shared" in said):
+            try:
+                told = bool(mesh.say_who_runs_this())
+            except Exception:                              # noqa: BLE001 -- said at the next minute's turn anyway
+                told = False
+        return JSONResponse({"ok": True, "told": told, "sharing": len(affiliateslib.to_share(state))})
 
     def _fruit_stand():
         """The node's fruit names for new arcades' operators (arcade/fruit.py, 2026-10-20)."""

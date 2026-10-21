@@ -311,6 +311,16 @@ class MeshService:
             if self.stun is not None:
                 self.stun.hosts = None
 
+    def say_who_runs_this(self) -> bool:
+        """Say "me" (operators.py) to every linked arcade now rather than at the next minute's turn: the operator just
+        ticked or unticked a site to share (Admin -> Affiliates, 2026-10-21). Not waited for. False when the mesh
+        is not running."""
+        share = getattr(self, "operators", None)
+        if self.loop is None or share is None:
+            return False
+        asyncio.run_coroutine_threadsafe(share.rebalance(), self.loop)
+        return True
+
     def _call(self, coro, timeout: float = 5.0):
         """Run a coroutine on the mesh's loop from any other thread, and wait."""
         if self.loop is None:
@@ -815,7 +825,9 @@ def for_state(state, *, listen_host: str | None = None, listen_port: int | None 
     # Who runs each linked arcade (operators.py, 2026-10-20: "a list of other operators").
     from .operators import OperatorsShare
 
-    service.operators = OperatorsShare(lambda: operator_about(state))
+    from .. import affiliates as affiliateslib
+    service.operators = OperatorsShare(lambda: operator_about(state),
+                                       lambda peer, tag, sites: affiliateslib.record(state, peer, tag, sites))
     service.node.add_extension(service.operators)
     # The ord indexes' shared chunks, one per chain (doginalshare.py, 2026-10-20).
     if hasattr(state, "ord_indexes"):
@@ -853,7 +865,8 @@ def operator_about(state) -> dict:
     """What this arcade says about itself to each linked arcade (operators.py "me"): its operator's own @name, its
     face's name, its version and the names it is published under. The operator's own @name only (state.operator_tag),
     left out of the frame when it has none, so a hearer shows the mesh id rather than an empty name (2026-10-21:
-    Overview's Arcades panel)."""
+    Overview's Arcades panel). `sites`: what the operator ticked to share in Admin -> Affiliates (arcade/affiliates.py,
+    2026-10-21), always a list so unticking the last one is heard too."""
     tag = state.operator_tag() if hasattr(state, "operator_tag") else ""
     try:
         from ..web import brand as brandlib
@@ -862,7 +875,17 @@ def operator_about(state) -> dict:
         name = ""
     return {**({"tag": tag} if tag else {}), "name": name,
             "version": str(getattr(state, "running_version", "") or ""),
-            "hosts": list(getattr(state, "public_hosts", []) or [])}
+            "hosts": list(getattr(state, "public_hosts", []) or []), **_shared_sites(state)}
+
+
+def _shared_sites(state) -> dict:
+    """{"sites": [...]}, or nothing when they could not be read: left out, a hearer keeps what it had, where an empty
+    list would have told it to forget them."""
+    try:
+        from .. import affiliates
+        return {"sites": affiliates.to_share(state)}
+    except Exception:                                      # noqa: BLE001 -- said without them
+        return {}
 
 
 def shared_cores(state):

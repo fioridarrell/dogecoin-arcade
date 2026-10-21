@@ -6,7 +6,7 @@
   <span class="pill {{ 'ok' if local else 'warn' }}">{{ 'at the node machine' if local else 'remote' }}</span>
   {% if not local %}<button type="button" class="ghost small" id="adminout">Lock the panel</button>{% endif %}
 </div>
-<p class="sub" style="margin-top:4px">Everything this node's operator runs, in six tabs.</p>
+<p class="sub" style="margin-top:4px">Everything this node's operator runs, in seven tabs.</p>
 <p class="msg" id="said" hidden></p>
 
 <nav class="admintabs" role="tablist">
@@ -16,6 +16,7 @@
   <button type="button" role="tab" data-tab="safety">Safety</button>
   <button type="button" role="tab" data-tab="network">Network</button>
   <button type="button" role="tab" data-tab="ords">Ords</button>
+  <button type="button" role="tab" data-tab="affiliates">Affiliates</button>
   <button type="button" role="tab" data-tab="people">People &amp; brand</button>
 </nav>
 
@@ -361,6 +362,36 @@
 </section>
 </div>
 
+{# 2026-10-21: "I want an admin affiliate panel. It should show the operators published URLs with a check box next
+   to each to share with affiliates. It should have a list of shared URLs from other node operators, each with a
+   checkmark to share on client side affiliate tab." Which URLs: "Arcade's names + ones I add". Then: "The second list
+   should be a list of operators and their published URLs that they shared with the affiliates." arcade/affiliates.py;
+   shared over the mesh in the operators "me" frame's `sites` (mesh/operators.py). #}
+<div class="admintab" data-tab="affiliates" aria-label="Affiliates">
+<section class="panel" id="affmine">
+  <h2>Your sites</h2>
+  <p class="muted" style="margin-top:0">The names this arcade is published under, and any other sites you add. Sites you
+    add are always on this arcade&rsquo;s <a href="/affiliates">Affiliates</a> tab. Tick <b>Share with other arcades</b>
+    to offer a site to the arcades linked to this one; their operators choose whether to show it.</p>
+  <div id="affhosts" class="afflist"></div>
+  <h3 style="margin:14px 0 6px">Sites you add</h3>
+  <div id="affown" class="afflist"></div>
+  <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
+    <button type="button" class="ghost small" id="affadd">Add a site</button>
+    <button type="button" class="small" id="affsave">Save</button>
+    <span class="muted" id="affsaid"></span>
+  </div>
+</section>
+<section class="panel" id="affothers">
+  <h2>Shared by other arcades</h2>
+  <p class="muted" style="margin-top:0">Each operator who shares sites with this arcade, and what they share. Nothing here
+    reaches your users until you tick <b>Show on my Affiliates tab</b>; a ticked site leaves the tab again when its
+    operator stops sharing it or is not heard from for <span id="affdays">30</span> days.</p>
+  <div id="affgroups"><p class="muted">Loading&hellip;</p></div>
+  <span class="muted" id="affshownsaid"></span>
+</section>
+</div>
+
 <div class="admintab" data-tab="people" aria-label="People & brand">
 <section class="panel">
   <h2>Seats</h2>
@@ -538,6 +569,24 @@ section.panel h2{margin-top:0}
   #arcades .who{grid-area:who}#arcades .link{grid-area:link;align-self:start}
   #arcades .cores{grid-area:cores}#arcades .ords{grid-area:ords}
   #arcades .lab{display:block}
+}
+#affmine .afflist,#affothers .afflist{display:grid;gap:8px}
+.affrow{display:grid;grid-template-columns:minmax(120px,1fr) minmax(180px,1.4fr) minmax(160px,1.6fr) auto auto;gap:8px;
+  align-items:center;border:1px solid var(--line);border-radius:10px;padding:8px 10px}
+.affrow.fixed{grid-template-columns:1fr auto}
+.affrow input[type=text],.affrow input[type=url]{width:100%;min-width:0;font-size:16px;box-sizing:border-box}
+.affrow .tick{display:inline-flex;align-items:center;gap:6px;font-size:.84rem;white-space:nowrap}
+.affrow .addr{overflow-wrap:anywhere}
+.affgroup{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:10px}
+.affgroup h3{margin:0 0 2px;font-size:1rem;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+.affsite{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;padding:8px 0;border-top:1px solid var(--line)}
+.affsite:first-of-type{border-top:0}
+.affsite .addr{font-size:.82rem;color:var(--muted);overflow-wrap:anywhere}
+@media (max-width:720px){
+  .affrow{grid-template-columns:1fr 1fr}
+  .affrow .url,.affrow .about{grid-column:1 / -1}
+  .affrow.fixed{grid-template-columns:1fr;justify-items:start}
+  .affsite{grid-template-columns:1fr}
 }
 </style>
 
@@ -1426,6 +1475,105 @@ section.panel h2{margin-top:0}
   setInterval(function () { if (!document.hidden) loadOrds(); }, 15000);   // the server keeps its answer 20 s
   document.querySelectorAll('.admintabs button[data-tab="ords"]').forEach(function (b) { b.addEventListener('click', loadOrds); });
   document.querySelectorAll('.saveswitches').forEach(function (b) { b.onclick = saveSwitches; });
+
+  // --- Affiliates (2026-10-21): this arcade's names + its own added sites, each with a share tick; under them,
+  // each operator who shares sites, with a show tick per site. Built with textContent only: every word here may be
+  // another operator's.
+  var AFF = null;
+  function tick(label, on, cb) {
+    var l = text('label', '', 'tick'), c = document.createElement('input'); c.type = 'checkbox'; c.checked = !!on;
+    if (cb) c.onchange = function () { cb(c); };
+    l.appendChild(c); l.appendChild(document.createTextNode(label)); return [l, c];
+  }
+  function affOwnRow(site) {
+    var row = text('div', '', 'affrow');
+    function field(cls, type, value, ph, max) {
+      var i = document.createElement('input'); i.type = type; i.value = value || ''; i.placeholder = ph;
+      i.maxLength = max; i.autocomplete = 'off'; i.className = cls; i.setAttribute('aria-label', ph);
+      var w = text('div', '', cls); w.appendChild(i); row.appendChild(w); return i;
+    }
+    var lim = (AFF && AFF.limits) || {name: 60, url: 200, about: 200};
+    row._name = field('name', 'text', site.name, 'Name', lim.name);
+    row._url = field('url', 'url', site.url, 'https://example.com', lim.url);
+    row._about = field('about', 'text', site.about, 'One line about it', lim.about);
+    var t = tick('Share with other arcades', site.share); row._share = t[1]; row.appendChild(t[0]);
+    var rm = text('button', 'Remove', 'ghost small'); rm.type = 'button';
+    rm.onclick = function () { row.remove(); $('affsaid').textContent = 'Removed. Save to keep it that way.'; };
+    row.appendChild(rm);
+    return row;
+  }
+  function drawAff(d) {
+    AFF = d; $('affdays').textContent = (d.limits && d.limits.heard_days) || 30;
+    var hosts = $('affhosts'); hosts.textContent = '';
+    if (!d.hosts.length) hosts.appendChild(text('p', 'This arcade has no published names yet (Network \u2192 Put this arcade online).', 'muted'));
+    d.hosts.forEach(function (h) {
+      var row = text('div', '', 'affrow fixed'), who = text('div', '', 'addr');
+      who.appendChild(text('b', h.url.replace('https://', '')));
+      who.appendChild(text('span', ' published name', 'pill'));
+      row.appendChild(who);
+      var t = tick('Share with other arcades', h.share); t[1].dataset.url = h.url; t[1].className = 'affhost';
+      row.appendChild(t[0]); hosts.appendChild(row);
+    });
+    var own = $('affown'); own.textContent = '';
+    d.mine.forEach(function (s) { own.appendChild(affOwnRow(s)); });
+    var box = $('affgroups'); box.textContent = '';
+    if (!d.others.length) box.appendChild(text('p', d.mesh ? 'No linked arcade shares any sites yet.' : 'The mesh is off on this arcade.', 'muted'));
+    d.others.forEach(function (g) {
+      var block = text('div', '', 'affgroup'), h = document.createElement('h3');
+      h.appendChild(text('span', g.tag ? '@' + g.tag : 'arcade ' + g.node, g.tag ? '' : 'mono'));
+      h.appendChild(text('span', 'last heard ' + (g.at ? new Date(g.at * 1000).toLocaleString() : '\u2014'), 'muted'));
+      if (g.linked) h.appendChild(text('span', 'linked', 'pill ok'));
+      var all = text('button', 'Show all', 'ghost small'); all.type = 'button';
+      h.appendChild(all); block.appendChild(h);
+      var boxes = [];
+      g.sites.forEach(function (s) {
+        var row = text('div', '', 'affsite'), what = document.createElement('div');
+        what.appendChild(text('b', s.name));
+        if (s.about) what.appendChild(text('div', s.about, 'muted'));
+        what.appendChild(text('div', s.url, 'addr'));
+        row.appendChild(what);
+        var t = tick('Show on my Affiliates tab', s.shown, function () { saveShown(); });
+        t[1].dataset.url = s.url; t[1].className = 'affshow'; boxes.push(t[1]);
+        row.appendChild(t[0]); block.appendChild(row);
+      });
+      all.onclick = function () {
+        var on = !boxes.every(function (c) { return c.checked; });
+        boxes.forEach(function (c) { c.checked = on; }); saveShown();
+      };
+      box.appendChild(block);
+    });
+  }
+  function loadAff() {
+    fetch('/admin/api/affiliates', {credentials: 'same-origin', cache: 'no-store'})
+      .then(function (r) { return r.json(); }).then(drawAff).catch(function () {});
+  }
+  function saveShown() {
+    var urls = {};
+    document.querySelectorAll('#affgroups input.affshow').forEach(function (c) {
+      if (c.checked) urls[c.dataset.url] = 1;
+    });
+    // a URL ticked under one operator and not another: ticked wins (the tab shows each address once)
+    call('/admin/api/affiliates', {shown: Object.keys(urls)})
+      .then(function () { $('affshownsaid').textContent = 'Saved.'; loadAff(); })
+      .catch(function (e) { $('affshownsaid').textContent = e.message; });
+  }
+  $('affadd').onclick = function () { $('affown').appendChild(affOwnRow({share: false})); };
+  $('affsave').onclick = function () {
+    var mine = [], hosts = [];
+    document.querySelectorAll('#affown .affrow').forEach(function (row) {
+      var s = {name: row._name.value.trim(), url: row._url.value.trim(), about: row._about.value.trim(), share: row._share.checked};
+      if (s.name || s.url || s.about) mine.push(s);
+    });
+    document.querySelectorAll('#affhosts input.affhost').forEach(function (c) { if (c.checked) hosts.push(c.dataset.url); });
+    $('affsave').disabled = true;
+    call('/admin/api/affiliates', {mine: mine, hosts_shared: hosts})
+      .then(function (j) { $('affsaid').textContent = 'Saved. Sharing ' + j.sharing + ' site' + (j.sharing === 1 ? '' : 's')
+          + (j.told ? '; linked arcades told now.' : '.'); loadAff(); })
+      .catch(function (e) { $('affsaid').textContent = e.message; })
+      .then(function () { $('affsave').disabled = false; });
+  };
+  loadAff();
+  document.querySelectorAll('.admintabs button[data-tab="affiliates"]').forEach(function (b) { b.addEventListener('click', loadAff); });
 
   // --- tabs: the tab is in the address (#trading), and an old link to a panel (#chains, #swaps, #gamecards)
   // opens the tab that holds it and scrolls there.
