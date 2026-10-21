@@ -96,6 +96,8 @@ page." me.html: `#wallet-chains` is a row of `button.wchip` (aria-pressed; grey 
 The Arcades card moved into `_arcades_panel.html` (markup, styles and its own script scope, `window.arcadesPanel.draw`)
 and is included by admin.html and me.html; new `GET /account/arcades` (signed in; door PUBLIC_PAGES) is
 `_arcades_view()` less this arcade's Share switches. The node side's page reads /admin/api/arcades.
+- **Tip** (the operator: "Allow tipping to any of the operators from the operator list"): each row with an operator @name
+  other than this arcade's own has a Tip button, `/me/wallet?to=@name`, the Send sheet with their name in To.
 - **Fixed on the way:** admin.html had two `function ordRing` in one script (the Ords tab's ring and the Arcades
   card's, 030b4d9): the later one replaced the first, so the Ords tab's ring was drawn by the wrong function. The
   card's now lives in its own scope.

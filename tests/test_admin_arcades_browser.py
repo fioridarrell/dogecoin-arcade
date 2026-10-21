@@ -113,6 +113,11 @@ def test_your_arcade_has_a_row_of_wallet_coins_and_the_arcades_card(browser, ser
         rows = WebDriverWait(browser, 15).until(
             lambda d: d.find_elements(By.CSS_SELECTOR, "#arcrows .arcrow:not(.archead)") or None)
         assert len(rows) == 2 and "@strawberry" in rows[0].text
+        assert not rows[0].find_elements(By.CSS_SELECTOR, ".arctip"), "no tip to this arcade's own operator"
+        tip = rows[1].find_element(By.CSS_SELECTOR, ".arctip")
+        assert tip.get_attribute("href").endswith("/me/wallet?to=%40bigchiefenergy"), "tip any operator on the list"
+        assert rows[1].find_elements(By.CSS_SELECTOR, ".cores img.coin"), "Cores, as on Admin"
+        assert "48 ms" in rows[1].text, "and the link speed"
         chips = browser.find_elements(By.CSS_SELECTOR, "#wallet-chains .wchip")
         assert chips and all(c.get_attribute("aria-pressed") == "true" for c in chips)
         assert browser.execute_script(

@@ -11,6 +11,7 @@
 #arcades .arcrow.me{background:color-mix(in srgb,var(--accent) 6%,transparent);border-radius:8px}
 #arcades .who b{font-weight:700;overflow-wrap:anywhere}
 #arcades .who .pill{margin-left:6px;white-space:nowrap}
+#arcades .who .arctip{display:inline-flex;align-items:center;margin-top:6px;min-height:32px;padding:0 14px}
 #arcades .who .arcsub{font-size:.76rem;color:var(--muted);overflow-wrap:anywhere;margin:2px 0 0}
 #arcades .coins>.muted{font-size:.82rem}
 #arcades .coins{display:flex;flex-wrap:wrap;gap:9px;align-items:center}
@@ -115,6 +116,14 @@
       if (row.me) who.appendChild(text('span', 'this arcade', 'pill ok'));
       var sub = row.host || (row.tag && row.node ? row.node : '');
       if (sub) who.appendChild(text('div', sub, 'arcsub' + (row.host ? '' : ' mono')));
+      if (row.tag && !row.me) {
+        // Tip any operator on the list (2026-10-21): the Wallet's Send sheet opens with their @name in To,
+        // on whichever coin is picked there (my_wallet.html ?to=).
+        var tip = document.createElement('a'); tip.className = 'ghost btn small arctip'; tip.textContent = 'Tip';
+        tip.href = '/me/wallet?to=' + encodeURIComponent('@' + row.tag);
+        tip.setAttribute('aria-label', 'Tip @' + row.tag); tip.title = 'Send @' + row.tag + ' coins or a token';
+        who.appendChild(tip);
+      }
       var cores = text('div', '', 'cores'), cl = text('div', 'Cores', 'lab'), cc = text('div', '', 'coins');
       (row.cores || []).forEach(function (c) { cc.appendChild(coinImg(c, c.shared ? '' : 'unshared')); });
       if (!(row.cores || []).length) cc.appendChild(text('span', row.me ? 'none' : 'none shared', 'muted'));
