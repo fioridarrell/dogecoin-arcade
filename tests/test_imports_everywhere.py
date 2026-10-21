@@ -128,6 +128,32 @@ def test_a_copy_written_here_is_put_aside_never_lost(tmp_path, no_nodes):
     assert [s["digest"] for s in store.siblings(pk)] == [W.blob_hash(folded)], "only the one written here"
 
 
+def test_copies_holding_nothing_new_go_with_no_new_version(tmp_path, no_nodes):
+    """The copy this arcade wrote before another's newer version came usually holds nothing new: the browser drops it
+    with its key's word over the version kept, and no version is saved -- or two arcades would answer each other's
+    versions with ever newer ones at every unlock."""
+    state, app = _arcade(tmp_path, "a")
+    key = SigningKey(b"\x0b" * 32)
+    pk = _seat(app, key)
+    state.vault().put("folder", pk, SOMEONE, json.dumps(VAULT))
+    store = state.imported_wallets()
+    mine, theirs = _text(sealed="47" * 40), _text(sealed="48" * 40)
+    store.put(pk, mine, 1, _sig(key, 1, mine))
+    store.adopt(pk, theirs, 2, _sig(key, 2, theirs))
+    digests = [W.blob_hash(mine)]
+    bad = SigningKey(b"\x0c" * 32).sign(W.merged_digest(pk, 2, digests)).signature.hex()
+    assert app.post("/account/imported/siblings/drop",
+                    json={"merged": digests, "merged_signature": bad}).status_code == 400
+    stale = key.sign(W.merged_digest(pk, 1, digests)).signature.hex()
+    assert app.post("/account/imported/siblings/drop",
+                    json={"merged": digests, "merged_signature": stale}).status_code == 400, "over another version"
+    assert len(store.siblings(pk)) == 1
+    good = key.sign(W.merged_digest(pk, 2, digests)).signature.hex()
+    said = app.post("/account/imported/siblings/drop", json={"merged": digests, "merged_signature": good})
+    assert said.status_code == 200 and said.json()["dropped"] == 1
+    assert store.siblings(pk) == [] and store.get(pk)["version"] == 2 and store.get(pk)["blob"] == theirs
+
+
 def test_a_record_from_before_versions_reads_as_version_0_unsigned(tmp_path, no_nodes):
     state, _ = _arcade(tmp_path, "a")
     conn = state.accounts().conn

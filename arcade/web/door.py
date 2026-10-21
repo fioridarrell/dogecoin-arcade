@@ -445,7 +445,7 @@ PUBLIC_POST = ("/auth/challenge", "/auth/login", "/auth/logout",
                "/account/imported", "/account/imported/address", "/account/imported/rescan",
                "/account/imported/forget", "/account/imported/name",
                # its signed record fetched from the arcade it was brought from (the caller's own account only)
-               "/account/imported/bring",
+               "/account/imported/bring", "/account/imported/siblings/drop",
                # starring a market: the caller's own list of favorites, nothing else
                "/account/favorites",
                # the page holding this account's listed swaps is open (order_presence)

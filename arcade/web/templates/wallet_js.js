@@ -3863,6 +3863,7 @@ async function changeImports(wallet, change, password, {tidy = false} = {}) {
       Object.assign(gone, body.gone || {});
     }
     const merged = [];
+    const before = JSON.stringify([wallets, gone]);
     for (const one of said.siblings || []) {
       let blob, body = null;
       try { blob = JSON.parse(one.blob); } catch (e) { continue; }
@@ -3876,6 +3877,15 @@ async function changeImports(wallet, change, password, {tidy = false} = {}) {
       merged.push(one.digest);
     }
     if (tidy && said.signed && !merged.length) return null;
+    if (tidy && said.signed && JSON.stringify([wallets, gone]) === before) {
+      // The copies hold nothing this version lacks (usually the one this arcade wrote before another's newer one
+      // came): dropped with no new version, or two arcades would answer each other's versions with newer ones.
+      const signature = hex(await wallet.sign(await mergedDigest(wallet.pubkey, Number(said.version), merged)));
+      await fetch("/account/imported/siblings/drop", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({merged, merged_signature: signature})});
+      return null;
+    }
     const out = await change(wallets, gone);
     const text = JSON.stringify(await sealText(JSON.stringify({v: 1, wallets, gone: trimGone(gone)}), keyed));
     const version = Number(said.version || 0) + 1;

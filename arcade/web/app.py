@@ -24001,6 +24001,23 @@ def create_app(state: AppState) -> FastAPI:
         _announce_record(account.pubkey)
         return JSONResponse(out)
 
+    @app.post("/account/imported/siblings/drop")
+    def account_imported_siblings_drop(request: Request, payload: Any = Body(None)):
+        """Copies of the record put aside here that the page folded in and found nothing new in: dropped, signed by
+        the login key over the version kept, with no new version saved or announced."""
+        account = _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        merged = said.get("merged") or []
+        if not isinstance(merged, list) or not 0 < len(merged) <= 2 * accountslib.SIBLINGS_MAX or not all(
+                isinstance(d, str) and re.fullmatch(r"[0-9a-fA-F]{64}", d) for d in merged):
+            return JSONResponse({"detail": "that merge is not readable"}, status_code=400)
+        try:
+            gone = state.imported_wallets().drop_siblings(account.pubkey, merged,
+                                                          str(said.get("merged_signature") or ""))
+        except accountslib.AccountError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        return JSONResponse({"dropped": gone})
+
     def _announce_record(pubkey: str) -> None:
         """Tell every linked arcade this account's record has a new version (mesh/importshare.py)."""
         share = getattr(getattr(state, "mesh", None), "importshare", None)

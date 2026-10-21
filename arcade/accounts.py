@@ -1152,7 +1152,7 @@ class ImportedWallets:
     when it was written HERE (`origin` "here", the only copies that may hold a wallet no other arcade has), and a
     signed copy of the same version that differs from the one kept, are put aside (`imported_siblings`) for the
     account's browser, which opens them, folds their wallets in, saves the next version, and only then has them dropped
-    (with its key's signature over which: `drop_siblings`).
+    (with its key's signature over which: `put`'s `merged`, or `drop_siblings` when they held nothing new).
     """
 
     def __init__(self, accounts: "Accounts"):
@@ -1271,6 +1271,26 @@ class ImportedWallets:
         self.conn.execute("DELETE FROM imported_siblings WHERE pubkey = ? AND digest NOT IN (SELECT digest FROM "
                           "imported_siblings WHERE pubkey = ? ORDER BY at DESC, version DESC LIMIT ?)",
                           (who, who, SIBLINGS_MAX))
+
+    def drop_siblings(self, pubkey: str, digests: list, signature: str) -> int:
+        """Copies put aside that the account's browser folded in and found holding nothing the kept version lacks:
+        dropped with no new version (so two arcades do not answer each other's versions with ever newer ones), once
+        the login key signed which, over the version kept (wallet_imports.merged_digest). How many went."""
+        from . import wallet_imports as importslib
+        who = (pubkey or "").lower()
+        with self._lock():
+            have = self.get(who)
+            if not have or not have["signed"]:
+                raise AccountError("there is no signed record here to fold copies into")
+            try:
+                importslib.check_merged(who, have["version"], digests, signature)
+            except importslib.ImportRefused as exc:
+                raise AccountError(str(exc)) from None
+            gone = 0
+            for digest in digests:
+                gone += self.conn.execute("DELETE FROM imported_siblings WHERE pubkey = ? AND digest = ?",
+                                          (who, str(digest).lower())).rowcount or 0
+        return gone
 
     def siblings(self, pubkey: str) -> list[dict]:
         return [{"digest": r[0], "version": int(r[1]), "blob": r[2]} for r in self.conn.execute(
