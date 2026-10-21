@@ -317,8 +317,8 @@
     Walking a chain is block after block, so it uses one core whatever this says. One core on a small machine rests
     between passes, so the arcade&rsquo;s pages stay quick.</p>
   <div class="tablewrap"><table class="admintable">
-    <thead><tr><th>Chain</th><th>Index</th><th>Starts at</th><th>Indexed</th><th>Inscriptions</th><th>Agreed</th><th>Now</th></tr></thead>
-    <tbody id="ordrows"><tr><td colspan="7" class="muted">Loading&hellip;</td></tr></tbody>
+    <thead><tr><th>Chain</th><th>Index</th><th>Starts at</th><th>Indexed</th><th>Inscriptions</th><th>Agreed</th><th>On disk</th><th>Now</th></tr></thead>
+    <tbody id="ordrows"><tr><td colspan="8" class="muted">Loading&hellip;</td></tr></tbody>
   </table></div>
   <span class="muted" id="ordsaid"></span>
   <h3 style="margin:14px 0 6px">Look up</h3>
@@ -1019,6 +1019,11 @@ section.panel h2{margin-top:0}
   var ORD_WORDS = {walk: 'Walk', help: 'Help', read: 'Read only', off: 'Off'};
   function pct(x) { return (x == null ? '\u2014' : Number(x).toFixed(x < 10 ? 2 : 1) + '%'); }
   function num(x) { return Number(x || 0).toLocaleString(); }
+  function bytes(n) {
+    var units = ['bytes', 'KB', 'MB', 'GB', 'TB'], i = 0;
+    while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+    return (i ? n.toFixed(n < 10 ? 2 : 1) : n) + ' ' + units[i];
+  }
   function lines(items, cls) {
     var td = document.createElement('td');
     if (cls) td.className = cls;
@@ -1066,6 +1071,7 @@ section.panel h2{margin-top:0}
           // Inscriptions in the chunks two or more arcades read the same way (2026-10-20).
           tr.appendChild(r.mode === 'off' && !r.agreed ? text('td', '\u2014')
                            : lines([num(r.agreed_births) + ' inscriptions', 'agreed by two or more arcades']));
+          tr.appendChild(text('td', r.disk ? bytes(r.disk) : '\u2014'));
           var bits = [];
           if (r.mode === 'off') bits.push('off');
           if (r.mode === 'read') bits.push((r.walkers || []).length ? 'reads from arcade ' + r.walkers[0].node

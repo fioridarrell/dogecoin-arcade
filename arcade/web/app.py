@@ -24126,10 +24126,25 @@ def create_app(state: AppState) -> FastAPI:
                 "source": SOURCES.get(net, ""), "tip": tip, "borrowed": bool(getattr(chain, "borrowed", False)),
                 "walked_pct": round(100 * max(0, (walk.get("next") or st["base"]) - st["base"]) / span, 2) if walk else None,
                 "agreed_pct": round(100 * (st.get("agreed") or 0) / ready, 2) if ready else 0.0,
+                # What the index takes on disk, its write-ahead log included (2026-10-20).
+                "disk": _index_bytes(index),
             })
         import os
         return JSONResponse({"rows": rows, "cores": state.ord_cores(), "machine": os.cpu_count() or 1},
                             headers={"Cache-Control": "no-store"})
+
+    def _index_bytes(index) -> int:
+        """Bytes one chain's ord index takes on disk: the database and its -wal and -shm files."""
+        if index is None:
+            return 0
+        path = Path(index.store.path)
+        total = 0
+        for p in (path, path.with_name(path.name + "-wal"), path.with_name(path.name + "-shm")):
+            try:
+                total += p.stat().st_size
+            except OSError:
+                pass
+        return total
 
     @app.post("/admin/api/ords")
     def admin_ords_mode(request: Request, payload: Any = Body(None)):

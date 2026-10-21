@@ -213,6 +213,8 @@ def test_the_ords_tab_lists_each_chain_with_its_official_start_and_saves_its_mod
     for net, r in rows.items():
         assert r["base"] == dx.STARTS[net] and r["source"]
     assert rows["main"]["mode"] == "help"
+    assert all(isinstance(r["disk"], int) and r["disk"] >= 0 for r in rows.values()), "each index's size on disk"
+    assert "<th>On disk</th>" in page.text
     assert app.get("/admin/api/ords", headers=EDGE).status_code != 200, "never shown to a stranger"
     assert "rows" in app.get("/admin/api/operators", headers=LOCAL).json()
     state.set_setting("ord_index:main", None)

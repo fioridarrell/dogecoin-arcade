@@ -88,6 +88,14 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-20 · the operator's side · Admin -> Ords: each index's size on disk; the index redesign planned
+
+The operator: "Each index should show their size on disc in the ORD panel". /admin/api/ords rows carry `disk` (the
+database plus its -wal and -shm), shown in an On disk column. Also planned, not built yet (operator's
+~/docs/doginals-index-plan.md, "Redesign"): cover every chunk once, handed out in line; spend notes per chunk;
+stitch owners/balances in order; audit after with a confidence = agreeing arcades; hold-the-full-index on
+request, served torrent-style.
+
 ### 2026-10-20 · the operator's side · Admin -> Ords: an Agreed column
 
 The operator: "add a number of [inscriptions] that are agreed upon by two or more arcades into the ORD table on its
