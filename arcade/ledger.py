@@ -1430,6 +1430,9 @@ class LedgerIndex:
         bids.sort(key=lambda r: (-r["price"], when(r)))
         return {"asks": asks[:limit], "bids": bids[:limit]}
 
+    #: How long one call may spend reading new mempool transactions (pending_orders).
+    POOL_SECONDS = 3.0
+
     def pending_orders(self) -> tuple[list[dict], set[str]]:
         """(orders broadcast and not yet mined, txids the pool cancels).
 
@@ -1456,10 +1459,16 @@ class LedgerIndex:
                 known = getattr(self, "_pool_orders", {})
                 cache = PrevOutCache(rpc, self.params)
                 found: dict[str, Any] = {}
+                # New mempool transactions are read for POOL_SECONDS at most a call; the rest on the next ones
+                # (2026-10-21: with .25's Dogecoin Core rescanning, its reads went over the mesh, one round trip a
+                # transaction, and the Exchange waited 50 s on thousands of them). A block shows every order anyway.
+                until = time.monotonic() + self.POOL_SECONDS
                 for txid in ids:
                     if txid in known:
                         found[txid] = known[txid]
                         continue
+                    if time.monotonic() > until:
+                        continue                        # not read yet: not kept, so the next call reads it
                     try:
                         tx = rpc.call("getrawtransaction", txid, True)
                         rtx = extract(tx, 0, 0, self.params, cache.lookup)
