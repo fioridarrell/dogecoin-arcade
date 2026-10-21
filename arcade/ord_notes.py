@@ -28,11 +28,18 @@ from __future__ import annotations
 import hashlib
 import zlib
 from dataclasses import dataclass, field
+from typing import Any
 
 from . import ord_rules, rawchain
 
-#: The notes format. Part of every digest, so notes in another format are never compared with these.
-VERSION = 1
+#: The notes format. Part of every digest, so notes in another format are never compared with these. 2 (2026-10-20):
+#: an envelope begun before the chunk is followed back to its first piece, and zeroed when it cannot matter.
+VERSION = 2
+#: How far back (pieces) an envelope is followed to its first piece; further, it is kept whole.
+MAX_BACK = 5000
+#: An envelope that may matter is parsed again with each piece it gains; past this many pieces it is kept whole instead
+#: (2026-10-20: re-parsing hundreds of pieces, each time, held .25's web process for a minute).
+MAX_PARSED = 50
 
 _P2PKH, _P2SH, _HASHED = 0, 1, 2
 _COINBASE, _SCRIPT, _WITNESS = 1, 2, 4
@@ -79,6 +86,56 @@ def content_matters(ctype: bytes, body: bytes) -> bool:
             or ord_rules.token_op("drc-20", ctype, body) is not None
             or ord_rules.token_op("prc-20", ctype, body) is not None
             or ord_rules.name_claim(ctype, body) is not None)
+
+
+def may_matter(ctype: bytes, first: bytes) -> bool:
+    """Can an envelope's content matter, known from its first piece alone: plain text or JSON (a name), or a body that
+    may start with "{" (a "p"). Exact the other way: when this is False, name_claim and protocol_of are None for any
+    body, and a token is never more than one piece."""
+    t = ctype.decode("utf-8", "replace").split(";")[0].strip().lower()
+    if t in ("text/plain", "application/json"):
+        return True
+    head = first.lstrip()[:1]
+    return not head or head == b"{"
+
+
+def _first_piece(script: bytes) -> tuple[bytes, bytes] | None:
+    """(content type, its first data) of a genesis piece, or None when it is not one."""
+    pushes = ord_rules.decode_push_datas(script)
+    if not pushes or pushes[0] != b"ord" or len(pushes) < 3:
+        return None
+    return pushes[2], (pushes[4] if len(pushes) > 4 else b"")
+
+
+_GENESIS: dict[str, Any] = {}                  # txid of a piece -> its envelope's first piece (or "none"), kept
+
+
+def genesis_before(txid: str, lookup) -> Any:
+    """Follow an envelope back from the piece in transaction `txid` (each piece's input 0 spends the one before) to
+    its first piece: (content type, first data); "none" when it is no envelope's piece; None when too far back."""
+    seen, at = [], txid
+    for _ in range(MAX_BACK):
+        if at in _GENESIS:
+            found = _GENESIS[at]
+            break
+        tx = rawchain.read_tx(lookup(at), at)
+        script = tx.vin[0]["script"] if tx.vin and tx.vin[0]["vout"] != -1 else b""
+        seen.append(at)
+        if not may_envelope(script):
+            found = "none"
+            break
+        first = _first_piece(script)
+        if first is not None:
+            found = first
+            break
+        at = tx.vin[0]["txid"]
+    else:
+        return None
+    for t in seen:
+        _GENESIS[t] = found
+    while len(_GENESIS) > 200_000:
+        _GENESIS.pop(next(iter(_GENESIS)))
+    return found
 
 
 def _zeroed(script: bytes, genesis: bool) -> bytes:
@@ -155,13 +212,19 @@ def block_notes(block, taproot: bool = False) -> list:
     return [block.header, txs]
 
 
-def finish(blocks: list[bytes]) -> bytes:
+def finish(blocks: list[bytes], lookup=None) -> bytes:
     """A chunk's notes, canonical: its blocks' notes (`one_block`, in height order) with the content of every envelope
-    that completes inside the chunk and cannot matter zeroed. The bytes `digest` and `pack` are of. Every arcade
-    finishes a chunk from the same block notes the same way, whether it walked the blocks or helped with them."""
+    that cannot matter zeroed. The bytes `digest` and `pack` are of. Every arcade finishes a chunk from the same block
+    notes the same way, whether it walked the blocks or helped with them.
+
+    Which envelopes cannot matter: one complete inside the chunk whose content says so (content_matters); and one whose
+    first piece says so (may_matter) -- known here when it began here, else by following it back with `lookup(txid)`
+    (raw transaction bytes, from a Core: 2026-10-20, PEP's big images in hundreds of pieces cross every chunk's edge,
+    and kept whole they made the notes as big as the blocks). Without `lookup`, a piece of an envelope begun before
+    the chunk is kept whole. A script zeroed that is no piece at all is never read by the walk anyway."""
     parts = [_structure(b) for b in blocks]
     # Envelope chains inside the chunk, linked as the walk links them: a piece's input 0 spends the piece before it.
-    chains: dict[str, list[tuple[int, int]]] = {}      # txid of the latest piece -> [(block, tx) of each piece]
+    chains: dict[str, dict] = {}                        # txid of the latest piece -> {"pieces", "first", "whole"}
     zero: dict[tuple[int, int], bool] = {}             # (block, tx) -> is it the genesis piece
     for b, (_header, txs) in enumerate(parts):
         for t, (txid, ins, _outs) in enumerate(txs):
@@ -169,12 +232,32 @@ def finish(blocks: list[bytes]) -> bytes:
                 continue
             prev, script = ins[0][0], ins[0][2]
             chain = chains.pop(prev, None)
-            if chain is None and not script.startswith(b"\x03ord"):
-                continue                                # a piece of a chain begun before this chunk: kept whole
-            pieces = (chain or []) + [(b, t)]
+            first = _first_piece(script)
+            if first is not None:
+                # A script opening with "ord" begins an envelope of its own (kept as one: its content type is read).
+                # Should the walk read it as the next piece of a chain it spends instead, it reads nothing of it.
+                chain = {"pieces": [], "first": first, "whole": True}
+            if chain is None:
+                if lookup is None:
+                    continue                            # begun before this chunk, and no way to look: kept whole
+                else:
+                    found = genesis_before(prev, lookup)
+                    if found is None:
+                        continue                        # too far back to follow: kept whole
+                    chain = {"pieces": [], "first": found, "whole": False}
+            chain["pieces"].append((b, t))
+            pieces = chain["pieces"]
+            first = chain["first"]
+            if first == "none" or not may_matter(*first):
+                zero.update({p: chain["whole"] and i == 0 for i, p in enumerate(pieces)})
+                chains[txid] = chain
+                continue
+            if not chain["whole"] or len(pieces) > MAX_PARSED:
+                chains[txid] = chain                    # may matter: begun before, or too long to parse again
+                continue
             state, ctype, body = ord_rules.parse([parts[pb][1][pt][1][0][2] for pb, pt in pieces])
             if state == "partial":
-                chains[txid] = pieces
+                chains[txid] = chain
             elif state == "complete" and not content_matters(ctype, body):
                 zero.update({p: i == 0 for i, p in enumerate(pieces)})
     return _encode(parts, zero)

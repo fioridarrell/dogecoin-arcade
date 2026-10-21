@@ -182,8 +182,25 @@ class Snapshots:
 
     # --- fetching one ----------------------------------------------------------------------------------------------
 
+    def may_fetch(self, size: int | None = None) -> str:
+        """Why this arcade does not fetch a whole index ("" when it may). 2026-10-20: .25 -- four cores, a spinning
+        disk, the live site -- fetched two 6 GB copies at once, and the site stopped answering. Only a big machine
+        fetches one, with three times its size free."""
+        from .doginal_index import BIG_FROM_CORES
+        if (os.cpu_count() or 1) < BIG_FROM_CORES:
+            return f"this machine has fewer than {BIG_FROM_CORES} cores: it walks on rather than fetch the whole index"
+        if size is not None:
+            import shutil
+            free = shutil.disk_usage(self.part_path.parent).free
+            if free < 3 * size:
+                return (f"not enough free disk to fetch the whole index ({size / 1e9:.1f} GB; "
+                        f"{free / 1e9:.1f} GB free, {3 * size / 1e9:.1f} GB needed)")
+        return ""
+
     def best_offer(self) -> tuple[str, dict] | None:
         """The newest snapshot offered whole by a linked arcade that holds the index, worth fetching."""
+        if self.may_fetch():
+            return None
         holders = {n for n, _h in self.index.walkers()}
         whole = [(o["h"], n, o) for n, o in self.offers.items()
                  if o.get("have") == "all" and n in holders and time.time() - o["at"] < 600]
@@ -246,6 +263,10 @@ class Snapshots:
             if manifest.get("net") != self.index.net or manifest.get("base") != self.index.base \
                     or manifest.get("rules") != ord_rules.RULES or manifest.get("piece") != PIECE:
                 self._drop("the snapshot is of another chain, start or rules")
+                return
+            why = self.may_fetch(int(manifest.get("size") or 0))
+            if why:
+                self._drop(why)
                 return
             f["manifest"] = manifest
             with open(self.part_path, "wb") as out:

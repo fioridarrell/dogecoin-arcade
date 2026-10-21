@@ -391,15 +391,21 @@ class Store:
     def note_block(self, h: int, raw: bytes) -> None:
         self.x("INSERT OR REPLACE INTO pnote VALUES (?,?)", (h, raw))
 
-    def finish_notes(self, c: int) -> tuple[str, int] | None:
+    def finish_notes(self, c: int, rpc=None) -> tuple[str, int] | None:
         """Chunk c's notes from its blocks' (when all of them are here): kept as this arcade's own, the block notes
-        let go. (digest, packed size), or None."""
+        let go. (digest, packed size), or None. With `rpc`, an envelope begun before the chunk is followed back to its
+        first piece (ord_notes.finish); should that fail, its pieces are kept whole."""
         from . import ord_notes
         lo, hi = chunk_range(c, self.base)
         rows = self.q("SELECT raw FROM pnote WHERE height>=? AND height<? ORDER BY height", (lo, hi))
         if len(rows) != CHUNK:
             return None
-        notes = ord_notes.finish([r[0] for r in rows])
+        lookup = (lambda txid: bytes.fromhex(rpc.call("getrawtransaction", txid, 0))) if rpc is not None else None
+        try:
+            notes = ord_notes.finish([r[0] for r in rows], lookup)
+        except Exception as exc:                         # noqa: BLE001 -- a Core that cannot say: kept whole
+            log.warning("ord index: chunk %d's envelopes could not be followed back (%s): kept whole", c, exc)
+            notes = ord_notes.finish([r[0] for r in rows])
         nd, blob = ord_notes.digest(notes), ord_notes.pack(notes)
         with self.tx() as db:
             db.execute("INSERT OR REPLACE INTO notes VALUES (?,?,?,?,?)", (c, blob, nd, "", time.time()))
@@ -696,7 +702,7 @@ class Walker:
                                 (chunk_range(c, self.base)[0], h))
             if len(rows) == CHUNK:
                 kept = self.store.notes_of(c)
-                nd = kept[1] if kept and kept[2] == "" else (self.store.finish_notes(c) or (None,))[0]
+                nd = kept[1] if kept and kept[2] == "" else (self.store.finish_notes(c, rpc) or (None,))[0]
                 self.store.say(c, "", chunk_hash_of([r[0] for r in rows]), sum(r[1] for r in rows), nd)
         return moves
 
@@ -1012,14 +1018,20 @@ class DoginalIndex:
 
     def _ask_for_snapshot(self) -> None:
         """Far behind the furthest holder, and nobody offers a snapshot: ask that holder to make one."""
-        from .ord_snapshot import SNAP_EVERY, WORTH_BLOCKS
-        walkers = self.walkers()
+        from .ord_snapshot import WORTH_BLOCKS
+        walkers = [(n, h) for n, h in self.walkers() if int((self.chunks.peers.get(n) or {}).get("v") or 0) >= 3]
         if not walkers or self.share is None or not hasattr(self.share, "post_to"):
             return
         node, h = walkers[0]
-        if h - self.walker.next_height() < WORTH_BLOCKS or self.snapshots.best_offer() is not None:
+        if h - self.walker.next_height() < WORTH_BLOCKS:
             return
-        if time.time() - getattr(self, "_snap_wished", 0.0) < SNAP_EVERY / 6:
+        why = self.snapshots.may_fetch()
+        if why:
+            self.snapshots.said = why                    # far behind, and not a machine to fetch it: walks on
+            return
+        if self.snapshots.best_offer() is not None:
+            return
+        if time.time() - getattr(self, "_snap_wished", 0.0) < 600:      # asked again every 10 minutes until offered
             return
         self._snap_wished = time.time()
         self.share.post_to(node, {"op": "sq"})
@@ -1162,30 +1174,27 @@ class DoginalIndex:
         return out
 
     def _check_stitched(self) -> None:
-        """A chunk stitched from another arcade's notes that the audit has since outvoted -- more arcades agree on
-        another hash or other notes, two of them at least -- means the index past it may be wrong: build it again."""
-        rows = self.store.q("SELECT s.chunk, s.hash, s.nd FROM stitched s")
-        if not rows:
-            return
-        words = self.store.all_notes_words(max(c for c, _h, _n in rows) + 1)
-        for c, h, nd in rows:
-            tally: dict[tuple, int] = {}
-            for wh, wnd, _b in (words.get(c) or {}).values():
-                key = (wh, wnd) if wnd else (wh, None)
-                tally[key] = tally.get(key, 0) + 1
-            ours = sum(n for (wh, wnd), n in tally.items() if wh == h and wnd in (nd, None))
-            against = max((n for (wh, wnd), n in tally.items() if wh != h or (wnd and wnd != nd)), default=0)
-            if against >= AGREE and against > ours:
-                self.error = (f"chunk {c} (blocks {chunk_range(c, self.base)[0]:,}+) was stitched from notes the "
-                              f"other arcades have outvoted: building the index again")
-                log.warning("ord index %s: %s", self.net, self.error)
-                self.store.reset()
-                self.store.set_meta("rebuilt", {"at": time.time(), "why": self.error})
-                self.walker.tracked = None
-                self._decoded = None
-                self.chunks.lanes = []
-                self._said_upto = -1
-                return
+        """A chunk stitched from another arcade's notes that the audit has since outvoted -- more arcades, two at least,
+        say a different births hash for it -- means the index past it may be wrong. Said in the Ords panel for the
+        operator to decide; never wiped by itself (2026-10-20: a test machine's PEP index, half walked, "I don't want
+        you to lose any of that"). Only the births hash counts: notes in another format differ without being wrong."""
+        rows = self.store.q("SELECT s.chunk, s.hash FROM stitched s")
+        disputed = []
+        if rows:
+            words = self.store.all_notes_words(max(c for c, _h in rows) + 1)
+            for c, h in rows:
+                tally: dict[str, int] = {}
+                for wh, _wnd, _b in (words.get(c) or {}).values():
+                    tally[wh] = tally.get(wh, 0) + 1
+                ours = tally.get(h, 0)
+                against = max((n for wh, n in tally.items() if wh != h), default=0)
+                if against >= AGREE and against > ours:
+                    disputed.append(c)
+        self.disputed = disputed
+        if disputed:
+            c = disputed[0]
+            log.warning("ord index %s: %d chunk(s) stitched from notes other arcades have outvoted, first %d",
+                        self.net, len(disputed), c)
 
     def _prune_notes(self) -> None:
         """Let go of the notes every arcade holding the index has stitched past (2026-10-20: "Delete after
@@ -1196,7 +1205,8 @@ class DoginalIndex:
         self._pruned = now
         if self.mode() == "walk":
             self._check_stitched()
-        held = self.holders()
+        # Only holders that stitch notes wait for them: an arcade from before the notes (v2) never will.
+        held = [(n, h) for n, h in self.holders() if not n or int((self.chunks.peers.get(n) or {}).get("v") or 0) >= 3]
         if held:
             behind = min(h for _n, h in held)
             self.store.x("DELETE FROM notes WHERE chunk < ?", (chunk_of(behind, self.base),))
@@ -1271,7 +1281,7 @@ class DoginalIndex:
                 got = self.store.chunk_line(c)
                 if got is not None:
                     kept = self.store.notes_of(c)
-                    nd = kept[1] if kept and kept[2] == "" else (self.store.finish_notes(c) or (None,))[0]
+                    nd = kept[1] if kept and kept[2] == "" else (self.store.finish_notes(c, rpc) or (None,))[0]
                     self.store.say(c, "", got[0], got[1], nd)
                     self.helped += 1
                     self.store.set_meta("helped", self.helped)
@@ -1283,8 +1293,12 @@ class DoginalIndex:
         each its own connection) and read in worker processes (Python reads blocks on one core per process)."""
         if not heights:
             return {}
-        if len(heights) == 1 or self._lanes_wanted() == 1:
+        import os
+        small = (os.cpu_count() or 1) < BIG_FROM_CORES
+        if (len(heights) == 1 or self._lanes_wanted() == 1) and not small:
             return {h: scan_block(rpc, h, self.taproot, self.mweb) for h in heights}
+        # A small machine reads every block in a worker process, even on one lane: parsed here, it held the web
+        # process's threads (2026-10-20, .25 helping: pages waited a minute).
         from concurrent.futures import ThreadPoolExecutor
 
         def fetch(h: int) -> tuple[str, str]:
@@ -1492,6 +1506,7 @@ class DoginalIndex:
                                   "pieces": len(f["manifest"]["pieces"]) if f.get("manifest") else None}
                                  if f else None)}
         return {"net": self.net, "levels": levels, "covered": covered, "snapshot": snapshot,
+                "disputed": list(getattr(self, "disputed", []))[:20],
                 "rebuilt": self.store.meta("rebuilt"),
                 "phase": "cover" if covered < ready else "audit",
                 "notes": {"chunks": kept[0], "bytes": kept[1], "own": kept[2]},

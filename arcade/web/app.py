@@ -23021,8 +23021,14 @@ def create_app(state: AppState) -> FastAPI:
                 log.exception("card watch")
             time.sleep(cwlib.EVERY)
 
+    def _cardwatch_when_running():
+        running = getattr(state, "running", None)        # a worker waiting for the run lock (supervisor.py)
+        if running is not None:
+            running.wait()
+        _cardwatch_loop()
+
     if not getattr(state, "no_background", False) and "PYTEST_CURRENT_TEST" not in os.environ:
-        threading.Thread(target=_cardwatch_loop, name="card-watch", daemon=True).start()
+        threading.Thread(target=_cardwatch_when_running, name="card-watch", daemon=True).start()
 
     def _game_by_txid(txid: str) -> dict | None:
         """The game an inscription on the Games tab's chain is, or None."""
@@ -24458,7 +24464,8 @@ def create_app(state: AppState) -> FastAPI:
         unknown = sorted((net, s.get("sharers", 0)) for net, s in status.items()
                          if net not in NETWORKS and s.get("sharers"))
         return {"rows": rows, "mesh": mesh is not None, "unknown": unknown,
-                "restart": bool(os.environ.get("INVOCATION_ID")), "mining": _mining_json()}
+                "restart": bool(os.environ.get("INVOCATION_ID") or os.environ.get("ARCADE_SUPERVISOR_PID")),
+                "mining": _mining_json()}
 
     def _admin_faucet_row(net: str) -> dict | None:
         """A test chain's faucet for Admin -> Chains (2026-10-18): its daily top-off, how it is stocked,
@@ -24643,10 +24650,16 @@ def create_app(state: AppState) -> FastAPI:
         who = _admin_check(request, write=True)
         if not who["local"]:
             return JSONResponse({"detail": "the arcade is restarted at the node machine"}, status_code=403)
+        import signal
+        supervisor = os.environ.get("ARCADE_SUPERVISOR_PID")
+        if supervisor:
+            # Run by the supervisor (arcade/web/supervisor.py): a reload -- the new worker gets ready beside this one,
+            # and nobody sees the arcade go down.
+            threading.Timer(1.0, lambda: os.kill(int(supervisor), signal.SIGHUP)).start()
+            return JSONResponse({"ok": True})
         if not os.environ.get("INVOCATION_ID"):
             return JSONResponse({"detail": "this arcade is not run by a service that would start it again; "
                                            "restart it yourself"}, status_code=409)
-        import signal
         threading.Timer(1.0, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
         return JSONResponse({"ok": True})
 

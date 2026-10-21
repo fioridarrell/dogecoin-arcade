@@ -1109,6 +1109,9 @@ section.panel h2{margin-top:0}
           else if (sn.said) bits.push(sn.said);
           if (sn.made) bits.push('serves a copy of its index at block ' + num(sn.made));
           if (r.rebuilt && r.rebuilt.why) bits.push('built again: ' + r.rebuilt.why);
+          if ((r.disputed || []).length) bits.push('needs you: ' + r.disputed.length + ' chunk(s) this index stitched from '
+            + 'another arcade\u2019s notes are now outvoted (first: chunk ' + num(r.disputed[0]) + '). The index past it may be '
+            + 'wrong; nothing was changed. Ask Claude before rebuilding.');
           if (r.error) bits.push(r.error);
           tr.appendChild(lines(bits, (r.differ || r.error) ? 'idx-bad' : 'muted'));
           tb.appendChild(tr);

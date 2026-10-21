@@ -88,6 +88,33 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-20 · the operator's side · zero-downtime restarts (a supervisor); spend notes v2; ord pruning fixes
+
+The operator: "add zero downtime restarts to Dogecoin arcade so that every node has redundancy", then "Word".
+- **arcade/web/supervisor.py**: `arcade-web` is now a small supervisor holding the port; the arcade runs as its child
+  (`--worker-fd`). A reload (SIGHUP: post-merge hook, arcade/update.py, Admin's restart) starts the new worker beside
+  the old; it builds the app, says "warm", and waits for the run lock (`web.lock` flock) the old one lets go when it
+  exits. Connections wait in the shared socket meanwhile: a few seconds late, never a 502 (load test: 934 requests
+  through two reloads, all 200, slowest 2.9 s). Two workers never serve or run background work at once. A dead
+  worker is started again at once. `ARCADE_NO_SUPERVISOR=1` runs the old way. Pidfile: <home>/web-supervisor.pid.
+  The FIRST deploy of this needs one ordinary restart; every later one is seamless. App imports in __main__ are
+  lazy so the supervisor stays small; card watch waits for `state.running`.
+- **Notes v2** (ord_notes.VERSION 2): an envelope begun before the chunk is followed back to its first piece through
+  the Core (`genesis_before`) and zeroed when its first piece says it cannot matter (`may_matter`): a heavy PEP Main
+  chunk 20 MB -> 1.5 MB.
+- Notes wait only for holders on v3 (an older arcade never stitches them); a holder far behind asks for a snapshot
+  every 10 minutes, of v3 holders only.
+- **Only a big machine fetches the whole index** (8+ cores, three times its size free): 2026-10-20 ~22:00 .25 fetched two
+  6 GB copies onto its spinning disk and the live site stopped answering (load 12, 85% I/O wait). Full indexes are
+  several GB (Dogecoin 14M inscriptions at ~8% of its blocks), not the ~1 GB planned. .25 set to Read only for both.
+- **Helping on a small machine stays off the web process**: ~22:11 .25 on Help scan stalled pages for a minute (the
+  deployed notes re-parsed a whole envelope for every new piece, in the web process). Now an envelope that may matter
+  is re-parsed only up to MAX_PARSED=50 pieces (then kept whole), and a machine under 8 cores reads blocks in a worker
+  process even on one lane. .25 back on Read only until this is live.
+- **An outvoted stitched chunk is SAID, never wiped** (`disputed` in the status, a "needs you" line in Admin -> Ords;
+  Store.reset is no longer called by itself): the operator, "I don't want you to lose any of that index information" (the
+  a test machine's PEP Main index, ~50% walked). Only the births hash counts as a dispute: notes v1 and v2 differ harmlessly.
+
 ### 2026-10-20 · the operator's side · ord index: cover in line, spend notes stitched, audit after, the whole index torrent-style; own machine opens as its operator
 
 Branch claude/ord-cover-stitch. The operator asked for this design in his own words (the operator's

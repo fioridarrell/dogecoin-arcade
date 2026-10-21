@@ -793,8 +793,9 @@ def test_notes_cross_a_link_in_parts_and_a_wrong_part_is_refused(tmp_path, monke
     assert holder.got_notes("liar", 1, blob[:-3], nd, h) is False, "cut short"
 
 
-def test_a_chunk_stitched_from_notes_the_audit_outvotes_builds_the_index_again(tmp_path):
-    """The holder trusted one helper's notes for a chunk during the cover; two auditors later say otherwise of it."""
+def test_a_chunk_stitched_from_notes_the_audit_outvotes_is_said_never_wiped(tmp_path):
+    """The holder trusted one helper's notes for a chunk during the cover; two auditors later say otherwise of it. It is
+    said for the operator; the index is kept (2026-10-20: never lose an index by itself)."""
     chain = _story_chain()
     mesh = Mesh()
     a = dx.DoginalIndex(tmp_path / "a.sqlite", lambda: chain, lambda: "help", cores=lambda: 1)
@@ -812,10 +813,14 @@ def test_a_chunk_stitched_from_notes_the_audit_outvotes_builds_the_index_again(t
     for liar in ("x", "y"):
         holder.heard(liar, {"op": "hi", "mode": "help", "rules": dx.ord_rules.RULES})
         holder.heard(liar, {"op": "dn", "rows": [[1, "cd" * 32, 0, "ef" * 32]]})
+    kept = holder.store.q("SELECT COUNT(*) FROM insc")[0][0]
     holder._pruned = 0
     holder._prune_notes()
-    assert "outvoted" in holder.error and holder.walker.next_height() == dx.BASE
-    assert holder.store.q("SELECT COUNT(*) FROM insc")[0][0] == 0
+    assert holder.status()["disputed"] == [1] or holder.disputed == [1]
+    assert holder.walker.next_height() == dx.BASE + 12 and holder.store.q("SELECT COUNT(*) FROM insc")[0][0] == kept
+    for liar in ("p", "q"):                              # other notes, the same births: not a dispute
+        holder.heard(liar, {"op": "hi", "mode": "help", "rules": dx.ord_rules.RULES})
+    assert holder.disputed == [1]
 
 
 def _hold_round(mesh, *indexes):
@@ -914,3 +919,68 @@ def test_a_chunk_only_an_older_arcade_said_is_scanned_here_not_waited_for(tmp_pa
         return holder.walker.next_height() - dx.BASE
     assert holder_after_three_passes("before", needed=False) == 4, "it waited at chunk 1 for notes nobody has"
     assert holder_after_three_passes("now") >= 8
+
+
+def test_an_envelope_begun_in_an_earlier_chunk_is_followed_back_and_zeroed_when_it_cannot_matter(tmp_path):
+    """2026-10-20: PEP's big images in hundreds of pieces cross every chunk's edge; kept whole, a chunk's notes were as
+    big as its blocks (27 MB). Followed back to its first piece through the Core, an image's later pieces are zeroed;
+    a name's are kept; and the index stitched from those notes is still the one a walk from a Core makes."""
+    from arcade import ord_notes
+    ord_notes._GENESIS.clear()
+    chain = Chain()
+    a = _tx([(FUND, 0, _envelope(b"image/jpeg", parts=((2, b"\xff\xd8" + b"J" * 200),), total=3))], [100_000], tag=b"a")
+    n = _tx([(FUND, 1, _envelope(b"text/plain", parts=((1, b"pup"),), total=2))], [100_000], tag=b"n")
+    chain.add([a, n])                                                           # block 0
+    chain.add([])
+    chain.add([])
+    chain.add([])                                                               # blocks 1-3: the chunk ends
+    b = _tx([(a[1], 0, _more(((1, b"K" * 200),)))], [100_000], tag=b"b")
+    m = _tx([(n[1], 0, _more(((0, b".doge"),)))], [100_000], tag=b"m")
+    chain.add([b, m])                                                           # block 4: both carry on
+    c = _tx([(b[1], 0, _more(((0, b"L" * 200),)))], [100_000], tag=b"c")
+    chain.add([c])                                                              # block 5: the image ends
+    chain.add([])
+    chain.add([])                                                               # blocks 6, 7
+    blocks = [rawchain.read_block(raw) for _h, raw in chain.blocks]
+    lookup = lambda txid: chain.txs[txid]
+    second = ord_notes.finish([ord_notes.one_block(x) for x in blocks[4:8]], lookup)
+    assert b"K" * 200 not in second and b"L" * 200 not in second, "the image's later pieces, zeroed"
+    assert b".doge" in second, "a name's piece is kept: plain text can matter"
+    kept_whole = ord_notes.finish([ord_notes.one_block(x) for x in blocks[4:8]])
+    assert b"K" * 200 in kept_whole, "with no way to look back, kept whole"
+    assert ord_notes.finish([ord_notes.one_block(x) for x in blocks[4:8]], lookup) == second, "canonical"
+
+    walked = _walker(tmp_path, chain)
+    walked.walker.step(chain, dx.BASE + 7, budget=60)
+    assert walked.name("pup.doge")["readings"]["spec"]["winner"], "the name across the edge"
+    assert ord_notes.unpack(walked.store.notes_of(1)[0]) == second, "a walk follows them back through its Core too"
+    assert walked.store.q("SELECT size, pieces FROM insc WHERE id=?", (f"{a[1]}i0",))[0] == (602, 3)
+    notes = {0: ord_notes.finish([ord_notes.one_block(x) for x in blocks[0:4]], lookup), 1: second}
+    stitched = dx.DoginalIndex(tmp_path / "s.sqlite", lambda: chain, lambda: "walk")
+    stitched.walker.step(chain, dx.BASE + 7, budget=60, notes=lambda k: (ord_notes.decode(notes[k]), False))
+    assert _dump(stitched) == _dump(walked)
+
+
+def test_a_small_machine_never_fetches_the_whole_index(tmp_path, monkeypatch):
+    """2026-10-20: .25 (four cores, a spinning disk, the live site) fetched two 6 GB copies at once and the site stopped
+    answering. A machine under BIG_FROM_CORES walks on instead, and says so; nor does it ask a holder to make one."""
+    from arcade import ord_snapshot
+    monkeypatch.setattr(ord_snapshot, "WORTH_BLOCKS", 4)
+    chain = _story_chain()
+    mesh = Mesh()
+    holder = dx.DoginalIndex(tmp_path / "h.sqlite", lambda: chain, lambda: "walk", cores=lambda: 1)
+    small = dx.DoginalIndex(tmp_path / "s.sqlite", lambda: chain, lambda: "walk", own_core=lambda: False)
+    holder.walker.step(chain, dx.BASE + 11, budget=60)
+    holder.store.x("DELETE FROM notes")
+    holder._snap_asked = True
+    for name, idx in (("holder", holder), ("small", small)):
+        mesh.join(name, idx)
+        idx.me = name
+    monkeypatch.setattr(ord_snapshot.os, "cpu_count", lambda: 4)
+    for _ in range(6):
+        _hold_round(mesh, holder, small)
+    assert small.snapshots.fetch is None and small.walker.next_height() == dx.BASE
+    assert "fewer than 8 cores" in small.snapshots.said
+    assert not any(x[2] == "piece" for x in mesh.fetched if x[0] == "small")
+    monkeypatch.setattr(ord_snapshot.os, "cpu_count", lambda: 20)
+    assert "free disk" in small.snapshots.may_fetch(10 ** 15), "and a big one with too little room says so"
