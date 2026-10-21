@@ -23830,6 +23830,27 @@ def create_app(state: AppState) -> FastAPI:
                             f"{importslib.say_wait(eta)}."}
         if (chain.network, address) in _rescan_queue:
             fails, until = _core_retry.get(chain.network, (0, 0.0)) if _core_rescan_on(chain) else (0, 0.0)
+            sent = state.setting(f"core_rescan_sent:{chain.network}", None)
+            if (_core_rescan_on(chain) and not fails and catchuplib.held(chain.network)
+                    and isinstance(sent, dict)):
+                # The Core is at a whole-chain rescan (one an arcade restart cut the connection to goes on all the
+                # same), and waited for: said as what it is, with its countdown (2026-10-21: "the arcades node
+                # is re-scanning and give a estimate time until finished"), never as "no node to borrow".
+                total = _run_left({"network": chain.network, "end": state.token_index(chain).indexed_height() or 0,
+                                   "core_next": True})
+                left = float(sent.get("at") or time.time()) + total - time.time()
+                mine = address in (sent.get("addresses") or ())
+                then = "" if mine else " After it, one more rescan reads this wallet's coins."
+                if left <= 0:
+                    return {"state": "rescan", "eta": None, "core": True,
+                            "says": "This arcade's node is rescanning the whole chain for imported wallets, and it is "
+                                    "taking longer than expected; it is still running, and the arcade reads the chain "
+                                    f"from another arcade meanwhile.{then} Check back later."}
+                eta = left + (0 if mine else total)
+                return {"state": "rescan", "eta": int(eta), "core": True,
+                        "says": f"This arcade's node is rescanning the whole chain for imported wallets (meanwhile the "
+                                f"arcade reads the chain from another arcade, so sends work as usual).{then} Check back "
+                                f"in about {importslib.say_wait(eta)}."}
             if fails:
                 when = ("after the arcade restarts" if fails >= CORE_RETRY_MAX
                         else f"in {importslib.say_wait(max(0.0, until - time.time()))}")

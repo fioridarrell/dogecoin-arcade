@@ -549,3 +549,26 @@ def test_a_busy_core_is_waited_for_and_a_rescan_it_already_ran_is_not_sent_again
     utxos.seed_from_core_wallet(index, core, P, [a], 500, sent={"at": sent_at, "addresses": [a]},
                                 remember=kept.update)
     assert core.batches == [[a]] and kept["addresses"] == [a]
+
+
+def test_a_core_still_rescanning_is_said_so_with_its_countdown(client, monkeypatch):
+    """2026-10-21 (a screenshot of "There is no node to borrow right now" while sends worked through a borrowed
+    node): while this arcade's Core is held at a rescan, waited for, the notice says the node is rescanning and about
+    how long is left -- never that there is nobody to borrow from."""
+    from arcade import core_catchup
+    app, state, chain, account = _ready(client, monkeypatch)
+    state.set_setting("import_core_rescan:ltctest", True)
+    _tip(state, chain, P.messaging_start_height + 40)
+    asked = _proof(account, 0x9101)
+    app.post("/account/imported/address", json=asked)
+    monkeypatch.setitem(core_catchup.HOLDS, "ltctest", "rescanning for wallet imports")
+    monkeypatch.setattr(core_catchup, "_loaded", True)
+    state.set_setting("core_rescan_rate:ltctest", 1.0)                 # a block a second: the tip's height in seconds
+    state.set_setting("core_rescan_sent:ltctest", {"at": time.time() - 10, "addresses": [asked["address"]]})
+    said = app.post("/account/imported/rescan", json={"chain": "ltctest", "address": asked["address"]}).json()
+    assert said["state"] == "rescan" and said["says"].startswith("This arcade's node is rescanning the whole chain")
+    assert "no node to borrow" not in said["says"] and said["eta"] > 0
+    # One sent before this wallet was imported: that one, then one more for it.
+    state.set_setting("core_rescan_sent:ltctest", {"at": time.time() - 10, "addresses": ["someone else"]})
+    said = app.post("/account/imported/rescan", json={"chain": "ltctest", "address": asked["address"]}).json()
+    assert "one more rescan reads this wallet's coins" in said["says"]
