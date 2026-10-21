@@ -788,8 +788,13 @@ class Walker:
         again)."""
         n = int(self.store.q("SELECT COUNT(*) FROM at")[0][0])
         seen = _Seen(2 * n + 100_000)
-        for tx, vout in self.store.q("SELECT tx, vout FROM at"):
-            seen.add(bytes(tx) + vout.to_bytes(4, "little"))
+        # Read a row at a time on a connection of its own: a list of 22 million rows was itself gigabytes.
+        db = sqlite3.connect(self.store.path, timeout=60)
+        try:
+            for tx, vout in db.execute("SELECT tx, vout FROM at"):
+                seen.add(bytes(tx) + vout.to_bytes(4, "little"))
+        finally:
+            db.close()
         self.tracked = seen
 
     @staticmethod
