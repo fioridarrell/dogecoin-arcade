@@ -181,7 +181,8 @@ def test_a_tab_lists_a_token_and_another_node_takes_it(world, monkeypatch):
         _scan_a(a)
         O.import_announced(a.trade_orders, a.token_index(a.messaging), "regtest")
         found = next(o for o in a.trade_orders.visible(a.mesh.online) if o["id"] == mine["id"])
-        assert found["give"] == {"network": "regtest", "kind": "token", "asset": "150", "amount": 40 * COIN}
+        assert found["give"] == {"network": "regtest", "kind": "token", "asset": "150", "amount": 40 * COIN,
+                                 "fee_bps": 0}
         give = b.leg("doge", 2 * COIN, bytes.fromhex(found["take_key"]))
         get = T.Leg("regtest", "token", "150", 40 * COIN, found["trade_key"], b.key.pubkey.hex())
         trade = b.propose(bytes.fromhex(found["msg_key"]), found["id"], give, get).id
@@ -336,7 +337,7 @@ def test_the_list_form_offers_a_token_the_account_holds(world, monkeypatch):
     O.import_announced(a.trade_orders, a.token_index(a.messaging), "regtest")
     listed = [o for o in a.trade_orders.visible(a.mesh.online) if o["lister"] == made]
     assert listed and listed[0]["give"] == {"network": "regtest", "kind": "token", "asset": "150",
-                                            "amount": 40 * COIN}
+                                            "amount": 40 * COIN, "fee_bps": 0}
 
 
 def test_the_swap_finishes_with_the_listers_browser_closed(world, monkeypatch):

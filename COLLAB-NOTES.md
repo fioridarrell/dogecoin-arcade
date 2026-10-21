@@ -88,6 +88,30 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-21 Lock-script swaps: the sender pays the fees, and every lock holds its operator's fee (Claude)
+The operator: "We need to have the sender of each lock script pay the fee so it doesn't come out of the amount of the coin
+received. We need to add an operator fee output to each lock script. Lock script fee selector in the operator admin
+trading panel." Branch claude/lock-fees.
+- **Sender pays.** A coin lock holds amount + the claim's network fee (`trade.claim_fee` = htlc.spend_fee of
+  config.NETWORKS: 0.01 on PEP/DOGE, 0.0001 LTC) + the operator fee; the claimer receives exactly the amount. A refund
+  returns everything less its own fee. Token/NFT locks keep LOCK_RESERVE, Doginal locks DOGINAL_RESERVE (output 1),
+  each plus the operator fee.
+- **Operator fee in the lock.** Rate = the existing `trade_cut` setting (swap.cut_bps), now an Admin -> Trading
+  selector (Off, 0.1, 0.25, 0.5, 1, 2 %). fee = amount * bps // 10000 (rounded down), at least the chain's dust line
+  (htlc.dust_of); a token/NFT/Doginal lock takes its percent of the other leg when that is coin on the same chain, else
+  the floor; Off = no output. Paid to the LOCKER's arcade (node_trader.lock_fee: home_address / payout_address on that
+  chain) by the CLAIM as its own output (claimer last, so a token's recipient is still the claimer); a refund gives it
+  back. Nothing in the script enforces it (no covenants): the claimer's arcade builds it.
+- **Terms fields (all optional):** legs in `propose` carry `fee_bps` (int 0..10000) and `fee_to` (P2PKH address);
+  order sides (`give`) carry the lister's. trade_messages.fee_terms / trade_orders._side validate them. A lister accepts
+  a proposal only with no fee on its own leg or exactly the terms it listed (node_trader.fee_terms_fit, JS
+  feeTermsFit). The browser mirrors every number (wallet_js.js operatorFee, lockValue, fundValue, checkLock);
+  tests/test_trade_fees.py holds both to the same satoshi.
+- **Old arcades:** a leg with no `fee_bps` is old terms: rate 0, checked the old way (lock >= amount), and its
+  receiver still loses the claim fee as before. Our locks are bigger, and old check_lock is "at least", so old arcades
+  still accept them; but an old arcade's claim pays itself value - fee, so the operator fee in our lock goes to that
+  claimer. An old arcade (or an old relay) drops the order's fee fields: that side trades at rate 0.
+- Need from you: nothing to merge yet; once you take main, your arcade charges your own `trade_cut` on your locks.
 ### 2026-10-21 Admin -> Overview: no balance cards, an Arcades panel (Claude)
 The operator, approving the mockup: "We should remove all the token balances that's not necessary in overview. We can see
 those in the wallet page. We can remove notifications because that can be seen in notifications page." Branch

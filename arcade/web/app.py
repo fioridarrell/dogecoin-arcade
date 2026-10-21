@@ -10945,6 +10945,14 @@ def create_app(state: AppState) -> FastAPI:
                 held += int(coin["value"])
         return held
 
+    def _lock_fee_on(chain) -> dict:
+        """This arcade's operator fee for a lock on `chain` (node_trader.lock_fee): {bps, to}, or {} when Off."""
+        from ..node_trader import lock_fee
+        try:
+            return lock_fee(state, chain)
+        except Exception:                                  # noqa: BLE001 -- no fee rather than no page
+            return {}
+
     def _doginal_needs() -> dict:
         """What Dogecoin a wallet needs ON TOP of its Doginals to move one (2026-10-15: "If the user doesn't have any
         Dogecoin in their wallet, and their only Doge coin is a Doginal they can't make a swap. Those buttons should be
@@ -11880,7 +11888,10 @@ def create_app(state: AppState) -> FastAPI:
                    # Whether the words were ever typed back, for the notice
                    # the Wallet tab shows beside real coins. Spends no longer
                    # wait on it (2026-10-08).
-                   "backed_up": _words_backed_up(account)}
+                   "backed_up": _words_backed_up(account),
+                   # This arcade's lock-fee terms here (node_trader.lock_fee, 2026-10-21): what the
+                   # page writes into the legs it locks, {} when the fee is Off. Never the account's own.
+                   "lock_fee": _lock_fee_on(one)}
             if here:
                 try:
                     index = state.token_index(one)
@@ -17147,7 +17158,56 @@ def create_app(state: AppState) -> FastAPI:
             raise ValueError("an NFT leg names its inscription")
         return tradelib.Leg(chain.network, kind, asset, 1 if kind == "nft" else amount, "", "")
 
-    def _doginal_lock(account, chain, owner: str, leg, redeem: bytes, hint: Any):
+    def _trade_operator(said: Any, chain) -> tuple[int, str] | None:
+        """The operator fee of the lock a tab names (2026-10-21: "add an operator fee output to each lock
+        script"), as the tab worked it out from the swap's terms (wallet_js.js operatorFee, the same arithmetic as
+        trade.operator_fee): {fee, fee_to} on its leg; None for none. For the tab's OWN lock it is what goes in on top;
+        for the lock it claims, the output its claim pays the other side's operator. Checked to be a payable address
+        and worth an output; how much is the account's own word, about its own swap."""
+        from .. import htlc as htlclib
+        leg = said if isinstance(said, dict) else {}
+        try:
+            fee = int(leg.get("fee") or 0)
+        except (TypeError, ValueError):
+            raise ValueError("an operator fee is a whole number of base units")
+        if fee <= 0:
+            return None
+        to = str(leg.get("fee_to") or "")
+        if not tradelib.payee_ok(to):
+            raise ValueError("an operator fee is paid to an address")
+        if fee < htlclib.dust_of(chain.params):
+            raise ValueError("an operator fee under the dust line would not relay")
+        return fee, to
+
+    def _lock_spend_pays(decoded: dict, owner: str, lock_address: str, kind: str,
+                         operator: tuple[int, str] | None) -> None:
+        """A lock spend the tab hands back pays this account and nobody else -- but for, on a claim, the one output of
+        exactly the operator fee the terms owe the other side's operator (2026-10-21), and, moving a token or NFT out,
+        what is left of the lock's coin back into the lock itself. The account's output is the last (a token's
+        recipient), or for a Doginal the first (its inscription's koinu). ValueError if not."""
+        outs = decoded["vout"]
+        ok = {owner, lock_address}
+        paid = []
+        for o in outs:
+            addresses = o["scriptPubKey"].get("addresses", [])
+            for a in addresses:
+                if a in ok:
+                    continue
+                if kind == "claim" and operator is not None and a == operator[1] and addresses == [a]:
+                    paid.append(round(float(o["value"]) * COIN))
+                    continue
+                raise ValueError("that spend pays somebody besides this account")
+        if paid and paid != [operator[0]]:
+            raise ValueError("that spend pays the operator something other than the fee agreed")
+        # A Doginal comes out with two inputs (the Doginal and its reserve, htlc.doginal_out): its first output is the
+        # Doginal's coin; everything else's last output is the token's recipient, so never the operator's.
+        doginal = len(decoded.get("vin") or []) == 2
+        mine = outs[0 if doginal else -1]["scriptPubKey"].get("addresses", []) if outs else []
+        if mine != [owner]:
+            raise ValueError("a lock spend's last output is this account's" if not doginal
+                             else "a Doginal comes out of its lock as this account's first output")
+
+    def _doginal_lock(account, chain, owner: str, leg, redeem: bytes, hint: Any, reserve: int | None = None):
         """The unsigned lock of one Doginal from this account's own coins. `hint` ({txid, vout}) is
         the coin the tab's wallet already knows carries it; without one, the account's coins are
         read until one does (each reading is kept, so each is read once)."""
@@ -17178,7 +17238,8 @@ def create_app(state: AppState) -> FastAPI:
             if found is None:
                 raise ValueError(f"this account does not hold Doginal {leg.asset} (or the chain cannot be read right now)")
             return fundinglib.build_doginal_lock(
-                db, chain.params, owner, found, leg.asset, htlclib.p2sh_script(redeem), htlclib.DOGINAL_RESERVE,
+                db, chain.params, owner, found, leg.asset, htlclib.p2sh_script(redeem),
+                htlclib.DOGINAL_RESERVE if reserve is None else int(reserve),
                 rate=fees.MIN_FEE_PER_KB, exclude=spent, extra=_flights.change_for(account.pubkey, chain.network))
 
     @app.post("/account/trade/lock")
@@ -17194,6 +17255,8 @@ def create_app(state: AppState) -> FastAPI:
             if lock["refunder"] != _coin_pubkey(account.pubkey, chain):
                 raise ValueError("that lock would refund somebody else; only lock your own")
             leg = _trade_leg(said.get("leg"), chain, account)
+            # This account's arcade's operator fee goes into its own lock on top (2026-10-21).
+            cut = (_trade_operator(said.get("leg"), chain) or (0, ""))[0]
             index = state.token_index(chain)
             mine = _coin_pubkey(account.pubkey, chain)
             if leg.kind == "token":
@@ -17217,7 +17280,8 @@ def create_app(state: AppState) -> FastAPI:
             elif leg.kind == "doginal":
                 # The coin carrying exactly this Doginal at its first koinu goes in whole as output 0
                 # of the lock, its reserve beside it as output 1 (funding.build_doginal_lock).
-                unsigned = _doginal_lock(account, chain, owner, leg, redeem, said.get("coin"))
+                unsigned = _doginal_lock(account, chain, owner, leg, redeem, said.get("coin"),
+                                         reserve=htlclib.DOGINAL_RESERVE + cut)
                 _quota(account, "send")
                 offer = _offers.add(account.pubkey, chain.network, unsigned, unsigned.what)
                 return JSONResponse({"offer": offer.id, "lock": htlclib.address_of(redeem, chain.params),
@@ -17225,7 +17289,7 @@ def create_app(state: AppState) -> FastAPI:
             else:
                 raise ValueError("a coin goes into its lock with an ordinary send")
             address = htlclib.address_of(redeem, chain.params)
-            outputs.append((tradelib.LOCK_RESERVE, txbuild.p2pkh_script(address)))
+            outputs.append((tradelib.LOCK_RESERVE + cut, txbuild.p2pkh_script(address)))
             with contextlib.closing(index.open()) as db:
                 unsigned = fundinglib.build(
                     db, chain.params, owner, outputs, rate=fees.MIN_FEE_PER_KB, what=what,
@@ -17263,6 +17327,8 @@ def create_app(state: AppState) -> FastAPI:
                 raise ValueError("that coin is not under this lock")
             coin = {"txid": txid, "vout": vout, "value": int(round(float(out["value"]) * COIN))}
             leg = _trade_leg(said.get("leg"), chain, account)
+            # A claim pays the other side's operator the fee its lock holds; a refund gives everything back.
+            operator = _trade_operator(said.get("leg"), chain) if kind == "claim" else None
             if leg.kind == "doginal":
                 # Two inputs under the lock: the Doginal (output 0), then its reserve (output 1) as the fee.
                 with chain.rpc() as rpc:
@@ -17270,13 +17336,16 @@ def create_app(state: AppState) -> FastAPI:
                 if vout != 0 or beside is None or beside["scriptPubKey"]["hex"] != out["scriptPubKey"]["hex"]:
                     raise ValueError("a Doginal's lock is output 0, with its reserve beside it as output 1")
                 inputs, outputs = htlclib.doginal_out(
-                    coin, {"txid": txid, "vout": 1, "value": int(round(float(beside["value"]) * COIN))}, owner)
+                    coin, {"txid": txid, "vout": 1, "value": int(round(float(beside["value"]) * COIN))}, owner,
+                    operator=operator, refund=kind == "refund")
             elif leg.kind == "coin":
-                inputs, outputs = htlclib.pay_out(coin, owner, params=chain.params)
+                inputs, outputs = htlclib.pay_out(coin, owner, fee=tradelib.claim_fee(chain.network),
+                                                  params=chain.params, operator=operator)
             else:
                 # The token or NFT moved out by the lock's own reserve, to this account.
                 inputs, outputs = htlclib.move_out(coin, htlclib.address_of(redeem, chain.params),
-                                                   tradelib.move_data(leg), owner)
+                                                   tradelib.move_data(leg), owner, operator=operator,
+                                                   params=chain.params)
             if kind == "refund":
                 inputs = [{**c, "sequence": htlclib.NOT_FINAL} for c in inputs]
                 locktime = lock["locktime"]
@@ -17313,14 +17382,11 @@ def create_app(state: AppState) -> FastAPI:
                     if under is None or under["scriptPubKey"]["hex"] != htlclib.p2sh_script(redeem).hex():
                         raise ValueError("that spend takes a coin that is not under this lock")
                 # This account, and -- moving a token or NFT out -- what is left of the
-                # lock's coin back into the lock itself; nobody else.
-                ok = {owner, htlclib.address_of(redeem, chain.params)}
-                if any(a not in ok for o in decoded["vout"]
-                       for a in o["scriptPubKey"].get("addresses", [])):
-                    raise ValueError("that spend pays somebody besides this account")
-                last = decoded["vout"][-1]["scriptPubKey"].get("addresses", [])
-                if last != [owner]:
-                    raise ValueError("a lock spend's last output is this account's")
+                # lock's coin back into the lock itself; on a claim, the operator fee agreed; nobody else.
+                kind = "refund" if said.get("kind") == "refund" else "claim"
+                # The terms are read for a claim only: nothing a leg says can stand in the way of a refund.
+                _lock_spend_pays(decoded, owner, htlclib.address_of(redeem, chain.params), kind,
+                                 _trade_operator(said.get("leg"), chain) if kind == "claim" else None)
                 from ..trade_watch import put_scripts, WatchError
                 if said.get("kind") == "refund":
                     scripts = [htlclib.refund_script_sig(sig, redeem) for sig in sigs]
@@ -17373,11 +17439,8 @@ def create_app(state: AppState) -> FastAPI:
                 raise ValueError("one signature per input")
             if prev is None or prev["scriptPubKey"]["hex"] != htlclib.p2sh_script(redeem).hex():
                 raise ValueError("that coin is not under this lock, or is already spent")
-            if any(a not in (owner, lock_address) for o in decoded["vout"]
-                   for a in o["scriptPubKey"].get("addresses", [])):
-                raise ValueError("that spend pays somebody besides this account")
-            if decoded["vout"][-1]["scriptPubKey"].get("addresses", []) != [owner]:
-                raise ValueError("a lock spend's last output is this account's")
+            _lock_spend_pays(decoded, owner, lock_address, kind,
+                             _trade_operator(said.get("leg"), chain) if kind == "claim" else None)
             locktime = int(decoded.get("locktime", 0))
             if kind == "refund" and locktime != lock["locktime"]:
                 raise ValueError("a refund carries the lock's own time")
@@ -29622,8 +29685,12 @@ def create_app(state: AppState) -> FastAPI:
             return JSONResponse({"detail": "this node does not run that chain"}, status_code=400)
         except (ValueError, KeyError, TypeError) as exc:
             return JSONResponse({"detail": str(exc)}, status_code=400)
+        # The lock-fee terms the node stood the order with (node_trader.stand): the page posts the order with exactly
+        # these, so a taker's proposal fits them (node_trader.fee_terms_fit).
+        stood = next((o["give"] for o in state.node_trader.standing() if o["id"] == oid), {})
         return JSONResponse({"msg_key": state.ensure_identity().public_bytes.hex(), "node": mesh.node_id,
-                             "deposit": deposit})
+                             "deposit": deposit,
+                             "lock_fee": {"bps": int(stood.get("fee_bps") or 0), "to": stood.get("fee_to", "")}})
 
     @app.post("/account/orders/post")
     def orders_post(request: Request, payload: Any = Body(None)):
@@ -30023,8 +30090,11 @@ def create_app(state: AppState) -> FastAPI:
             give = trader.leg(want["network"], want["amount"],
                               bytes.fromhex(found.get("take_key") or found["trade_key"]),
                               kind=want["kind"], asset=want["asset"])
+            # The lister's own lock-fee terms come with its order (fee_bps, fee_to; absent from an arcade before
+            # 2026-10-21, and then that lock is held to the old rule).
             get = tradelib.Leg(found["give"]["network"], found["give"]["kind"], found["give"]["asset"],
-                               found["give"]["amount"], found["trade_key"], mine.hex())
+                               found["give"]["amount"], found["trade_key"], mine.hex(),
+                               found["give"].get("fee_bps"), found["give"].get("fee_to", ""))
             trade = trader.propose(bytes.fromhex(found["msg_key"]), found["id"], give, get)
             state.flash(f"Proposed ({trade.id}). It locks and settles by itself; follow it below.", "ok")
         except Exception as exc:
