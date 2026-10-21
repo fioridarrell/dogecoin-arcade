@@ -76,35 +76,72 @@ def push_number(data: bytes) -> int | None:
 def parse(scripts: list[bytes]) -> tuple[str, bytes, bytes]:
     """("none" | "partial" | "complete", content type, body) for input 0's scripts of a chain of transactions
     (InscriptionParser::parse)."""
-    pushes = decode_push_datas(scripts[0])
-    if pushes is None or len(pushes) < 3 or pushes[0] != b"ord":
-        return "none", b"", b""
-    npieces = push_number(pushes[1])
-    if not npieces:
-        return "none", b"", b""
-    ctype, rest, body = pushes[2], pushes[3:], b""
-    left = list(scripts)
-    while True:
-        while True:
-            if npieces == 0:
-                return "complete", ctype, body
-            if len(rest) < 2:
-                break
-            nxt = push_number(rest[0])
-            if nxt is None or nxt != npieces - 1:
-                break
-            body += rest[1]
-            rest = rest[2:]
-            npieces -= 1
-        if len(left) <= 1:
-            return "partial", ctype, body
-        left = left[1:]
-        rest = decode_push_datas(left[0])
-        if rest is None or len(rest) < 2:
-            return "none", b"", b""
+    got = envelope_start(scripts[0])
+    for script in scripts[1:]:
+        if got[0] != "partial":
+            break
+        got = envelope_more(got, script)
+    return got[0], got[1], got[3]
+
+
+#: An envelope being read a piece at a time: (state, content type, pieces still to come, body so far). The walk keeps
+#: one of these for a body still arriving, never the pieces themselves (2026-10-20: keeping every piece's script, and
+#: copying it into every block's undo, made PEP Main's index 6 GB bigger than it is).
+Envelope = tuple[str, bytes, int, bytes]
+_NONE: Envelope = ("none", b"", 0, b"")
+
+
+def _pieces(rest: list[bytes], npieces: int, body: bytes) -> tuple[int, bytes]:
+    """Take the countdown pieces off one script's pushes, in order, while they count down."""
+    while npieces and len(rest) >= 2:
         nxt = push_number(rest[0])
         if nxt is None or nxt != npieces - 1:
-            return "none", b"", b""
+            break
+        body += rest[1]
+        rest = rest[2:]
+        npieces -= 1
+    return npieces, body
+
+
+def envelope_start(script0: bytes) -> Envelope:
+    """The envelope a chain's first transaction starts (its input 0's script)."""
+    pushes = decode_push_datas(script0)
+    if pushes is None or len(pushes) < 3 or pushes[0] != b"ord":
+        return _NONE
+    npieces = push_number(pushes[1])
+    if not npieces:
+        return _NONE
+    left, body = _pieces(pushes[3:], npieces, b"")
+    return ("complete" if left == 0 else "partial"), pushes[2], left, body
+
+
+def envelope_more(env: Envelope, script: bytes) -> Envelope:
+    """A partial envelope and the next transaction's input 0 script: its next state. A continuation must go on
+    counting down where the last one stopped."""
+    _state, ctype, npieces, body = env
+    rest = decode_push_datas(script)
+    if rest is None or len(rest) < 2:
+        return _NONE
+    nxt = push_number(rest[0])
+    if nxt is None or nxt != npieces - 1:
+        return _NONE
+    left, body = _pieces(rest, npieces, body)
+    return ("complete" if left == 0 else "partial"), ctype, left, body
+
+
+#: The body bytes that matter to the rules: a JSON "p" is read from a body of at most this many bytes.
+PROTOCOL_MAX = 65536
+
+
+def body_matters(ctype: bytes, body: bytes, size: int) -> bool:
+    """Could anything the index keeps still depend on a body arriving in pieces, beyond its size? A name claim reads
+    a text/plain or application/json body; protocol_of reads a JSON "p" from any body that opens with "{" and stays
+    within PROTOCOL_MAX bytes. Tokens never arrive in pieces (single-transaction inscriptions only). When this is
+    False the body is let go of, for good -- the content itself is read from the chain when it is wanted."""
+    t = ctype.decode("utf-8", "replace").split(";")[0].strip().lower()
+    if t in ("text/plain", "application/json"):
+        return True
+    return size <= PROTOCOL_MAX and body.lstrip()[:1] in (b"", b"{")
 
 
 def genesis(script0: bytes) -> tuple[str, bytes] | None:
@@ -118,7 +155,7 @@ def protocol_of(body: bytes) -> str | None:
     """The `"p"` of a JSON body ("drc-20", "dns", ...), kept with every inscription so a protocol indexed later finds
     its own inscriptions without reading every body again (2026-10-20). None when the body is not such JSON."""
     head = body.lstrip()[:1]
-    if head != b"{" or len(body) > 65536:
+    if head != b"{" or len(body) > PROTOCOL_MAX:
         return None
     try:
         value = json.loads(body.decode("utf-8"))

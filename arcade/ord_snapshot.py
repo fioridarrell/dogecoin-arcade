@@ -44,6 +44,9 @@ MOVES_SAMPLE = 64
 #: Tables a snapshot leaves out: work in hand, not the index.
 WORK = ("notes", "pnote", "stitched")
 WORK_META = ("lanes", "lease", "said_upto")
+#: A snapshot nobody has fetched from for this long is let go of: it is made again when someone asks (the operator
+#: 2026-10-20, slimming: a whole second copy of the index kept on disk for nobody).
+SNAP_IDLE = 2 * 3600
 
 
 class SnapshotError(ValueError):
@@ -83,12 +86,32 @@ class Snapshots:
         self.snap_path = base.with_name(base.name + ".snap")
         self.part_path = base.with_name(base.name + ".part")
         self.manifest_path = base.with_name(base.name + ".snap.json")
+        self.served_at = time.time()
+        from .doginal_index import LAYOUT
         try:
             kept = json.loads(self.manifest_path.read_text())
-            if self.snap_path.exists() and self.snap_path.stat().st_size == kept["manifest"]["size"]:
+            if self.snap_path.exists() and self.snap_path.stat().st_size == kept["manifest"]["size"] \
+                    and kept["manifest"].get("layout", 1) == LAYOUT:
                 self.made = {**kept, "path": self.snap_path}
+            else:
+                self.forget()
         except (OSError, ValueError, KeyError):
             pass
+
+    def forget(self) -> None:
+        """Let go of the snapshot made here (old, of another layout, or not fetched from for SNAP_IDLE)."""
+        with self.lock:
+            self.made = None
+            for path in (self.snap_path, self.manifest_path):
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
+
+    def tidy(self) -> None:
+        if self.made is not None and time.time() - max(self.served_at, self.made["manifest"]["at"]) > SNAP_IDLE:
+            log.info("ord index %s: snapshot not fetched from for %d h: let go of", self.index.net, SNAP_IDLE // 3600)
+            self.forget()
 
     # --- making one ------------------------------------------------------------------------------------------------
 
@@ -120,7 +143,9 @@ class Snapshots:
                 hashes.append(_sha(piece))
                 size += len(piece)
         from . import ord_rules
-        manifest = {"net": self.index.net, "base": self.index.base, "rules": ord_rules.RULES, "height": height,
+        from .doginal_index import LAYOUT
+        manifest = {"net": self.index.net, "base": self.index.base, "rules": ord_rules.RULES, "layout": LAYOUT,
+                    "height": height,
                     "size": size, "piece": PIECE, "pieces": hashes, "at": int(time.time())}
         os.replace(tmp, self.snap_path)
         sid = manifest_id(manifest)
@@ -172,6 +197,7 @@ class Snapshots:
                 continue
             if have is self.fetch and i not in have["have"]:
                 return None
+            self.served_at = time.time()
             m = have["manifest"]
             if not 0 <= i < len(m["pieces"]):
                 return None
@@ -253,6 +279,7 @@ class Snapshots:
 
     def got_manifest(self, node: str, sid: str, manifest: Any) -> None:
         from . import ord_rules
+        from .doginal_index import LAYOUT
         with self.lock:
             f = self.fetch
             if f is None or f["id"] != sid or f["manifest"] is not None:
@@ -261,8 +288,9 @@ class Snapshots:
                 self._drop(f"arcade {node[:12]} sent a manifest that is not the one it offered")
                 return
             if manifest.get("net") != self.index.net or manifest.get("base") != self.index.base \
-                    or manifest.get("rules") != ord_rules.RULES or manifest.get("piece") != PIECE:
-                self._drop("the snapshot is of another chain, start or rules")
+                    or manifest.get("rules") != ord_rules.RULES or manifest.get("piece") != PIECE \
+                    or manifest.get("layout", 1) != LAYOUT:
+                self._drop("the snapshot is of another chain, start, rules or layout")
                 return
             why = self.may_fetch(int(manifest.get("size") or 0))
             if why:

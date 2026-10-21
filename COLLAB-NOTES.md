@@ -88,6 +88,32 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-20 · the operator's side · the ord index slimmed (layout 2): PEP Main 11.0 GB -> 2.1 GB, nothing lost
+
+The operator: "figure out how we can slim down the index ... without losing functionality", "we should not be saving every
+image, we should be retrieving those images directly from the blockchain when they are needed", "implement the other
+space saving ideas". Branch claude/ord-slim.
+- **Measured first** (a test machine PEP Main): 9.6 GB file + 2.8 GB write log + 6.6 GB snapshot. 6.25 GB of the file was `undo`:
+  each block's undo copied the whole of every image still arriving (as hex, up to 9 MB a row) for 300 blocks.
+- **A body arriving in pieces is kept as its envelope's state** (content type, pieces still to come, size, pieces so
+  far) -- ord_rules.envelope_start / envelope_more read it a piece at a time; parse() is the same reading (fuzz-tested
+  against the old one). The body itself is kept only while a rule could still read it (ord_rules.body_matters: a
+  text/plain or application/json body for names, or one that may yet be a JSON "p" within 64 KB); an image's is never
+  kept. Content is read from the chain when it is wanted, as before.
+- **Layout 2** (doginal_index.LAYOUT): insc and at keep ids/txids as 32 bytes (insc.tx + n, at.tx), content types by
+  number (ctypes), the protocol lookup only where there is one, undo packed (zlib JSON). journal_size_limit 64 MB and a
+  TRUNCATE checkpoint every 10 minutes. **Nothing peers compare changed**: chunk hashes and moves are the same, so
+  arcades of layouts 1 and 2 scan together.
+- **Converted in place, once, by the index thread** (Store.upgrade): a new file built beside the old, then swapped in
+  as a fetched snapshot is; the walk waits meanwhile; Ords status says "slimming the index (one time)". Real PEP Main
+  copy: 100 s, 11.0 GB -> 2.1 GB, every table's row count the same, every inscription's place the same, 20,000 sampled
+  inscriptions field for field the same. tests/test_ord_slim.py: a converted index matches a walk of the new layout
+  row for row, walks on the same and rolls back the same.
+- **Snapshots:** offered as "sn2" with "layout" in the manifest -- an arcade of layout 1 (which reads "sn") never
+  fetches one it cannot read; a layout-1 snapshot on disk is deleted; a snapshot nobody fetched from for 2 hours is let
+  go of (made again on the next ask).
+- SadFrog / tbuuol: nothing to do; your arcades convert by themselves after the update.
+
 ### 2026-10-20 · the operator's side · zero-downtime restarts (a supervisor); spend notes v2; ord pruning fixes
 
 The operator: "add zero downtime restarts to Dogecoin arcade so that every node has redundancy", then "Word".

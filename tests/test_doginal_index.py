@@ -954,7 +954,7 @@ def test_an_envelope_begun_in_an_earlier_chunk_is_followed_back_and_zeroed_when_
     walked.walker.step(chain, dx.BASE + 7, budget=60)
     assert walked.name("pup.doge")["readings"]["spec"]["winner"], "the name across the edge"
     assert ord_notes.unpack(walked.store.notes_of(1)[0]) == second, "a walk follows them back through its Core too"
-    assert walked.store.q("SELECT size, pieces FROM insc WHERE id=?", (f"{a[1]}i0",))[0] == (602, 3)
+    assert walked.store.q("SELECT size, pieces FROM insc WHERE tx=? AND n=0", (bytes.fromhex(a[1]),))[0] == (602, 3)
     notes = {0: ord_notes.finish([ord_notes.one_block(x) for x in blocks[0:4]], lookup), 1: second}
     stitched = dx.DoginalIndex(tmp_path / "s.sqlite", lambda: chain, lambda: "walk")
     stitched.walker.step(chain, dx.BASE + 7, budget=60, notes=lambda k: (ord_notes.decode(notes[k]), False))
