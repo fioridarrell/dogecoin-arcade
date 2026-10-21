@@ -1288,10 +1288,12 @@ def create_app(state: AppState) -> FastAPI:
 
     # --- overview -------------------------------------------------------------
 
-    def _arcades_running() -> dict:
+    def _arcades_running(with_ids: bool = False) -> dict:
         """How many OTHER arcades are running (2026-10-19: Overview "should show how many other Dogecoin
         arcades are running"): linked to this one now, reached in the last hour, or announced on the chain in the
-        last day -- each arcade once, by its mesh key."""
+        last day -- each arcade once, by its mesh key. With `with_ids`, which ones too (`ids`, their mesh keys), for
+        Overview's Arcades panel (2026-10-21: one row per arcade running on the mesh); the counts stay as they
+        were for the pages that read only them."""
         mesh = getattr(state, "mesh", None)
         live, me, linked = set(), "", 0
         if mesh is not None and getattr(mesh, "loop", None) is not None:
@@ -1309,7 +1311,11 @@ def create_app(state: AppState) -> FastAPI:
             pass
         live.discard(me)
         live.discard(None)
-        return {"running": len(live), "linked": linked}
+        live.discard("")
+        out = {"running": len(live), "linked": linked}
+        if with_ids:
+            out["ids"] = sorted(live)
+        return out
 
     @app.get("/", response_class=HTMLResponse)
     def overview(request: Request):
@@ -25823,6 +25829,101 @@ def create_app(state: AppState) -> FastAPI:
         out["stun_mine"] = [f"{h}:{p}" for h, p in stun.mine()] if stun is not None else []
         out["stun_known"] = len(stun.known()) if stun is not None else 0
         return JSONResponse(out)
+
+    @app.get("/admin/api/arcades")
+    def admin_arcades(request: Request):
+        """Admin -> Overview's Arcades panel (2026-10-21, approving the mockup: "N arcades running, N linked to
+        this one", and a row per arcade): every arcade running on the mesh (_arcades_running), THIS one first, each
+        with its operator's @name, where it is published, the Cores it runs, the ord indexes it holds and how far
+        each has walked, and its link to this one.
+
+        Where each piece comes from, and what can be known:
+          * @name and host: this arcade's from state.operator_tag() and public_hosts; another's from what it said on
+            its link (mesh/operators.py "me", checked for a tag's shape there) -- display only, never trusted for
+            anything. An arcade that never said one (older, or not linked since this one started) shows its mesh id.
+          * Cores: this arcade's own, each chain it runs here (not borrowed), `shared` when the mesh offers it now
+            (coreshare.status "sharing"; its Share box in Coins -> Chains is `switch`). Another arcade's only as far
+            as it shares them (coreshare.offers, linked arcades): a Core it runs and does not share is not told.
+          * Ord indexes: every holder of each chain's index (doginal_index.holders: this arcade when it walks,
+            linked walkers heard in the last five minutes), with the share of the chain's ord range it has walked
+            by the same reckoning as Admin -> Ords (None while the tip is not known: "walking").
+          * Link: this arcade, linked with its round trip (node.rtts, ms; None until the first pong), or not linked.
+        """
+        _admin_check(request)
+        from .. import cores as coreslib
+        from ..doginal_index import SETTLE
+        mesh = getattr(state, "mesh", None)
+        up = mesh is not None and getattr(mesh, "loop", None) is not None
+        running = _arcades_running(with_ids=True)
+        me = (mesh.node_id if up else "") or ""
+        links = set(dict(mesh.node.links)) if up else set()
+        try:
+            rtts = mesh.node.rtts() if up else {}
+        except Exception:                                  # noqa: BLE001 -- shown linked without a time
+            rtts = {}
+        coreshare = getattr(mesh, "coreshare", None) if up else None
+        operators = getattr(mesh, "operators", None) if up else None
+        said = dict(getattr(operators, "peers", {}) or {}) if operators is not None else {}
+        try:
+            sharing = coreshare.status() if coreshare is not None else {}
+        except Exception:                                  # noqa: BLE001
+            sharing = {}
+        offers = dict(getattr(coreshare, "offers", {}) or {}) if coreshare is not None else {}
+
+        def coin(net: str) -> dict:
+            params = NETWORKS.get(net)
+            return {"net": net, "label": params.label if params is not None else net, "icon": _coin_icon(net)}
+
+        settings = state.settings()
+        mine_cores = [{**coin(c.network), "shared": bool((sharing.get(c.network) or {}).get("sharing")),
+                       "switch": coreslib.sharing(settings, c.network)}
+                      for c in state.all_chains if not getattr(c, "borrowed", False)]
+        # Each chain's ord index: who holds it, and how far each has walked (peer id -> [{net, pct, walked_to}]).
+        ords: dict[str, list[dict]] = {}
+        try:
+            indexes = state.ord_indexes()
+        except Exception:                                  # noqa: BLE001 -- no rings this time
+            indexes = {}
+        for chain in state.all_chains:
+            index = indexes.get(chain.network)
+            if index is None:
+                continue
+            try:
+                held = index.holders()
+                base, tip = int(index.base), int(index.tip or 0)
+            except Exception:                              # noqa: BLE001 -- an index busy opening
+                continue
+            known = tip > base
+            span = max(1, tip - SETTLE - base + 1)
+            for node, walked in held:
+                pct = (round(100 * min(1.0, max(0.0, (int(walked or 0) - base) / span)), 1) if known else None)
+                ords.setdefault(node or me or "this arcade", []).append(
+                    {**coin(chain.network), "pct": pct, "walked_to": int(walked or 0)})
+        rows = [{"me": True, "node": me[:12], "tag": state.operator_tag(),
+                 "host": (list(state.public_hosts) or [""])[0], "cores": mine_cores,
+                 "ords": ords.get(me or "this arcade", []), "link": {"state": "me"}}]
+        order = {n: i for i, n in enumerate(NETWORKS)}      # the chains in the order the arcade lists them
+        others = []
+        for peer in running["ids"]:
+            heard = said.get(peer) or {}
+            if peer in links:
+                ms = rtts.get(peer)
+                link = {"state": "slow" if ms is not None and ms > 1000 else "linked", "ms": ms}
+            else:
+                link = {"state": "none"}
+            others.append({"me": False, "node": peer[:12], "tag": heard.get("tag") or "",
+                           "host": (heard.get("hosts") or [""])[0],
+                           "cores": [{**coin(n), "shared": True}
+                                     for n in sorted(offers.get(peer) or {}, key=lambda n: (order.get(n, 99), n))
+                                     if peer in links],
+                           "ords": ords.get(peer, []), "link": link})
+        # Linked first, fastest first; then the rest by name.
+        others.sort(key=lambda r: (r["link"]["state"] == "none",
+                                   r["link"].get("ms") if r["link"].get("ms") is not None else 9e9,
+                                   r["tag"] or "~" + r["node"]))
+        return JSONResponse({"ok": up, "running": running["running"], "linked": running["linked"],
+                             "total": 1 + running["running"], "rows": rows + others},
+                            headers={"Cache-Control": "no-store"})
 
     @app.get("/admin/api/cards")
     def admin_cards(request: Request):

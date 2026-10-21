@@ -945,6 +945,22 @@ class AppState:
     def claim_operator(self, pubkey: str) -> None:
         self.set_setting("operator", (pubkey or "").strip().lower())
 
+    def operator_tag(self) -> str:
+        """The @name of whoever runs this arcade, as the chain has it ("" when none): the operator account's address on
+        the messaging chain, or the node's own derived address for an arcade whose operator is its node (as on .25).
+
+        What this arcade says about itself to linked arcades (mesh/operators.py, "me") and what Admin -> Overview's
+        Arcades panel shows on its own row (2026-10-21, approving the mockup). Only ever this arcade's OWN
+        operator: never an account that merely signed in here."""
+        try:
+            chain = next(c for c in self.token_chains if c.network == self.messaging.network)
+            op = self.operator
+            address = ((self.setting(f"address:{chain.network}:{op}") or self.setting(f"address:{op}")) if op
+                       else self.derived_address)
+            return (self.token_index(chain).tag_of(address) or "") if address else ""
+        except Exception:                                  # noqa: BLE001 -- said without a name
+            return ""
+
     @property
     def public_hosts(self) -> tuple[str, ...]:
         """The names this node answers to publicly.

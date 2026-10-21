@@ -22,9 +22,25 @@
 <div class="admintab" data-tab="overview" aria-label="Overview">
 <div class="cards" id="cards"></div>
 <section class="panel" id="needs">
-  <p style="margin:0 0 10px;font-weight:600" id="arcadesline"></p>
   <h2>Needs you</h2>
   <div id="needlist" class="muted">Looking&hellip;</div>
+</section>
+{#- Every arcade running on the mesh, this one first (2026-10-21, approving the mockup): its operator's @name,
+    the Cores it runs, the ord indexes it holds and how far each has walked, and its link to this one. -#}
+<section class="panel" id="arcades">
+  <h2>Arcades</h2>
+  <div id="arcrows" role="table" aria-label="Arcades running on the mesh">
+    <div class="arcrow archead" role="row"><span role="columnheader">Arcade</span><span role="columnheader">Cores</span>
+      <span role="columnheader">Ord indexes</span><span role="columnheader">Link</span></div>
+  </div>
+  <p class="muted" id="arcsaid" style="margin:8px 0 0">Looking&hellip;</p>
+  <div class="arclegend muted">
+    <span><img class="coin" src="{{ coin_icon('main') }}" alt=""> Core shared</span>
+    <span><img class="coin unshared" src="{{ coin_icon('main') }}" alt=""> runs, not shared</span>
+    <span><span class="ringwrap"><svg viewBox="0 0 36 36" aria-hidden="true"><circle class="track" cx="18" cy="18" r="16"/>
+      <circle class="arc" cx="18" cy="18" r="16" stroke-dasharray="67 100.5" transform="rotate(-90 18 18)"/></svg>
+      <img class="coin" src="{{ coin_icon('main') }}" alt=""></span> ord index, the ring how much of its chain is walked</span>
+  </div>
 </section>
 <section class="panel" id="nodeswitch">
   <h2>This node</h2>
@@ -473,6 +489,42 @@ section.panel h2{margin-top:0}
 /* base.html gives every input width:100%, which stretched each switch's checkbox across its panel */
 .switch input[type=checkbox]{width:auto;flex:none;margin:0}
 #needlist div,#meshinfo div{padding:3px 0}
+/* Overview -> Arcades (2026-10-21, the approved mockup): a grid row per arcade; at phone width each row is a
+   small card with its Cores and Ord indexes labelled, and the header row hidden. */
+#arcades .arcrow{display:grid;grid-template-columns:1.6fr 1.3fr 1.3fr .9fr;gap:10px;align-items:center;
+  padding:9px 4px;border-bottom:1px solid var(--line)}
+#arcades .arcrow>*{min-width:0}
+#arcades .archead{color:var(--muted);font-weight:600;font-size:.82rem;padding-top:0}
+#arcades .arcrow.me{background:color-mix(in srgb,var(--accent) 6%,transparent);border-radius:8px}
+#arcades .who b{font-weight:700;overflow-wrap:anywhere}
+#arcades .who .pill{margin-left:6px;white-space:nowrap}
+#arcades .who .arcsub{font-size:.76rem;color:var(--muted);overflow-wrap:anywhere;margin:2px 0 0}
+#arcades .coins>.muted{font-size:.82rem}
+#arcades .coins{display:flex;flex-wrap:wrap;gap:9px;align-items:center}
+#arcades .coin{width:24px;height:24px;border-radius:50%;display:block;flex:none}
+#arcades .coin.unshared{opacity:.4;outline:1px dashed var(--muted);outline-offset:2px}
+#arcades .ord{display:inline-flex;align-items:center;gap:4px;font-size:.78rem;color:var(--muted);white-space:nowrap}
+#arcades .ringwrap{position:relative;width:34px;height:34px;flex:none;display:inline-block;vertical-align:middle}
+#arcades .ringwrap svg{position:absolute;inset:0;width:34px;height:34px}
+#arcades .ringwrap .coin{position:absolute;left:6px;top:6px;width:22px;height:22px}
+#arcades .ringwrap circle{fill:none;stroke-width:3}
+#arcades .ringwrap .track{stroke:var(--line)}
+#arcades .ringwrap .arc{stroke:var(--accent);stroke-linecap:round}
+#arcades .link{font-size:.86rem;white-space:nowrap}
+#arcades .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:var(--muted);vertical-align:middle}
+#arcades .dot.linked{background:var(--ok)}
+#arcades .dot.slow{background:var(--warn)}
+#arcades .lab{display:none;font-size:.72rem;color:var(--muted);margin-bottom:3px}
+#arcades .arclegend{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:10px;font-size:.8rem}
+#arcades .arclegend>span{display:inline-flex;align-items:center;gap:7px}
+@media (max-width:720px){
+  #arcades .archead{display:none}
+  #arcades .arcrow{grid-template-columns:1fr auto;grid-template-areas:"who link" "cores cores" "ords ords";
+    border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px;gap:8px}
+  #arcades .who{grid-area:who}#arcades .link{grid-area:link;align-self:start}
+  #arcades .cores{grid-area:cores}#arcades .ords{grid-area:ords}
+  #arcades .lab{display:block}
+}
 </style>
 
 <script>
@@ -507,12 +559,10 @@ section.panel h2{margin-top:0}
     function card(n, l, a) { var c = text('div', '', 'card'); c.appendChild(text('div', n, 'n'));
       c.appendChild(text('div', l, 'l')); if (a) c.appendChild(text('div', a, 'a mono')); cards.appendChild(c); }
     card(d.seats.free + ' / ' + d.seats.total, 'seats open');
-    d.wallets.forEach(function (w) {
-      card(w.syncing ? 'syncing ' + w.progress + '%' : w.error ? 'offline'
-           : Number(w.spendable).toLocaleString(), w.label + (w.syncing ? ' node' : ' balance'),
-           w.keyed ? w.address : '');
-    });
-    card(d.push.available ? String(d.push.devices) : 'off', 'accounts with notifications');
+    // No balances and no notification count here (2026-10-21: "We should remove all the token balances
+    // that's not necessary in overview. We can see those in the wallet page ... We don't have to have a display of
+    // accounts with notifications at all"); beside the seats, the arcades running (loadNeeds fills it).
+    cards.appendChild(arcCard());
 
     // seats
     $('seats').value = d.seats.total;
@@ -1385,13 +1435,13 @@ section.panel h2{margin-top:0}
   function loadNeeds() {
     Promise.all([
       fetch('/admin/api/cards', {credentials: 'same-origin', cache: 'no-store'}).then(function (r) { return r.json(); }).catch(function () { return {}; }),
-      fetch('/admin/api/mesh', {credentials: 'same-origin', cache: 'no-store'}).then(function (r) { return r.json(); }).catch(function () { return {}; })
+      fetch('/admin/api/mesh', {credentials: 'same-origin', cache: 'no-store'}).then(function (r) { return r.json(); }).catch(function () { return {}; }),
+      fetch('/admin/api/arcades', {credentials: 'same-origin', cache: 'no-store'}).then(function (r) { return r.json(); }).catch(function () { return {}; })
     ]).then(function (got) {
       var cards = got[0] || {}, mesh = got[1] || {}, box = $('needlist'), lines = [];
       var hidden = (cards.rows || []).filter(function (r) { return r.status === 'flagged'; });
-      var ar = mesh.arcades || {}, arc = $('arcadesline');
-      if (arc) arc.textContent = (ar.running || 0) + ' other arcade' + (ar.running === 1 ? '' : 's') + ' running, '
-                                 + (ar.linked || 0) + ' linked to this one.';
+      arcSaid = got[2] && got[2].rows ? got[2] : null;
+      arcCard(); drawArcades(arcSaid);
       if (hidden.length) lines.push(['gamecards', hidden.length + ' game card' + (hidden.length > 1 ? 's' : '') + ' hidden, waiting for you to look']);
       if (mesh.ok && !mesh.linked) lines.push(['mesh', 'This node is not linked to any other arcade']);
       (mesh.chains || []).forEach(function (c) { if (c.syncing) lines.push(['coins', c.label + ' is still syncing (' + c.progress + '%)']); });
@@ -1399,6 +1449,69 @@ section.panel h2{margin-top:0}
       box.replaceChildren();
       if (!lines.length) { box.textContent = 'Nothing. Everything here is running.'; return; }
       lines.forEach(function (l) { var d = document.createElement('div'), a = document.createElement('a'); a.href = '#' + l[0]; a.textContent = l[1]; d.append('\u2022 ', a); box.append(d); });
+    });
+  }
+  // --- Overview -> Arcades (2026-10-21, approving the mockup): /admin/api/arcades, this arcade first.
+  var arcSaid = null;
+  function arcCard() {
+    // The card beside the seats: "N arcades · running, N linked to this one" (N counts this arcade too).
+    var c = $('arcadescard') || text('div', '', 'card'); c.id = 'arcadescard'; c.textContent = '';
+    var a = arcSaid;
+    c.appendChild(text('div', a ? String(a.total) : '\u2026', 'n'));
+    c.appendChild(text('div', 'arcade' + (a && a.total === 1 ? '' : 's') + ' \u00b7 running'
+                              + (a ? ', ' + a.linked + ' linked to this one' : ''), 'l'));
+    return c;
+  }
+  function coinImg(c, cls) {
+    // The arcade's own coin faces (/coin-<name>.png); a chain this version has none for is named, never drawn.
+    if (!c.icon) return text('span', c.label || c.net, 'pill');
+    var i = document.createElement('img'); i.src = c.icon; i.alt = c.label || c.net; i.title = c.label || c.net;
+    i.className = 'coin' + (cls ? ' ' + cls : ''); i.width = 24; i.height = 24; return i;
+  }
+  function ordRing(o) {
+    var NS = 'http://www.w3.org/2000/svg', C = 2 * Math.PI * 16;
+    var w = text('span', '', 'ord'), r = text('span', '', 'ringwrap'), svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 36 36'); svg.setAttribute('aria-hidden', 'true');
+    var t = document.createElementNS(NS, 'circle'), a = document.createElementNS(NS, 'circle');
+    [t, a].forEach(function (k) { k.setAttribute('cx', 18); k.setAttribute('cy', 18); k.setAttribute('r', 16); });
+    t.setAttribute('class', 'track'); a.setAttribute('class', 'arc');
+    var f = o.pct == null ? 0 : Math.max(0, Math.min(100, o.pct)) / 100;
+    a.setAttribute('stroke-dasharray', (f * C).toFixed(1) + ' ' + C.toFixed(1));
+    a.setAttribute('transform', 'rotate(-90 18 18)');
+    svg.append(t); if (f > 0) svg.append(a);
+    var img = coinImg(o); img.width = 22; img.height = 22;
+    r.append(svg, img);
+    w.title = (o.label || o.net) + ' ord index, walked to block ' + Number(o.walked_to || 0).toLocaleString();
+    w.append(r, o.pct == null ? 'walking' : (o.pct >= 99.95 ? '100' : String(o.pct)) + '%');
+    return w;
+  }
+  function drawArcades(a) {
+    var box = $('arcrows'), said = $('arcsaid'); if (!box) return;
+    box.querySelectorAll('.arcrow:not(.archead)').forEach(function (r) { r.remove(); });
+    if (!a || !a.rows) { said.textContent = 'Could not ask this arcade about the others.'; said.hidden = false; return; }
+    said.hidden = a.ok; if (!a.ok) said.textContent = 'This node is not on the mesh, so it sees no other arcade.';
+    a.rows.forEach(function (row) {
+      var tr = text('div', '', 'arcrow' + (row.me ? ' me' : '')); tr.setAttribute('role', 'row');
+      var who = text('div', '', 'who'), name = text('b', row.tag ? '@' + row.tag : (row.node || 'this arcade'), row.tag ? '' : 'mono');
+      who.appendChild(name);
+      if (row.me) who.appendChild(text('span', 'this arcade', 'pill ok'));
+      var sub = row.host || (row.tag && row.node ? row.node : '');
+      if (sub) who.appendChild(text('div', sub, 'arcsub' + (row.host ? '' : ' mono')));
+      var cores = text('div', '', 'cores'), cl = text('div', 'Cores', 'lab'), cc = text('div', '', 'coins');
+      (row.cores || []).forEach(function (c) { cc.appendChild(coinImg(c, c.shared ? '' : 'unshared')); });
+      if (!(row.cores || []).length) cc.appendChild(text('span', row.me ? 'none' : 'none shared', 'muted'));
+      cores.append(cl, cc);
+      var ords = text('div', '', 'ords'), ol = text('div', 'Ord indexes', 'lab'), oc = text('div', '', 'coins');
+      (row.ords || []).forEach(function (o) { oc.appendChild(ordRing(o)); });
+      if (!(row.ords || []).length) oc.appendChild(text('span', 'none', 'muted'));
+      ords.append(ol, oc);
+      var link = text('div', '', 'link'), st = (row.link || {}).state;
+      if (st === 'me') link.append(text('span', 'this arcade', 'muted'));
+      else {
+        link.appendChild(text('span', '', 'dot ' + (st === 'none' ? '' : st)));
+        link.append(st === 'none' ? 'not linked' : 'linked' + (row.link.ms != null ? ' \u00b7 ' + Math.round(row.link.ms) + ' ms' : ''));
+      }
+      tr.append(who, cores, ords, link); box.appendChild(tr);
     });
   }
   function drawMesh(m) {

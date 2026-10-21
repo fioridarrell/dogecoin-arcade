@@ -815,24 +815,7 @@ def for_state(state, *, listen_host: str | None = None, listen_port: int | None 
     # Who runs each linked arcade (operators.py, 2026-10-20: "a list of other operators").
     from .operators import OperatorsShare
 
-    def about() -> dict:
-        tag = ""
-        try:
-            chain = next(c for c in state.token_chains if c.network == state.messaging.network)
-            op = state.operator
-            address = ((state.setting(f"address:{chain.network}:{op}") or state.setting(f"address:{op}")) if op
-                       else state.derived_address)
-            tag = (state.token_index(chain).tag_of(address) or "") if address else ""
-        except Exception:                                  # noqa: BLE001 -- said without a name
-            pass
-        try:
-            from ..web import brand as brandlib
-            name = brandlib.current().name
-        except Exception:                                  # noqa: BLE001
-            name = ""
-        return {"tag": tag, "name": name, "version": str(getattr(state, "running_version", "") or ""),
-                "hosts": list(getattr(state, "public_hosts", []) or [])}
-    service.operators = OperatorsShare(about)
+    service.operators = OperatorsShare(lambda: operator_about(state))
     service.node.add_extension(service.operators)
     # The ord indexes' shared chunks, one per chain (doginalshare.py, 2026-10-20).
     if hasattr(state, "ord_indexes"):
@@ -864,6 +847,22 @@ def for_state(state, *, listen_host: str | None = None, listen_port: int | None 
     service.stun = StunShare(own_hosts if stun_port else None, port=stun_port or 3478)
     service.node.add_extension(service.stun)
     return service
+
+
+def operator_about(state) -> dict:
+    """What this arcade says about itself to each linked arcade (operators.py "me"): its operator's own @name, its
+    face's name, its version and the names it is published under. The operator's own @name only (state.operator_tag),
+    left out of the frame when it has none, so a hearer shows the mesh id rather than an empty name (2026-10-21:
+    Overview's Arcades panel)."""
+    tag = state.operator_tag() if hasattr(state, "operator_tag") else ""
+    try:
+        from ..web import brand as brandlib
+        name = brandlib.current().name
+    except Exception:                                      # noqa: BLE001
+        name = ""
+    return {**({"tag": tag} if tag else {}), "name": name,
+            "version": str(getattr(state, "running_version", "") or ""),
+            "hosts": list(getattr(state, "public_hosts", []) or [])}
 
 
 def shared_cores(state):

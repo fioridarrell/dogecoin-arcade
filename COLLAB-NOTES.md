@@ -88,6 +88,25 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-21 Admin -> Overview: no balance cards, an Arcades panel (Claude)
+The operator, approving the mockup: "We should remove all the token balances that's not necessary in overview. We can see
+those in the wallet page. We can remove notifications because that can be seen in notifications page." Branch
+claude/overview-arcades. Overview's cards are now the seats and "N arcades · running, N linked to this one" (N counts
+this arcade); the coin balance cards and "accounts with notifications" are gone (the Coins tab's `#wallets` and the
+push line are untouched). New panel **Arcades** under Needs you, from new `GET /admin/api/arcades` (operator only, as
+every /admin route; door.py unchanged): a row per arcade `_arcades_running(with_ids=True)` counts, THIS one first,
+each with its @name and public host (or mesh id), its Cores (coin faces from `_coin_icon`; this arcade's own with
+`shared` from coreshare.status, a running-unshared one faded and dashed; another's only as far as it shares them,
+coreshare.offers), its ord indexes (doginal_index.holders, a ring of how much of the chain it has walked, the same
+reckoning as Admin -> Ords) and its link (node.rtts; amber over a second). Phone width: each row a small card.
+- **Operator @name on the mesh:** already said in operators.py's `op`/`me` frame; now `tag` is LEFT OUT when the
+  operator has none (`service.operator_about`, `state.operator_tag()`), and on receipt it is kept only with a tag's
+  shape (`operators.said_tag`: tags.py's alphabet, 2-24, not reserved; bounded before it is read), hosts only when
+  shaped like host names. Display only, never trusted. An arcade without the field shows its mesh id: nothing to do
+  on your side, and a node of yours that says a bad tag is simply shown by its id.
+- Tests: tests/test_admin.py (route shape, page), tests/test_mesh_operators.py (said tag), new
+  tests/test_admin_arcades_browser.py.
+
 ### 2026-10-21 Wallet Doginals: pages, one batched read, frames built once (Claude)
 The operator: "over 1500 doginals in that wallet ... good pagination ... lazy loading and caching ... whatever is lightest
 weight for the server ... right now it looks like the doginals in my Wallet load like three times when I'm looking at
