@@ -1256,11 +1256,27 @@ section.panel h2{margin-top:0}
       + ' on this machine</span> <button type="button" class="small" id="ordcoressave">Save</button>');
     cores.style.cssText = 'gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0 0';
     part.appendChild(cores);
+    // How much of the machine the walk may take (2026-10-21): the walk shares the web process with the pages.
+    var shareRow = ordEl('div', 'row', '<label for="ordshare"><b>Share of this machine for walking:</b></label> '
+      + '<select id="ordshare" style="font-size:16px">' + [10, 20, 30, 50, 75, 100].map(function (v) {
+        return '<option value="' + v + '"' + (v === d.share ? ' selected' : '') + '>' + v + '%</option>'; }).join('')
+      + (([10, 20, 30, 50, 75, 100].indexOf(d.share) < 0) ? '<option value="' + d.share + '" selected>' + d.share + '%</option>' : '')
+      + '</select>');
+    shareRow.style.cssText = 'gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0 0';
+    part.appendChild(shareRow);
+    part.appendChild(ordEl('p', 'muted', '<span style="font-size:.84rem">The walk works in short bursts and rests between '
+      + 'them, so this much of the time goes to walking and the rest to the arcade\u2019s pages. Lower it if pages feel '
+      + 'slow while it walks; 100% walks as fast as it can.</span>'));
     part.appendChild(ordEl('p', 'muted', '<span style="font-size:.84rem">Each core scans a chunk of its own. Holding the index, '
       + 'one core stitches and the rest scan ahead. ' + (big ? '' : 'A machine with fewer than 8 cores that serves the live site '
       + 'should not hold a big chain’s index: walking it slows the pages. Help scan instead.') + '</span>'));
     box.appendChild(part);
     $('ordcores').value = d.cores; $('ordcores').max = d.machine;
+    $('ordshare').onchange = function () {
+      call('/admin/api/ords', {share: Number($('ordshare').value)})
+        .then(function (j) { $('ordsaid').textContent = 'Walking takes up to ' + j.share + '% of this machine.'; loadOrds(true); })
+        .catch(function (e) { $('ordsaid').textContent = e.message; });
+    };
     $('ordcoressave').onclick = function () {
       call('/admin/api/ords', {cores: Number($('ordcores').value)})
         .then(function (j) { $('ordsaid').textContent = 'Ords help with ' + j.cores + ' core' + (j.cores > 1 ? 's' : '') + '.'; loadOrds(true); })

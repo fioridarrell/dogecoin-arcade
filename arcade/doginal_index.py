@@ -691,6 +691,43 @@ KEYS = {"insc": ("rid",), "at": ("rid",), "pending": ("txid",), "tok": ("tick",)
         "xfer": ("rid",), "names": ("rid",)}
 
 
+class _Seen:
+    """Which coins may have an inscription on them (2026-10-21: the walker held every inscription's place in
+    Python memory -- about 17 GB on a test machine for 22 million -- and the out-of-memory killer took the arcade).
+
+    A Bloom filter of coins (outpoints), about 1.5 bytes each: False means no inscription sits on that coin, for
+    certain; True means maybe, and the index file says (`at`, by its at_out8 lookup). Nothing is ever taken out (a
+    spent coin stays "maybe", and is looked up and found empty); built again from `at` once it has taken in more
+    than it was made for."""
+
+    K = 7
+
+    def __init__(self, expect: int):
+        self.capacity = max(1 << 16, int(expect))
+        self.m = 1 << max(20, (self.capacity * 12 - 1).bit_length())        # >= 12 bits a coin: ~0.3% false
+        self.bits = bytearray(self.m >> 3)
+        self.added = 0
+
+    def _spots(self, key: bytes):
+        h = hashlib.blake2b(key, digest_size=16).digest()
+        a, b = int.from_bytes(h[:8], "little"), int.from_bytes(h[8:], "little") | 1
+        mask = self.m - 1
+        return [(a + i * b) & mask for i in range(self.K)]
+
+    def add(self, key: bytes) -> None:
+        bits = self.bits
+        for i in self._spots(key):
+            bits[i >> 3] |= 1 << (i & 7)
+        self.added += 1
+
+    def __contains__(self, key: bytes) -> bool:
+        bits = self.bits
+        return all(bits[i >> 3] & (1 << (i & 7)) for i in self._spots(key))
+
+    def full(self) -> bool:
+        return self.added > self.capacity
+
+
 class _Block:
     """One block's writes, each row's old value kept first (rollback puts them back)."""
 
@@ -727,7 +764,7 @@ class Walker:
         self.base, self.taproot, self.mweb = store.base, taproot, mweb
         self.params = params
         self.token_protocol = token_protocol
-        self.tracked: dict[bytes, list[tuple[int, int]]] | None = None     # outpoint -> [(rid, koinu offset)]
+        self.tracked: _Seen | None = None                                  # coins an inscription may sit on
         self.values: OrderedDict[bytes, int] = OrderedDict()               # recent outputs' koinu
         self.rate = 0.0
         self.error = ""
@@ -747,10 +784,20 @@ class Walker:
         return ct
 
     def _load(self) -> None:
-        tracked: dict[bytes, list[tuple[int, int]]] = {}
-        for rid, tx, vout, off in self.store.q("SELECT rid, tx, vout, off FROM at"):
-            tracked.setdefault(bytes(tx) + vout.to_bytes(4, "little"), []).append((rid, off))
-        self.tracked = tracked
+        """The filter of coins inscriptions sit on, from `at` (made for twice as many, so it rarely needs making
+        again)."""
+        n = int(self.store.q("SELECT COUNT(*) FROM at")[0][0])
+        seen = _Seen(2 * n + 100_000)
+        for tx, vout in self.store.q("SELECT tx, vout FROM at"):
+            seen.add(bytes(tx) + vout.to_bytes(4, "little"))
+        self.tracked = seen
+
+    @staticmethod
+    def _on(db, txid: str, vout: int) -> list[tuple[int, int]]:
+        """The inscriptions on a coin, from the index file (on the walk's own connection: this block's moves in it)."""
+        tx = bytes.fromhex(txid)
+        return [(rid, off) for rid, off in db.execute(
+            "SELECT rid, off FROM at WHERE substr(tx, 1, 8)=? AND tx=? AND vout=?", (tx[:8], tx, vout))]
 
     def _value(self, rpc, txid: str, vout: int) -> int:
         key = _outpoint(txid, vout)
@@ -764,7 +811,7 @@ class Walker:
 
     def _keep(self, key: bytes, value: int) -> None:
         self.values[key] = value
-        if len(self.values) > 2_000_000:
+        if len(self.values) > 500_000:
             self.values.popitem(last=False)
 
     def owner_of(self, script: bytes) -> str:
@@ -787,7 +834,7 @@ class Walker:
         `notes(chunk)` says where each chunk's blocks come from (2026-10-20: scanned in line by whoever is free,
         stitched here in order): ([blocks], this arcade's own scan?) from its spend notes; False to wait for them;
         None (or no `notes`) to read each block from `rpc`."""
-        if self.tracked is None:
+        if self.tracked is None or self.tracked.full():
             self._load()
         start, done = time.monotonic(), 0
         while True:
@@ -837,7 +884,11 @@ class Walker:
                 if pos == 0:
                     continue
                 # What this transaction carries in: inscriptions on the coins it spends, at their koinu among the inputs.
-                needs = [j for j, i in enumerate(tx.vin) if i["vout"] != -1 and _outpoint(i["txid"], i["vout"]) in tracked]
+                # The filter says "maybe" for every coin an inscription sits on (and, now and then, one it does not):
+                # the index file says which.
+                on = {j: self._on(w.db, i["txid"], i["vout"]) for j, i in enumerate(tx.vin)
+                      if i["vout"] != -1 and _outpoint(i["txid"], i["vout"]) in tracked}
+                needs = [j for j, got in on.items() if got]
                 sizes_upto = max(needs, default=-1)
                 taproot = [b for b in births_of(tx, True) if b["n"] or b["vin"]] if self.taproot else []
                 sizes_upto = max([sizes_upto] + [b["vin"] for b in taproot])
@@ -846,7 +897,7 @@ class Walker:
                 carried: list[tuple[int, int, bool, str]] = []
                 for j in needs:
                     base = sum(sizes[:j])
-                    for rid, off in tracked.pop(_outpoint(tx.vin[j]["txid"], tx.vin[j]["vout"])):
+                    for rid, off in on[j]:
                         carried.append((rid, base + off, False, tx.vin[j]["txid"]))
                 new: list[tuple[int, str, bytes, bytes, int]] = []  # (rid, id, ctype, body, pieces)
                 # A new inscription only when nothing inscribed sits on the first koinu (inscription_updater.rs).
@@ -911,7 +962,7 @@ class Walker:
                         continue
                     off = p - (ends[k - 1] if k else 0)
                     w.put("at", (rid,), {"rid": rid, "tx": bytes.fromhex(tx.txid), "vout": k, "off": off, "height": h})
-                    tracked.setdefault(_outpoint(tx.txid, k), []).append((rid, off))
+                    tracked.add(_outpoint(tx.txid, k))
                     moves.append(f"{'B' if is_new else 'M'} {iid} {tx.txid}:{k}:{off}\n")
                     landed[rid] = (k, self.owner_of(tx.vout[k][1]))
                 self._tokens(w, h, tx, new, carried, landed)
@@ -1160,9 +1211,11 @@ class DoginalIndex:
 
     def __init__(self, path: Path, rpc_factory: Callable[[], Any] | None, mode: Callable[[], str],
                  own_core: Callable[[], bool] = lambda: True, net: str = "doge", mweb: bool = False,
-                 cores: Callable[[], int] | None = None):
+                 cores: Callable[[], int] | None = None, walk_share: Callable[[], int] | None = None):
         self.net = net
         self.cores = cores or default_cores
+        # Without a setting: all of a big machine, half of a small one (as it paced before 2026-10-21).
+        self.walk_share = walk_share or (lambda: 100 if self._big() else 50)
         self._pool: Any = None
         self._pool_size = 0
         self.base = STARTS.get(net, BASE) if net != "doge" else BASE
@@ -1222,12 +1275,26 @@ class DoginalIndex:
             return 30.0
         self._tell_new_chunks()
         took = time.monotonic() - started
-        # One core on a small machine: rest as long as the work took. More, or a big machine: straight on (the operator
-        # 2026-10-20: a test machine "is a much faster machine. It shouldn't be pacing with the other one").
-        import os
-        if self._lanes_wanted() > 1 or (os.cpu_count() or 1) >= BIG_FROM_CORES:
+        # Paced by the share of the machine the operator gives the walk (2026-10-21): work `took`, rest so that
+        # the work is that share of the time. All of it: straight on (2026-10-20: a test machine "shouldn't be pacing").
+        try:
+            share = max(10, min(int(self.walk_share()), 100))
+        except (TypeError, ValueError):
+            share = 100
+        if share >= 100:
             return 0.05
-        return max(0.5, took)
+        return max(0.5, took * (100 / share - 1))
+
+    @staticmethod
+    def _big() -> bool:
+        import os
+        return (os.cpu_count() or 1) >= BIG_FROM_CORES
+
+    def pass_budget(self) -> float:
+        """How long one pass may hold the web process: short bursts on a small machine, so a page waits a second at
+        most; a big machine runs its passes long."""
+        import os
+        return 5.0 if (os.cpu_count() or 1) >= BIG_FROM_CORES else 1.0
 
     # --- holding the index: scan ahead on the spare cores, fetch what others scanned, stitch in order ------------
 
@@ -1957,7 +2024,8 @@ class Runner:
             try:
                 for index in list(self.indexes().values()):
                     if index.mode() in ("walk", "help") or index.store.old_layout:
-                        rests.append(index.step())
+                        budget = index.pass_budget() if hasattr(index, "pass_budget") else 5.0
+                        rests.append(index.step(budget))
             except Exception:                            # noqa: BLE001 -- never dies
                 log.debug("ord index step", exc_info=True)
                 rests.append(30.0)

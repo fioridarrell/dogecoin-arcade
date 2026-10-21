@@ -24896,7 +24896,8 @@ def create_app(state: AppState) -> FastAPI:
             free = shutil.disk_usage(state.home).free
         except (OSError, TypeError):
             free = None
-        return JSONResponse({"rows": rows, "cores": state.ord_cores(), "machine": os.cpu_count() or 1, "free": free,
+        return JSONResponse({"rows": rows, "cores": state.ord_cores(), "share": state.ord_share(),
+                             "machine": os.cpu_count() or 1, "free": free,
                              "me": me_tag},
                             headers={"Cache-Control": "no-store"})
 
@@ -24918,6 +24919,15 @@ def create_app(state: AppState) -> FastAPI:
         _admin_check(request, write=True)
         from ..doginal_index import MODES, STARTS
         said = payload if isinstance(payload, dict) else {}
+        if "share" in said:
+            try:
+                share = int(said["share"])
+            except (TypeError, ValueError):
+                share = 0
+            if not 10 <= share <= 100:
+                return JSONResponse({"detail": "from 10 to 100 percent"}, status_code=400)
+            state.set_setting("ord_share", share)
+            return JSONResponse({"ok": True, "share": share})
         if "cores" in said:
             import os
             try:

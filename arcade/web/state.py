@@ -1668,6 +1668,20 @@ class AppState:
         except (TypeError, ValueError):
             return default_cores()
 
+    def ord_share(self) -> int:
+        """How much of this machine the ord walk may take, in percent (Admin -> Ords; 2026-10-21: ".25 seems to
+        be running slow ... see if we can mess around with how much is allocated to walking the chain"). The walk
+        shares the web process with the pages; at 30% it works a second and rests over two, so pages get in between.
+        By default all of a big machine, 30% of a small one."""
+        import os
+        from ..doginal_index import BIG_FROM_CORES
+        chosen = self.setting("ord_share")
+        try:
+            return max(10, min(int(chosen), 100)) if chosen is not None else (
+                100 if (os.cpu_count() or 1) >= BIG_FROM_CORES else 30)
+        except (TypeError, ValueError):
+            return 30
+
     def ord_indexes(self) -> dict:
         """Our own ord index of each chain this arcade reads, its own Core or a borrowed one (arcade/doginal_index.py;
         2026-10-20: the Ords tab, "controls to enable ord in for each chain"). One file each, ord-<net>.sqlite."""
@@ -1684,7 +1698,8 @@ class AppState:
             kept[net] = DoginalIndex(Path(self.home) / f"ord-{net}.sqlite", chain.rpc,
                                      (lambda n=net: self.ord_mode(n)),
                                      own_core=(lambda c=chain: not getattr(c, "borrowed", False)),
-                                     net=net, mweb=bool(getattr(chain.params, "mweb", False)), cores=self.ord_cores)
+                                     net=net, mweb=bool(getattr(chain.params, "mweb", False)), cores=self.ord_cores,
+                                     walk_share=self.ord_share)
         return dict(kept)
 
     def doginal_index(self):

@@ -88,6 +88,20 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-21 · the operator's side · the ord walk: a filter instead of every place in memory; a share of the machine
+
+- **Memory** (a test machine's arcade, ~17.5 GB, was killed by the out-of-memory killer at 10:18): the walker no longer keeps
+  every inscription's place in a Python dict (22 million on a test machine). It keeps a Bloom filter of the coins
+  inscriptions sit on (`_Seen`, ~1.5 bytes a coin, ~0.3% false "maybe"s) and looks a "maybe" up in the index file
+  (`at`, by `at_out8`) on the walk's own connection, so a block's own earlier moves are seen. Spent coins stay in the
+  filter (a lookup that finds nothing); it is built again from `at` once it has taken in twice what it was made for.
+  The recent-outputs value cache is 500,000 coins (was 2 million).
+- **A share of the machine for walking** (Admin -> Ords, "Share of this machine for walking", setting `ord_share`,
+  10-100%; 2026-10-21: ".25 seems to be running slow ... see if we can mess around with how much is allocated
+  to walking the chain"): the walk shares the web process with the pages, so it works in short bursts (1 s a pass on a
+  machine under 8 cores, 5 s on a big one) and rests so walking is that share of the time. Default: 100% on a big
+  machine, 30% on a small one (an index made without the setting paces at 50% on a small machine, as before).
+
 ### 2026-10-21 · the operator's side · an imported wallet's whole past, from a Core rescan, reads borrowed meanwhile
 
 The operator imported a Dogecoin wallet and asked whether the arcade borrows another node while it rescans. It did not, and
