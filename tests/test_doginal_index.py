@@ -491,3 +491,33 @@ def test_read_only_holds_no_index_and_asks_an_arcade_that_walks(tmp_path):
     assert where["where"]["output"] == f"{send[1]}:0" and where["from"] == "arcade walker-node"
     assert on["on"] == [{"id": f"{reveal[1]}i0", "offset": 0}]
     assert reader.store.q("SELECT COUNT(*) FROM insc")[0][0] == 0, "and the reader keeps no index"
+
+
+def test_status_never_makes_a_page_wait_for_another_working_it_out(tmp_path):
+    """2026-10-20 on .25: Admin tabs asked at once when the kept status ran out, every one worked it out again, and
+    they held the threads that serve pages. Now one works it out; the rest get the last answer at once."""
+    import threading
+    chain = _busy_chain(4)
+    index = dx.DoginalIndex(tmp_path / "s.sqlite", lambda: chain, lambda: "help")
+    first = index.status()
+    index._status_kept = (time.monotonic() - 999, first)      # run out
+    index._status_lock.acquire()                              # somebody is working it out
+    try:
+        started = time.monotonic()
+        assert index.status() is first and time.monotonic() - started < 0.5
+    finally:
+        index._status_lock.release()
+    assert index.status() is not first, "and once nobody is, it is worked out again"
+
+
+def test_reads_do_not_wait_for_a_write_in_progress(tmp_path):
+    chain = _busy_chain(4)
+    index = dx.DoginalIndex(tmp_path / "r.sqlite", lambda: chain, lambda: "walk")
+    index.step()
+    with index.store.tx():                                    # a write held open on another path
+        import threading
+        got = []
+        t = threading.Thread(target=lambda: got.append(index.store.q("SELECT COUNT(*) FROM block")[0][0]))
+        t.start()
+        t.join(2)
+        assert got == [4], "read on its own connection, not queued behind the writer's lock"

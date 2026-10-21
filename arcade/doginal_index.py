@@ -230,7 +230,8 @@ class Store:
     def __init__(self, path: Path, base: int | None = None):
         self.path = Path(path)
         self.base = BASE if base is None else base
-        self._lock = threading.RLock()
+        self._lock = threading.RLock()                 # the one writer connection
+        self._readers = threading.local()              # a read connection per thread (q)
         self._db = sqlite3.connect(self.path, timeout=60, check_same_thread=False, isolation_level=None)
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.execute("PRAGMA synchronous=NORMAL")
@@ -286,8 +287,13 @@ class Store:
         """)
 
     def q(self, sql: str, args: tuple = ()) -> list:
-        with self._lock:
-            return self._db.execute(sql, args).fetchall()
+        """A read, on this thread's own connection: never waits for a write in progress (WAL lets readers through) nor
+        for another reader (2026-10-20: page threads queued here behind the mesh's chunk words, and the site's pages
+        waited with them)."""
+        db = getattr(self._readers, "db", None)
+        if db is None:
+            db = self._readers.db = sqlite3.connect(self.path, timeout=60, isolation_level=None)
+        return db.execute(sql, args).fetchall()
 
     def x(self, sql: str, args: tuple = ()) -> None:
         with self._lock:
@@ -986,12 +992,20 @@ class DoginalIndex:
     COUNTS_SECONDS = 120.0
 
     def status(self) -> dict:
+        """Kept STATUS_SECONDS; while it is being worked out again, everybody else gets the last one at once instead of
+        working it out too (2026-10-20: Admin tabs piled up on it and held the threads that serve pages)."""
         kept = getattr(self, "_status_kept", None)
         if kept and time.monotonic() - kept[0] < self.STATUS_SECONDS:
             return kept[1]
-        said = self._status()
-        self._status_kept = (time.monotonic(), said)
-        return said
+        lock = self.__dict__.setdefault("_status_lock", threading.Lock())
+        if not lock.acquire(blocking=kept is None):
+            return kept[1]
+        try:
+            said = self._status()
+            self._status_kept = (time.monotonic(), said)
+            return said
+        finally:
+            lock.release()
 
     def _counts(self) -> dict:
         kept = getattr(self, "_counts_kept", None)
