@@ -255,6 +255,9 @@ def test_a_walkers_chunks_and_a_helpers_scans_agree(tmp_path):
     status = helper.status()
     assert status["ready"] == 3 and status["agreed"] == 3 and status["differ"] == 0, status
     assert walker.status()["agreed"] == 3
+    born = walker.store.q("SELECT COALESCE(SUM(births), 0) FROM seen WHERE node=''")[0][0]
+    assert born > 0 and status["agreed_births"] == walker.status()["agreed_births"] == born, \
+        "every inscription the two read the same way counts as agreed"
     # The helper read whole chunks, and its hash of each is the walker's.
     for c in range(3):
         assert helper.store.words(c)[""] == walker.store.words(c)[""]
@@ -268,7 +271,7 @@ def test_a_helper_that_lies_shows_as_a_difference(tmp_path):
     walker.heard("liar", {"op": "dn", "rows": [[0, "ab" * 32, 0]]})
     status = walker.status()
     assert status["differ"] == 1 and status["differs"][0]["chunk"] == 0
-    assert status["agreed"] == 0
+    assert status["agreed"] == 0 and status["agreed_births"] == 0, "one word against a liar agrees on nothing"
 
 
 def test_a_chunk_whose_helper_went_quiet_goes_to_the_next(tmp_path, monkeypatch):

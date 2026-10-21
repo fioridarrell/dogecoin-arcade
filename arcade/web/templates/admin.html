@@ -317,8 +317,8 @@
     Walking a chain is block after block, so it uses one core whatever this says. One core on a small machine rests
     between passes, so the arcade&rsquo;s pages stay quick.</p>
   <div class="tablewrap"><table class="admintable">
-    <thead><tr><th>Chain</th><th>Index</th><th>Starts at</th><th>Indexed</th><th>Inscriptions</th><th>Now</th></tr></thead>
-    <tbody id="ordrows"><tr><td colspan="6" class="muted">Loading&hellip;</td></tr></tbody>
+    <thead><tr><th>Chain</th><th>Index</th><th>Starts at</th><th>Indexed</th><th>Inscriptions</th><th>Agreed</th><th>Now</th></tr></thead>
+    <tbody id="ordrows"><tr><td colspan="7" class="muted">Loading&hellip;</td></tr></tbody>
   </table></div>
   <span class="muted" id="ordsaid"></span>
   <h3 style="margin:14px 0 6px">Look up</h3>
@@ -1063,6 +1063,9 @@ section.panel h2{margin-top:0}
           tr.appendChild(w ? lines([num(w.inscriptions) + ' inscriptions', num(w.tokens) + ' tokens, '
                                     + num(w.holders) + ' holders', num((w.names || {}).spec) + ' names'])
                            : r.found ? lines([num(r.found), 'in chunks read here']) : text('td', '\u2014'));
+          // Inscriptions in the chunks two or more arcades read the same way (2026-10-20).
+          tr.appendChild(r.mode === 'off' && !r.agreed ? text('td', '\u2014')
+                           : lines([num(r.agreed_births) + ' inscriptions', 'agreed by two or more arcades']));
           var bits = [];
           if (r.mode === 'off') bits.push('off');
           if (r.mode === 'read') bits.push((r.walkers || []).length ? 'reads from arcade ' + r.walkers[0].node

@@ -88,6 +88,12 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-20 · the operator's side · Admin -> Ords: an Agreed column
+
+The operator: "add a number of [inscriptions] that are agreed upon by two or more arcades into the ORD table on its
+own column". The index status gains `agreed_births`: the births in every chunk two or more arcades hashed the
+same way, counted from that agreeing word (`seen.births`). Shown as its own column after Inscriptions.
+
 ### 2026-10-20 · the operator's side · arcade.storage keeps each key's last 10 values; no empty shelf on a failed /account
 
 @tbuuol lost his ASHVALE character: during a restart /account failed, wallet.js shelfName() fell back to the

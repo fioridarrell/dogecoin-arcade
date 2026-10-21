@@ -1026,15 +1026,24 @@ class DoginalIndex:
     def _status(self) -> dict:
         now = time.time()
         ready = ready_chunks(self.tip, self.base) if self.tip else 0
-        per = self.store.all_words(max(ready, 1))
-        agreed = differ = one = 0
+        per: dict[int, dict[str, str]] = {}
+        born: dict[tuple[int, str], int] = {}
+        for c, node, h, n in self.store.q("SELECT chunk, node, hash, births FROM seen WHERE chunk < ?",
+                                          (max(ready, 1),)):
+            per.setdefault(c, {})[node] = h
+            born[(c, h)] = n
+        agreed = differ = one = agreed_births = 0
         differs = []
         for c, words in per.items():
             tally: dict[str, int] = {}
             for h in words.values():
                 tally[h] = tally.get(h, 0) + 1
-            if max(tally.values()) >= AGREE:
+            best = max(tally, key=tally.get)
+            if tally[best] >= AGREE:
                 agreed += 1
+                # The births two arcades said with the same hash (2026-10-20: the inscriptions agreed on, in a
+                # column of their own on the Ords tab).
+                agreed_births += born.get((c, best), 0)
             elif len(words) == 1:
                 one += 1
             if len(tally) > 1:
@@ -1061,7 +1070,7 @@ class DoginalIndex:
                     "rate": round(self.walker.rate, 2), "error": self.walker.error}
         found = self._counts()["found"]
         return {"net": self.net, "found": found, "mode": self.mode(), "base": self.base, "source": SOURCES.get(self.net, ""), "chunk": CHUNK, "tip": self.tip, "ready": ready,
-                "agreed": agreed, "one": one, "none": max(0, ready - len(per)), "differ": differ, "differs": differs,
+                "agreed": agreed, "agreed_births": agreed_births, "one": one, "none": max(0, ready - len(per)), "differ": differ, "differs": differs,
                 "lease": ({"chunk": mine["c"], "blocks": list(chunk_range(mine["c"], self.base)), "at": mine["at"],
                            "done": mine["at"] - chunk_range(mine["c"], self.base)[0]} if mine else None),
                 "lanes": [{"chunk": lane["c"], "at": lane["at"], "done": lane["at"] - chunk_range(lane["c"], self.base)[0]}
