@@ -88,6 +88,29 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-21 Import rescans on a busy Core, the walk's real pace, copies with nothing new (Claude)
+Follow-ups deployed on .25 the same day after @apple's Dogecoin import (DCHxodk...) met a Core still rescanning
+from an `importmulti` an arcade restart had cut the connection to (the Core goes on with it; its RPC queue stays full).
+- **utxos.CoreBusy** (c341838, 3433069, aaa5a99): "Work queue depth exceeded", a transport error, or a Core failing
+  even `local_rpc`'s connection check is a WAIT (3 min, `CORE_BUSY_SECONDS`), never one of the three strikes. The
+  batch is remembered as sent (`core_rescan_sent:<net>` = {at, addresses}) before `importmulti` goes, and when it is
+  first found busy with nothing remembered; once the Core answers, addresses it already watches with a Core not
+  restarted since (a peer older than `at`, getpeerinfo conntime) are LISTED, not rescanned again (hours on Dogecoin).
+- **The notice** (4250440, a2c5d6e): while the Core is held at a rescan with no real failure, `_rescan_says` says
+  "This arcade's node is rescanning the whole chain for imported wallets (meanwhile the arcade reads the chain from
+  another arcade, so sends work as usual)" with a countdown from `core_rescan_rate` (a guess of 600 b/s until
+  measured), never "There is no node to borrow" (the operator's screenshot). `_can_read_back` counts a held Core with a
+  sharer as readable: it read offline because its own queue is full.
+- **Start-up sweep** (66c4691): tried each minute for an hour until every Core-rescan chain counts ready
+  (`_account_chains` leaves out a Dogecoin whose Core is busy), so an import is never left off the queue by a restart.
+  The queue logs why an import waits, every ten minutes (8af72f6): `imported <addr> on <net> waits: ...`.
+- **Ord walk pace** (66c4691): `walk.rate` in the Ords status is now the pace over two minutes of wall time
+  (`DoginalIndex.walk_pace`, rests and waits for scans included); the speed inside a pass is `burst`. Strawberry's
+  PEP main said 12,000 b/s while it moved ~15.
+- **Imported-wallet copies** (f6623dc): a copy put aside that holds nothing the kept version lacks is dropped by
+  `POST /account/imported/siblings/drop` (the login key's signature over the KEPT version) with no new version, so
+  two arcades no longer answer each other's versions at every unlock.
+
 ### 2026-10-21 Lock-script swaps: the sender pays the fees, and every lock holds its operator's fee (Claude)
 The operator: "We need to have the sender of each lock script pay the fee so it doesn't come out of the amount of the coin
 received. We need to add an operator fee output to each lock script. Lock script fee selector in the operator admin
@@ -130,6 +153,10 @@ reckoning as Admin -> Ords) and its link (node.rtts; amber over a second). Phone
   on your side, and a node of yours that says a bad tag is simply shown by its id.
 - Tests: tests/test_admin.py (route shape, page), tests/test_mesh_operators.py (said tag), new
   tests/test_admin_arcades_browser.py.
+- **Helping / read only** (e3007d1, the operator: "an indicator that shows if an arcade is helping on one of the ord
+  indexes ... or read only"): besides the holders' rings, each chain's `index.chunks.peers` (its last "hi", five
+  minutes) and this arcade's own `index.mode()` add `role: "help"` (a whole dashed ring, "helping", blocks scanned in
+  the title) or `role: "read"` (faded coin, "read only"); walkers carry `role: "walk"`. Legend says all three.
 
 ### 2026-10-21 Wallet Doginals: pages, one batched read, frames built once (Claude)
 The operator: "over 1500 doginals in that wallet ... good pagination ... lazy loading and caching ... whatever is lightest
