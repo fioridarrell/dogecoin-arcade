@@ -18,7 +18,9 @@ import re
 import unicodedata
 from decimal import Decimal, InvalidOperation
 
-RULES = 2                      # bump when what an index keeps changes: an index of other rules is cut again
+RULES = 3                      # bump when what an index keeps changes: an index of other rules is cut again
+#: 3 (2026-10-21): an envelope is no longer dropped when a transaction spends one of its pieces without continuing it
+#: (doginal_index.Walker: the official indexers keep it) -- every index walked under 2 lost such inscriptions.
 
 
 # --------------------------------------------------------------------------- inscriptions (wonky-ord)

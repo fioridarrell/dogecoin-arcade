@@ -186,6 +186,24 @@ def test_an_envelope_over_two_transactions_closes_in_the_second(tmp_path):
     assert index.store.q("SELECT COUNT(*) FROM pending")[0][0] == 0
 
 
+def test_a_spend_of_a_pieces_change_first_does_not_end_its_envelope(tmp_path):
+    """2026-10-21, against pepeblocks.com: in PEP block 293,201 a transaction whose input 0 spent a piece's CHANGE
+    (output 1, a signature, no piece) came before the next piece (spending output 0). The walk took it for the next
+    piece and dropped the envelope; the official indexers keep it ("ParsedInscription::None" removes nothing), and the
+    next piece completes it. 862 of PEP's first 2.07 million were lost that way."""
+    chain = Chain()
+    first = _tx([(FUND, 0, _envelope(parts=((1, b"part one"),), total=2))], [100_000, 5_000_000])
+    chain.add([first])
+    change = _tx([(first[1], 1, _push(b"\x30" * 71) + _push(b"\x02" * 33))], [4_000_000])
+    rest = _tx([(first[1], 0, _more(((0, b"part two"),)))], [100_000])
+    chain.add([change, rest])
+    index = _walker(tmp_path, chain)
+    index.step()
+    where = index.where(f"{first[1]}i0")
+    assert where is not None and where["output"] == f"{rest[1]}:0", "the next piece still completes it"
+    assert index.store.q("SELECT COUNT(*) FROM pending")[0][0] == 0
+
+
 def test_a_reorg_walks_back_and_takes_the_new_blocks(tmp_path):
     chain = Chain()
     reveal = _tx([(FUND, 0, _envelope())], [100_000])

@@ -88,6 +88,21 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-21 Ord index rules 3: an envelope kept when something else spends a piece -- every ord index rebuilt (Claude)
+The operator compared our PEP numbers with pepeblocks.com: #0 matched exactly, but by our #2,074,940 they were 862 higher. A
+binary search against their pages found the first split at our #30,410: their #30,410-30,412 (790fb113...i0,
+7dc0523b...i0, 6a45475b...i0, blocks 293,201 / 293,207 / 293,215) were not in our index. Each is a ~50-transaction
+envelope; in its last block a transaction whose input 0 spends a piece's CHANGE (a signature, no piece) comes before
+the next piece. `Walker.walk_block` looked the chain up by the spent txid (as ord-pepecoin / ord-dogecoin do) and,
+reading no piece, DROPPED the pending envelope; the official inscription_updater.rs removes nothing on
+`ParsedInscription::None`, so the next piece completes it. Fixed: the pending row is removed only on "complete" (or
+replaced on "partial"). A fresh walk of 293,190-293,220 with the fix gives exactly pepeblocks' three, then 9da92d33.
+- **ord_rules.RULES 2 -> 3**: the operator chose "Rebuild everything". Every arcade that updates drops its ord indexes and
+  walks again from each chain's first block; arcades still on rules 2 are not trusted for chunks or snapshots. Dogecoin
+  (the same walker, wonky-ord's rule) is rebuilt too. **SadFrog / tbuuol: update, and your ord indexes rebuild.**
+- Test: tests/test_doginal_index.py `test_a_spend_of_a_pieces_change_first_does_not_end_its_envelope` (fails on the
+  old code).
+
 ### 2026-10-21 Trades read once a block, not by every page at once (Claude)
 .25's /feed stalled 49-57 s at 17:32: every request thread was in `render -> _account_counts -> _notif_events ->
 index.trades() -> _trades_uncached` (the pre-existing stall noted this morning). The memo (per tip and newest row) was

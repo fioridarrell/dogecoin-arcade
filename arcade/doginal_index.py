@@ -953,7 +953,12 @@ class Walker:
                     chain = w.get("pending", (prev,))
                     got = carry(chain, tx.vin[0]["script"])
                     state, ctype = got["state"], got["ctype"]
-                    if chain is not None and state != "partial":
+                    # A transaction that spends a piece but is no next piece (e.g. its input 0 spends the piece's change
+                    # output) leaves the chain where it was: the official indexers keep it ("ParsedInscription::None"
+                    # removes nothing, ord-pepecoin/ord-dogecoin inscription_updater.rs), and the real next piece, later
+                    # in the block or after, still continues it. Dropping it here lost such inscriptions (2026-10-21: 862
+                    # of PEP's first 2.07 million, against pepeblocks.com -- 790fb113...i0 in block 293,201 the first).
+                    if chain is not None and state == "complete":
                         w.put("pending", (prev,), None)
                     if state == "partial":
                         if chain is not None:
