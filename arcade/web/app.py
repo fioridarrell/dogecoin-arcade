@@ -23946,15 +23946,29 @@ def create_app(state: AppState) -> FastAPI:
                         _rescan_queue.pop((network, address), None)
                         continue
                     if not _can_read_back(chain):
+                        _queue_says(network, address, f"waits: the chain cannot be read back now (readable "
+                                    f"{_readable(chain)}, held {catchuplib.held(network)!r}, sharer "
+                                    f"{catchuplib.can_borrow(chain)}, retry {_core_retry.get(network)})")
                         continue
                     with _imports_lock:
-                        if _chain_rescan(network) is None and (network, address) in _rescan_queue:
+                        running = _chain_rescan(network)
+                        if running is None and (network, address) in _rescan_queue:
                             _begin_next(chain, address)
+                        elif running is not None:
+                            _queue_says(network, address, f"waits behind the read-back of {running['address']}")
                 time.sleep(20)
         except Exception:                                  # noqa: BLE001 -- woken again by the next queue
             log.warning("the imported-wallet queue stopped", exc_info=True)
         finally:
             _rescan_queue_running.clear()
+
+    #: When each queued import last said why it waits (once every ten minutes in the log).
+    _queue_said: dict[tuple[str, str], float] = {}
+
+    def _queue_says(network: str, address: str, why: str) -> None:
+        if time.time() - _queue_said.get((network, address), 0.0) > 600:
+            _queue_said[(network, address)] = time.time()
+            log.info("imported %s on %s %s", address, network, why)
 
     def _rescan_queue_wake() -> None:
         if _rescan_queue and not _rescan_queue_running.is_set():
