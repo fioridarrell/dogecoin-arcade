@@ -88,6 +88,17 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-20 · the operator's side · realtime players lost their seat one way; ord index stops stalling
+
+Ashvale reported @apple seeing @makwa while makwa could not see him; the operator: "Ship it".
+- A seat the node lost (restart, dropped line) is refused on send as "join the room first" (node) or
+  "not in that room any more -- join again" (mesh service). The page only rejoined on the second, and the
+  fast-lane and trade sends never rejoined: the player heard the room but nobody heard them. Now
+  `seatLost()` in _page_doors matches both, on all three send paths; tests/test_realtime_seat_lost.py
+  reads both texts from the server code so a reworded refusal fails the test.
+- (cb8373f, already live) the ord index reads on a connection per thread and its status answers from the
+  last result while one thread works the new one out, so Admin -> Ords polling no longer piles up.
+
 ### 2026-10-20 · the operator's side · faster pages: kept scripts and style, no picture loop, search boxes
 
 The operator: "measure the load times ... offer solutions", then "Yep" to the first two, and "these should be auto

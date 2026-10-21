@@ -226,6 +226,10 @@
     // nobody could hear until they reloaded. Now the viewer rejoins by itself,
     // as the same player where it can (a guest keeps its name), and tells the
     // page who left and who is there now.
+    // The node lost this seat (a restart, a dropped line): the mesh service says "join again", the node itself
+    // "join the room first". Either way the page has to take its seat again, or it hears the room but nobody
+    // hears it (2026-10-20, one-way players in ASHVALE).
+    function seatLost(j){ return !!j && !j.ok && /join again|join the room first/.test(j.error || ''); }
     function realtimeRejoin(name, frame, h){
       if (rt[name] !== h || h.rejoining) return;
       h.rejoining = true;
@@ -434,7 +438,8 @@
           if (!fastViaRoom(h)) { clearInterval(h.fast.pump); h.fast.pump = null; }
           return;
         }
-        realtimePost('/realtime/send', {token: h.token, data: RTC + JSON.stringify(msg)}, h.base).catch(function(){});
+        realtimePost('/realtime/send', {token: h.token, data: RTC + JSON.stringify(msg)}, h.base)
+          .then(function(j){ if (seatLost(j)) realtimeRejoin(name, h.frame, h); }).catch(function(){});
       }, 340);
     }
     function fastViaRoom(h){
@@ -505,7 +510,7 @@
       if (m.op === 'send') {
         realtimePost('/realtime/send', {token: held.token, data: String(m.data || '')}, held.base)
           .then(function(j){
-            if (!j.ok && /join again/.test(j.error || '')) realtimeRejoin(name, frame, held);
+            if (seatLost(j)) realtimeRejoin(name, frame, held);
             answer(j.ok ? {ok: true} : {ok: false, error: j.error || 'refused'});
           })
           .catch(function(){
@@ -563,7 +568,10 @@
       if (!h) return Promise.reject(new Error('you left the room this trade was in'));
       msg.id = t.id; msg.to = t.peer.id;
       return realtimePost('/realtime/send', {token: h.token, data: TRADE + JSON.stringify(msg)}, h.base)
-        .then(function(j){ if (!j.ok) throw new Error(j.error || 'the room did not take it'); });
+        .then(function(j){
+          if (seatLost(j)) realtimeRejoin(t.room, h.frame, h);
+          if (!j.ok) throw new Error(j.error || 'the room did not take it');
+        });
     }
     function tradeFail(t, err, quiet){
       var why = String((err && err.message) || err || 'failed');
