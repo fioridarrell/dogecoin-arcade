@@ -383,27 +383,36 @@ VAULT = {"kdf": "PBKDF2-SHA512", "iterations": 600000, "salt": "aa" * 16, "nonce
 
 
 def test_the_sealed_record_round_trips_and_the_vault_blob_is_untouched(client):
+    from nacl.signing import SigningKey
+    from test_imports_everywhere import _seat as seat_with, _sig
     app, state = client
-    account = _seat(app)
+    key = SigningKey(b"\x21" * 32)
+    account = seat_with(app, key)
+    text = json.dumps(SEALED, separators=(",", ":"))
     # No vault here: nothing to share a password with.
-    assert app.post("/account/imported", json={"blob": SEALED, "base": 0}).status_code == 404
+    assert app.post("/account/imported", json={"blob": text, "version": 1,
+                                               "signature": _sig(key, 1, text)}).status_code == 404
     state.vault().put("importer", account, SOMEONE, json.dumps(VAULT))
     before = app.get("/signin/importer").json()
 
-    put = app.post("/account/imported", json={"blob": SEALED, "base": 0})
+    put = app.post("/account/imported", json={"blob": text, "version": 1, "signature": _sig(key, 1, text)})
     assert put.status_code == 200, put.text
     stamp = put.json()["updated"]
     got = app.get("/account/imported").json()
-    assert json.loads(got["blob"]) == SEALED and got["updated"] == stamp
+    assert json.loads(got["blob"]) == SEALED and got["updated"] == stamp and got["version"] == 1
     assert got["vault"] == VAULT
     # Written since it was read: refused, never overwritten.
-    stale = app.post("/account/imported", json={"blob": {**SEALED, "sealed": "33" * 40}, "base": 0})
+    other = json.dumps({**SEALED, "sealed": "33" * 40}, separators=(",", ":"))
+    stale = app.post("/account/imported", json={"blob": other, "version": 1, "signature": _sig(key, 1, other)})
     assert stale.status_code == 409 and stale.json()["updated"] == stamp
     # Not a sealed record: refused.
     for bad in ({"kdf": "none"}, {**SEALED, "extra": 1}, {**SEALED, "sealed": "xyz"}, {**SEALED, "iterations": 10}):
-        assert app.post("/account/imported", json={"blob": bad, "base": stamp}).status_code == 400, bad
-    newer = app.post("/account/imported", json={"blob": {**SEALED, "sealed": "44" * 40}, "base": stamp})
-    assert newer.status_code == 200
+        bad_text = json.dumps(bad, separators=(",", ":"))
+        assert app.post("/account/imported", json={"blob": bad_text, "version": 2,
+                                                   "signature": _sig(key, 2, bad_text)}).status_code == 400, bad
+    newer = json.dumps({**SEALED, "sealed": "44" * 40}, separators=(",", ":"))
+    assert app.post("/account/imported", json={"blob": newer, "version": 2,
+                                               "signature": _sig(key, 2, newer)}).status_code == 200
     # The main vault: byte for byte what it was, through every write above.
     assert app.get("/signin/importer").json() == before
     assert state.vault().get("importer")["blob"] == json.dumps(VAULT)

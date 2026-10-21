@@ -88,6 +88,49 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-21 · the operator's side · imported wallets follow the account to every arcade it signs into
+
+The operator: "an imported wallet needs to be automatically broadcast to other arcades that you are signed in with. So all
+of your wallet balances persist over all arcades that you sign into." Branch claude/imports-everywhere.
+- **The record is signed and numbered.** Every save of the sealed record of imported wallets is version N+1 with an
+  Ed25519 signature by the ACCOUNT'S LOGIN KEY (the /auth/login key, from the words) over
+  `sha256("DogecoinArcade imported wallets\n" + pubkey + "\n" + str(version) + "\n" + sha256(blob) hex)`
+  (wallet_imports.record_digest; wallet.js recordDigest). Made in the browser (changeImports), checked on
+  POST /account/imported (a version other than kept+1 is a 409; unsigned is refused). Columns `version`, `sig`,
+  `origin` added in place; a record from before is version 0, unsigned, never shared, and the page saves it again,
+  signed, at the next unlock.
+- **Mesh extension `iw`** (arcade/mesh/importshare.py): `ls` (on link up: every signed record here as
+  [account_hash, version]), `an` (a new version), `gt`/`rc` (ask for / send the record, in 48 KB parts), `no`.
+  Accounts are named by `sha256("DogecoinArcade imported account\n" + pubkey)[:32]`, so a list only matches accounts
+  the hearer already holds. A version is taken only when the hearer's OWN vault holds the pubkey, the signature
+  checks against that pubkey, the blob's hash matches, and the version is higher than its own; then it tells its
+  other links. Rate limits per linked arcade (rows read, records sent, 16 questions open).
+- **Nothing lost when two arcades change it apart:** the plaintext keeps tombstones (`gone`) and each wallet's `at`;
+  a copy written here that a newer version replaces, or a signed copy of the same version with other contents, is
+  kept aside (`imported_siblings`, at most 8) and the page folds it in and saves the next version; the copies are
+  dropped only with the login key's signature over which (wallet_imports.merged_digest).
+- **Bringing an account:** GET `/signin/{tag}/imported` (public like /signin/{tag}: blob, version, signature);
+  POST `/account/imported/bring` fetches it from the arcade the account came from (one this arcade knows) and keeps
+  it after checking it against this vault's pubkey. bringHere and signIn call it, then open the record.
+- **Addresses everywhere:** the Wallet page registers every wallet of the open, current record that this arcade
+  does not watch, with the existing key-signed /account/imported/address (`sync: true`: an allowance of its own as
+  large as PER_DAY, only for an account with a signed record here; this node cannot open the record to check the
+  wallet is in it). "Bringing your imported wallets over…" while it runs.
+- **Balances privately:** POST `/signin/{tag}/imported-coins` {network, address, kind, pubkey, minute, asker,
+  signature}: the signature is by THAT ADDRESS'S KEY over
+  `sha256("DogecoinArcade imported coins\n" + tag + "\n" + network + "\n" + address + "\n" + asker + "\n" + minute)`,
+  made in the browser for this arcade's public name (`public_hosts`). Answered only when it checks, within 5
+  minutes, the asker is an arcade the answerer knows, the address is that tag's import there, and its whole past is
+  read; the asker checks every coin with gettxout (`_file_checked_coins`, shared with `_coins_from`). None answers:
+  the usual read-back / Core rescan. `/signin/{tag}/coins` still lists main addresses only.
+- **Removal** is a new signed version without the wallet; an arcade that takes it stops watching the address when
+  the account's page there next has the record open (the page's existing "registered here but not in the record"
+  forget): this node cannot read the record.
+- Tests: tests/test_imports_everywhere.py, tests/test_imports_everywhere_browser.py (two arcades, Firefox).
+- **SadFrog / tbuuol:** nothing to set; your arcades take part once they update. An arcade that has not updated
+  ignores `iw` frames and has no /signin/{tag}/imported, so it just does not take part (its accounts' imports stay
+  on it). An updated arcade asks for imported coins only with a public name in `public_hosts`.
+
 ### 2026-10-21 · the operator's side · the ord walk: a filter instead of every place in memory; a share of the machine
 
 - **Memory** (a test machine's arcade, ~17.5 GB, was killed by the out-of-memory killer at 10:18): the walker no longer keeps

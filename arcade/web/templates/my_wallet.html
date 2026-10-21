@@ -551,6 +551,24 @@ async function loadImports(force = false) {
       }
     }
   }
+  // The record came from another arcade the account uses (2026-10-21: "all of your wallet balances persist
+  // over all arcades that you sign into"): every wallet in it that this arcade is not watching yet is registered
+  // here, by its own key, with a proof that lets this arcade ask the others for its coins. Quietly, once a page.
+  if (open && !open.stale && !imp.syncing && !imp.synced && imp.node.signed
+      && Number(open.updated || 0) === Number(imp.node.updated || 0)) {
+    imp.syncing = true;
+    wallet.syncImported(acct(), imp.node, () => {
+      const st = $("wstate");
+      if (st && st.hidden) {
+        st.className = "wl-wstate wait"; st.textContent = "Bringing your imported wallets over…"; st.hidden = false;
+        imp.syncNote = true;
+      }
+    }).then((n) => {
+      imp.synced = true;
+      if (imp.syncNote) { $("wstate").hidden = true; imp.syncNote = false; }
+      if (n) loadImports(true).then(() => drawHead()).catch(() => {});
+    }).catch(() => {}).finally(() => { imp.syncing = false; });
+  }
   // A read-back cut short (a restart) starts again, once per page.
   for (const w of importedHere(c)) {
     if (w.status && w.status.state === "stopped" && !imp.kicked.has(w.address)) {
@@ -606,7 +624,10 @@ function drawMenu() {
            w && w.id === one.id, () => { pickWallet(one.id); drawAll(); });
   }
   const open = wallet.importsOpen(acct());
-  if (imp.node.blob && !(open && !open.stale)) {
+  // A newer version than the one open in this tab (another arcade's, or another device's): opened again with the
+  // password, so its wallets show here too.
+  const behind = open && !open.stale && Number(open.updated || 0) < Number(imp.node.updated || 0);
+  if (imp.node.blob && (!(open && !open.stale) || behind)) {
     option(el("span", "who", open && open.stale ? "Open your imported wallets (earlier password)…"
                                                  : "Open your imported wallets…"), null, false, openUnlockImports);
   }

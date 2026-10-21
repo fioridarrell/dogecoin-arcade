@@ -359,7 +359,9 @@ async function _signIn(tag, password, {network, version}) {
     throw new Error("that wallet does not match this name. Nothing was opened.");
   }
   const result = await seatWith(wallet);
-  // The imported wallets open with the same password (plan item 18), in the second sealed record.
+  // A newer record of its imported wallets from the arcade it came from, when this one has not heard (the mesh
+  // carries them too); then they open with the same password (plan item 18), in the second sealed record.
+  await bringImports("");
   await openImportsWith(wallet, password);
   // Any chain whose coins were never read back here (a read-back cut short by a restart): finished now. A chain
   // already done costs the node nothing (2026-10-19).
@@ -419,6 +421,10 @@ async function bringHere(said, password, {network, version}) {
   // (2026-10-19), or read back from the blocks when that arcade cannot say.
   fetch("/account/coins/backfill", {method: "POST", headers: {"Content-Type": "application/json"},
                                     body: JSON.stringify({from: said.from || ""})}).catch(() => {});
+  // Its imported wallets too (2026-10-21): the signed record from the arcade it came from, checked here
+  // against this account's key, then opened with the same password.
+  await bringImports(said.from || "");
+  await openImportsWith(wallet, password);
   return {...result, tag: said.tag, wallet};
 }
 
@@ -3718,7 +3724,9 @@ async function openImportsWith(wallet, password) {
       return;
     }
     importKey = {account: wallet.pubkey, ...keyed};
-    keepImports(wallet.pubkey, {updated: said.updated, wallets: (opened && opened.wallets) || []});
+    keepImports(wallet.pubkey, {updated: said.updated, version: said.version,
+                                wallets: (opened && opened.wallets) || []});
+    await tidyImports(wallet, password);
   } catch (e) { /* the record is read again on the Wallet page */ }
 }
 
@@ -3777,27 +3785,178 @@ async function keyForChange(wallet, said, password) {
   return {keyed: importKey};
 }
 
-/** Change the record: read it, open it, apply `change` to its wallets, seal it, hand it back -- read again and
- *  retried when another tab or device wrote it in between (the node's 409), so neither loses the other's change. */
-async function changeImports(wallet, change, password) {
+/* --- the record between arcades (2026-10-21: "an imported wallet needs to be automatically broadcast to
+ * other arcades that you are signed in with") ----------------------------------------------------------------------
+ * Every version of the record is numbered (one more each change) and signed HERE by the account's login key, over
+ * sha256("DogecoinArcade imported wallets\n" + pubkey + "\n" + version + "\n" + sha256(sealed text)), so another
+ * arcade can check it against the account's key and keep it (mesh/importshare.py, wallet_imports.record_digest).
+ * The plaintext keeps a tombstone for each removed wallet (`gone`: id -> when) and each wallet when it last changed
+ * (`at`), so two copies changed apart (two devices, one offline) fold together with nothing lost and nothing removed
+ * coming back. */
+
+async function sha256Hex(bytes) {
+  return hex(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)));
+}
+
+/** The 32 bytes the login key signs for one version of the record (wallet_imports.record_digest). */
+export async function recordDigest(pubkey, version, text) {
+  const line = `DogecoinArcade imported wallets\n${String(pubkey).toLowerCase()}\n${Number(version)}\n`
+    + await sha256Hex(enc.encode(text));
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(line)));
+}
+
+async function mergedDigest(pubkey, version, digests) {
+  const line = `DogecoinArcade imported wallets merged\n${String(pubkey).toLowerCase()}\n${Number(version)}\n`
+    + [...digests].map((d) => String(d).toLowerCase()).sort().join(",");
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(line)));
+}
+
+/** What an imported address's key signs so this arcade may ask another for its coins (wallet_imports.coins_digest). */
+async function coinsDigest(tag, network, address, host, minute) {
+  const line = `DogecoinArcade imported coins\n${String(tag).toLowerCase()}\n${network}\n${address}\n`
+    + `${String(host).toLowerCase()}\n${minute}`;
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(line)));
+}
+
+const changedAt = (w) => Number(w.at || w.made || 0);
+
+/** Fold another copy's wallets and tombstones into these (both changed in place): the newest change of each
+ *  wallet wins, a tombstone newer than a wallet's last change removes it, and one key imported twice is kept once. */
+export function foldImports(wallets, gone, other) {
+  for (const [id, at] of Object.entries((other && other.gone) || {})) {
+    if (!(Number(gone[id] || 0) >= Number(at))) gone[id] = Number(at);
+  }
+  for (const w of (other && other.wallets) || []) {
+    const at = wallets.findIndex((x) => x.id === w.id);
+    if (at < 0) {
+      if (!wallets.some((x) => x.chain === w.chain && x.address && x.address === w.address)) wallets.push({...w});
+    } else if (changedAt(w) > changedAt(wallets[at])) {
+      wallets[at] = {...w};
+    }
+  }
+  for (let i = wallets.length - 1; i >= 0; i--) {
+    if (Number(gone[wallets[i].id] || 0) >= changedAt(wallets[i])) wallets.splice(i, 1);
+  }
+}
+
+/** Tombstones are kept 180 days and at most 400. */
+function trimGone(gone) {
+  const old = Date.now() - 180 * 86400000;
+  return Object.fromEntries(Object.entries(gone).filter(([, at]) => Number(at) > old)
+    .sort((a, b) => Number(b[1]) - Number(a[1])).slice(0, 400));
+}
+
+/** Change the record: read it, open it, fold in any copies of it put aside here (the node keeps them when another
+ *  arcade's newer version replaced one written here: accounts.ImportedWallets.adopt), apply `change` to its wallets,
+ *  seal it, sign it as the next version, hand it back -- read again and retried when another tab or device wrote it in
+ *  between (the node's 409), so neither loses the other's change. `{tidy}`: only save when that changes something
+ *  (a copy folded in, or a record from before signatures). */
+async function changeImports(wallet, change, password, {tidy = false} = {}) {
   for (let attempt = 0; attempt < 4; attempt++) {
     const said = await importedOnNode();
     const {keyed, reseal} = await keyForChange(wallet, said, password);
     let wallets = reseal ? JSON.parse(JSON.stringify(reseal)) : [];
-    if (said.record && !reseal) wallets = (JSON.parse(await openText(said.record, keyed)).wallets) || [];
-    const out = await change(wallets);
-    const blob = await sealText(JSON.stringify({v: 1, wallets}), keyed);
+    const gone = {};
+    if (said.record && !reseal) {
+      const body = JSON.parse(await openText(said.record, keyed));
+      wallets = body.wallets || [];
+      Object.assign(gone, body.gone || {});
+    }
+    const merged = [];
+    for (const one of said.siblings || []) {
+      let blob, body = null;
+      try { blob = JSON.parse(one.blob); } catch (e) { continue; }
+      try { body = JSON.parse(await openText(blob, keyed)); } catch (e) {
+        if (password) {
+          try { body = JSON.parse(await openText(blob, await recordKey(password, blob))); } catch (x) { body = null; }
+        }
+      }
+      if (!body) continue;                 // sealed under a password this page does not have: folded in later
+      foldImports(wallets, gone, body);
+      merged.push(one.digest);
+    }
+    if (tidy && said.signed && !merged.length) return null;
+    const out = await change(wallets, gone);
+    const text = JSON.stringify(await sealText(JSON.stringify({v: 1, wallets, gone: trimGone(gone)}), keyed));
+    const version = Number(said.version || 0) + 1;
+    const signature = hex(await wallet.sign(await recordDigest(wallet.pubkey, version, text)));
+    const body = {blob: text, version, signature, base: said.updated || 0};
+    if (merged.length) {
+      body.merged = merged;
+      body.merged_signature = hex(await wallet.sign(await mergedDigest(wallet.pubkey, version, merged)));
+    }
     const put = await fetch("/account/imported", {
-      method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({blob, base: said.updated || 0}),
+      method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body),
     });
     const got = await put.json().catch(() => ({}));
     if (put.status === 409) continue;
     if (!put.ok) throw new Error(got.detail || "your imported wallets were not saved");
-    keepImports(wallet.pubkey, {updated: got.updated, wallets});
+    keepImports(wallet.pubkey, {updated: got.updated, version: got.version, wallets});
     return out;
   }
   throw new Error("Your imported wallets kept changing in another tab. Close the other tabs and try again.");
+}
+
+/** After the record opens with the password: a record from before signatures is saved again, signed, and copies
+ *  put aside are folded in (2026-10-21). Never fails an unlock. */
+async function tidyImports(wallet, password) {
+  try {
+    const said = await importedOnNode();
+    if (!said.record || (said.signed && !(said.siblings || []).length)) return;
+    await changeImports(wallet, () => {}, password, {tidy: true});
+  } catch (e) { /* tried again at the next unlock */ }
+}
+
+/** The account's signed record from the arcade it came from (`from`, or the one this node remembers), kept by this
+ *  node when it checks. A few seconds at most: a sign-in never waits on another arcade for long. */
+async function bringImports(from) {
+  try {
+    await Promise.race([
+      fetch("/account/imported/bring", {method: "POST", headers: {"Content-Type": "application/json"},
+                                        body: JSON.stringify({from: from || ""})}),
+      new Promise((ok) => setTimeout(ok, 12000))]);
+  } catch (e) { /* the mesh brings it later */ }
+}
+
+const syncTried = new Set();
+
+/** The imported wallets in the open record that this arcade is not watching for the account (the record came from
+ *  another arcade): each registered here with its key's proof (`sync`, an allowance of its own), with a second proof
+ *  by the same key that lets this arcade ask the others the account uses for its coins (wallet_imports.coins_digest)
+ *  instead of reading the chain back. `said` is importedOnNode()'s answer. How many were registered. */
+export async function syncImported(account, said, onStart) {
+  const here = importsOpen(account);
+  if (!here || here.stale || here.reseal || !said || !said.signed
+      || Number(here.updated || 0) !== Number(said.updated || 0)) return 0;
+  const running = await chains();
+  let n = 0;
+  for (const w of here.wallets || []) {
+    if (!w.address || (said.no_imports || []).includes(w.chain)) continue;
+    const chain = running.find((c) => c.network === w.chain);
+    if (!chain) continue;
+    if (((said.chains || {})[w.chain] || []).some((x) => x.address === w.address)) continue;
+    const key = `${account}:${w.chain}:${w.address}`;
+    if (syncTried.has(key)) continue;
+    syncTried.add(key);
+    if (onStart && !n) onStart();
+    try {
+      const keys = await importedKeys(w, chain);
+      const mine = keys.on[chain.network];
+      if (mine.address !== w.address) continue;
+      const proof = await coins.importProof(account, chain.network, mine.address, mine.pubkey);
+      const body = {chain: chain.network, address: mine.address, kind: keys.kind, pubkey: hex(mine.pubkey),
+                    signature: hex(await coins.signHash(mine.key, proof)), sync: true};
+      if (said.host && said.tag) {
+        const minute = Math.floor(Date.now() / 60000);
+        const digest = await coinsDigest(said.tag, chain.network, mine.address, said.host, minute);
+        body.coins = {minute, asker: said.host, signature: hex(await coins.signHash(mine.key, digest))};
+      }
+      const asked = await fetch("/account/imported/address", {
+        method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+      if (asked.ok) n++;
+    } catch (e) { /* tried again on the next page */ }
+  }
+  return n;
 }
 
 const KIND_IDS = {legacy: "p2pkh", "p2sh-p2wpkh": "p2sh-p2wpkh", p2wpkh: "p2wpkh"};
@@ -3907,6 +4066,7 @@ export async function renameImported(chain, id, name, {otherNames = [], password
     const it = wallets.find((w) => w.id === id);
     if (!it) throw new Error("That wallet is not in your imported wallets any more.");
     it.name = "";
+    it.at = Date.now();
     const names = otherNames.concat(wallets.filter((w) => w.chain === it.chain && w.id !== id).map((w) => w.name));
     it.name = cleanName(name) || nextWalletName(names);
     return it.name;
@@ -3919,9 +4079,10 @@ export async function removeImported(chain, id, {password = ""} = {}) {
   const wallet = await opened(chain);
   if (!wallet) throw new Error("Unlock your wallet first.");
   let gone = null;
-  await changeImports(wallet, (wallets) => {
+  await changeImports(wallet, (wallets, tombs) => {
     const at = wallets.findIndex((w) => w.id === id);
     if (at >= 0) gone = wallets.splice(at, 1)[0];
+    tombs[id] = Math.max(Date.now(), gone ? changedAt(gone) + 1 : 0);   // so a copy elsewhere does not bring it back
   }, password);
   if (gone && gone.address) {
     await fetch("/account/imported/forget", {method: "POST", headers: {"Content-Type": "application/json"},
@@ -3956,8 +4117,10 @@ export async function openImports(wallet, password) {
   try {
     const opened = JSON.parse(await openText(said.record, keyed));
     importKey = {account: wallet.pubkey, ...keyed};
-    keepImports(wallet.pubkey, {updated: said.updated, wallets: (opened && opened.wallets) || []});
-    return opened.wallets || [];
+    keepImports(wallet.pubkey, {updated: said.updated, version: said.version,
+                                wallets: (opened && opened.wallets) || []});
+    await tidyImports(wallet, password);
+    return (importsOpen(wallet.pubkey) || {}).wallets || opened.wallets || [];
   } catch (e) {
     const main = said.vault ? await open(said.vault, password).catch(() => null) : null;
     if (main && signer.normalise(main) === signer.normalise(wallet.phrase)) {

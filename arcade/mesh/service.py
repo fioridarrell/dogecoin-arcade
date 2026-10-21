@@ -845,6 +845,11 @@ def for_state(state, *, listen_host: str | None = None, listen_port: int | None 
                 return {}
         service.doginalshare = DxShare(indexes)
         service.node.add_extension(service.doginalshare)
+    # Each account's imported wallets, to every arcade that holds the account (importshare.py, 2026-10-21).
+    if hasattr(state, "imported_wallets"):
+        from .importshare import ImportShare, StateRecords
+        service.importshare = ImportShare(StateRecords(state))
+        service.node.add_extension(service.importshare)
     from . import coreshare
     coreshare.CURRENT = service.coreshare
     # STUN for the WebRTC fast lane (stun.py): served here when asked for, proved by other nodes before it is

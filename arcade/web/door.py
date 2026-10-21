@@ -444,6 +444,8 @@ PUBLIC_POST = ("/auth/challenge", "/auth/login", "/auth/logout",
                # key's signature, its read-back, taking one off, the main wallet's name -- each the caller's own only
                "/account/imported", "/account/imported/address", "/account/imported/rescan",
                "/account/imported/forget", "/account/imported/name",
+               # its signed record fetched from the arcade it was brought from (the caller's own account only)
+               "/account/imported/bring",
                # starring a market: the caller's own list of favorites, nothing else
                "/account/favorites",
                # the page holding this account's listed swaps is open (order_presence)
@@ -457,6 +459,12 @@ PUBLIC_POST = ("/auth/challenge", "/auth/login", "/auth/logout",
                # a finished lock-script swap, for its market's history (swap_history)
                "/account/trade/done",
                "/signup")
+
+#: POSTs a stranger may make, by shape: another arcade asking this one for an imported address's coins, with a proof
+#: that address's key signed (web/app.py signin_imported_coins; nothing without it).
+PUBLIC_POST_SHAPES = (
+    re.compile(r"^/signin/[^/]{1,64}/imported-coins$"),
+)
 
 #: What an inscribed page's own hostname may reach, and nothing else. A page
 #: in the sandbox has an opaque origin and sends no cookie, so this hostname
@@ -472,7 +480,7 @@ def public_path(path: str, method: str = "GET") -> bool:
            for deny in NEVER_PUBLIC):
         return False
     if method.upper() not in ("GET", "HEAD"):
-        return path in PUBLIC_POST
+        return path in PUBLIC_POST or any(shape.match(path) for shape in PUBLIC_POST_SHAPES)
     if path in PUBLIC_PAGES:
         return True
     if any(shape.match(path) for shape in PUBLIC_SHAPES):

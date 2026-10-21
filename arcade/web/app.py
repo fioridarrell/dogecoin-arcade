@@ -23750,6 +23750,9 @@ def create_app(state: AppState) -> FastAPI:
         """Where an imported address's read-back stands, with what to tell the person:
         "ready", "rescan" (reading back now or next in line), "none" (no node to read the chain), "stopped" (never
         finished, e.g. cut short by a restart: POST /account/imported/rescan starts it again)."""
+        if (chain.network, address) in _asking_peers:
+            return {"state": "rescan", "eta": 30,
+                    "says": "Bringing this wallet's coins over from another arcade you use; check back in a minute."}
         if address in _backfill_runs:
             eta = _wait_for(address)
             run = _backfill_runs.get(address) or {}
@@ -23881,7 +23884,9 @@ def create_app(state: AppState) -> FastAPI:
     def _rescan_begin(chain, address: str) -> dict:
         """Start the read-back of an imported address now, or queue it; and say where it stands."""
         with _imports_lock:
-            if not (address in _backfill_runs or _rescan_done(chain, address)):
+            if (chain.network, address) in _asking_peers:
+                pass                                       # another arcade is being asked first
+            elif not (address in _backfill_runs or _rescan_done(chain, address)):
                 if _chain_rescan(chain.network) is None and _can_read_back(chain):
                     _begin_next(chain, address)
                 else:
@@ -23933,7 +23938,8 @@ def create_app(state: AppState) -> FastAPI:
         blob beside it (the same one /signin hands anybody), so the browser can check a password against it before
         it seals anything; each chain's imported addresses and where they stand; the main wallet's names."""
         account = _signed_in_account(request)
-        have = state.imported_wallets().get(account.pubkey) or {"blob": "", "updated": 0}
+        record = state.imported_wallets()
+        have = record.get(account.pubkey) or {"blob": "", "updated": 0, "version": 0, "signed": False}
         vault = state.vault().by_pubkey(account.pubkey)
         chains: dict[str, Any] = {}
         names: dict[str, str] = {}
@@ -23951,29 +23957,66 @@ def create_app(state: AppState) -> FastAPI:
                 said = None
             if said is not None:
                 busy[chain.network] = said
+        # Since 2026-10-21: the record's version and whether the account's key signed it (one from before is saved
+        # again, signed, by the page), copies of it put aside for the page to fold in (accounts.ImportedWallets.adopt),
+        # and what an imported address's key signs to have another arcade tell this one its coins: this arcade's
+        # public name and the account's @tag (wallet_imports.coins_digest).
         return JSONResponse({"blob": have["blob"], "updated": have["updated"], "busy": busy,
+                             "version": int(have.get("version") or 0), "signed": bool(have.get("signed")),
+                             "siblings": [{"digest": one["digest"], "version": one["version"], "blob": one["blob"]}
+                                          for one in record.siblings(account.pubkey)],
+                             "tag": str((vault or {}).get("tag") or ""), "host": _proof_host(),
+                             "no_imports": list(NO_IMPORTS),
                              "vault": json.loads(vault["blob"]) if vault else None,
                              "chains": chains, "names": names, "cap": importslib.CAP_PER_CHAIN})
 
     @app.post("/account/imported")
     def account_imported_put(request: Request, payload: Any = Body(None)):
         """Keep this account's sealed record of imported wallets (accounts.ImportedWallets): ciphertext the browser
-        sealed under the account's password, replaced only if nothing else wrote it since the browser read it
-        (`base`; a 409 says read it again). The main vault is never touched here."""
+        sealed under the account's password, as the next `version`, with `signature` by the account's login key over
+        it (wallet_imports.record_digest); refused unless it is exactly one more than the version kept (a 409 says
+        read it again). Then every linked arcade is told (mesh/importshare.py). The main vault is never touched."""
         account = _signed_in_account(request)
         said = payload if isinstance(payload, dict) else {}
         blob = said.get("blob")
         if not state.vault().by_pubkey(account.pubkey):
             return JSONResponse({"detail": "this arcade keeps no sealed wallet for your account, so there is no "
                                            "password to seal imported wallets under here"}, status_code=404)
+        merged = said.get("merged") or []
+        if not isinstance(merged, list) or len(merged) > 2 * accountslib.SIBLINGS_MAX or not all(
+                isinstance(d, str) and re.fullmatch(r"[0-9a-fA-F]{64}", d) for d in merged):
+            return JSONResponse({"detail": "that merge is not readable"}, status_code=400)
         try:
-            text = json.dumps(blob, separators=(",", ":")) if isinstance(blob, dict) else str(blob or "")
-            out = state.imported_wallets().put(account.pubkey, text, int(said.get("base") or 0))
+            # The text exactly as the browser signed it; a parsed object (an older page) as JSON, compact.
+            text = blob if isinstance(blob, str) else json.dumps(blob, separators=(",", ":")) \
+                if isinstance(blob, dict) else ""
+            out = state.imported_wallets().put(account.pubkey, text, said.get("version"),
+                                               str(said.get("signature") or ""), merged=merged,
+                                               merged_sig=str(said.get("merged_signature") or ""))
         except accountslib.ImportedMoved as exc:
-            return JSONResponse({"detail": str(exc), "updated": exc.updated}, status_code=409)
+            return JSONResponse({"detail": str(exc), "updated": exc.updated, "version": exc.version},
+                                status_code=409)
         except (accountslib.AccountError, ValueError, TypeError) as exc:
             return JSONResponse({"detail": str(exc)}, status_code=400)
+        _announce_record(account.pubkey)
         return JSONResponse(out)
+
+    def _announce_record(pubkey: str) -> None:
+        """Tell every linked arcade this account's record has a new version (mesh/importshare.py)."""
+        share = getattr(getattr(state, "mesh", None), "importshare", None)
+        if share is None:
+            return
+        try:
+            have = state.imported_wallets().get(pubkey)
+            if have and have.get("signed"):
+                share.announce(pubkey, have["version"], importslib.blob_hash(have["blob"]))
+        except Exception:                                  # noqa: BLE001 -- linked arcades catch up at the next link
+            log.debug("could not announce an imported-wallets record", exc_info=True)
+
+    def _proof_host() -> str:
+        """The name other arcades know this one by, which an imported address's key signs when it asks them for
+        that address's coins through this arcade ("" when it has none: then nobody is asked)."""
+        return next((str(h).strip().lower() for h in (state.public_hosts or ()) if str(h).strip()), "")
 
     @app.post("/account/imported/address")
     def account_imported_address(request: Request, payload: Any = Body(None)):
@@ -23998,6 +24041,17 @@ def create_app(state: AppState) -> FastAPI:
                                    str(said.get("pubkey") or ""), kind, str(said.get("signature") or ""))
         except importslib.ImportRefused as exc:
             return JSONResponse({"detail": str(exc)}, status_code=400)
+        # A wallet already in the account's signed record, registered on another arcade it uses (2026-10-21:
+        # "all of your wallet balances persist over all arcades that you sign into"): the Wallet page registers it
+        # here by itself, with the same key proof. Those count against an allowance of their own, so bringing a
+        # record of many wallets over does not use up the day's imports. This node cannot open the record to see
+        # that the wallet is in it, so the allowance is the bound (as large as PER_DAY), and it is open only to an
+        # account whose signed record is here.
+        sync = bool(said.get("sync"))
+        coins_proof = said.get("coins") if isinstance(said.get("coins"), dict) else None
+        if sync and not (state.imported_wallets().get(account.pubkey) or {}).get("signed"):
+            return JSONResponse({"detail": "this arcade has no signed record of your imported wallets yet"},
+                                status_code=400)
         with _imports_lock:
             listed = _imported(account, chain)
             if any(e["a"] == address for e in listed):
@@ -24009,7 +24063,7 @@ def create_app(state: AppState) -> FastAPI:
             if len(listed) >= importslib.CAP_PER_CHAIN:
                 return JSONResponse({"detail": f"An account can import at most {importslib.CAP_PER_CHAIN} wallets "
                                                f"on {chain.title}. Remove one first."}, status_code=400)
-            day_key = f"import_day:{account.pubkey}"
+            day_key = f"import_{'sync_' if sync else ''}day:{account.pubkey}"
             day = importslib.recent(state.setting(day_key, []))
             if len(day) >= importslib.PER_DAY:
                 return JSONResponse({"detail": f"{importslib.PER_DAY} imports in a day is the most one account can "
@@ -24032,7 +24086,71 @@ def create_app(state: AppState) -> FastAPI:
                 return JSONResponse({"address": address, "chain": chain.network, "state": "ready",
                                      "says": "Imported. This arcade was already watching this address, so it is "
                                              "ready now."})
-            return JSONResponse({"address": address, "chain": chain.network, **_rescan_begin(chain, address)})
+            if coins_proof is not None:
+                _asking_peers[(chain.network, address)] = time.time()
+        if coins_proof is not None:
+            # Its coins as another arcade the account uses knows them, each checked here; the read-back only when
+            # none can say.
+            try:
+                got = _imported_coins_elsewhere(account, chain, address, kind, str(said.get("pubkey") or ""),
+                                                coins_proof)
+            finally:
+                _asking_peers.pop((chain.network, address), None)
+            if got is not None:
+                filed, host = got
+                state.set_setting(f"backfilled:{chain.network}:{address}", filed)
+                if _core_rescan_on(chain):
+                    state.set_setting(f"core_rescanned:{chain.network}:{address}", int(time.time()))
+                state.bump_generation()
+                return JSONResponse({"address": address, "chain": chain.network, "state": "ready", "from": host,
+                                     "says": f"Ready: brought over from {host}, every coin checked here."})
+        return JSONResponse({"address": address, "chain": chain.network, **_rescan_begin(chain, address)})
+
+    #: Imported addresses whose coins are being asked of other arcades right now: (network, address) -> since.
+    _asking_peers: dict[tuple[str, str], float] = {}
+
+    def _imported_coins_elsewhere(account, chain, address: str, kind: str, pubkey: str,
+                                  proof: dict) -> tuple[int, str] | None:
+        """An imported address's coins from another arcade this account uses (POST /signin/{tag}/imported-coins
+        there), with the proof its key signed in the browser for THIS arcade, this minute; each coin checked against
+        this arcade's own chain and filed. (filed, host), or None when no arcade could say."""
+        mine = state.vault().by_pubkey(account.pubkey) or {}
+        tag, asker = str(mine.get("tag") or ""), _proof_host()
+        if not tag or not asker or str(proof.get("asker") or "").lower() != asker:
+            return None
+        hosts = _arcade_hosts()
+        first = str(state.setting(f"came_from:{account.pubkey}", "") or "").removeprefix("https://")
+        order = ([first] if first in hosts else []) + [h for h in hosts if h != first]
+        body = {"network": chain.network, "address": address, "kind": kind, "pubkey": pubkey,
+                "minute": proof.get("minute"), "signature": str(proof.get("signature") or ""), "asker": asker}
+
+        def ask(host: str):
+            got = _post_arcade(f"https://{host}/signin/{urllib.parse.quote(tag)}/imported-coins", json=body,
+                               timeout=10, headers={"User-Agent": "arcade-node"})
+            said = got.json() if got.status_code == 200 else None
+            if not isinstance(said, dict) or said.get("address") != address or said.get("network") != chain.network:
+                return None
+            return said.get("coins") if isinstance(said.get("coins"), list) else None
+
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        if not order:
+            return None
+        with ThreadPoolExecutor(max_workers=min(8, len(order))) as pool:
+            jobs = {pool.submit(ask, h): h for h in order[:8]}
+            for job in as_completed(jobs):
+                try:
+                    coins = job.result()
+                except Exception:                          # noqa: BLE001 -- that arcade did not answer
+                    coins = None
+                if coins is not None:
+                    try:
+                        filed = _file_checked_coins(state, chain, address, coins)
+                    except Exception as exc:               # noqa: BLE001 -- this chain cannot check them: read back
+                        log.warning("coins of imported %s could not be checked here: %s", address, exc)
+                        return None
+                    log.info("imported %s on %s: %d coins as %s knew them", address, chain.network, filed, jobs[job])
+                    return filed, jobs[job]
+        return None
 
     @app.post("/account/imported/rescan")
     def account_imported_rescan(request: Request, payload: Any = Body(None)):
@@ -24096,6 +24214,124 @@ def create_app(state: AppState) -> FastAPI:
         name = importslib.clean_name(said.get("name"))
         state.set_setting(importslib.name_key(chain.network, account.pubkey), name or None)
         return JSONResponse({"chain": chain.network, "name": name})
+
+    # --- the record and its coins between arcades (2026-10-21: "an imported wallet needs to be automatically
+    # broadcast to other arcades that you are signed in with. So all of your wallet balances persist over all arcades
+    # that you sign into") -------------------------------------------------------------------------------------------
+
+    @app.get("/signin/{tag}/imported")
+    def signin_imported(request: Request, tag: str):
+        """An account's sealed record of imported wallets, its version and its login key's signature over both, for
+        an arcade the account is brought to. Handed to whoever asks, like the sealed vault at /signin/{tag}: nobody
+        can open it without the password, and nobody can change it without the words. Only a signed record."""
+        if _peer_data_limited(request):
+            return JSONResponse({"detail": "too many in a row. Wait a few minutes."}, status_code=429)
+        found = state.vault().get(tag)
+        have = state.imported_wallets().get(found["pubkey"]) if found else None
+        if not have or not have.get("signed"):
+            return JSONResponse({"detail": "no signed record of imported wallets here by that name"},
+                                status_code=404)
+        return JSONResponse({"tag": found["tag"], "pubkey": found["pubkey"], "version": have["version"],
+                             "blob": have["blob"], "signature": have["sig"]})
+
+    #: When each account last had its record fetched by /account/imported/bring (one try a minute).
+    _bring_asked: dict[str, float] = {}
+
+    def _take_record_from(source: str, mine: dict) -> str | None:
+        """Fetch an account's signed record from another arcade and keep it if it checks: signed by the pubkey of
+        THIS arcade's vault row for the account (never the one the answer names) and newer than the one here."""
+        try:
+            got = _ask_arcade(f"{source}/signin/{urllib.parse.quote(mine['tag'])}/imported", timeout=10,
+                              headers={"User-Agent": "arcade-node"})
+            said = got.json() if got.status_code == 200 else None
+        except Exception:                                  # noqa: BLE001 -- that arcade did not answer
+            return None
+        if not isinstance(said, dict) or not isinstance(said.get("blob"), str):
+            return None
+        try:
+            return state.imported_wallets().adopt(mine["pubkey"], said["blob"], said.get("version"),
+                                                  str(said.get("signature") or ""))
+        except accountslib.AccountError as exc:
+            log.info("imported wallets of %s from %s refused: %s", mine.get("tag"), source, exc)
+            return "refused"
+
+    @app.post("/account/imported/bring")
+    def account_imported_bring(request: Request, payload: Any = Body(None)):
+        """An account just brought here (wallet.js bringHere), or signing in: its signed record of imported wallets
+        from the arcade it came from (`from`, one of the arcades this one knows, or the one remembered), kept when it
+        checks. Linked arcades also hand newer versions over by themselves (mesh/importshare.py)."""
+        account = _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        mine = state.vault().by_pubkey(account.pubkey)
+        if not mine or not mine.get("tag"):
+            return JSONResponse({"detail": "this arcade keeps no sealed wallet for your account"}, status_code=404)
+        hosts = _arcade_hosts()
+        source = str(said.get("from") or "").rstrip("/").lower()
+        if source.removeprefix("https://") not in hosts:
+            source = ""
+        if not source:
+            source = str(state.setting(f"came_from:{account.pubkey}", "") or "").rstrip("/").lower()
+            if source.removeprefix("https://") not in hosts:
+                source = ""
+        if not source:
+            return JSONResponse({"asked": False, "version": (state.imported_wallets().get(account.pubkey) or {})
+                                 .get("version", 0)})
+        if time.time() - _bring_asked.get(account.pubkey, 0.0) < 60:
+            return JSONResponse({"asked": False, "version": (state.imported_wallets().get(account.pubkey) or {})
+                                 .get("version", 0)})
+        _bring_asked[account.pubkey] = time.time()
+        if not source.startswith("https://"):
+            source = "https://" + source
+        outcome = _take_record_from(source, mine)
+        if outcome == "taken":
+            _announce_record(account.pubkey)
+            state.bump_generation()
+        have = state.imported_wallets().get(account.pubkey) or {}
+        return JSONResponse({"asked": True, "from": source, "outcome": outcome, "version": have.get("version", 0)})
+
+    @app.post("/signin/{tag}/imported-coins")
+    def signin_imported_coins(request: Request, tag: str, payload: Any = Body(None)):
+        """One imported address's coins, for another arcade the account uses, which checks each against its own
+        chain. Never said by address alone (that would tell anybody which addresses this arcade's accounts imported):
+        the asker passes on a proof the ADDRESS'S KEY signed in the account's browser (wallet_imports.coins_digest)
+        naming this @tag, the chain, the address, the asking arcade and the minute. Answered only when that checks,
+        the asking arcade is one this one knows, the address is that account's import here, and this arcade has the
+        address's whole past."""
+        if _peer_data_limited(request):
+            return JSONResponse({"detail": "too many in a row. Wait a few minutes."}, status_code=429)
+        said = payload if isinstance(payload, dict) else {}
+        found = state.vault().get(tag)
+        if found is None:
+            return JSONResponse({"detail": "no wallet here by that name"}, status_code=404)
+        chain = next((c for c in _account_chains() if c.network == str(said.get("network") or "")), None)
+        if chain is None:
+            return JSONResponse({"detail": "no such chain here"}, status_code=404)
+        address = str(said.get("address") or "").strip()
+        asker = str(said.get("asker") or "").strip().lower()
+        if asker not in _arcade_hosts():
+            return JSONResponse({"detail": "asked for an arcade this one does not know"}, status_code=403)
+        try:
+            importslib.check_coins_proof(chain.params, found["tag"], chain.network, address, asker,
+                                         said.get("minute"), str(said.get("pubkey") or ""),
+                                         str(said.get("kind") or "p2pkh"), str(said.get("signature") or ""))
+        except importslib.ImportRefused as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=403)
+        entries = importslib.entries(state.setting(importslib.setting_key(chain.network, found["pubkey"]), []))
+        if not any(e["a"] == address for e in entries):
+            return JSONResponse({"detail": "that is not one of this account's imported wallets here"},
+                                status_code=404)
+        try:
+            whole = address not in _backfill_runs and _rescan_done(chain, address)
+        except Exception:                                  # noqa: BLE001 -- the chain's index is not ready
+            whole = False
+        if not whole:
+            return JSONResponse({"detail": "this arcade has not read this wallet's whole past yet"}, status_code=409)
+        index = state.token_index(chain)
+        with contextlib.closing(index.open()) as db:
+            coins = utxoslib.unspent(db, address)
+            since = utxoslib.since(db, address)
+        return JSONResponse({"tag": found["tag"], "network": chain.network, "address": address, "since": since,
+                             "coins": [{k: c[k] for k in ("txid", "vout", "value", "height")} for c in coins]})
 
     @app.post("/account/send")
     def account_send(request: Request, payload: Any = Body(None)):
@@ -30596,10 +30832,24 @@ def _coins_from(state, source: str, tag: str, chain, address: str) -> int | None
     said = (kept[1] or {}).get(chain.network) if isinstance(kept[1], dict) else None
     if not isinstance(said, dict) or said.get("address") != address:
         return None
+    return _file_checked_coins(state, chain, address, said.get("coins"))
+
+
+def _post_arcade(url: str, **kwargs):
+    """POST to another arcade, on the same terms as `_ask_arcade`: a public address only, never a redirect."""
+    host = urllib.parse.urlsplit(url).hostname or ""
+    if not _host_is_public(host):
+        raise requests.ConnectionError(f"{host} is not a public address; not asked")
+    return requests.post(url, allow_redirects=False, **kwargs)
+
+
+def _file_checked_coins(state, chain, address: str, coins) -> int:
+    """Coins another arcade says `address` holds, each checked against this arcade's own chain (gettxout: unspent,
+    in a block, paying `address`) and filed; how many. Nothing another arcade says is filed unchecked."""
     filed = 0
     index = state.token_index(chain)
     with chain.rpc() as rpc, index.open() as db:
-        for coin in (said.get("coins") or [])[:5000]:
+        for coin in (coins if isinstance(coins, list) else [])[:5000]:
             try:
                 txid, vout = str(coin["txid"]).lower(), int(coin["vout"])
                 out = rpc.call("gettxout", txid, vout, False)
