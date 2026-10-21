@@ -479,3 +479,13 @@ def test_a_failing_core_rescan_backs_off_instead_of_rescanning_again_at_once(cli
     assert core.batches == [1], "tried once, then waits: never straight into another whole-chain rescan"
     said = app.post("/account/imported/rescan", json={"chain": "ltctest", "address": a["address"]}).json()
     assert said["state"] == "rescan" and "tries again" in said["says"], said
+
+
+def test_no_wallet_is_imported_on_pep_test(client, monkeypatch):
+    """2026-10-21: "No imports for pep test"."""
+    app, state, chain, account = _ready(client, monkeypatch)
+    from arcade.config import NETWORKS as N
+    asked = _proof(account, 0xC001, network="test", params=N["test"])
+    refused = app.post("/account/imported/address", json=asked)
+    assert refused.status_code == 400, refused.text      # "cannot be imported" where PEP TEST runs
+    assert not W.entries(state.setting(W.setting_key("test", account)))

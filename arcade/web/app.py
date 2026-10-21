@@ -23511,6 +23511,8 @@ def create_app(state: AppState) -> FastAPI:
     catchuplib.store = (lambda: state.setting("core_rescan_holds", None) or {},
                         lambda holds: state.set_setting("core_rescan_holds", holds or None))
     CORE_RESCAN_ON = ("doge", "main")
+    #: Chains no wallet may be imported on (2026-10-21: "No imports for pep test").
+    NO_IMPORTS = ("test",)
     #: A chain whose Core rescan failed: network -> (failures in a row, not before this time). A Core is never made to
     #: rescan its whole chain again at once: 10 minutes, then 20, then it stops until the arcade restarts.
     _core_retry: dict[str, tuple[int, float]] = {}
@@ -23987,6 +23989,8 @@ def create_app(state: AppState) -> FastAPI:
             chain = _chain_asked(said)
         except ValueError as exc:
             return JSONResponse({"detail": str(exc)}, status_code=400)
+        if chain.network in NO_IMPORTS:
+            return JSONResponse({"detail": f"wallets cannot be imported on {chain.title}"}, status_code=400)
         address = str(said.get("address") or "").strip()
         kind = str(said.get("kind") or "p2pkh")
         try:

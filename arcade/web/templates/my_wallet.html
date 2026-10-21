@@ -610,7 +610,8 @@ function drawMenu() {
     option(el("span", "who", open && open.stale ? "Open your imported wallets (earlier password)…"
                                                  : "Open your imported wallets…"), null, false, openUnlockImports);
   }
-  option(el("span", "", "+ Import a wallet"), null, false, openImport, "import");
+  // No imports on PEP TEST (2026-10-21); the node refuses one there too.
+  if (chainNow() !== "test") option(el("span", "", "+ Import a wallet"), null, false, openImport, "import");
 }
 
 /** Where the picked wallet's read-back stands, or the import that just happened. */
