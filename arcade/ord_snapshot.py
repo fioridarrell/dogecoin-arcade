@@ -88,10 +88,14 @@ class Snapshots:
         self.manifest_path = base.with_name(base.name + ".snap.json")
         self.served_at = time.time()
         from .doginal_index import LAYOUT
+        from . import ord_rules
         try:
             kept = json.loads(self.manifest_path.read_text())
+            # Of this layout AND these rules (2026-10-21, rules 3: a snapshot walked under 2 lost inscriptions -- kept,
+            # it was offered and its gigabytes stayed on the disk; an arcade fetching refused it, by its manifest).
             if self.snap_path.exists() and self.snap_path.stat().st_size == kept["manifest"]["size"] \
-                    and kept["manifest"].get("layout", 1) == LAYOUT:
+                    and kept["manifest"].get("layout", 1) == LAYOUT \
+                    and kept["manifest"].get("rules") == ord_rules.RULES:
                 self.made = {**kept, "path": self.snap_path}
             else:
                 self.forget()

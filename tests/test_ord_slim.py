@@ -264,6 +264,18 @@ def test_a_snapshot_of_another_layout_is_never_fetched_nor_kept(tmp_path):
     snaps.snap_path.write_bytes(b"abc")
     fresh = dx.DoginalIndex(index.store.path, lambda: chain, lambda: "walk").snapshots
     assert fresh.made is None and not fresh.snap_path.exists(), "a layout-1 snapshot on disk is let go of"
+    # Of this layout but other rules (2026-10-21, rules 3): let go of too, its gigabytes off the disk.
+    snaps = fresh
+    snaps.manifest_path.write_text(json.dumps({"manifest": {"size": 3, "at": 0, "layout": dx.LAYOUT,
+                                                            "rules": ord_rules.RULES - 1}, "id": "e" * 64}))
+    snaps.snap_path.write_bytes(b"abc")
+    again = dx.DoginalIndex(index.store.path, lambda: chain, lambda: "walk").snapshots
+    assert again.made is None and not again.snap_path.exists(), "a snapshot of other rules is let go of"
+    snaps.manifest_path.write_text(json.dumps({"manifest": {"size": 3, "at": 0, "layout": dx.LAYOUT,
+                                                            "rules": ord_rules.RULES}, "id": "f" * 64}))
+    snaps.snap_path.write_bytes(b"abc")
+    kept = dx.DoginalIndex(index.store.path, lambda: chain, lambda: "walk").snapshots
+    assert kept.made is not None, "one of these rules and layout is kept"
 
 
 @pytest.mark.parametrize("idle", [True, False])

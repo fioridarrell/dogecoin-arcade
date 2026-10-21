@@ -102,6 +102,9 @@ replaced on "partial"). A fresh walk of 293,190-293,220 with the fix gives exact
   (the same walker, wonky-ord's rule) is rebuilt too. **SadFrog / tbuuol: update, and your ord indexes rebuild.**
 - Test: tests/test_doginal_index.py `test_a_spend_of_a_pieces_change_first_does_not_end_its_envelope` (fails on the
   old code).
+- **Old files:** an index of other rules is emptied in place (its tables dropped; SQLite keeps the file's size and the
+  rebuild reuses the space). A snapshot kept beside it (`.snap`, GBs) is now let go of at start when its manifest's
+  rules are not these (ord_snapshot.Snapshots: it checked only the layout; a fetching arcade refused it already).
 
 ### 2026-10-21 Trades read once a block, not by every page at once (Claude)
 .25's /feed stalled 49-57 s at 17:32: every request thread was in `render -> _account_counts -> _notif_events ->
