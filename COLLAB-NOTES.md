@@ -88,6 +88,15 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-22 Import rescans: a wallet that already found the address's history is not rescanned again (Claude)
+The operator: "looks like rescan started over". @apple's Dogecoin rescan on .25 finished about 09:35 CDT after ~22 h; when the
+Core answered, `utxos._rescan_already_ran` judged "Core restarted since the send" by its OLDEST PEER (getpeerinfo
+conntime) -- but a Core locked for 22 hours drops and makes its peers anew -- so at 09:42 the whole chain was sent
+again. Now: every address watch-only AND the wallet already holding transactions for each
+(`listreceivedbyaddress 0 true true`, `_wallet_has_history`) means a rescan ran: the coins are listed, nothing is
+sent again. The peer test is only the fallback for an address with no history at all. Test:
+tests/test_wallet_imports.py `test_a_rescan_that_found_history_is_not_sent_again_though_the_peers_are_new`.
+
 ### 2026-10-22 Dogecoin rules 5: reinscriptions numbered like nintondo; per-chain rules versions (Claude)
 The operator compared our Dogecoin numbers with nintondo.io: identical to #3,052, then nintondo pulled ahead (152,856 by our
 #63.4 million). The first one, nintondo's #3,053 (3af064b2...i0, block 4,610,566), is a REINSCRIPTION -- written on the

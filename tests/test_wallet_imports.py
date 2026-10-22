@@ -274,6 +274,10 @@ class _WalletCore:
             return [{"success": True} for _ in args[0]]
         if method == "getblockcount":
             return self.tip
+        if method == "validateaddress":                # not watched before its first import
+            return {"isvalid": True, "iswatchonly": any(args[0] in b for b in self.batches)}
+        if method == "listreceivedbyaddress":
+            return []
         if method == "listunspent":
             return [{"txid": hashlib.sha256(a.encode()).hexdigest(), "vout": 0, "address": a, "confirmations": 200,
                      "amount": 1.5, "scriptPubKey": txbuild.p2pkh_script(a).hex()}
@@ -503,9 +507,9 @@ def test_no_wallet_is_imported_on_pep_test(client, monkeypatch):
 class _BusyCore(_WalletCore):
     """A Core still at a rescan sent before an arcade restart: its queue full until `free`, peers since `up`."""
 
-    def __init__(self, gate, up, watched=()):
+    def __init__(self, gate, up, watched=(), history=()):
         super().__init__(gate)
-        self.free, self.up, self.watched = False, up, set(watched)
+        self.free, self.up, self.watched, self.history = False, up, set(watched), set(history)
 
     def call(self, method, *args):
         from arcade.rpc import RpcTransportError
@@ -515,6 +519,8 @@ class _BusyCore(_WalletCore):
             return [{"conntime": int(self.up)}, {"conntime": int(self.up) + 500}]
         if method == "validateaddress":
             return {"isvalid": True, "iswatchonly": args[0] in self.watched}
+        if method == "listreceivedbyaddress":
+            return [{"address": a, "txids": ["ab" * 32] if a in self.history else []} for a in self.watched]
         return super().call(method, *args)
 
 
@@ -599,3 +605,28 @@ def test_a_core_that_does_not_answer_at_all_is_remembered_as_rescanning(client, 
     assert state.setting("core_rescan_sent:ltctest")["addresses"] == [asked["address"]]
     said = app.post("/account/imported/rescan", json={"chain": "ltctest", "address": asked["address"]}).json()
     assert said["says"].startswith("This arcade's node is rescanning the whole chain"), said
+
+
+
+def test_a_rescan_that_found_history_is_not_sent_again_though_the_peers_are_new(tmp_path):
+    """2026-10-22, "looks like rescan started over": a 22-hour Dogecoin rescan drops and makes its peers anew,
+    so the peer test said "restarted" and the whole chain was sent again. The wallet already holding transactions for
+    the address is proof enough that a rescan ran: its coins are listed, nothing is rescanned."""
+    from arcade import utxos
+    from arcade.ledger import LedgerIndex
+    gate = threading.Event()
+    gate.set()
+    index = LedgerIndex(tmp_path / "t.sqlite", P, lambda: None)
+    a = W.address_of(P, _key(0xB101)[1], "p2pkh")
+    sent_at = time.time() - 3600
+    core = _BusyCore(gate, up=time.time() - 60, watched={a}, history={a})     # peers newer than the send
+    core.free = True
+    filed = utxos.seed_from_core_wallet(index, core, P, [a], 500, sent={"at": sent_at, "addresses": [a]},
+                                        remember=lambda said: None)
+    assert filed == {a: 1} and core.batches == [], "listed with no second rescan"
+    # Watched but no history, and the peers say restarted: rescanned, as before (it may have been cut short).
+    empty = _BusyCore(gate, up=time.time() - 60, watched={a})
+    empty.free = True
+    utxos.seed_from_core_wallet(index, empty, P, [a], 500, sent={"at": sent_at, "addresses": [a]},
+                                remember=lambda said: None)
+    assert empty.batches == [[a]]
