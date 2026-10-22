@@ -88,6 +88,17 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-21 Ord notes: multisig spends not followed back (a test machine's and .25's walks stood still) (Claude)
+Both walks stood on their first Dogecoin block after the rules-3 reset: a test machine's lane finished chunk 0 and then hung
+in `Store.finish_notes -> ord_notes.finish -> genesis_before` (faulthandler, a scratch walk on a test machine's Core). Ordinary
+P2SH multisig spends (OP_0, a DER signature, ..., a redeem script ending OP_CHECKMULTISIG) pass `may_envelope` (the
+first push reads as the number 0), so each was followed back as a possible envelope piece -- through long chains of
+such spends, up to MAX_BACK (5,000) Core calls each, and a "too far" answer was not remembered, so every candidate
+walked the chain again. `ord_notes._multisig_spend` (script shape only, so every arcade finishes a chunk the same way)
+now stops the follow-back at such a spend and skips it as a candidate (kept whole). What notes KEEP is unchanged
+(`may_envelope`). A scratch walk of a test machine's Dogecoin then ran ~60 blocks/s and found #0 = 15f3b73d...i0 at 4,609,723.
+.25 waited on a test machine's chunk (it borrows its reads while its Core rescans), hence "stalled on the same block".
+
 ### 2026-10-21 Ord index rules 4: each chain read in its own indexer's dialect, delegates and parents kept -- every ord index rebuilt again (Claude)
 Branch `claude/ord-rules4`. Read from the official sources (gh api, today): mvdnbrk/ord-pepecoin
 `src/inscriptions/parser.rs` (whole), `tag.rs`, `inscription.rs` (delegate_id/into_body), `src/index/updater/

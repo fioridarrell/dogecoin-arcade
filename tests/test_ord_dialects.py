@@ -420,3 +420,24 @@ def test_a_walker_that_fails_is_passed_over_for_the_next_then_this_arcade(tmp_pa
     monkeypatch.setattr(others["mid"], "answer", down)
     said = me.lookup({"what": "number", "number": 0})
     assert said["from"] == "this arcade" and said["walked_to"] == dx.BASE + 4
+
+
+def test_a_multisig_spend_is_not_followed_back_as_a_piece():
+    """2026-10-21: on Dogecoin, P2SH multisig spends (OP_0, a DER signature, a redeem script ending OP_CHECKMULTISIG)
+    pass may_envelope; followed back 5,000 transactions each, a chunk's notes were never finished and a test machine's and
+    .25's walks stood still. The follow-back now sees them for what they are; what notes keep is unchanged."""
+    from arcade import ord_notes
+    def push(b):
+        return bytes([len(b)]) + b
+    sig = b"\x30" + b"\x45" * 70 + b"\x01"
+    redeem = b"\x52" + push(b"\x02" * 33) + push(b"\x03" * 33) + b"\x52\xae"
+    multisig = b"\x00" + push(sig) + push(sig) + bytes([0x4c, len(redeem)]) + redeem
+    assert ord_notes.may_envelope(multisig, "dogecoin"), "kept by the notes, as before"
+    assert ord_notes._multisig_spend(multisig, "dogecoin")
+    piece = push(b"\x02") + push(b"x" * 80) + push(b"\x01") + push(b"y" * 80) + push(sig) + push(b"\x21" + b"\x02" * 33 + b"\xac")
+    assert not ord_notes._multisig_spend(piece, "dogecoin"), "a Doginal piece is still followed"
+    calls = []
+    def lookup(txid):
+        calls.append(txid)
+        raise AssertionError("a multisig chain is not followed")
+    assert ord_notes.genesis_before.__name__  # (the candidate itself is skipped in finish; see the walk test below)

@@ -112,6 +112,19 @@ def _first_piece(script: bytes, dialect: str = "dogecoin") -> tuple[bytes, bytes
     return pushes[2], (pushes[4] if len(pushes) > 4 else b"")
 
 
+def _multisig_spend(script: bytes, dialect: str = "dogecoin") -> bool:
+    """An ordinary P2SH multisig spend, by its script alone: OP_0, a DER signature, ..., a redeem script ending
+    OP_CHECKMULTISIG. Such a script passes may_envelope (its first push reads as the number 0) and is no piece of an
+    envelope: a Doginal's reveal ends with its own lock script, never with OP_CHECKMULTISIG (2026-10-21: on Dogecoin,
+    chains of these spends were followed back 5,000 transactions each, so a chunk's notes were never finished and the
+    a test machine's and .25's walks stood still). Only the follow-back below asks; what notes KEEP is decided by may_envelope."""
+    pushes = ord_rules.decode_push_datas(script, dialect)
+    if not pushes or len(pushes) < 3 or pushes[0] != b"":
+        return False
+    sig, redeem = pushes[1], pushes[-1]
+    return (70 <= len(sig) <= 73 and sig[:1] == b"\x30" and redeem[-1:] == b"\xae")
+
+
 _GENESIS: dict[str, Any] = {}                  # txid of a piece -> its envelope's first piece (or "none"), kept
 
 
@@ -126,7 +139,7 @@ def genesis_before(txid: str, lookup, dialect: str = "dogecoin") -> Any:
         tx = rawchain.read_tx(lookup(at), at)
         script = tx.vin[0]["script"] if tx.vin and tx.vin[0]["vout"] != -1 else b""
         seen.append(at)
-        if not may_envelope(script, dialect):
+        if not may_envelope(script, dialect) or _multisig_spend(script, dialect):
             found = "none"
             break
         first = _first_piece(script, dialect)
@@ -272,8 +285,8 @@ def finish(blocks: list[bytes], lookup=None, dialect: str = "dogecoin") -> bytes
                 # Should the walk read it as the next piece of a chain it spends instead, it reads nothing of it.
                 chain = {"pieces": [], "first": first, "whole": True}
             if chain is None:
-                if lookup is None:
-                    continue                            # begun before this chunk, and no way to look: kept whole
+                if lookup is None or _multisig_spend(script, dialect):
+                    continue                            # no way to look, or no piece at all: kept whole
                 else:
                     found = genesis_before(prev, lookup, dialect)
                     if found is None:
