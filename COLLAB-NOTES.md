@@ -88,6 +88,34 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-22 DRC-20 / PRC-20 send from the Wallet, one Send press, counted as pepeblocks and nintondo count it (Claude)
+The operator: "look at the recent PRC-20 that @apple recently received ... I want the ability to send a PRC 20 token in the
+same way I can send any other token" and "Our transfer and send protocol needs to match that of Pepe block and
+Nintondo". @apple's 50,000 frgy (pepeblocks: frgy 50,000.00, transferable 0.00, as our index) came the BRC-20 way: five
+notes `{"p":"prc-20","op":"transfer","tick":"frgy","amt":"10000"}` inscribed on the deployer's own address (e.g.
+ddc29df9...i0, block 778,863: the envelope in a P2SH input's scriptSig), then one transaction (67f2cc49..., block
+1,261,581) sent the five 0.001 PEP note coins to @apple. There is no one-step "send" op in DRC-20 / PRC-20 (wonky-ord
+rules: deploy, mint, transfer; the BRC-20 single-step idea is a Bitcoin taproot proposal), and the "send" is an ordinary
+transaction, not an inscription. Asked, the operator chose "One Send press"; then: the token loads on the wallet card like an
+Omni token and the card's own Send sends it.
+* arcade/token20_send.py: `note` (compact JSON, the explorers' key order), `envelope` (ltc_ord's Doginals writer: byte
+  for byte the frgy note), `commit_script`, `reveal_fee`, `build_reveal` (the commit coin in, POSTAGE 0.001 to the
+  sender's own address out; the input carries `redeem` and `envelope`).
+* funding: `assemble` puts envelope + signature + redeem for such an input; `build_note_send` (= the Doginal send,
+  taking the reveal's coin as vouched: no index has read it yet); `choose` never takes an in-flight coin at or under
+  POSTAGE_MAX_GUARDED where a guard runs (the note's coin is in flight on the sender's own address).
+* POST /account/token20/send (door PUBLIC_POST): {chain, tick, amount, to, pubkey} -- the address's own coin key, not
+  the login key, checked against the address -- refused unless a copy of the index is within INDEX_READY_LAG of the tip
+  and the amount is on hand (units - transferable); offers the commit and keeps the run (`_t20_sends`, 30 min);
+  {send} after each broadcast (each offer's `done` hook notes its txid) offers the reveal, then the send, then "done".
+* coins.js `noteKey` / `noteText`: verifyOffer signs a reveal only over this key's own note script, and reads the note
+  back from the envelope. wallet_js `startToken20` / `sendToken20` (signs the three in turn, `reviewed`).
+* my_wallet.html: a DRC-20 / PRC-20 row selects the card (`asset.token20`: balance on hand, BigInt units), the card's
+  Send gives the `token20` kind (amount by its decimals, Max, Review shows the note, the three fees with the 0.001 note
+  coin, Send runs the three steps "Signing 1 of 3 ...").
+Not yet: sending from an imported wallet; sending a note already inscribed but unsent. Tests: tests/test_token20_send.py
+(our walker credits a send built here), test_doginal_wallet.py (the three offers end to end), test_coins_browser.py.
+
 ### 2026-10-22 Tokens tab: an empty DRC-20 list while the index walks says "none found yet", with how far it has read (Claude)
 The operator: "Add drc-20 balances to doge wallet tokens." The section was there (drawToken20), but for his imported address
 the most complete Dogecoin index (@strawberry, at block 4,766,321 of ~6.43 M) has not reached his DRC-20 activity, and

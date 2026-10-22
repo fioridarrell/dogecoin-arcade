@@ -451,6 +451,8 @@ PUBLIC_POST = ("/auth/challenge", "/auth/login", "/auth/logout",
                "/account/imported/bring", "/account/imported/siblings/drop",
                # what sits on the caller's own coins, many transactions at once (the Wallet's Doginals)
                "/account/doginal-txs",
+               # a DRC-20 / PRC-20 send of the caller's own tokens: its three offers, one after the other
+               "/account/token20/send",
                # starring a market: the caller's own list of favorites, nothing else
                "/account/favorites",
                # the page holding this account's listed swaps is open (order_presence)

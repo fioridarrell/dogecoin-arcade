@@ -13697,6 +13697,151 @@ def create_app(state: AppState) -> FastAPI:
                              "balances": said.get("balances") or [], "walked_to": said.get("walked_to"), "tip": tip},
                             headers={"Cache-Control": "no-store"})
 
+    #: DRC-20 / PRC-20 sends in progress (token20_send): id -> where it stands. In memory, as offers are: a send cut
+    #: short by a restart is said so, and its note (if revealed) stays on the account's own address, sendable again.
+    _t20_sends: dict[str, dict] = {}
+    T20_SEND_SECONDS = 1800
+
+    @app.post("/account/token20/send")
+    def account_token20_send(request: Request, payload: Any = Body(None)):
+        """Send a DRC-20 / PRC-20 token in one press (2026-10-22: "I want the ability to send a PRC 20 token in
+        the same way I can send any other token"; asked, "One Send press"), the way pepeblocks and nintondo count it
+        (token20_send): three offers, each signed by the tab and broadcast by /account/sign, one after the other.
+
+        * `{chain, tick, amount, to}`: checked against a complete copy of the ord index (the amount must be on hand,
+          not already set aside), then the COMMIT is offered; the answer carries `send` (its id) and the exact note.
+        * `{send}` again, after each broadcast: the REVEAL (the note landing on this account's own address), then the
+          SEND (that coin, whole, to the recipient). `step` says which; "done" after the third."""
+        from .. import token20_send as t20
+        account = _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        now = time.time()
+        for k, v in list(_t20_sends.items()):
+            if now - v["at"] > T20_SEND_SECONDS:
+                _t20_sends.pop(k, None)
+        sid = str(said.get("send") or "")
+        try:
+            if sid:
+                run = _t20_sends.get(sid)
+                if run is None or run["pubkey"] != account.pubkey:
+                    raise ValueError("that send is not one this arcade is holding (it may have expired): start again")
+                chain = next(c for c in state.token_chains if c.network == run["chain"])
+                return JSONResponse(_t20_next(account, chain, run))
+            chain = next((c for c in state.token_chains if c.network == str(said.get("chain") or "")
+                          and c.network in t20.PROTOCOL), None)
+            if chain is None:
+                raise ValueError("DRC-20 is on Dogecoin and PRC-20 on Pepecoin mainnet")
+            address = _account_address(account.pubkey, chain)
+            if not address:
+                raise ValueError(f"this account has no {chain.label} address yet")
+            to, to_tag = _payee(said.get("to", ""), chain)
+            complaint = _check_address(to, mainnet=chain)
+            if complaint:
+                raise ValueError(complaint)
+            if to == address:
+                raise ValueError("that is this account's own address")
+            index = state.ord_indexes().get(chain.network)
+            if index is None:
+                raise ValueError("this arcade has no ord index of that chain")
+            got = index.lookup({"what": "balances", "owner": address})
+            guard = fundinglib.guard_on(chain.network)
+            tip = int(index.tip or 0) or (guard._tip() if guard is not None else 0)
+            if not tip or int(got.get("walked_to") or 0) < tip - doginalslib.INDEX_READY_LAG:
+                raise ValueError(f"the arcades' {t20.PROTOCOL[chain.network].upper()} index is not at the chain's tip "
+                                 f"yet (block {int(got.get('walked_to') or 0):,} of {tip:,}): a send waits for it, so "
+                                 "the balance it is checked against is the whole one")
+            tick = str(said.get("tick") or "").strip()
+            row = next((b for b in got.get("balances") or [] if str(b.get("tick")).lower() == tick.lower()), None)
+            if row is None:
+                raise ValueError(f"this wallet holds no {tick}")
+            text, units = t20.amount_text(str(said.get("amount") or ""), int(row.get("decimals") or 0))
+            free = int(row.get("units") or 0) - int(row.get("transferable_units") or 0)
+            if units > free:
+                raise ValueError(f"that is more {row['tick']} than this wallet has to send")
+            # The key of this account's address on the chain (the browser's coin key, not the login key): the note's
+            # script is its, so only it reveals the note. Taken only when it is the address's own.
+            try:
+                coin_key = bytes.fromhex(str(said.get("pubkey") or ""))
+            except ValueError:
+                coin_key = b""
+            if len(coin_key) != 33 or txbuild.p2pkh_script(address) != (b"\x76\xa9\x14" + hash160(coin_key)
+                                                                       + b"\x88\xac"):
+                raise ValueError("that is not the key of this account's address")
+            content = t20.note(t20.PROTOCOL[chain.network], str(row["tick"]), text)
+            pushes, redeem = t20.envelope(content, coin_key)
+            commit_value = t20.POSTAGE + t20.reveal_fee(chain.params, pushes, redeem, fees.MIN_FEE_PER_KB)
+            with contextlib.closing(state.token_index(chain).open()) as db:
+                unsigned = fundinglib.build(db, chain.params, address, [(commit_value, t20.commit_script(redeem))],
+                                            rate=fees.MIN_FEE_PER_KB,
+                                            what=f"send {text} {row['tick']} to {to} (1 of 3: the commit)",
+                                            exclude=_flights.spent_by(account.pubkey, chain.network),
+                                            extra=_flights.change_for(account.pubkey, chain.network))
+            _quota(account, "send")
+            sid = secrets.token_urlsafe(12)
+            run = {"pubkey": account.pubkey, "chain": chain.network, "address": address, "to": to, "to_tag": to_tag,
+                   "tick": str(row["tick"]), "amount": text, "note": content.decode(),
+                   "pushes": [p.hex() for p in pushes], "redeem": redeem.hex(), "commit_value": commit_value,
+                   "step": "commit", "txids": {}, "at": now}
+            _t20_sends[sid] = run
+            offer = _offers.add(account.pubkey, chain.network, unsigned, unsigned.what,
+                                done=lambda txid, r=run: r["txids"].__setitem__("commit", txid))
+            send_fee = fundinglib.price(2, [(t20.POSTAGE, txbuild.p2pkh_script(to))], fees.rate_for(
+                chain.params, fees.MIN_FEE_PER_KB), change=True, params=chain.params)
+            return JSONResponse({"send": sid, "step": "commit", "of": 3, "offer": offer.id, "note": run["note"],
+                                 "to": to, "to_tag": to_tag, "chain": chain.network, "tick": run["tick"],
+                                 "amount": text, "fees": {"commit": unsigned.fee, "reveal": commit_value - t20.POSTAGE,
+                                                          "send": send_fee, "postage": t20.POSTAGE},
+                                 **unsigned.as_json()})
+        except (taglib.TagError, fundinglib.FundingError, ValueError) as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        except Exception as exc:                          # noqa: BLE001 -- no copy of the index answered, the node...
+            return JSONResponse({"detail": str(exc)[:300]}, status_code=503)
+
+    def _t20_next(account, chain, run: dict) -> dict:
+        """The next offer of a send in progress, once the one before it went out."""
+        from .. import token20_send as t20
+        step = run["step"]
+        if step == "commit":
+            txid = run["txids"].get("commit")
+            if not txid:
+                raise ValueError("the commit has not gone out yet: sign it first")
+            with chain.rpc() as rpc:
+                tx = rpc.call("getrawtransaction", txid, 1)
+            redeem = bytes.fromhex(run["redeem"])
+            out = next((o for o in tx.get("vout") or []
+                        if (o.get("scriptPubKey") or {}).get("hex") == t20.commit_script(redeem).hex()
+                        and round(float(o["value"]) * 1e8) == run["commit_value"]), None)
+            if out is None:
+                raise ValueError("the commit on the chain is not the one this send made")
+            unsigned = t20.build_reveal(chain.params, {"txid": txid, "vout": int(out["n"]), "value": run["commit_value"]},
+                                        [bytes.fromhex(p) for p in run["pushes"]], redeem, run["address"],
+                                        what=f"send {run['amount']} {run['tick']} to {run['to']} (2 of 3: the note)")
+            run["step"] = "reveal"
+            offer = _offers.add(account.pubkey, chain.network, unsigned, unsigned.what,
+                                done=lambda t, r=run: r["txids"].__setitem__("reveal", t))
+            return {"step": "reveal", "of": 3, "offer": offer.id, "note": run["note"],
+                    "chain": chain.network, **unsigned.as_json()}
+        if step == "reveal":
+            txid = run["txids"].get("reveal")
+            if not txid:
+                raise ValueError("the note has not gone out yet: sign it first")
+            coin = {"txid": txid, "vout": 0, "value": t20.POSTAGE, "address": run["address"]}
+            with contextlib.closing(state.token_index(chain).open()) as db:
+                unsigned = fundinglib.build_note_send(
+                    db, chain.params, run["address"], coin, run["to"], rate=fees.MIN_FEE_PER_KB,
+                    exclude=_flights.spent_by(account.pubkey, chain.network),
+                    extra=_flights.change_for(account.pubkey, chain.network),
+                    what=f"send {run['amount']} {run['tick']} to {run['to']} (3 of 3: the send)")
+            run["step"] = "send"
+            offer = _offers.add(account.pubkey, chain.network, unsigned, unsigned.what,
+                                done=lambda t, r=run: (r["txids"].__setitem__("send", t),
+                                                       r.__setitem__("step", "done")))
+            return {"step": "send", "of": 3, "offer": offer.id, "note": run["note"],
+                    "to": run["to"], "to_tag": run["to_tag"], "chain": chain.network, **unsigned.as_json()}
+        if step == "done":
+            return {"step": "done", "txids": run["txids"], "note": run["note"], "to": run["to"]}
+        raise ValueError(f"the {step} has not gone out yet: sign it first")
+
     @app.get("/account/doginal-index")
     def account_doginal_index(request: Request, chain: str = "doge"):
         """How far the chain's ord index has walked -- the furthest copy, this arcade's or a linked one's -- and the

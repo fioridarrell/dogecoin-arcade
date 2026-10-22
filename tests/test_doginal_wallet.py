@@ -305,3 +305,89 @@ def test_the_tokens_tab_reads_drc20_balances_from_the_most_complete_index(client
     assert app.get(f"/account/token20?chain=doge&address={'D' * 34}").status_code == 403
     assert "/account/token20" in door.PUBLIC_PAGES
     assert "these balances update as it walks" in app.get("/me/wallet").text
+
+
+def test_a_drc20_send_is_three_offers_signed_and_broadcast_one_after_the_other(client, monkeypatch, tmp_path):
+    """2026-10-22: send a DRC-20 / PRC-20 token "in the same way I can send any other token", one Send press.
+    The balance is checked against a complete index; the commit pays the note's P2SH script; once it is out the
+    reveal spends it, the note on this account's own address; once that is out the send moves that coin, whole, to
+    the recipient, fees from the clean coin; then "done"."""
+    from arcade import rawchain, token20_send as t20
+    from arcade.txbuild import p2pkh_script
+    app, state = client
+    doge, _ = _doge_account(app, state, monkeypatch, tmp_path)
+    them = b58check_encode(30, hash160(_pubkey(int("41" * 32, 16))))
+
+    class Index:
+        tip = 5_000_000
+
+        def lookup(self, q):
+            assert q == {"what": "balances", "owner": ME}
+            return {"balances": [{"tick": "dogi", "units": "1500", "transferable_units": "200", "decimals": 2}],
+                    "walked_to": 4_999_999}
+    monkeypatch.setattr(type(state), "ord_indexes", lambda self: {"doge": Index()})
+    sent: dict = {}
+
+    class Rpc:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def call(self, method, *args):
+            if method == "decoderawtransaction":
+                tx = rawchain.read_tx(bytes.fromhex(args[0]))
+                return {"vin": [{"txid": i["txid"], "vout": i["vout"]} for i in tx.vin],
+                        "vout": [{"n": n, "value": v / 1e8, "scriptPubKey": {"hex": s.hex()}}
+                                 for n, (v, s) in enumerate(tx.vout)]}
+            if method == "sendrawtransaction":
+                tx = rawchain.read_tx(bytes.fromhex(args[0]))
+                sent[tx.txid] = args[0]
+                return tx.txid
+            if method == "getrawtransaction":
+                tx = rawchain.read_tx(bytes.fromhex(sent[args[0]]))
+                return {"txid": tx.txid, "vout": [{"n": n, "value": v / 1e8, "scriptPubKey": {"hex": s.hex()}}
+                                                  for n, (v, s) in enumerate(tx.vout)]}
+            raise AssertionError(method)
+
+        def get_block_count(self):
+            return 5_000_000
+    real_rpc = type(doge).rpc
+    monkeypatch.setattr(type(doge), "rpc", lambda self: Rpc() if self.network == "doge" else real_rpc(self))
+
+    def sign(offer):
+        done = app.post("/account/sign", json={"offer": offer["offer"], "signatures": ["30" * 71] * len(
+            offer["sighashes"]), "pubkey": _pubkey(int("31" * 32, 16)).hex()})
+        assert done.status_code == 200, done.text
+        return done.json()["txid"]
+
+    key = _pubkey(int("31" * 32, 16)).hex()
+    wrong = app.post("/account/token20/send", json={"chain": "doge", "tick": "DOGI", "amount": "1", "to": them,
+                                                     "pubkey": _pubkey(int("41" * 32, 16)).hex()})
+    assert wrong.status_code == 400 and "not the key of this account's address" in wrong.json()["detail"]
+    too_much = app.post("/account/token20/send", json={"chain": "doge", "tick": "DOGI", "amount": "13.01", "to": them,
+                                                        "pubkey": key})
+    assert too_much.status_code == 400 and "more dogi" in too_much.json()["detail"], "1500 - 200 set aside = 13.00"
+    first = app.post("/account/token20/send", json={"chain": "doge", "tick": "DOGI", "amount": "12.5", "to": them,
+                                                     "pubkey": key})
+    assert first.status_code == 200, first.text
+    c = first.json()
+    assert c["step"] == "commit" and c["note"] == '{"p":"drc-20","op":"transfer","tick":"dogi","amt":"12.5"}'
+    pushes, redeem = t20.envelope(c["note"].encode(), _pubkey(int("31" * 32, 16)))
+    commit = sign(c)
+    out = rawchain.read_tx(bytes.fromhex(sent[commit])).vout[0]
+    assert out[1] == t20.commit_script(redeem) and out[0] == t20.POSTAGE + c["fees"]["reveal"]
+    r = app.post("/account/token20/send", json={"send": c["send"]}).json()
+    assert r["step"] == "reveal" and r["inputs"][0]["txid"] == commit and r["inputs"][0]["redeem"] == redeem.hex()
+    reveal = sign(r)
+    raw = rawchain.read_tx(bytes.fromhex(sent[reveal]))
+    assert raw.vin[0]["script"].startswith(b"".join(pushes)), "the envelope in front of the signature"
+    assert raw.vout == [(t20.POSTAGE, p2pkh_script(ME))], "the note lands on this account's own address"
+    s = app.post("/account/token20/send", json={"send": c["send"]}).json()
+    assert s["step"] == "send" and (s["inputs"][0]["txid"], s["inputs"][0]["vout"]) == (reveal, 0)
+    assert s["inputs"][1]["txid"] == commit, "the fee from the commit's change (it spent the clean coin), never a Doginal's"
+    final = sign(s)
+    tx = rawchain.read_tx(bytes.fromhex(sent[final]))
+    assert tx.vout[0] == (t20.POSTAGE, p2pkh_script(them)), "the note's coin, whole, to them as output 0"
+    assert app.post("/account/token20/send", json={"send": c["send"]}).json()["step"] == "done"

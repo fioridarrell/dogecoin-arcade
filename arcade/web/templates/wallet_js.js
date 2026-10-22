@@ -733,6 +733,36 @@ export async function checked(offer, wallet) {
   return coins.verifyOffer(offer, keys);
 }
 
+/** A DRC-20 / PRC-20 send in one press (2026-10-22; arcade/token20_send.py), in two calls so the page can
+ *  review it first. `startToken20(keys, ask)` -- {chain, tick, amount, to} -- has the node check the balance and offer the
+ *  commit: what comes back carries the exact `note`, the recipient and `fees` (commit, reveal, send). */
+async function token20Post(body) {
+  const r = await fetch("/account/token20/send", {method: "POST", headers: {"Content-Type": "application/json"},
+                                                  body: JSON.stringify(body)});
+  const said = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(said.detail || `the node would not take it (HTTP ${r.status})`);
+  return said;
+}
+export async function startToken20(wallet, ask) {
+  // The address's own key (not the login key): the note's script is its, so only it can reveal the note.
+  const k = keysOn(wallet, ask.chain);
+  return token20Post({...ask, pubkey: coinsHex(k.pubkey)});
+}
+/** Then `sendToken20(keys, first, onStep)`: the commit, the note's reveal and the send, each checked here
+ *  (coins.verifyOffer: the reveal only for this key's own note script) and broadcast before the next is asked for.
+ *  The page's review listed the note and the fees, so each signature is `reviewed`. The three txids. */
+export async function sendToken20(keys, first, onStep = null) {
+  let offer = first;
+  const sid = first.send, txids = {};
+  for (let n = 0; n < 3 && offer.step !== "done"; n++) {
+    if (onStep) onStep(offer.step, offer);
+    const sent = await working(() => signOffer(keys, offer, null, {reviewed: true}));
+    txids[offer.step] = sent.txid;
+    offer = await token20Post({send: sid});
+  }
+  return txids;
+}
+
 /** Sign and send. `{reviewed: true}` only from a page whose own review already
  *  listed every cost of this mainnet transaction from `checked` (the Wallet's). */
 export async function confirm(wallet, offer, options = null) {
