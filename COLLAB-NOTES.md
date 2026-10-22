@@ -88,6 +88,14 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-22 Wallet Tokens tab: DRC-20 / PRC-20 balances from the ord index, refreshed as it walks (Claude)
+The operator: "under Wallet tokens tab DRC-20 and PRC-20 balances should be displayed updated as the index is updated." The
+tab listed only the arcade's own (Omni-style) tokens. New GET /account/token20?chain=doge|main[&address=own] (door
+PUBLIC_PAGES): the most complete copy of the chain's ord index answers "balances" for the account's address (or an
+imported wallet's, `_own_address_asked`), with `walked_to` and the tip. my_wallet.html `drawToken20` draws a DRC-20 /
+PRC-20 section under the tokens (tick, amount, transferable), asks again every T20_MS (60 s) while the tab is open, and
+says "at block X of Y: these balances update as it walks" until the index is at the tip. Test: test_doginal_wallet.py.
+
 ### 2026-10-22 Wallet Doginals fill in as the ord index walks (Claude)
 The operator: "Can the doginals in my wallet that I have imported with 7000+ of them can the Wallet view be updated in real
 time as the index is built?" A coin can be answered as soon as some copy of the index has walked past the block that

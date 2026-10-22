@@ -278,3 +278,30 @@ def test_the_wallet_asks_how_far_the_ord_index_has_walked(client, monkeypatch, t
     assert "/account/doginal-index" in door.PUBLIC_PAGES
     page = app.get("/me/wallet").text
     assert "/account/doginal-index?chain=" in page and "shown here as the index gets to each" in page
+
+
+def test_the_tokens_tab_reads_drc20_balances_from_the_most_complete_index(client, monkeypatch, tmp_path):
+    """2026-10-22: "under Wallet tokens tab DRC-20 and PRC-20 balances should be displayed updated as the index
+    is updated" -- asked of the index, with how far it has walked; an address not the account's own is refused."""
+    from arcade.web import door
+    app, state = client
+    _doge_account(app, state, monkeypatch, tmp_path)
+    asked = []
+
+    class Index:
+        tip = 6_426_000
+
+        def lookup(self, q):
+            asked.append(q)
+            return {"balances": [{"tick": "dogi", "units": "150000", "transferable_units": "0", "decimals": 2}],
+                    "walked_to": 4_750_000, "from": "arcade 8c95b1358339"}
+    monkeypatch.setattr(type(state), "ord_indexes", lambda self: {"doge": Index()})
+    got = app.get("/account/token20?chain=doge")
+    assert got.status_code == 200, got.text
+    said = got.json()
+    assert said["protocol"] == "drc-20" and said["address"] == ME and said["walked_to"] == 4_750_000
+    assert said["balances"][0]["tick"] == "dogi" and said["tip"] == 6_426_000
+    assert asked == [{"what": "balances", "owner": ME}]
+    assert app.get(f"/account/token20?chain=doge&address={'D' * 34}").status_code == 403
+    assert "/account/token20" in door.PUBLIC_PAGES
+    assert "these balances update as it walks" in app.get("/me/wallet").text

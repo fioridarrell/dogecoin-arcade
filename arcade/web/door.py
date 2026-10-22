@@ -132,6 +132,7 @@ PUBLIC_PAGES = frozenset({
     "/account/dust",                  # coins in this account's own payload outputs
     "/account/coins",                 # this account's own coins on one chain (the Doginals check)
     "/account/doginal-index",         # how far the chain's ord index has walked (the Doginals fill in as it goes)
+    "/account/token20",               # this account's DRC-20 / PRC-20 balances, from the most complete ord index
     "/account/arcades",               # the arcades on the mesh, for the Your arcade page's Arcades card
     "/account/favorites",             # the markets this account starred (Exchange, 2026-10-17)
     "/account/orders/delegated",      # where this account's node-filled orders stand (2026-10-17)

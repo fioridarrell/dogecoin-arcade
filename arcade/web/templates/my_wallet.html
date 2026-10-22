@@ -1788,6 +1788,59 @@ async function drawTokens() {
   }
   if (held.length) box.prepend(el("p", "wl-note", "Tap a token to send or receive it from the card above."));
   // Sending is the card's Send now, so no link away to do it (2026-10-08).
+  if (c && (c.network === "doge" || c.network === "main")) {
+    const t20 = el("div", "wl-t20");
+    box.append(t20);
+    drawToken20(t20, c).catch(() => {});
+  }
+}
+
+/* DRC-20 (Dogecoin) and PRC-20 (Pepecoin) balances, from the most complete copy of the chain's ord index (the operator
+ * 2026-10-22: "DRC-20 and PRC-20 balances should be displayed updated as the index is updated"): asked again every
+ * T20_MS while the Tokens tab is open, with how far that copy has walked. */
+const T20_MS = 60000;
+let t20Timer = null;
+function units20(units, dec) {
+  const neg = String(units).startsWith("-"), digits = String(units).replace(/^-/, "").replace(/^0+(?=\d)/, "");
+  if (!dec) return (neg ? "-" : "") + BigInt(digits || "0").toLocaleString();
+  const pad = digits.padStart(dec + 1, "0");
+  const whole = BigInt(pad.slice(0, -dec)).toLocaleString(), frac = pad.slice(-dec).replace(/0+$/, "");
+  return (neg ? "-" : "") + whole + (frac ? "." + frac : "");
+}
+async function drawToken20(box, c) {
+  clearTimeout(t20Timer);
+  const w = pickedNow(), only = w ? `&address=${encodeURIComponent(w.address)}` : "";
+  const word = c.network === "doge" ? "DRC-20" : "PRC-20";
+  const r = await fetch(`/account/token20?chain=${encodeURIComponent(c.network)}${only}`, {cache: "no-store"});
+  const got = await r.json().catch(() => ({}));
+  if (!box.isConnected) return;
+  const rows = [el("div", "wl-favhead", word)];
+  if (!r.ok || got.balances == null) {
+    rows.push(el("p", "wl-note", `${word} balances can't be read right now: ${got.detail || "no arcade's index answered"}. `
+      + "Asked again in a minute."));
+  } else {
+    if (!got.balances.length) rows.push(el("div", "wl-empty", `No ${word} tokens on ${w ? w.name + "'s" : "your"} address.`));
+    for (const b of got.balances) {
+      const row = el("div", "wl-tok");
+      const av = el("span", "wl-av", String(b.tick || "?").slice(0, 1).toUpperCase());
+      const mid = el("span", "wl-mid");
+      const free = b.transferable_units && b.transferable_units !== "0"
+        ? ` · ${units20(b.transferable_units, b.decimals)} transferable` : "";
+      mid.append(el("b", "", b.tick), el("small", "", word + free));
+      row.append(av, mid, el("span", "wl-amt", units20(b.units, b.decimals)));
+      rows.push(row);
+    }
+    const walked = Number(got.walked_to || 0), tip = Number(got.tip || 0);
+    if (walked && tip && walked < tip - 30) {
+      rows.push(el("p", "wl-note", `Read from the arcades' ord index, at block ${walked.toLocaleString()} of `
+        + `${tip.toLocaleString()}: these balances update as it walks.`));
+    }
+  }
+  box.replaceChildren(...rows);
+  t20Timer = setTimeout(() => {
+    if (tab === "tokens" && box.isConnected && !document.hidden) drawToken20(box, c).catch(() => {});
+    else if (tab === "tokens" && box.isConnected) t20Timer = setTimeout(() => drawToken20(box, c).catch(() => {}), T20_MS);
+  }, T20_MS);
 }
 
 /* --- NFTs ----------------------------------------------------------------

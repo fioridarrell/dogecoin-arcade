@@ -13667,6 +13667,36 @@ def create_app(state: AppState) -> FastAPI:
         return JSONResponse({"chain": one.network, "address": address, "txs": out},
                             headers={"Cache-Control": "no-store"})
 
+    @app.get("/account/token20")
+    def account_token20(request: Request, chain: str = "doge", address: str = ""):
+        """This account's DRC-20 (Dogecoin) or PRC-20 (Pepecoin) balances, for the Wallet's Tokens tab (the operator
+        2026-10-22: "DRC-20 and PRC-20 balances should be displayed updated as the index is updated"): asked of the most
+        complete copy of the chain's ord index (DoginalIndex.lookup "balances"), with how far that copy has walked and
+        the tip -- a balance can still change until it is there. `address`: one of this account's own (an imported
+        wallet's), else its main one."""
+        account = _signed_in_account(request)
+        one = next((c for c in state.token_chains if c.network == chain and chain in ("doge", "main")), None)
+        if one is None:
+            return JSONResponse({"detail": "DRC-20 and PRC-20 are on Dogecoin and Pepecoin mainnet"}, status_code=404)
+        address = _own_address_asked(account, one, address)
+        index = state.ord_indexes().get(one.network)
+        protocol = "drc-20" if one.is_doge else "prc-20"
+        if index is None:
+            return JSONResponse({"detail": "this arcade has no ord index of that chain"}, status_code=404)
+        try:
+            said = index.lookup({"what": "balances", "owner": address})
+        except Exception as exc:                          # noqa: BLE001 -- no copy could say just now
+            return JSONResponse({"chain": one.network, "address": address, "protocol": protocol, "balances": None,
+                                 "detail": str(exc)[:200]}, headers={"Cache-Control": "no-store"})
+        guard = fundinglib.guard_on(one.network)
+        try:
+            tip = int(index.tip or 0) or (guard._tip() if guard is not None else None)
+        except Exception:                                 # noqa: BLE001
+            tip = None
+        return JSONResponse({"chain": one.network, "address": address, "protocol": protocol,
+                             "balances": said.get("balances") or [], "walked_to": said.get("walked_to"), "tip": tip},
+                            headers={"Cache-Control": "no-store"})
+
     @app.get("/account/doginal-index")
     def account_doginal_index(request: Request, chain: str = "doge"):
         """How far the chain's ord index has walked -- the furthest copy, this arcade's or a linked one's -- and the
