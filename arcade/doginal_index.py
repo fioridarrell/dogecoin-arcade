@@ -1494,9 +1494,10 @@ class DoginalIndex:
             self._snap_asked = False
             snaps.make()
         snaps.step(self.share)
-        if snaps.fetch is not None:
-            return                                       # the whole index is on its way: no walk until it is here
-        self._ask_for_snapshot()
+        # The whole index on its way: the walk goes on from this arcade's own Core meanwhile, and whichever gets there
+        # first wins (2026-10-22: "Both"; Snapshots.step lets the copy go once the walk passes its block).
+        if snaps.fetch is None:
+            self._ask_for_snapshot()
         own = self.own_core()
         lanes = self._lanes_wanted() - 1 if own else 0
         if lanes > 0:

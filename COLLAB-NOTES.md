@@ -88,6 +88,19 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-22 Ord copies: a fetch carries on after a restart, and the walk goes on from the arcade's own Core meanwhile (Claude)
+Admin -> Ords' new readout showed @yourfirstname's fetch of Strawberry's Pepecoin copy go from 420 of 2,978 pieces back
+to 13 (its arcade restarted: the pieces were only in memory, and `_drop` threw the .part away), and both far-behind
+arcades walked nothing while they fetched. The operator, asked how a far-behind arcade should catch up: "Both". Now:
+* `Snapshots._save_fetch` keeps where a fetch got to beside its .part (`<index>.part.json`: id, maker, manifest, the
+  pieces in hand; every FETCH_SAVE = 15 s, and at the manifest); `_resume` carries it on after a restart, each kept
+  piece checked again against the manifest's hash (one half written is asked for again).
+* A fetch that got nothing for FETCH_STALL is let go of only when nobody offers its copy any more; still offered (a
+  slow link, a restart over there), its pieces are kept and asked for again, of a holder that has them all.
+* `_walk` no longer waits for a fetch: the walk goes on from the arcade's own Core (as far as it has one), and once it
+  passes the copy's block the copy is let go of ("walked past block N ... before the copy came").
+Tests: the three new ones in tests/test_doginal_index.py beside the snapshot ones.
+
 ### 2026-10-22 Admin -> Ords: each linked arcade's whole-index copy fetch is said in the rings' key (Claude)
 The operator: "It seems as though that the indexing is still stalled ... on yourfirstname and banana" (Pepecoin walks at
 186,920 and 803,295 for hours). Their "hi" already carries the copy they fetch (`sn<layout>`, with the pieces they

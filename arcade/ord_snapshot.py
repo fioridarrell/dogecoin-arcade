@@ -43,6 +43,8 @@ PIECE_SECONDS = 60
 #: @yourfirstname's Pepecoin walk sat at its first block all day on a snapshot the maker had long let go of and made
 #: again under a new id -- nobody offered the old one, so no piece ever came, and the walk waits while a fetch runs).
 FETCH_STALL = 600
+#: How often where a fetch got to is written beside its .part (a restart loses at most this much).
+FETCH_SAVE = 15
 #: Chunks whose moves are compared with a second holder, picked at random through the copy.
 MOVES_SAMPLE = 64
 #: Tables a snapshot leaves out: work in hand, not the index.
@@ -90,6 +92,9 @@ class Snapshots:
         self.snap_path = base.with_name(base.name + ".snap")
         self.part_path = base.with_name(base.name + ".part")
         self.manifest_path = base.with_name(base.name + ".snap.json")
+        # Where a fetch got to, beside its .part (2026-10-22: @yourfirstname's fetch went from 420 of 2,978 pieces
+        # back to 13 when its arcade restarted -- the pieces were only in memory, and the .part was thrown away).
+        self.fetch_path = base.with_name(base.name + ".part.json")
         self.served_at = time.time()
         from .doginal_index import LAYOUT
         from . import ord_rules
@@ -105,6 +110,53 @@ class Snapshots:
                 self.forget()
         except (OSError, ValueError, KeyError):
             pass
+        self._resume()
+
+    def _resume(self) -> None:
+        """Carry on a fetch an arcade restart cut short: its manifest and the pieces it had, each checked again
+        against the manifest's hash (a piece half written when the arcade stopped is asked for again)."""
+        from .doginal_index import LAYOUT
+        try:
+            kept = json.loads(self.fetch_path.read_text())
+            m = kept["manifest"]
+            if manifest_id(m) != kept["id"] or m.get("net") != self.index.net or m.get("rules") != self.index.rules \
+                    or m.get("layout", 1) != LAYOUT or m.get("piece") != PIECE \
+                    or not self.part_path.exists() or self.part_path.stat().st_size != int(m["size"]):
+                raise ValueError("not this chain's, or its .part is gone")
+            have = set()
+            with open(self.part_path, "rb") as f:
+                for i in sorted(int(i) for i in kept.get("have") or ()):
+                    if 0 <= i < len(m["pieces"]):
+                        f.seek(i * m["piece"])
+                        if _sha(f.read(m["piece"])) == m["pieces"][i]:
+                            have.add(i)
+        except (OSError, ValueError, KeyError, TypeError):
+            for path in (self.fetch_path,):
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
+            return
+        now = time.time()
+        self.fetch = {"id": kept["id"], "from": str(kept.get("from") or ""), "manifest": m, "have": have, "asked": {},
+                      "started": now, "moved": now, "saved": now}
+        self.said = (f"fetching the index (carried on after a restart): {len(have)} of {len(m['pieces'])} pieces")
+        log.info("ord index %s: snapshot fetch carried on, %d of %d pieces kept", self.index.net, len(have),
+                 len(m["pieces"]))
+
+    def _save_fetch(self, force: bool = False) -> None:
+        """Where the fetch got to, kept beside its .part (every FETCH_SAVE seconds, and at its manifest)."""
+        f = self.fetch
+        if f is None or f.get("manifest") is None or (not force and time.time() - f.get("saved", 0) < FETCH_SAVE):
+            return
+        f["saved"] = time.time()
+        tmp = self.fetch_path.with_name(self.fetch_path.name + ".tmp")
+        try:
+            tmp.write_text(json.dumps({"id": f["id"], "from": f["from"], "manifest": f["manifest"],
+                                       "have": sorted(f["have"])}))
+            tmp.replace(self.fetch_path)
+        except OSError:
+            log.debug("ord snapshot: could not keep where the fetch got to", exc_info=True)
 
     def forget(self) -> None:
         """Let go of the snapshot made here (old, of another layout, or not fetched from for SNAP_IDLE)."""
@@ -259,11 +311,27 @@ class Snapshots:
                 self.fetch = f = {"id": o["id"], "from": node, "manifest": None, "have": set(), "asked": {},
                                   "started": time.time()}
                 self.said = f"fetching the index from arcade {node[:12]} (block {o['h']:,})"
-            if time.time() - f.get("moved", f["started"]) > FETCH_STALL:
-                log.info("ord index %s: snapshot %s from %s sent nothing for %d min: let go of", self.index.net,
-                         f["id"][:12], f["from"][:12], FETCH_STALL // 60)
-                self._drop(f"the index fetch from arcade {f['from'][:12]} stalled: started again on the newest copy")
+            # Walked past the copy's block from this arcade's own Core meanwhile (2026-10-22: "Both"): no use.
+            h = int((f.get("manifest") or {}).get("height") or (self.offers.get(f["from"]) or {}).get("h") or 0)
+            if h and self.index.walker.next_height() >= h:
+                self._drop(f"walked past block {h:,} from this arcade's own node before the copy came: let go of")
                 return
+            if time.time() - f.get("moved", f["started"]) > FETCH_STALL:
+                if any(o.get("id") == f["id"] and time.time() - o.get("at", 0) < 600 for o in self.offers.values()):
+                    # Still offered (a slow or broken link, a restart over there): keep every piece, ask again.
+                    log.info("ord index %s: snapshot %s sent nothing for %d min: asked again, %d pieces kept",
+                             self.index.net, f["id"][:12], FETCH_STALL // 60, len(f["have"]))
+                    f["asked"], f["moved"], f["manifest_asked"] = {}, time.time(), 0
+                    holder = next((n for n, o in self.offers.items() if o.get("id") == f["id"]
+                                   and o.get("have") == "all"), None)
+                    if holder:
+                        f["from"] = holder
+                else:
+                    log.info("ord index %s: snapshot %s from %s sent nothing for %d min and nobody offers it: let go "
+                             "of", self.index.net, f["id"][:12], f["from"][:12], FETCH_STALL // 60)
+                    self._drop(f"the index fetch from arcade {f['from'][:12]} stalled: started again on the newest "
+                               f"copy")
+                    return
             if f["manifest"] is None:
                 if time.time() - f.get("manifest_asked", 0) > PIECE_SECONDS:
                     f["manifest_asked"] = time.time()
@@ -313,6 +381,7 @@ class Snapshots:
             f["moved"] = time.time()
             with open(self.part_path, "wb") as out:
                 out.truncate(int(manifest["size"]))
+            self._save_fetch(force=True)
 
     def got_piece(self, node: str, sid: str, i: int, data: bytes) -> None:
         with self.lock:
@@ -330,6 +399,7 @@ class Snapshots:
                 out.write(data)
             f["have"].add(i)
             f["moved"] = time.time()
+            self._save_fetch()
             self.said = f"fetching the index: {len(f['have'])} of {len(m['pieces'])} pieces"
 
     def piece_failed(self, node: str, sid: str, i: int) -> None:
@@ -345,10 +415,11 @@ class Snapshots:
     def _drop(self, why: str) -> None:
         self.said = why
         self.fetch = None
-        try:
-            self.part_path.unlink()
-        except FileNotFoundError:
-            pass
+        for path in (self.part_path, self.fetch_path):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
 
     def _finish(self) -> None:
         """Whole: check the copy, then put it in the index's place (called with the lock held)."""
@@ -361,6 +432,10 @@ class Snapshots:
             return
         m = f["manifest"]
         self.fetch = None
+        try:
+            self.fetch_path.unlink()
+        except FileNotFoundError:
+            pass
         self.index.install(self.part_path)
         self.single = single
         self.said = (f"the index came from the arcades that hold it, at block {m['height']:,}"

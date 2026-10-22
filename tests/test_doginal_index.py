@@ -929,6 +929,93 @@ def test_a_fetch_of_a_snapshot_nobody_offers_any_more_is_let_go_and_the_newest_t
     assert _dump(newcomer) == _dump(holder)
 
 
+def _fetch_setup(tmp_path, monkeypatch, own_core=False):
+    from arcade import ord_snapshot
+    monkeypatch.setattr(ord_snapshot, "WORTH_BLOCKS", 4)
+    monkeypatch.setattr(ord_snapshot, "PIECE", 4096)
+    monkeypatch.setattr(ord_snapshot, "IN_FLIGHT", 1)            # a piece a pass: a fetch caught half way
+    monkeypatch.setattr(ord_snapshot, "FETCH_SAVE", 0)
+    chain = _story_chain()
+    mesh = Mesh()
+    holder = dx.DoginalIndex(tmp_path / "h.sqlite", lambda: chain, lambda: "walk", cores=lambda: 1)
+    newcomer = dx.DoginalIndex(tmp_path / "new.sqlite", lambda: chain, lambda: "walk", own_core=lambda: own_core,
+                               cores=lambda: 1)
+    holder.walker.step(chain, dx.BASE + 11, budget=60)
+    holder.store.x("DELETE FROM notes")
+    holder._snap_asked = True
+    for name, idx in (("holder", holder), ("new", newcomer)):
+        mesh.join(name, idx)
+        idx.me = name
+    return chain, mesh, holder, newcomer
+
+
+def test_a_fetch_cut_short_by_a_restart_carries_on_with_the_pieces_it_had(tmp_path, monkeypatch):
+    """2026-10-22: @yourfirstname's fetch went from 420 of 2,978 pieces back to 13 when its arcade restarted. Where a
+    fetch got to is kept beside its .part; after a restart each kept piece is checked again by its hash (one half
+    written is asked for again) and the rest are fetched."""
+    chain, mesh, holder, newcomer = _fetch_setup(tmp_path, monkeypatch)
+    for _ in range(40):
+        _hold_round(mesh, holder, newcomer)
+        f = newcomer.snapshots.fetch
+        if f and f["manifest"] and len(f["have"]) >= 3:
+            break
+    f = newcomer.snapshots.fetch
+    total = len(f["manifest"]["pieces"])
+    assert 3 <= len(f["have"]) < total, (len(f["have"]), total)
+    kept = sorted(f["have"])
+    with open(newcomer.snapshots.part_path, "r+b") as part:      # the arcade stopped half way through a write
+        part.seek(kept[0] * 4096)
+        part.write(b"\0" * 16)
+    newcomer._snapshots = None                                   # the restart: everything in memory gone
+    again = newcomer.snapshots.fetch
+    assert again is not None and again["have"] == set(kept[1:]), "kept, each checked again"
+    assert "carried on after a restart" in newcomer.snapshots.said
+    before = len([x for x in mesh.fetched if x[0] == "new" and x[2] == "piece"])
+    for _ in range(4 * total):
+        _hold_round(mesh, holder, newcomer)
+        if newcomer.snapshots.said.startswith("the index came"):
+            break
+    assert newcomer.snapshots.said.startswith("the index came"), newcomer.snapshots.said
+    after = len([x for x in mesh.fetched if x[0] == "new" and x[2] == "piece"]) - before
+    assert after == total - len(kept) + 1, (after, total, len(kept))
+    assert _dump(newcomer) == _dump(holder)
+    assert not newcomer.snapshots.fetch_path.exists() and not newcomer.snapshots.part_path.exists()
+
+
+def test_a_stalled_fetch_of_a_copy_still_offered_keeps_its_pieces(tmp_path, monkeypatch):
+    from arcade import ord_snapshot
+    chain, mesh, holder, newcomer = _fetch_setup(tmp_path, monkeypatch)
+    for _ in range(40):
+        _hold_round(mesh, holder, newcomer)
+        f = newcomer.snapshots.fetch
+        if f and f["manifest"] and len(f["have"]) >= 2:
+            break
+    f = newcomer.snapshots.fetch
+    had = set(f["have"])
+    f["moved"] -= ord_snapshot.FETCH_STALL + 1
+    newcomer.snapshots.step(newcomer.share)
+    assert newcomer.snapshots.fetch is f and had <= f["have"], "asked again, nothing thrown away"
+
+
+def test_the_walk_goes_on_from_its_own_core_while_a_copy_comes_and_the_first_there_wins(tmp_path, monkeypatch):
+    """2026-10-22: "Both" -- fetching the copy and walking from its own node at once; once the walk passes the
+    copy's block, the copy is let go of."""
+    chain, mesh, holder, newcomer = _fetch_setup(tmp_path, monkeypatch)
+    for _ in range(6):
+        _hold_round(mesh, holder, newcomer)
+        if newcomer.snapshots.fetch is not None:
+            break
+    assert newcomer.snapshots.fetch is not None
+    newcomer.own_core = lambda: True                              # its own node, caught up meanwhile
+    newcomer.tip = dx.BASE + 11
+    newcomer._walk(chain, 60)                                     # walks on while the copy comes
+    assert newcomer.snapshots.fetch is not None or "walked past" in newcomer.snapshots.said
+    assert newcomer.walker.next_height() == dx.BASE + 12
+    newcomer.snapshots.step(newcomer.share)
+    assert newcomer.snapshots.fetch is None and "walked past" in newcomer.snapshots.said
+    assert not newcomer.snapshots.part_path.exists()
+
+
 def test_a_snapshot_whose_moves_another_holder_does_not_share_is_refused(tmp_path, monkeypatch):
     from arcade import ord_snapshot
     monkeypatch.setattr(ord_snapshot, "WORTH_BLOCKS", 4)
