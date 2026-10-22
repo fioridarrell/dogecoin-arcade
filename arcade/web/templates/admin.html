@@ -1175,7 +1175,9 @@ section.panel h2{margin-top:0}
   var ORD_PICK = null;
   try { ORD_PICK = localStorage.getItem('ords.chain'); } catch (e) { /* no storage: first chain */ }
   var ORD_DATA = null;
-  var ORD_COLORS = ['#c8962a', '#3c8dbc', '#2f9e6e', '#a05cc4', '#d0573c', '#6b8e23'];
+  // Rings A, B, C red, yellow, green, the same three the inner ring uses for 1, 2 and 3 agreeing (2026-10-22: "so
+  // they match the inner ring"): one copy alone is red, a second makes yellow, a third green.
+  var ORD_COLORS = ['#c0392b', '#d4a017', '#2f7d4f', '#a05cc4', '#d0573c', '#6b8e23'];
   var ORD_CHOICES = [
     ['walk', 'Hold the full index', 'Keeps every inscription, who owns it and every token balance, stitched in order from '
       + 'the chunks every arcade scans. Answers lookups for the arcades that only read. Takes disk (see below) and, on a '
@@ -1223,7 +1225,7 @@ section.panel h2{margin-top:0}
     // The inner circle (2026-10-21): how many arcades AGREE on each stretch of the chain -- one alone red, two
     // agreeing yellow, three or more green; grey where no arcade has said it yet (doginal_index status agree_runs).
     var runs = r.agree_runs || [], ready = Math.max(1, r.ready || 0), three = 0;
-    var AGREE_COL = ['var(--line)', 'var(--bad,#c0392b)', '#d4a017', 'var(--good,#2f7d4f)'];
+    var AGREE_COL = ['var(--line)', ORD_COLORS[0], ORD_COLORS[1], ORD_COLORS[2]];
     runs.forEach(function (run) {
       var s0 = run[0] / ready, e0 = run[1] / ready;
       if (e0 - s0 < 1e-4) return;

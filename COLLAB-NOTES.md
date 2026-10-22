@@ -94,7 +94,8 @@ two nodes with agreeing index, and it should be green when there are three". `Do
 `agree_runs`: runs of chunks [first, last + 1, agreeing], agreeing = how many arcades said a chunk's most-said hash,
 capped at 3 (0: nobody yet). admin.html `ordRing` draws the thin inner ring from them: red 1, yellow 2, green 3+,
 grey 0 (each run titled on hover); the centre says the share of the chain with 3 agreeing. Runs are drawn edge to edge
-(2026-10-22: a 0.1% gap after each of PEP's 157 runs showed the page through as black ticks). Before, it counted how far
+(2026-10-22: a 0.1% gap after each of PEP's 157 runs showed the page through as black ticks). Rings A, B, C are now
+red, yellow, green (ORD_COLORS), the inner ring's own three colours, as the operator asked. Before, it counted how far
 each copy reached (2+ green, 1 amber), whether or not their words agreed. Test: tests/test_doginal_index.py
 `test_the_status_says_how_many_arcades_agree_along_the_chain`.
 
