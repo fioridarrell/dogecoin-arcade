@@ -88,6 +88,76 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-22 Repos to look at later for the arcade (no code changed) (Claude)
+The operator asked to note these for possible future use. Nothing has been taken or run yet. All of it was read through the GitHub
+API. **Check the license before copying anything:** GPL-3 code is for ideas only. Where no license file exists, the code is all
+rights reserved, so only the idea can be reused.
+
+**The repos the operator named**
+- **dogechat-android** (GreatApe42069, CC0; the README says it is a fork of bitchat-android, which is MIT, so keep that
+  notice). <https://github.com/GreatApe42069/dogechat-android>
+  - `app/src/main/java/com/dogechat/android/wallet/WalletManager.kt`: a DOGE SPV wallet built on bitcoinj + libdohj
+    `WalletAppKit`, with up to 6 peers, DNS seeds (`seed.dogecoin.com`, `seed.multidoge.org`, `seed2.multidoge.org`,
+    `seed.dogechain.info`) and optional Tor (SOCKS) with a 45 s bootstrap wait. It pre-generates a receive address and
+    reports sync %, peer count and a live log line as status flows.
+    - For the arcade: a reference for a light wallet when a player has no Core.
+    - It is also a pattern for our "a Core that is behind" status: peers, sync % and the last log line.
+  - `.../wallet/net/PeerDirectory.kt`: a peer book that seeds from a writable `dogecoin_peers.csv`, then the bundled CSV, then
+    hardcoded IPv4s (Tor mode). It resolves the DNS seeds on clearnet and writes newly found IPs back to disk.
+    - For the arcade: the installer/Core bootstrap could ship a peer list and keep it fresh the same way, as an `addnode`
+      fallback when DNS seeds fail.
+  - `app/src/main/assets/dogecoin_peers.csv`: 11 mainnet `ip:22556` lines (IPv4 only, for SOCKS). It is a list from one
+    moment, so check the peers are alive before using it.
+- **qlpqlp/dogecoin-wallet**: the Android "Dogecoin Wallet" (fork of langerhans/dogecoin-wallet-new, from Schildbach Bitcoin
+  Wallet), Java, **GPL-3 (`wallet/COPYING`)**, so it is for ideas only. <https://github.com/qlpqlp/dogecoin-wallet>
+  - Atomic swaps DOGE <-> BTC/LTC (`wallet/src/de/schildbach/wallet/util/HtlcScriptBuilder.java`,
+    `service/AtomicSwapService.java`). The script is the standard HTLC:
+    `IF SHA256 <h> EQUALVERIFY DUP HASH160 <to> EQUALVERIFY CHECKSIG ELSE <t> CLTV DROP DUP HASH160 <refund> ... ENDIF`.
+    - It is a cross-chain swap compatible with other wallets. Our lock-script swaps could add Litecoin <-> Dogecoin swaps in
+      this shape, so phones running that wallet could trade with an arcade.
+  - Other features:
+    - timelocked "checks" (`WriteCheckActivity`, `CheckPdfGenerator`), which could become an arcade gift or voucher
+    - a Point of Sale web server, which could become an arcade "merchant mode"
+    - custom checkpoints, recurring payments, and RadioDoge (LoRa) status
+
+**More from GreatApe42069 (77 repos; about 45 are forks without changes, including old copies of our own repos)**
+- High:
+  - **dogechat-android** as a whole is Bluetooth-mesh + Nostr geohash chat. Parts to take:
+    - `sync/GossipSyncManager.kt` + `sync/GCSFilter.kt`: catch-up sync. Each node sends a compact filter of the ids it has
+      seen, and the other side sends back only what is missing. Fits mesh rooms and the shared order book after a reconnect.
+    - `mesh/StoreForwardManager.kt`, `PacketRelayManager.kt`, `FragmentManager.kt`: store-and-forward, multi-hop relay and
+      large-message fragments.
+    - `nostr/NostrProofOfWork.kt` (NIP-13): a proof-of-work stamp against spam on public feed and chat posts.
+    - `parsing/DogeTokenParser.kt`: `Đ1.23@Daddr #memo` in chat becomes a pay link, a cheap tip feature.
+    - Bigger idea: bridge testnet messaging to dogechat users over Nostr.
+  - **dogechat-extension** (JS, CC0): a small Chrome extension for geohash chat over Nostr, a reference for a "nearby players"
+    room.
+  - **royalties-doginals** (JS, CC0, spec `DOIP-6969.md`): royalty data on inscriptions (flat amount or %), plus minting from a
+    delegate. The order book and swap builder could read it and add a payout output to the creator.
+- Medium:
+  - **doginals** fork (CC0): the specs in `docs/DNS.md` (`.doge` names, first inscription wins; the indexer could resolve
+    name.doge), `docs/DUNES.md` and `docs/Delegates.md`.
+  - **dunes-cli** fork (MIT): reference if the arcade adds Dunes (Runes-style tokens), with pay terms and parent-child.
+  - **dogeclaw-wallet** (GPL-3 Schildbach base, ideas only): another HTLC swap service (unfinished in places) and
+    `PaymentTerminalApiService.java`, an HTTP API a till calls for an address, amount and QR code.
+  - **Degentralized_Wallet** (TS, no license): browser SPV wallet idea. The code is unfinished: mock headers always validate,
+    and multisig is mostly TODOs.
+  - **dogechatMeshCore** (MIT): a dogechat bridge to LoRa radios, only if the arcade ever needs messages off the internet.
+  - **dogechat** (iOS fork of bitchat): only the iOS end of the same chat protocol.
+- Low:
+  - doginalsArtGallery: a three.js 3D gallery stored as inscriptions; could be a showcase room in a game.
+  - dogechat-client: Python, the easiest copy of the chat protocol to read.
+  - The rest are one-off scripts or unchanged forks. dunes-gui and the doginals fork commit `.env`/`.wallet.json` files;
+    never copy those.
+
+**Suggested order if picked up:**
+1. gossip catch-up sync for the mesh
+2. `Đamount@address` tips in chat
+3. a shipped and refreshed peer list for Core bootstrap
+4. royalty outputs in swaps (DOIP-6969)
+5. `.doge` name resolution
+6. DOGE <-> LTC HTLC swaps compatible with other wallets
+
 ### 2026-10-22 Rescan %: the Core's own progress line, read from its debug.log (Claude)
 The operator: "Can we include rescan % to Arcade from RPC?" Dogecoin Core 1.14.9's RPC says nothing of a rescan (no
 `scanning` in getwalletinfo; the rescan holds the locks most calls need), so the RPC cannot. What it does write each
