@@ -95,6 +95,19 @@ The operator (a screenshot: frgy at -99,999,952,250, "100,000,000,000 listed"): 
 is whole there too, its tick read as everything after "<net>-<kind>-", and the wallet never shows a token balance below
 zero. The bad order has to be cancelled by its lister (Swaps listed -> Cancel; a book with it is refused by
 /account/orders/post as more than is free, its cancel goes through).
+### 2026-10-22 Index copies are not made again while being fetched; the imported wallet's balance line reads its coins in one go (Claude)
+* The operator (Admin -> Ords: Banana at 384 of 3,116 pieces, @yourfirstname at 63, both now fetching a copy at block
+  1,261,709): "they should be walking while fetching a copy and every time they are restarted the fetching is reset".
+  Banana (0c68a51) does walk while fetching (1,029,320 -> 1,034,229) and keeps its pieces across restarts; what reset
+  both was Strawberry making its Pepecoin copy AGAIN at 17:29 (SNAP_EVERY, asked by a fetcher): a new id is a new copy
+  to every fetcher. `Snapshots.want_made` now never remakes a copy that served a piece within SNAP_SERVING (15 min).
+  @yourfirstname runs an old local build (070ccbce): no walk while fetching, no resume -- it needs to update.
+* The operator: "Investigate why it takes so long to unlock your wallet." .25's log: /account/imported 1.5-4.5 s a call
+  (9 calls in 40.5 s once), called several times during an unlock; `Doginals.sort_known` (the imported wallet's
+  balance line, since today) read each of 7,139 coins on a connection of its own: 1.45 s on .25. Now `kept_many`
+  reads them 500 a query: 0.033 s, the same answer; `spendable_known` and `spendable` use it too. The rest of an
+  unlock is the browser: PBKDF2-SHA512 at 600,000 iterations (0.39 s on a test machine's Chromium, a phone 2-4x), done
+  twice (the wallet, then the imported wallets' record with its own salt).
 
 ### 2026-10-22 Listings hold what they list until unlisted or taken (Claude)
 The operator: "I made a listing of frgy from my @apple but it remains in my balance so it seems like I could list it and send
