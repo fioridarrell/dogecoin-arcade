@@ -101,10 +101,10 @@ def _parse(job: tuple) -> tuple[str, str, int, bytes]:
     """One block's (hash, line, births, notes) from its raw hex, in a worker process (a lane of a helper on many
     cores)."""
     from . import ord_notes
-    raw_hex, block_hash, taproot, mweb = job
+    raw_hex, block_hash, taproot, mweb, dialect = job
     block = rawchain.read_block(bytes.fromhex(raw_hex), block_hash, mweb=mweb)
-    found = births(block, taproot)
-    return block.hash, block_hash_of(block.hash, found), len(found), ord_notes.one_block(block, taproot)
+    found = births(block, taproot, dialect)
+    return block.hash, block_hash_of(block.hash, found), len(found), ord_notes.one_block(block, taproot, dialect)
 
 
 # --------------------------------------------------------------------------- reading a block
@@ -132,13 +132,13 @@ def _parts_end(data: list) -> bool:
     return False
 
 
-def birth_of(tx: rawchain.Tx) -> dict | None:
-    """{"vin": 0, "ctype", "done"} when `tx` STARTS a Doginals-kind inscription, read alone as the official indexers
-    read it (ord_rules.genesis: input 0 only, push-only, "ord", a piece count above 0). "done": complete in this
-    transaction; else it continues in the one whose input 0 spends it."""
+def birth_of(tx: rawchain.Tx, dialect: str = "dogecoin") -> dict | None:
+    """{"vin": 0, "ctype", "done"} when `tx` STARTS a Doginals-kind inscription, read alone as the chain's official
+    indexer reads it (ord_rules.genesis: input 0 only, push-only, "ord", a piece count -- above 0 on Dogecoin, any on
+    Pepecoin). "done": complete in this transaction; else it continues in the one whose input 0 spends it."""
     if not tx.vin or tx.vin[0]["vout"] == -1:
         return None
-    g = ord_rules.genesis(tx.vin[0]["script"])
+    g = ord_rules.genesis(tx.vin[0]["script"], dialect)
     if g is None:
         return None
     return {"vin": 0, "ctype": g[1].hex(), "done": g[0] == "complete"}
@@ -170,6 +170,13 @@ def _ops(script: bytes):
 def taproot_envelopes(witness: list[bytes]) -> list[str]:
     """The content types (hex) of ord's witness envelopes in one input -- OP_FALSE OP_IF "ord" fields... OP_ENDIF in
     the tapscript of a script-path spend (ord's inscription format, as ord-litecoin reads it)."""
+    return [ctype for ctype, _delegate in taproot_read(witness)]
+
+
+def taproot_read(witness: list[bytes]) -> list[tuple[str, str | None]]:
+    """(content type hex, delegate id or None) of each of ord's witness envelopes in one input. The delegate as
+    ord-litecoin reads it (src/inscriptions/envelope.rs `Tag::Delegate.take(&mut fields)`: the first value of tag 11,
+    tag.rs `Delegate = 11`; inscription.rs `inscription_id_field`, as wonky-ord's)."""
     w = [x for x in witness or []]
     if len(w) >= 2 and w[-1][:1] == b"\x50":                  # an annex
         w = w[:-1]
@@ -180,7 +187,7 @@ def taproot_envelopes(witness: list[bytes]) -> list[str]:
     i = 0
     while i + 2 < len(ops):
         if ops[i][0] == 0x00 and ops[i + 1][0] == 0x63 and ops[i + 2][1] == b"ord":
-            ctype, j = b"", i + 3
+            ctype, delegate, j = b"", None, i + 3
             while j < len(ops) and ops[j][0] != 0x68:
                 tag = ops[j][1]
                 if tag == b"":                                    # the body: pushes to OP_ENDIF
@@ -190,31 +197,34 @@ def taproot_envelopes(witness: list[bytes]) -> list[str]:
                     break
                 if tag == b"\x01" and j + 1 < len(ops) and isinstance(ops[j + 1][1], bytes):
                     ctype = ops[j + 1][1]
+                if tag == b"\x0b" and delegate is None and j + 1 < len(ops) and isinstance(ops[j + 1][1], bytes):
+                    delegate = ops[j + 1][1]
                 j += 2
-            found.append(ctype.hex())
+            found.append((ctype.hex(), ord_rules.id_from_tag(delegate, "dogecoin")))
             i = j + 1
         else:
             i += 1
     return found
 
 
-def births_of(tx: rawchain.Tx, taproot: bool = False) -> list[dict]:
+def births_of(tx: rawchain.Tx, taproot: bool = False, dialect: str = "dogecoin") -> list[dict]:
     """Every inscription `tx` gives birth to: {"n", "vin", "ctype", "done"}; the id is txid + "i" + n. The Doginals kind
-    (an input script opening with "ord", i0) and, on a Taproot chain, ord's witness envelopes, numbered in input order."""
+    (an input script opening with "ord", i0, read in the chain's dialect) and, on a Taproot chain, ord's witness
+    envelopes, numbered in input order (each with its "delegate", which no chunk hash covers)."""
     out = []
-    b = birth_of(tx)
+    b = birth_of(tx, dialect)
     if b is not None:
         out.append({"n": 0, **b})
     if taproot:
         for j, i in enumerate(tx.vin):
-            for ctype in taproot_envelopes(i.get("witness") or []):
-                out.append({"n": len(out), "vin": j, "ctype": ctype, "done": True})
+            for ctype, delegate in taproot_read(i.get("witness") or []):
+                out.append({"n": len(out), "vin": j, "ctype": ctype, "done": True, "delegate": delegate})
     return out
 
 
-def births(block: rawchain.Block, taproot: bool = False) -> list[tuple[str, int, int, str]]:
+def births(block: rawchain.Block, taproot: bool = False, dialect: str = "dogecoin") -> list[tuple[str, int, int, str]]:
     """(txid, n, envelope input, content type hex) for every birth in the block, in block order."""
-    return [(tx.txid, b["n"], b["vin"], b["ctype"]) for tx in block.txs for b in births_of(tx, taproot)]
+    return [(tx.txid, b["n"], b["vin"], b["ctype"]) for tx in block.txs for b in births_of(tx, taproot, dialect)]
 
 
 def block_hash_of(block_hash: str, found: list[tuple[str, int, int, str]]) -> str:
@@ -253,11 +263,13 @@ TABLES = """
             -- ctype: the content type as text; proto: a JSON body's "p" (drc-20, dns, ...); size: the body's bytes --
             -- so a protocol indexed later finds its own inscriptions by type or "p" (2026-10-20)
             -- its id is tx (the reveal's txid, 32 bytes as written in hex) and n ("<txid hex>i<n>"); ct: its content
-            -- type's number in ctypes
+            -- type's number in ctypes; delegate (every chain) and parent (Pepecoin): the inscription its tags name,
+            -- as id_blob (the txid's 32 bytes as written, then n in 4 bytes little-endian), NULL for none (rules 4)
             CREATE TABLE IF NOT EXISTS insc (rid INTEGER PRIMARY KEY, tx BLOB NOT NULL, n INTEGER NOT NULL,
                                              number INTEGER NOT NULL, height INTEGER NOT NULL, txpos INTEGER NOT NULL,
                                              ct INTEGER NOT NULL, proto TEXT, size INTEGER,
-                                             pieces INTEGER NOT NULL DEFAULT 1, burned INTEGER);
+                                             pieces INTEGER NOT NULL DEFAULT 1, burned INTEGER,
+                                             delegate BLOB, parent BLOB);
             -- every content type seen, by number (a few hundred, for millions of inscriptions)
             CREATE TABLE IF NOT EXISTS ctypes (ct INTEGER PRIMARY KEY, ctype TEXT NOT NULL UNIQUE);
             -- where each one is now (walker): the output and the koinu inside it
@@ -347,6 +359,19 @@ def iid_parts(iid: str) -> tuple[bytes, int] | None:
         return None
 
 
+def id_blob(iid: str | None) -> bytes | None:
+    """An inscription id as the insc table's delegate / parent keep it (2026-10-21): the txid's 32 bytes as written
+    (the same bytes as insc.tx, so the row it names is found by its tx lookup) and n as 4 bytes little-endian -- 36
+    bytes, a third of the id's text; NULL (None) for none. Rare enough (only inscriptions that name one) that nothing
+    else is worth it."""
+    key = iid_parts(iid) if iid else None
+    return key[0] + key[1].to_bytes(4, "little") if key else None
+
+
+def iid_of_blob(blob: bytes | None) -> str | None:
+    return iid_of(bytes(blob)[:32], int.from_bytes(bytes(blob)[32:36], "little")) if blob else None
+
+
 def _shown(units: Any, dec: int) -> str:
     """Whole units as the token shows them: with its decimals, trailing zeros dropped."""
     v, unit = int(units), 10 ** int(dec)
@@ -381,9 +406,10 @@ def _first_page_of(token: dict | None) -> dict | None:
 # --------------------------------------------------------------------------- the store
 
 class Store:
-    def __init__(self, path: Path, base: int | None = None):
+    def __init__(self, path: Path, base: int | None = None, dialect: str = "dogecoin"):
         self.path = Path(path)
         self.base = BASE if base is None else base
+        self.dialect = dialect                         # how the chain's envelopes read (ord_rules.dialect_of)
         self._lock = threading.RLock()                 # the one writer connection
         self._readers = threading.local()              # a read connection per thread (q)
         self._gen = 0                                  # bumped when the file is swapped (a snapshot installed)
@@ -431,6 +457,12 @@ class Store:
         # A chunk's word carries its notes' digest too (2026-10-20); an index from before gains the column.
         if "nd" not in [r[1] for r in db.execute("PRAGMA main.table_info(seen)").fetchall()]:
             db.execute("ALTER TABLE main.seen ADD COLUMN nd TEXT")
+        # Each inscription's delegate and parent (rules 4, 2026-10-21). An index of rules 4 is always made with them;
+        # an index of another layout, kept until it is converted, gains them (NULL: none), so its rows read alike.
+        cols = [r[1] for r in db.execute("PRAGMA main.table_info(insc)").fetchall()]
+        for col in ("delegate", "parent"):
+            if cols and col not in cols:
+                db.execute(f"ALTER TABLE main.insc ADD COLUMN {col} BLOB")
 
     def q(self, sql: str, args: tuple = ()) -> list:
         """A read, on this thread's own connection: never waits for a write in progress (WAL lets readers through) nor
@@ -509,7 +541,8 @@ class Store:
             db.execute("INSERT INTO ctypes (ctype) SELECT DISTINCT ctype FROM old.insc ORDER BY ctype")
             cts = dict(db.execute("SELECT ctype, ct FROM ctypes").fetchall())
             self.upgrading = "inscriptions"
-            db.execute("INSERT INTO insc SELECT i.rid, unhex(substr(i.id, 1, 64)), CAST(substr(i.id, 66) AS INTEGER), "
+            db.execute("INSERT INTO insc (rid, tx, n, number, height, txpos, ct, proto, size, pieces, burned) "
+                       "SELECT i.rid, unhex(substr(i.id, 1, 64)), CAST(substr(i.id, 66) AS INTEGER), "
                        "i.number, i.height, i.txpos, c.ct, i.proto, i.size, i.pieces, i.burned "
                        "FROM old.insc i JOIN ctypes c ON c.ctype = i.ctype")
             self.upgrading = "where each inscription is"
@@ -527,7 +560,7 @@ class Store:
             def pending_of(old: dict) -> dict:
                 row = None
                 for script in json.loads(old["scripts"]):
-                    got = carry(row, bytes.fromhex(script))
+                    got = carry(row, bytes.fromhex(script), self.dialect)
                     row = {**got, "ctype": got["ctype"]}
                 return {"txid": old["txid"], "ctype": row["ctype"], "left": row["left"], "body": row["body"],
                         "size": row["size"], "pieces": row["pieces"], "height": old["height"], "origin": old["origin"]}
@@ -651,10 +684,10 @@ class Store:
             return None
         lookup = (lambda txid: bytes.fromhex(rpc.call("getrawtransaction", txid, 0))) if rpc is not None else None
         try:
-            notes = ord_notes.finish([r[0] for r in rows], lookup)
+            notes = ord_notes.finish([r[0] for r in rows], lookup, self.dialect)
         except Exception as exc:                         # noqa: BLE001 -- a Core that cannot say: kept whole
             log.warning("ord index: chunk %d's envelopes could not be followed back (%s): kept whole", c, exc)
-            notes = ord_notes.finish([r[0] for r in rows])
+            notes = ord_notes.finish([r[0] for r in rows], dialect=self.dialect)
         nd, blob = ord_notes.digest(notes), ord_notes.pack(notes)
         with self.tx() as db:
             db.execute("INSERT OR REPLACE INTO notes VALUES (?,?,?,?,?)", (c, blob, nd, "", time.time()))
@@ -720,23 +753,27 @@ def _outpoint(txid: str, vout: int) -> bytes:
     return bytes.fromhex(txid) + vout.to_bytes(4, "little")
 
 
-def carry(chain: dict | None, script: bytes) -> dict:
+def carry(chain: dict | None, script: bytes, dialect: str = "dogecoin") -> dict:
     """A body arriving in pieces, one piece on: the pending row it continues (None: a first piece) and the next
-    transaction's input 0 script, to {state, ctype, left, body (None once let go of), size, pieces}."""
+    transaction's input 0 script, to {state, ctype, left, body (None once let go of), size, pieces, delegate,
+    parents} -- delegate (an id or None) and parents (ids claimed, Pepecoin only) once complete, from the trailer of
+    the script it completes in (ord_rules.read says why nothing later)."""
     if chain is None:
-        env, size, kept = ord_rules.envelope_start(script), None, True
+        env, size, kept = ord_rules.envelope_start(script, dialect), None, True
     else:
         had = bytes(chain["body"]) if chain["body"] is not None else b""
-        env = ord_rules.envelope_more(("partial", bytes(chain["ctype"]), chain["left"], had), script)
+        env = ord_rules.envelope_more(("partial", bytes(chain["ctype"]), chain["left"], had), script, dialect)
         size, kept = chain["size"] + len(env[3]) - len(had), chain["body"] is not None
-    state, ctype, left, body = env
+    state, ctype, left, body, tags = env
     size = len(body) if size is None else size
     if state == "none":
-        return {"state": "none", "ctype": b"", "left": 0, "body": None, "size": 0, "pieces": 0}
+        return {"state": "none", "ctype": b"", "left": 0, "body": None, "size": 0, "pieces": 0, "delegate": None,
+                "parents": []}
     pieces = (chain["pieces"] if chain else 0) + 1
     if not kept or (state == "partial" and not ord_rules.body_matters(ctype, body, size)):
         body = None
-    return {"state": state, "ctype": ctype, "left": left, "body": body, "size": size, "pieces": pieces}
+    return {"state": state, "ctype": ctype, "left": left, "body": body, "size": size, "pieces": pieces,
+            "delegate": ord_rules.delegate_of(tags, dialect), "parents": ord_rules.parents_of(tags, dialect)}
 
 
 #: The key of each table a block's walk writes, for its undo (every row's old value is kept before it changes).
@@ -812,9 +849,11 @@ class Walker:
     coins are asked of it)."""
 
     def __init__(self, store: Store, taproot: bool = False, mweb: bool = False, params: Any = None,
-                 token_protocol: str = "drc-20"):
+                 token_protocol: str = "drc-20", dialect: str | None = None):
         self.store = store
         self.base, self.taproot, self.mweb = store.base, taproot, mweb
+        #: "pepecoin" | "dogecoin" (ord_rules.dialect_of): how envelopes read, and when a new one is looked for.
+        self.dialect = dialect or store.dialect
         self.params = params
         self.token_protocol = token_protocol
         self.tracked: _Seen | None = None                                  # coins an inscription may sit on
@@ -929,7 +968,7 @@ class Walker:
         tracked = self.tracked
         assert tracked is not None
         moves: list[str] = []
-        born_here = births(block, self.taproot)
+        born_here = births(block, self.taproot, self.dialect)
         next_number = int(self.store.meta("next_number", 0))
         number_before = next_number
         next_rid = (self.store.q("SELECT COALESCE(MAX(rid), 0) FROM insc")[0][0]) + 1
@@ -948,7 +987,7 @@ class Walker:
                       if i["vout"] != -1 and _outpoint(i["txid"], i["vout"]) in tracked}
                 needs = [j for j, got in on.items() if got]
                 sizes_upto = max(needs, default=-1)
-                taproot = [b for b in births_of(tx, True) if b["n"] or b["vin"]] if self.taproot else []
+                taproot = [b for b in births_of(tx, True, self.dialect) if b["n"] or b["vin"]] if self.taproot else []
                 sizes_upto = max([sizes_upto] + [b["vin"] for b in taproot])
                 sizes = [self._value(rpc, i["txid"], i["vout"]) for i in tx.vin[:sizes_upto]] if sizes_upto > 0 else []
                 # (rid, koinu among the inputs, new here, the txid it sat in before this one)
@@ -958,11 +997,16 @@ class Walker:
                     for rid, off in on[j]:
                         carried.append((rid, base + off, False, tx.vin[j]["txid"]))
                 new: list[tuple[int, str, bytes, bytes, int]] = []  # (rid, id, ctype, body, pieces)
-                # A new inscription only when nothing inscribed sits on the first koinu (inscription_updater.rs).
-                if all(c[1] != 0 for c in carried) and tx.vin and tx.vin[0]["vout"] != -1:
+                returned: list[int] = []            # Pepecoin: parents spent beside their child, sent to output 1
+                # Dogecoin: a new inscription only when nothing inscribed sits on the first koinu (wonky-ord
+                # inscription_updater.rs `if inscriptions.iter().all(|flotsam| flotsam.offset != 0)`). Pepecoin: in
+                # every transaction (ord-pepecoin's: "In Pepecoin, we always check for new inscriptions to support
+                # parent/child collection provenance" -- `if true`), rules 4.
+                if (self.dialect == "pepecoin" or all(c[1] != 0 for c in carried)) and tx.vin \
+                        and tx.vin[0]["vout"] != -1:
                     prev = tx.vin[0]["txid"]
                     chain = w.get("pending", (prev,))
-                    got = carry(chain, tx.vin[0]["script"])
+                    got = carry(chain, tx.vin[0]["script"], self.dialect)
                     state, ctype = got["state"], got["ctype"]
                     # A transaction that spends a piece but is no next piece (e.g. its input 0 spends the piece's change
                     # output) leaves the chain where it was: the official indexers keep it ("ParsedInscription::None"
@@ -984,12 +1028,17 @@ class Walker:
                         body = got["body"] if got["body"] is not None else b""
                         if not w.db.execute("SELECT 1 FROM insc WHERE substr(tx, 1, 8)=? AND tx=? AND n=0",
                                             (otx[:8], otx)).fetchone():
+                            parent = self._parent(w, got["parents"], carried) if chain is None else None
+                            if parent is not None:
+                                returned = parent[1]
                             rid, next_rid = next_rid, next_rid + 1
                             w.put("insc", (rid,), {"rid": rid, "tx": otx, "n": 0, "number": next_number, "height": h,
                                                     "txpos": pos, "ct": self._ct(w.db, ctype.decode("utf-8", "replace")),
                                                     "proto": ord_rules.protocol_of(body) if got["body"] is not None
                                                     else None, "size": got["size"],
-                                                    "pieces": got["pieces"], "burned": None})
+                                                    "pieces": got["pieces"], "burned": None,
+                                                    "delegate": id_blob(got["delegate"]),
+                                                    "parent": id_blob(parent[0]) if parent else None})
                             next_number += 1
                             new.append((rid, iid, ctype, body, got["pieces"]))
                             carried.append((rid, 0, True, ""))
@@ -1002,7 +1051,8 @@ class Walker:
                     w.put("insc", (rid,), {"rid": rid, "tx": btx, "n": b["n"], "number": next_number, "height": h,
                                             "txpos": pos,
                                             "ct": self._ct(w.db, bytes.fromhex(b["ctype"]).decode("utf-8", "replace")),
-                                            "proto": None, "size": None, "pieces": 1, "burned": None})
+                                            "proto": None, "size": None, "pieces": 1, "burned": None,
+                                            "delegate": id_blob(b.get("delegate")), "parent": None})
                     next_number += 1
                     carried.append((rid, sum(sizes[:b["vin"]]), True, ""))
                 if not carried:
@@ -1013,7 +1063,21 @@ class Walker:
                     total += v
                     ends.append(total)
                 landed: dict[int, tuple[int | None, str | None]] = {}     # rid -> (vout or None, owner or None)
-                for rid, p, is_new, _was in sorted(carried, key=lambda c: c[1]):
+                # A parent spent beside its new child goes to output 1, at its first koinu, whatever its place among
+                # the inputs (ord-pepecoin inscription_updater.rs: "In our P2SH model, the commit must be input[0] ...
+                # so parents are input[1+] ... where it gets consumed by fees. Fix: explicitly assign the parent to its
+                # return output" -- `if let Some(return_output) = tx.output.get(1)`), before the others land.
+                if returned and len(tx.vout) > 1:
+                    for rid in returned:
+                        iid = iid_of(*w.db.execute("SELECT tx, n FROM insc WHERE rid=?", (rid,)).fetchone())
+                        w.put("at", (rid,), {"rid": rid, "tx": bytes.fromhex(tx.txid), "vout": 1, "off": 0,
+                                             "height": h})
+                        tracked.add(_outpoint(tx.txid, 1))
+                        moves.append(f"M {iid} {tx.txid}:1:0\n")
+                        landed[rid] = (1, self.owner_of(tx.vout[1][1]))
+                else:
+                    returned = []
+                for rid, p, is_new, _was in sorted((c for c in carried if c[0] not in returned), key=lambda c: c[1]):
                     iid = iid_of(*w.db.execute("SELECT tx, n FROM insc WHERE rid=?", (rid,)).fetchone())
                     k = next((n for n, e in enumerate(ends) if p < e), None)
                     if k is None:
@@ -1040,7 +1104,8 @@ class Walker:
             db.execute("INSERT OR REPLACE INTO meta VALUES ('next_number', ?)", (json.dumps(next_number),))
             if own and isinstance(block, rawchain.Block):
                 from . import ord_notes
-                db.execute("INSERT OR REPLACE INTO pnote VALUES (?,?)", (h, ord_notes.one_block(block, self.taproot)))
+                db.execute("INSERT OR REPLACE INTO pnote VALUES (?,?)",
+                           (h, ord_notes.one_block(block, self.taproot, self.dialect)))
         if own and (h + 1 - self.base) % CHUNK == 0:
             c = chunk_of(h, self.base)
             rows = self.store.q("SELECT line, n FROM block WHERE height>=? AND height<=? ORDER BY height",
@@ -1050,6 +1115,25 @@ class Walker:
                 nd = kept[1] if kept and kept[2] == "" else (self.store.finish_notes(c, rpc) or (None,))[0]
                 self.store.say(c, "", chunk_hash_of([r[0] for r in rows]), sum(r[1] for r in rows), nd)
         return moves
+
+    def _parent(self, w: _Block, claimed: list[str], carried: list) -> tuple[str, list[int]] | None:
+        """Pepecoin: the parents a new inscription's tags claim that stand -- (the first one's id, every one's rid) --
+        or None. ord-pepecoin inscription_updater.rs keeps a claim only when the parent is indexed and this
+        transaction spends the coin it sits on (`if let Some(parent_entry) = self.id_to_entry.get(..)` ... `if
+        txs[0].input.iter().any(|input| input.previous_output == parent_satpoint.outpoint)`). txs[0] is the
+        envelope's FIRST transaction; called only when that is this one (no pieces kept): an envelope begun earlier
+        spent its parent's coin back then, the parent moved with it, and its coin now is never one txs[0] spent."""
+        spent = {c[0] for c in carried if not c[2]}
+        first, rids = None, []
+        for pid in claimed:
+            key = iid_parts(pid)
+            row = w.db.execute("SELECT rid FROM insc WHERE substr(tx, 1, 8)=? AND tx=? AND n=?",
+                               (key[0][:8],) + key).fetchone() if key else None
+            if row is not None and row[0] in spent:
+                first = first or pid
+                if row[0] not in rids:
+                    rids.append(row[0])
+        return (first, rids) if first else None
 
     # --- DRC-20 / PRC-20 -----------------------------------------------------------------------------------------
 
@@ -1258,13 +1342,14 @@ class Chunks:
         return random.choice([c for best, c in audit[:16] if best == least])
 
 
-def scan_block(rpc, h: int, taproot: bool = False, mweb: bool = False) -> tuple[str, str, int, bytes]:
+def scan_block(rpc, h: int, taproot: bool = False, mweb: bool = False,
+               dialect: str = "dogecoin") -> tuple[str, str, int, bytes]:
     """(block hash, its line, births in it, its spend notes) for one block, read raw and proved (rawchain)."""
     from . import ord_notes
     block_hash = rpc.call("getblockhash", h)
     block = rawchain.read_block(bytes.fromhex(rpc.call("getblock", block_hash, 0)), block_hash, mweb=mweb)
-    found = births(block, taproot)
-    return block.hash, block_hash_of(block.hash, found), len(found), ord_notes.one_block(block, taproot)
+    found = births(block, taproot, dialect)
+    return block.hash, block_hash_of(block.hash, found), len(found), ord_notes.one_block(block, taproot, dialect)
 
 
 # --------------------------------------------------------------------------- the worker
@@ -1283,13 +1368,15 @@ class DoginalIndex:
         self._pool_size = 0
         self.base = STARTS.get(net, BASE) if net != "doge" else BASE
         self.taproot, self.mweb = net in TAPROOT, mweb
-        self.store = Store(path, self.base)
+        # Each chain read as its own official indexer reads it (rules 4, 2026-10-21): births, completions, notes.
+        self.dialect = ord_rules.dialect_of(net)
+        self.store = Store(path, self.base, self.dialect)
         self.rpc_factory = rpc_factory
         self.mode = mode
         self.own_core = own_core
         from .config import NETWORKS
         self.walker = Walker(self.store, self.taproot, mweb, params=NETWORKS.get(net),
-                             token_protocol="prc-20" if net in ("main", "test") else "drc-20")
+                             token_protocol="prc-20" if net in ("main", "test") else "drc-20", dialect=self.dialect)
         self.chunks = Chunks(self.store)
         self.share: Any = None                       # DxShare, when the mesh runs
         self.me: str | None = None                   # this arcade's node id on the mesh (DxShare sets it)
@@ -1559,7 +1646,7 @@ class DoginalIndex:
             blocks = ord_notes.decode(notes)
             if len(blocks) != CHUNK:
                 raise ord_notes.NotesError(f"{len(blocks)} blocks, not {CHUNK}")
-            if chunk_hash_of([block_hash_of(b.hash, births(b, self.taproot)) for b in blocks]) != hash_:
+            if chunk_hash_of([block_hash_of(b.hash, births(b, self.taproot, self.dialect)) for b in blocks]) != hash_:
                 raise ord_notes.NotesError("its blocks do not make the hash it said")
         except ord_notes.NotesError as exc:
             log.warning("ord index: arcade %s sent chunk %d's notes that are wrong: %s", node[:12], c, exc)
@@ -1714,7 +1801,7 @@ class DoginalIndex:
         import os
         small = (os.cpu_count() or 1) < BIG_FROM_CORES
         if (len(heights) == 1 or self._lanes_wanted() == 1) and not small:
-            return {h: scan_block(rpc, h, self.taproot, self.mweb) for h in heights}
+            return {h: scan_block(rpc, h, self.taproot, self.mweb, self.dialect) for h in heights}
         # A small machine reads every block in a worker process, even on one lane: parsed here, it held the web
         # process's threads (2026-10-20, .25 helping: pages waited a minute).
         from concurrent.futures import ThreadPoolExecutor
@@ -1726,7 +1813,7 @@ class DoginalIndex:
         with ThreadPoolExecutor(max_workers=len(heights)) as fetchers:
             raws = list(fetchers.map(fetch, heights))
         pool = self._workers()
-        jobs = [(raw, block_hash, self.taproot, self.mweb) for block_hash, raw in raws]
+        jobs = [(raw, block_hash, self.taproot, self.mweb, self.dialect) for block_hash, raw in raws]
         return dict(zip(heights, pool.map(_parse, jobs)))
 
     def _workers(self):
@@ -1979,31 +2066,57 @@ class DoginalIndex:
         raise ValueError("no such question")
 
     def lookup(self, question: dict) -> dict:
-        """The answer, and whose it is: this arcade's own walk, else (read only, or not walking) a linked arcade that
-        walks this chain, asked over the mesh."""
-        if self.mode() == "walk":
-            return {**self.answer(question), "from": "this arcade", "walked_to": self.walker.next_height()}
-        if self.share is None or not hasattr(self.share, "ask"):
-            raise ValueError("no linked arcade to ask: the mesh is off here")
-        try:
-            return self.share.ask(question)
-        except ValueError as exc:
-            if "no such question" not in str(exc) or question.get("what") not in NEWER_QUESTIONS:
-                raise
-            older = str(exc).split(":")[0]
-        # The walking arcade runs a version from before the explorer (2026-10-21). A rich list's first page is its
-        # token's biggest holders, which it does answer; anything else waits until it updates.
-        if question.get("what") == "holders" and not int(question.get("page") or 0):
-            got = self.share.ask({"what": "token", "tick": str(question.get("tick") or "")})
-            return {**got, "holders": _first_page_of(got.get("token")),
-                    "older": f"{older} runs an older version: only the first page of holders, and no percentages"}
-        raise ValueError(f"{older} walks this chain but runs an older version that cannot answer this yet; it can "
-                         f"once it updates")
+        """The answer, and whose it is ("from", "walked_to"; "node" when a linked arcade's), from the MOST COMPLETE
+        index of this chain (2026-10-21: "All arcades should be able to access all other arcades indexs and
+        they should always use the most complete index in the ord Explorer"): this arcade's own walk and every linked
+        walker on these rules heard in the last five minutes (`walkers`), furthest walked first -- this arcade first
+        when it is furthest or tied. Should the one asked fail (gone, too slow, an error, a version that cannot answer
+        this), the next furthest is asked, down to this arcade's own walk when it walks (which always answers). A
+        walker on other rules is never asked (`walkers`)."""
+        own = self.walker.next_height() if self.mode() == "walk" else None
+        peers = self.walkers() if self.share is not None and hasattr(self.share, "ask") else []
+        order: list[tuple[str | None, int]] = peers + ([(None, own)] if own is not None else [])
+        order.sort(key=lambda o: (-o[1], o[0] is not None))
+        if not order:
+            if self.share is None or not hasattr(self.share, "ask"):
+                raise ValueError("no linked arcade to ask: the mesh is off here")
+            raise ValueError("no linked arcade walks this chain yet")
+        failed: list[str] = []
+        older = ""
+        for node, height in order:
+            if node is None:
+                return {**self.answer(question), "from": "this arcade", "walked_to": own}
+            try:
+                return {"from": f"arcade {node[:12]}", "walked_to": height, **self.share.ask(question, node=node),
+                        "node": node}
+            except Exception as exc:                     # noqa: BLE001 -- that arcade could not say: the next one
+                said = str(exc)
+                if "no such question" in said and question.get("what") in NEWER_QUESTIONS:
+                    older = older or said.split(":")[0] or f"arcade {node[:12]}"
+                    # The walking arcade runs a version from before the explorer (2026-10-21). A rich list's first
+                    # page is its token's biggest holders, which it does answer.
+                    if question.get("what") == "holders" and not int(question.get("page") or 0):
+                        try:
+                            got = self.share.ask({"what": "token", "tick": str(question.get("tick") or "")}, node=node)
+                        except Exception as again:          # noqa: BLE001
+                            failed.append(str(again)[:120])
+                            continue
+                        return {"from": f"arcade {node[:12]}", "walked_to": height, **got, "node": node,
+                                "holders": _first_page_of(got.get("token")),
+                                "older": f"{older} runs an older version: only the first page of holders, and no "
+                                         f"percentages"}
+                failed.append(said[:120])
+        if older:
+            raise ValueError(f"{older} walks this chain but runs an older version that cannot answer this yet; it can "
+                             f"once it updates")
+        raise ValueError("no linked arcade that walks this chain could answer: " + "; ".join(failed))
 
     def walkers(self) -> list[tuple[str, int]]:
         """Linked arcades that walk this chain, furthest first: (node, the block they have walked to)."""
+        # Only arcades on these rules (2026-10-21): an index built under other rules numbers otherwise.
         rows = [(node, int(p.get("walk") or 0)) for node, p in self.chunks.peers.items()
-                if p.get("mode") == "walk" and time.time() - float(p.get("at") or 0) < 300]
+                if p.get("mode") == "walk" and p.get("rules") == ord_rules.RULES
+                and time.time() - float(p.get("at") or 0) < 300]
         return sorted(rows, key=lambda r: -r[1])
 
     def where(self, inscription: str) -> dict | None:
@@ -2011,13 +2124,32 @@ class DoginalIndex:
         if key is None or self.store.old_layout:
             return None
         row = self.store.q("SELECT i.tx, i.n, i.number, i.height, c.ctype, i.proto, i.size, i.burned, a.tx, a.vout, "
-                           "a.off FROM insc i JOIN ctypes c ON c.ct = i.ct LEFT JOIN at a ON a.rid = i.rid "
-                           "WHERE substr(i.tx, 1, 8)=? AND i.tx=? AND i.n=?", (key[0][:8],) + key)
+                           "a.off, i.delegate, i.parent FROM insc i JOIN ctypes c ON c.ct = i.ct "
+                           "LEFT JOIN at a ON a.rid = i.rid WHERE substr(i.tx, 1, 8)=? AND i.tx=? AND i.n=?",
+                           (key[0][:8],) + key)
         if not row:
             return None
-        tx, n, number, height, ctype, proto, size, burned, at, vout, off = row[0]
+        tx, n, number, height, ctype, proto, size, burned, at, vout, off, delegate, parent = row[0]
         return {"id": iid_of(tx, n), "number": number, "height": height, "content_type": ctype, "protocol": proto,
-                "size": size, "burned": burned, "output": f"{bytes(at).hex()}:{vout}" if at else None, "offset": off}
+                "size": size, "burned": burned, "output": f"{bytes(at).hex()}:{vout}" if at else None, "offset": off,
+                "delegate": iid_of_blob(delegate), "parent": iid_of_blob(parent)}
+
+    def delegate(self, inscription: str) -> dict | None:
+        """What /content serves for an inscription that names a delegate (2026-10-21): None when this walk does
+        not hold `inscription` or it names none (its own content is served, as before); else {"delegate": id,
+        "known": the delegate is an inscription this walk holds, "delegates": that delegate names one of its own}.
+        One hop only: ord-pepecoin's and wonky-ord's /content swap in the delegate once (`if let Some(delegate) =
+        inscription.delegate_id() { inscription = index.get_inscription_by_id(delegate)?.ok_or_not_found(..)? }`)."""
+        key = iid_parts(inscription)
+        if key is None or self.store.old_layout:
+            return None
+        row = self.store.q("SELECT delegate FROM insc WHERE substr(tx, 1, 8)=? AND tx=? AND n=?", (key[0][:8],) + key)
+        if not row or not row[0][0]:
+            return None
+        blob = bytes(row[0][0])
+        tx, n = blob[:32], int.from_bytes(blob[32:36], "little")
+        of = self.store.q("SELECT delegate FROM insc WHERE substr(tx, 1, 8)=? AND tx=? AND n=?", (tx[:8], tx, n))
+        return {"delegate": iid_of_blob(blob), "known": bool(of), "delegates": bool(of and of[0][0])}
 
     def kinds(self, ctype: str = "", proto: str = "", first: int = 20) -> dict:
         """How many inscriptions of a content type (a prefix: "image/" for every image) or a JSON "p", and the first
@@ -2091,17 +2223,28 @@ class DoginalIndex:
             if rid < 1:
                 return out
         row = self.store.q("SELECT i.tx, i.n, i.number, i.height, c.ctype, i.proto, i.size, i.burned, i.pieces, a.tx, "
-                           "a.vout, a.off, a.height FROM insc i JOIN ctypes c ON c.ct = i.ct "
+                           "a.vout, a.off, a.height, i.delegate, i.parent FROM insc i JOIN ctypes c ON c.ct = i.ct "
                            "LEFT JOIN at a ON a.rid = i.rid WHERE i.rid=?", (rid,))
         if not row:
             return out
-        tx, n, num, height, ctype, proto, size, burned, pieces, at, vout, off, moved = row[0]
+        tx, n, num, height, ctype, proto, size, burned, pieces, at, vout, off, moved, delegate, parent = row[0]
         txid = bytes(at).hex() if at else None
         out["inscription"] = {"id": iid_of(tx, n), "number": num, "height": height, "content_type": ctype,
                               "protocol": proto, "size": size, "pieces": pieces, "burned": bool(burned),
                               "output": f"{txid}:{vout}" if txid else None, "offset": off, "moved_at": moved,
-                              "owner": self._owner_at(txid, vout) if txid and not burned else None}
+                              "owner": self._owner_at(txid, vout) if txid and not burned else None,
+                              # rules 4: the inscription its tags name (Admin -> Ords shows and opens them), and the
+                              # delegate's content type -- what /content serves for it
+                              "delegate": iid_of_blob(delegate), "parent": iid_of_blob(parent),
+                              "delegate_content_type": self._ctype_of(bytes(delegate)) if delegate else None}
         return out
+
+    def _ctype_of(self, blob: bytes) -> str | None:
+        """The content type of the inscription an id_blob names, when this walk holds it."""
+        tx, n = blob[:32], int.from_bytes(blob[32:36], "little")
+        row = self.store.q("SELECT c.ctype FROM insc i JOIN ctypes c ON c.ct = i.ct WHERE substr(i.tx, 1, 8)=? AND "
+                           "i.tx=? AND i.n=?", (tx[:8], tx, n))
+        return row[0][0] if row else None
 
     def _owner_at(self, txid: str, vout: int) -> str | None:
         """Who holds a coin: its address (Walker.owner_of), read from this arcade's Core; None without one (a walk

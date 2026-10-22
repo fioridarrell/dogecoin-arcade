@@ -1484,7 +1484,9 @@ section.panel h2{margin-top:0}
   // The viewer: one inscription, by number (or by id, from a search), and the arrows.
   function ordxContent(box, x) {
     box.textContent = '';
-    var ct = String(x.content_type || '').toLowerCase(), src = '/content/' + encodeURIComponent(x.id);
+    // One that names a delegate shows the delegate's content: /content serves it, so it is drawn by the delegate's type.
+    var ct = String((x.delegate ? x.delegate_content_type : x.content_type) || '').toLowerCase(),
+      src = '/content/' + encodeURIComponent(x.id);
     if (/^image\//.test(ct) || /^text\/html/.test(ct)) {
       // As the Wallet shows a Doginal (my_wallet.html doginalPic): sandboxed, scripts only, never this page's origin.
       var frame = document.createElement('iframe');
@@ -1526,6 +1528,9 @@ section.panel h2{margin-top:0}
         ['Number', '#' + num(x.number) + (ORDX.last >= 0 ? ' of ' + num(ORDX.last) : '')],
         ['Id', content],
         ['Content type', x.content_type],
+        // rules 4 (2026-10-21): the inscription its tags name, opened here in the viewer
+        ['Delegate', x.delegate ? ordxLink(x.delegate, function () { ordxShow(null, x.delegate); }) : null],
+        ['Parent', x.parent ? ordxLink(x.parent, function () { ordxShow(null, x.parent); }) : null],
         ['Size', x.size == null ? null : bytes(x.size) + (x.pieces > 1 ? ' in ' + x.pieces + ' pieces' : '')],
         ['Block', num(x.height)],
         ['Protocol', x.protocol || '—'],

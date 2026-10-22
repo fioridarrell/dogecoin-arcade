@@ -6908,9 +6908,25 @@ def create_app(state: AppState) -> FastAPI:
         from .. import doginals as D
         if not D.INSCRIPTION_ID.match(str(key or "").lower()):
             return None
+        nets = {id(g): n for n, g in (fundinglib.GUARD_BY_NET or {}).items()}
         for guard in [g for g in [fundinglib.GUARD] if g is not None] + [g for _, g in fundinglib.GUARDS]:
+            net = nets.get(id(guard)) or ("doge" if guard is fundinglib.GUARD else "")
+            read = str(key).lower()
+            # An inscription that names a delegate shows the delegate's content and type (rules 4, 2026-10-21),
+            # as ord-pepecoin's and wonky-ord's /content do -- once: a delegate is not followed on to its own. Known
+            # only from this arcade's own walk of that chain; without one, the inscription's own envelope, as before.
+            said = _ord_delegate(net, read)
+            if said is not None:
+                if not said["known"]:
+                    # ord: `.ok_or_not_found(|| format!("delegate {inscription_id}"))`
+                    return contentlib._missing("its delegate is not an inscription this arcade knows")
+                if said["delegates"] and said["dialect"] == "pepecoin":
+                    # ord-pepecoin's into_body() is None for an inscription that names a delegate, so a delegate
+                    # that names one of its own has no content there (wonky-ord serves its body: Dogecoin does).
+                    return contentlib._missing("its delegate names a delegate of its own")
+                read = said["delegate"]
             try:
-                ctype, body = guard.content(str(key).lower())
+                ctype, body = guard.content(read)
             except Exception:                               # noqa: BLE001 -- not on this chain, or not readable now
                 continue
             # The same rules as the arcade's own pieces (content.content): a type it renders, else a download.
@@ -6921,6 +6937,18 @@ def create_app(state: AppState) -> FastAPI:
                 headers["Content-Disposition"] = "attachment"
             return Response(body, media_type=safe or "application/octet-stream", headers=headers)
         return None
+
+    def _ord_delegate(net: str, inscription: str) -> dict | None:
+        """The delegate this arcade's own ord index of `net` says an inscription names (DoginalIndex.delegate, with the
+        chain's dialect), or None: no index of that chain, an index not walked that far, or no delegate."""
+        if not net:
+            return None
+        try:
+            index = state.ord_indexes().get(net)
+            said = index.delegate(inscription) if index is not None else None
+        except Exception:                                   # noqa: BLE001 -- an index that cannot say: as before
+            return None
+        return {**said, "dialect": index.dialect} if said else None
 
     def _inscription_content(key: str, download: int = 0, reveal: int = 0):
         """An inscription's bytes -- screened first when this arcade screens
@@ -25420,11 +25448,24 @@ def create_app(state: AppState) -> FastAPI:
 
     def _ords_ask(index, question: dict):
         """One question to a chain's index, answered by its own walk or a walking linked arcade (index.lookup); what
-        went wrong said in a 409 the box shows."""
+        went wrong said in a 409 the box shows. The most complete index of the chain answers (DoginalIndex.lookup,
+        2026-10-21); a linked arcade's answer is said as its @tag when the mesh knows one ("Answered by")."""
         try:
-            return JSONResponse(index.lookup(question), headers={"Cache-Control": "no-store"})
+            said = index.lookup(question)
         except Exception as exc:                               # noqa: BLE001 -- said in the box
             return JSONResponse({"detail": str(exc)[:300]}, status_code=409)
+        node = str(said.pop("node", "") or "")
+        if node:
+            try:
+                share = getattr(getattr(state, "mesh", None), "operators", None)
+                for row in (share.status() if share is not None else []):
+                    known = str(row.get("node") or "")
+                    if known and row.get("tag") and (node.startswith(known) or known.startswith(node)):
+                        said["from"] = "@" + str(row["tag"])
+                        break
+            except Exception:                                  # noqa: BLE001 -- said as the arcade's id
+                pass
+        return JSONResponse(said, headers={"Cache-Control": "no-store"})
 
     def _ords_index(net: str):
         index = state.ord_indexes().get(net)

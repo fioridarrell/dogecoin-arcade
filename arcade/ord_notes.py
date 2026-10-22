@@ -13,12 +13,14 @@ What a note keeps, and why that is enough (doginal_index.Walker.walk_block reads
 * the block's 80-byte header: its hash and its previous block's, and the merkle root the transaction ids must hash to
   (`decode` proves that, so the list of transactions is the block's own);
 * per transaction: its id, every input's outpoint, every output's value and owner;
-* input 0's script only when it can matter to ord_rules.parse -- push-only, and starting with "ord" or a piece count;
+* input 0's script only when it can matter to ord_rules.parse -- push-only, and starting with "ord" or a piece count
+  (as the chain's dialect reads pushes: on Pepecoin OP_PUSHDATA2/4 are read right, rules 4);
 * on a Taproot chain, the witness of an input that carries ord's witness envelope.
 
 A chain of envelope pieces that completes inside the chunk and whose content cannot matter (no "p", no token
 operation, no name claim) has its big pushes zeroed: the same lengths, so every size and number stays the same, and a
-run of zeros costs nothing compressed. Everything else is kept whole.
+run of zeros costs nothing compressed. A tag the walk reads after the countdown (a delegate, a parent: rules 4) is never
+zeroed. Everything else is kept whole.
 
 Notes are canonical: two arcades that scan the same chunk write the same bytes, so `digest` is a second word on the
 chunk beside its births hash, and two arcades agreeing on it means the notes are right.
@@ -71,10 +73,13 @@ class NoteBlock:
 
 # --------------------------------------------------------------------------- what can matter
 
-def may_envelope(script: bytes) -> bool:
+def may_envelope(script: bytes, dialect: str = "dogecoin") -> bool:
     """Can input 0's script open or continue an envelope (ord_rules.parse): push-only, two pushes or more, the first
-    "ord" or a piece count? A plain signature (a 72-byte push first) cannot."""
-    pushes = ord_rules.decode_push_datas(script)
+    "ord" or a piece count? A plain signature (a 72-byte push first) cannot. Says yes to everything the walk can read
+    (rules 4, checked): a Pepecoin envelope of no pieces ("ord" first) and a last piece carrying tags (a piece count
+    first). A transaction carrying ONLY tags never matters: the official indexers read a chain's tags only from the
+    script its countdown ends in (ord_rules.read), and a script after that starts nothing."""
+    pushes = ord_rules.decode_push_datas(script, dialect)
     if pushes is None or len(pushes) < 2:
         return False
     return pushes[0] == b"ord" or ord_rules.push_number(pushes[0]) is not None
@@ -99,9 +104,9 @@ def may_matter(ctype: bytes, first: bytes) -> bool:
     return not head or head == b"{"
 
 
-def _first_piece(script: bytes) -> tuple[bytes, bytes] | None:
+def _first_piece(script: bytes, dialect: str = "dogecoin") -> tuple[bytes, bytes] | None:
     """(content type, its first data) of a genesis piece, or None when it is not one."""
-    pushes = ord_rules.decode_push_datas(script)
+    pushes = ord_rules.decode_push_datas(script, dialect)
     if not pushes or pushes[0] != b"ord" or len(pushes) < 3:
         return None
     return pushes[2], (pushes[4] if len(pushes) > 4 else b"")
@@ -110,7 +115,7 @@ def _first_piece(script: bytes) -> tuple[bytes, bytes] | None:
 _GENESIS: dict[str, Any] = {}                  # txid of a piece -> its envelope's first piece (or "none"), kept
 
 
-def genesis_before(txid: str, lookup) -> Any:
+def genesis_before(txid: str, lookup, dialect: str = "dogecoin") -> Any:
     """Follow an envelope back from the piece in transaction `txid` (each piece's input 0 spends the one before) to
     its first piece: (content type, first data); "none" when it is no envelope's piece; None when too far back."""
     seen, at = [], txid
@@ -121,10 +126,10 @@ def genesis_before(txid: str, lookup) -> Any:
         tx = rawchain.read_tx(lookup(at), at)
         script = tx.vin[0]["script"] if tx.vin and tx.vin[0]["vout"] != -1 else b""
         seen.append(at)
-        if not may_envelope(script):
+        if not may_envelope(script, dialect):
             found = "none"
             break
-        first = _first_piece(script)
+        first = _first_piece(script, dialect)
         if first is not None:
             found = first
             break
@@ -138,9 +143,38 @@ def genesis_before(txid: str, lookup) -> Any:
     return found
 
 
-def _zeroed(script: bytes, genesis: bool) -> bytes:
+def _tag_values(script: bytes, genesis: bool, dialect: str) -> set[int] | None:
+    """Which pushes (by position) of a piece's script are the values of tags the walk reads after the countdown -- a
+    delegate's, a parent's (ord_rules.DELEGATE_TAG / PARENT_TAG) -- so zeroing keeps them (rules 4). The countdown is
+    followed as the walk follows it: a genesis from its piece count, a later piece from its own first number. None
+    when the dialect reads the script's pushes otherwise than their opcodes say (wonky-ord's OP_PUSHDATA2/4 quirk):
+    such a script is kept whole."""
+    pushes = ord_rules.decode_push_datas(script, dialect)
+    if pushes is None or pushes != ord_rules.decode_push_datas(script, "pepecoin"):
+        return None
+    if genesis:
+        npieces, i = (ord_rules.push_number(pushes[1]) if len(pushes) > 1 else None), 3
+    else:
+        first = ord_rules.push_number(pushes[0]) if pushes else None
+        npieces, i = (first + 1 if first is not None else None), 0
+    if npieces is None:
+        return set()
+    while npieces and i + 1 < len(pushes) and ord_rules.push_number(pushes[i]) == npieces - 1:
+        i, npieces = i + 2, npieces - 1
+    if npieces:
+        return set()
+    keys = {ord_rules.DELEGATE_TAG[dialect], ord_rules.PARENT_TAG.get(dialect)}
+    keys = {k.encode() if isinstance(k, str) else k for k in keys if k is not None}
+    return {j + 1 for j in range(i, len(pushes) - 1, 2) if pushes[j] in keys}
+
+
+def _zeroed(script: bytes, genesis: bool, dialect: str = "dogecoin") -> bytes:
     """The same script with every push longer than 8 bytes zeroed (a genesis keeps "ord", the piece count and the
-    content type): the same operations and lengths, so parse reads the same pieces and the same sizes."""
+    content type; every piece keeps the tags the walk reads after its countdown, `_tag_values`): the same operations
+    and lengths, so parse reads the same pieces, the same sizes and the same delegate and parent."""
+    keep_too = _tag_values(script, genesis, dialect)
+    if keep_too is None:
+        return script
     out, at, n = bytearray(), 0, 0
     while at < len(script):
         op = script[at]
@@ -162,7 +196,7 @@ def _zeroed(script: bytes, genesis: bool) -> bytes:
             continue
         data = script[at:at + size]
         at += size
-        keep = size <= 8 or (genesis and n < 3)
+        keep = size <= 8 or (genesis and n < 3) or n in keep_too
         out += head + (data if keep else bytes(len(data)))
         n += 1
     return bytes(out)
@@ -193,7 +227,7 @@ def _owner_bytes(script: bytes) -> bytes:
     return bytes([_HASHED]) + hash160(script)
 
 
-def block_notes(block, taproot: bool = False) -> list:
+def block_notes(block, taproot: bool = False, dialect: str = "dogecoin") -> list:
     """One block's notes, before the chunk is finished: [header, [(txid, ins, outs)...]] with input 0's script kept
     whole where it may matter (the chunk's finish decides what is zeroed)."""
     txs = []
@@ -201,7 +235,7 @@ def block_notes(block, taproot: bool = False) -> list:
         ins = []
         for j, i in enumerate(tx.vin):
             coinbase = i["vout"] == -1
-            script = i["script"] if (j == 0 and not coinbase and may_envelope(i["script"])) else None
+            script = i["script"] if (j == 0 and not coinbase and may_envelope(i["script"], dialect)) else None
             witness = None
             if taproot and not coinbase and i.get("witness"):
                 from .doginal_index import taproot_envelopes
@@ -212,7 +246,7 @@ def block_notes(block, taproot: bool = False) -> list:
     return [block.header, txs]
 
 
-def finish(blocks: list[bytes], lookup=None) -> bytes:
+def finish(blocks: list[bytes], lookup=None, dialect: str = "dogecoin") -> bytes:
     """A chunk's notes, canonical: its blocks' notes (`one_block`, in height order) with the content of every envelope
     that cannot matter zeroed. The bytes `digest` and `pack` are of. Every arcade finishes a chunk from the same block
     notes the same way, whether it walked the blocks or helped with them.
@@ -232,7 +266,7 @@ def finish(blocks: list[bytes], lookup=None) -> bytes:
                 continue
             prev, script = ins[0][0], ins[0][2]
             chain = chains.pop(prev, None)
-            first = _first_piece(script)
+            first = _first_piece(script, dialect)
             if first is not None:
                 # A script opening with "ord" begins an envelope of its own (kept as one: its content type is read).
                 # Should the walk read it as the next piece of a chain it spends instead, it reads nothing of it.
@@ -241,7 +275,7 @@ def finish(blocks: list[bytes], lookup=None) -> bytes:
                 if lookup is None:
                     continue                            # begun before this chunk, and no way to look: kept whole
                 else:
-                    found = genesis_before(prev, lookup)
+                    found = genesis_before(prev, lookup, dialect)
                     if found is None:
                         continue                        # too far back to follow: kept whole
                     chain = {"pieces": [], "first": found, "whole": False}
@@ -255,20 +289,20 @@ def finish(blocks: list[bytes], lookup=None) -> bytes:
             if not chain["whole"] or len(pieces) > MAX_PARSED:
                 chains[txid] = chain                    # may matter: begun before, or too long to parse again
                 continue
-            state, ctype, body = ord_rules.parse([parts[pb][1][pt][1][0][2] for pb, pt in pieces])
+            state, ctype, body = ord_rules.parse([parts[pb][1][pt][1][0][2] for pb, pt in pieces], dialect)
             if state == "partial":
                 chains[txid] = chain
             elif state == "complete" and not content_matters(ctype, body):
                 zero.update({p: i == 0 for i, p in enumerate(pieces)})
-    return _encode(parts, zero)
+    return _encode(parts, zero, dialect)
 
 
-def one_block(block, taproot: bool = False) -> bytes:
+def one_block(block, taproot: bool = False, dialect: str = "dogecoin") -> bytes:
     """One block's notes as read (nothing zeroed yet): what a scanner keeps until its chunk is whole."""
-    return _encode([block_notes(block, taproot)], {})[1:]
+    return _encode([block_notes(block, taproot, dialect)], {})[1:]
 
 
-def _encode(parts: list, zero: dict) -> bytes:
+def _encode(parts: list, zero: dict, dialect: str = "dogecoin") -> bytes:
     out = bytearray([VERSION])
     out += _varint(len(parts))
     for b, (header, txs) in enumerate(parts):
@@ -283,7 +317,7 @@ def _encode(parts: list, zero: dict) -> bytes:
                     out += bytes.fromhex(ptxid) + _varint(vout)
                 if script is not None:
                     if j == 0 and (b, t) in zero:
-                        script = _zeroed(script, zero[(b, t)])
+                        script = _zeroed(script, zero[(b, t)], dialect)
                     out += _blob(script)
                 if witness is not None:
                     out += _varint(len(witness)) + b"".join(_blob(w) for w in witness)

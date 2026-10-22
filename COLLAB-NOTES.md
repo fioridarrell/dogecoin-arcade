@@ -88,6 +88,66 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-21 Ord index rules 4: each chain read in its own indexer's dialect, delegates and parents kept -- every ord index rebuilt again (Claude)
+Branch `claude/ord-rules4`. Read from the official sources (gh api, today): mvdnbrk/ord-pepecoin
+`src/inscriptions/parser.rs` (whole), `tag.rs`, `inscription.rs` (delegate_id/into_body), `src/index/updater/
+inscription_updater.rs`, `src/subcommand/server.rs` (`content`); tylordius/wonky-dogeord `src/inscription.rs`
+(parser + `inscription_id_field`), `src/tag.rs`, `inscription_updater.rs`, `server.rs`; ynohtna92/ord-litecoin
+`src/inscriptions/envelope.rs`, `tag.rs`.
+- **`ord_rules.dialect_of(net)`**: "pepecoin" (main, test) | "dogecoin" (doge, ltc, ltctest). Threaded through
+  `envelope_start/envelope_more/parse/read/genesis`, `doginal_index.birth_of/births_of/births` (chunk hashes),
+  `carry`, `Walker` (and `Store.dialect` for notes), `scan_block`, the helpers' worker job, `got_notes`, and
+  `ord_notes.may_envelope/block_notes/one_block/finish/genesis_before/_zeroed`.
+- **Pepecoin** (parser.rs 43-56, 68-87, 136-150; tag.rs 11-21): a piece count of 0 is COMPLETE, no body (we returned
+  none: every zero-piece inscription missing, every later number low); after the countdown the PRC-721 trailer
+  (`chunks_exact(2)`, UTF-8 keys); "delegate"/"parent" = 36 bytes, txid as stored (reversed) + LE u32, else no id.
+  `delegate_id` takes the FIRST value only. decode_push_datas reads OP_PUSHDATA2/4 right (fixed upstream 414ce571,
+  "OP_PUSHDATA2/4 parser bug"), so Pepecoin reads pushes over 255 bytes; Dogecoin keeps wonky's quirk.
+  inscription_updater.rs 139-140 `if true` ("In Pepecoin, we always check for new inscriptions"): a new inscription is
+  looked for even when one sits on the first koinu (wonky's `offset != 0` rule stays Dogecoin's). Lines 222-278: a
+  parent claim stands only when the parent is indexed and txs[0] spends its coin (so only single-transaction
+  children), and that parent then goes to output 1 at koinu 0. No cursed / negative numbers there.
+  A trailer in a LATER script (parser.rs da6333ee) is read by `ord_rules.read`, but the updater only ever parses the
+  kept pieces + the tx at hand and keeps a chain only while partial, so the walk reads tags from the script the
+  countdown ends in -- same result.
+- **Dogecoin** (wonky inscription.rs 207-209, 227-251, 117-154; tag.rs `Delegate = 11`): zero pieces stays none;
+  after the countdown 1-byte-key fields up to the first other key; delegate = first value of key 11, 32-36 bytes,
+  index trimmed (no trailing zero unless 4 bytes). No parent (wonky never reads `Parent = 3`).
+- **Litecoin**: `taproot_read` also reads tag 11 (ord-litecoin envelope.rs `Tag::Delegate.take`). Numbering unchanged.
+- **Stored**: `insc.delegate BLOB`, `insc.parent BLOB` (Pepecoin only): 36 bytes = the txid's bytes as written (same as
+  insc.tx, so the named row is found by its tx lookup) + n LE u32; NULL for none. In TABLES, and `_columns_added`
+  for an index of another layout. Layout stays 3. `where()` / `inscription()` say `delegate`, `parent`,
+  `delegate_content_type`; `DoginalIndex.delegate(id)` for /content.
+- **Notes**: zeroing keeps a delegate/parent tag value after the countdown (`ord_notes._tag_values`); a script the
+  dialect reads otherwise than its opcodes (the quirk) is kept whole. Peers are already split by rules, so notes
+  VERSION stays 2.
+- **/content/<id>** (`app._chain_inscription`, `_ord_delegate`): when this arcade's own walk of that chain says the
+  inscription names a delegate, the DELEGATE's content and type are served (one hop, as both servers); delegate not
+  in the index: 404 (ord's "delegate not found"); on Pepecoin a delegate that names its own: 404 (ord-pepecoin
+  into_body() is None); no index / not walked that far: as before. Admin -> Ords viewer: "Delegate:" and "Parent:"
+  links open them in the viewer; the frame draws by the delegate's type.
+- **The explorer asks the most complete index** (2026-10-21: "All arcades should be able to access all other
+  arcades indexs and they should always use the most complete index in the ord Explorer"): `DoginalIndex.lookup`
+  (Admin -> Ords lookup, inscription by number, ticks, holders) orders this arcade's own walk and every linked walker
+  heard in the last 5 min by walked height, this arcade first on a tie, and asks the furthest; a peer that fails
+  (gone, timeout, error, too old) is passed over for the next, down to the own walk. `walkers()` now counts only
+  arcades on these rules (`peers[node]["rules"] == RULES`), so a rules-3 arcade is never asked (nor counted as a
+  holder for snapshots / notes pruning / Admin's walker list). Answers keep "from" / "walked_to"; `_ords_ask` shows a
+  peer as its @tag when the mesh knows one. /content's delegate lookup reads only this arcade's own walk (no mesh
+  round trip on a page read).
+- **ord_rules.RULES 3 -> 4**: every arcade's ord indexes are dropped and walked again (births and numbers change on
+  Pepecoin). **SadFrog / tbuuol: update, and your ord indexes rebuild again.**
+- Real chain (a test machine's own Pepecoin Core, scratch Store, read only): blocks 1,221,880-1,221,930 hold d7645bf5...i0
+  (image/svg+xml, 2 pieces, block 1,221,885) and two zero-piece children a861a3b5...i0 (1,221,887) and b0b1cd21...i0
+  (1,221,925), each with delegate AND parent d7645bf5...i0. Rules 4: numbered 0, 1, 2, both delegates and parents
+  kept, the parent on output 1 of each child. The old reading: only d7645bf5, and it went to the fee.
+- Tests: tests/test_ord_dialects.py (20: dialects, walk, notes, /content, the most complete index).
+- **Not done / open**: Pepecoin's "content-encoding" tag (br) is not sent as a header by /content; a Doginal-kind
+  inscription whose every output is 0 koinu is numbered at once here, while ord numbers it with the coinbase at the
+  block's end (pre-existing, untouched); `Walker.walk_block`'s taproot filter `b["n"] or b["vin"]` seems to drop a
+  witness envelope in input 0 when the transaction has no Doginal-kind birth (Litecoin, pre-existing, untouched --
+  please check).
+
 ### 2026-10-21 Ord index rules 3: an envelope kept when something else spends a piece -- every ord index rebuilt (Claude)
 The operator compared our PEP numbers with pepeblocks.com: #0 matched exactly, but by our #2,074,940 they were 862 higher. A
 binary search against their pages found the first split at our #30,410: their #30,410-30,412 (790fb113...i0,
