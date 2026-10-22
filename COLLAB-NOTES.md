@@ -88,6 +88,16 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-22 Wallet drop-down: each address type is its own wallet, every wallet labelled "name · protocol" (Claude)
+The operator (a screenshot of L TEST's "Wallet 1" picker over a separate "Native SegWit" select): "The three different
+types of wallets should each get their own wallet in the Wallet drop-down instead of a separate drop-down. Each one of
+the wallets should be labeled with their Wallet name and the protocol." my_wallet.html: the card's #addrkind select is
+gone (kept hidden); `drawMenu` lists the account's own wallet once per kind (`mainKinds`: wallet.ADDRESS_KINDS, or the
+one Legacy address on a chain without kinds), "Wallet 1 · Legacy" / "· P2SH (Nested SegWit)" / "· Native SegWit", each
+with its balance (the other kinds read by loadKind when the menu opens); picking one sets the kind (KIND) as the select
+did. Imported wallets say their protocol too (`addr_kind`), and the picker's own label is "name · protocol".
+tests/test_wallet_imports_browser.py reads the name and checks the label.
+
 ### 2026-10-22 DRC-20 / PRC-20: a sent amount is off the balance until the index reads its note (Claude)
 The operator, after sending 500 frgy from @apple to @yourfirstname (note ea32fec4...i0, send f109fbc3..., block 1,261,650):
 "my balance remain the same. So it appears as though I could send same tokens more than once this needs to be fixed"

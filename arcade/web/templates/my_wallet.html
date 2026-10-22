@@ -290,6 +290,7 @@ a.wl-act:hover{text-decoration:none}
 .wl-wstate.wait{background:color-mix(in srgb,var(--accent) 12%,transparent);border:1px solid color-mix(in srgb,var(--accent) 40%,transparent)}
 .wl-wstate.none{background:color-mix(in srgb,var(--bad) 9%,transparent);border:1px solid color-mix(in srgb,var(--bad) 35%,transparent)}
 .wl-wstate.good{background:color-mix(in srgb,var(--ok) 10%,transparent);border:1px solid color-mix(in srgb,var(--ok) 35%,transparent)}
+.wl-proto{color:var(--muted);font-weight:500}
 .wl-rescanbar{display:block;width:100%;height:8px;margin-top:8px;accent-color:var(--accent)}
 .wl-segk{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--line);border-radius:10px;overflow:hidden;margin:12px 0 4px}
 .wl-segk button{border:0;border-radius:0;background:none;box-shadow:none;color:var(--fg);font-weight:600;padding:9px}
@@ -597,11 +598,24 @@ function drawPicker() {
   $("wstate").hidden = true;
   if (box.hidden) return;
   const w = pickedNow();
-  $("wpickname").textContent = w ? w.name : (mainName(c) || "Your wallet");
+  // Labelled with its name and its protocol (2026-10-22).
+  $("wpickname").textContent = w ? `${w.name} · ${protoLabel(c, w.addr_kind)}`
+    : `${mainName(c) || "Your wallet"} · ${(kindNow() || mainKinds(c)[0]).label}`;
   $("wremove").hidden = !w;
   // Not redrawn under a finger: an open list stays as it was until it closes (it is drawn afresh on opening).
   if ($("wmenu").hidden) drawMenu();
   drawWalletState(w);
+}
+
+/** A chain's address types for this account's own wallet: its kinds, or the one ordinary (Legacy) address. */
+const mainKinds = (c) => (kinds(c).length ? kinds(c) : [{id: "legacy", label: "Legacy"}]);
+/** A protocol's name by its kind id ("legacy" where the chain has no kinds). */
+const protoLabel = (c, id) => ((kinds(c).find((x) => x.id === (id || "legacy"))) || {label: "Legacy"}).label;
+/** A wallet's line in the drop-down: its name, then its protocol. */
+function walletLabel(name, proto) {
+  const who = el("span", "who", name);
+  who.append(el("span", "wl-proto", ` · ${proto}`));
+  return who;
 }
 
 function drawMenu() {
@@ -617,10 +631,19 @@ function drawMenu() {
     o.onclick = () => { menu.hidden = true; $("wpick").setAttribute("aria-expanded", "false"); act(); };
     menu.append(o);
   };
-  option(el("span", "who", mainName(c) || "Your wallet"), `${coinsOf(c.spendable ?? c.balance)} ${COIN()}`, !w,
-         () => { pickWallet("main"); drawAll(); });
+  // This account's own wallet once per address type, each its own entry: name and protocol, and its balance.
+  const kNow = kindNow(), own = mainKinds(c);
+  for (const k of own) {
+    const first = k === own[0];
+    const seen = first ? null : kindSeen[`${c.network}:${k.id}`];
+    const bal = first ? `${coinsOf(c.spendable ?? c.balance)} ${COIN()}`
+      : seen && seen.balance != null ? `${coinsOf(seen.balance)} ${COIN()}` : "—";
+    option(walletLabel(mainName(c) || "Your wallet", k.label), bal, !w && (first ? !kNow : !!kNow && kNow.id === k.id),
+           () => { pickWallet("main"); keep(KIND + c.network, k.id); drawAll(); });
+    if (!first && (!seen || seen.balance == null)) loadKind(c, k).catch(() => {});
+  }
   for (const one of importedHere(c)) {
-    const who = el("span", "who", one.name);
+    const who = walletLabel(one.name, protoLabel(c, one.addr_kind));
     const tag = stateTag(one);
     if (tag) who.append(el("span", "wl-tag", tag));
     option(who, one.status && one.status.state === "ready" ? `${coinsOf(one.status.spendable)} ${COIN()}` : "—",
@@ -910,17 +933,12 @@ function drawHead() {
     return;
   }
   if (asset && asset.network !== c.network) asset = null;
-  const ks = asset ? [] : kinds(c), k = kindNow(), here = kindHere();
+  const k = kindNow(), here = kindHere();
+  // The address type is picked in the Wallet drop-down now, each its own wallet (2026-10-22: "The three
+  // different types of wallets should each get their own wallet in the Wallet drop-down instead of a separate
+  // drop-down"): no second picker on the card.
   const pick = $("addrkind");
-  pick.hidden = ks.length < 2;
-  if (ks.length > 1) {
-    pick.replaceChildren(...ks.map((one) => { const o = el("option", "", one.label); o.value = one.id; return o; }));
-    pick.value = (k || ks[0]).id;
-    pick.onchange = () => {
-      keep(KIND + c.network, pick.value);
-      drawAll();
-    };
-  }
+  pick.hidden = true;
   UNIT = asset ? asset.name : coinOf(c);
   const w = pickedNow();
   if (w) pick.hidden = true;
