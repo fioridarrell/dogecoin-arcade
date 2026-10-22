@@ -88,6 +88,33 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-22 To do: connect players' Chrome extension wallets (no code changed) (Claude)
+The operator: "We need Wallet connect to all of the Extension wallets." Players who keep their coins in a Chrome extension
+wallet should be able to connect it to the arcade and sign there. This would sit beside our own browser wallet and
+imported keys; it would not replace them. Nothing has been built yet. This is the request, written down for later.
+
+- **Goal:** a single "Connect wallet" button that lists every extension wallet the browser has, so the player can sign in
+  (the `accounts.login_message` challenge), see balances and Doginals, and sign sends, swaps and inscriptions in the
+  extension. The private key never reaches the arcade.
+- **Wallets to cover.** Each injects its own object into the page. The names below are from memory, so **confirm each API
+  before building**:
+  - MyDoge / MyDogeMask (`window.doge`): connect, send, DRC-20, inscriptions, PSBT signing
+  - DogeLabs Wallet (`window.dogeLabs`, a UniSat-style API: requestAccounts, signMessage, signPsbt)
+  - Nintondo (`window.nintondo`)
+  - any others found, including Pepecoin and Litecoin extension wallets, so every face and chain is covered
+- **Shape (game-agnostic, see the ground rules):**
+  - one adapter per wallet behind one small interface: connect, address, signMessage, signPsbt or signTx, send
+  - detect what is injected and list only the wallets the player has
+  - games keep calling the same `arcade.*` wallet API and never talk to an extension directly
+  - the per-game wallet permission box still applies
+- **Things to settle:**
+  - which arcade transactions can be expressed as PSBTs the extensions will sign (lock-script swaps, the P2SH referee
+    pools and inscription commit/reveal may need wallets that sign custom scripts)
+  - sign-in by signed message, with each wallet's message format
+  - testnet support, since many extensions are mainnet only
+  - whether WalletConnect itself (the relay protocol) is worth adding for phone wallets
+- Related: the 2026-10-22 "Repos to look at later" entry below (GreatApe42069 also forked mydogemask).
+
 ### 2026-10-22 Ords rings: no @tag on the arcs (Claude)
 The operator: "Remove the @tag labels from the rings." Each copy's arc in Admin -> Ords now says only how far it has walked
 ("57%"); who holds it is in the key under the rings, as before (admin.html, the rings' `label`).
