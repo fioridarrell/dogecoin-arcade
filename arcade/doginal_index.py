@@ -403,7 +403,7 @@ def _pct(part: Any, whole: Any) -> float | None:
 
 
 #: Questions the explorer asks (2026-10-21) that a walking arcade from before does not know.
-NEWER_QUESTIONS = ("number", "ticks", "holders")
+NEWER_QUESTIONS = ("number", "ticks", "holders", "note", "ticklist")
 
 
 def _first_page_of(token: dict | None) -> dict | None:
@@ -2105,6 +2105,10 @@ class DoginalIndex:
             return {"name": self.name(str(question.get("name") or ""))}
         if what == "on":
             return {"on": self.on(str(question.get("txid") or ""), int(question.get("vout") or 0))}
+        if what == "note":
+            return {"note": self.note(str(question.get("id") or ""))}
+        if what == "ticklist":
+            return {"ticklist": self.ticklist()}
         if what == "moves":                              # a snapshot being checked: this walk's moves, chunk by chunk
             from .ord_snapshot import MOVES_SAMPLE, moves_digest
             chunks = [int(c) for c in (question.get("chunks") or [])[:MOVES_SAMPLE]]
@@ -2326,6 +2330,14 @@ class DoginalIndex:
             {"tick": shown, "number": number, "supply": _shown(supply, dec), "minted": _shown(minted, dec),
              "minted_pct": _pct(minted, supply)} for _t, shown, number, supply, minted, dec in rows]}
 
+    def ticklist(self, most: int = 5000) -> list[str]:
+        """Every DRC-20 / PRC-20 tick as deployed (its `shown` spelling), in tick order, for the exchange's search
+        (2026-10-22: "The tokens should be added to the search of tokens with their ticker, followed by the
+        protocol"): one compact list, the primary key read in order."""
+        if self.store.old_layout:
+            return []
+        return [r[0] for r in self.store.q("SELECT shown FROM tok ORDER BY tick LIMIT ?", (max(1, int(most)),))]
+
     def rich_list(self, tick: str, page: Any = 0) -> dict | None:
         """2026-10-21: "When a ticker is selected it should show information about token and a list rich list
         of the token holders paginated to 20 holders." The token, and one page of its holders biggest first, each with
@@ -2380,6 +2392,17 @@ class DoginalIndex:
                   if len({got.get(r) for r in rules if got.get(r) is not None}) > 1]
         return {"names": len(firsts), "per_reading": {r: sum(1 for g in firsts.values() if r in g) for r in rules},
                 "different_first_claim": len(differ), "examples": differ[:limit]}
+
+    def note(self, iid: str) -> dict | None:
+        """A DRC-20 / PRC-20 transfer note not moved yet (2026-10-22, a swap's lock holds one: token20_swap): its tick,
+        amount in units and the owner it was inscribed to; None when the inscription is no such note -- never one,
+        refused by the rules (more than its owner had), or already moved."""
+        key = iid_parts(iid)
+        if not key or self.store.old_layout:
+            return None
+        rows = self.store.q("SELECT x.tick, x.amt, x.owner FROM xfer x JOIN insc i ON i.rid = x.rid "
+                            "WHERE substr(i.tx, 1, 8)=? AND i.tx=? AND i.n=?", (key[0][:8],) + key)
+        return {"tick": rows[0][0], "amt": rows[0][1], "owner": rows[0][2]} if rows else None
 
     def on(self, txid: str, vout: int) -> list[dict]:
         if self.store.old_layout:

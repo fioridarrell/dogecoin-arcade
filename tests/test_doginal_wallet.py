@@ -409,3 +409,90 @@ def test_a_drc20_send_is_three_offers_signed_and_broadcast_one_after_the_other(c
                                                   "decimals": 2}], "walked_to": 5_000_000}
     assert app.get("/account/token20?chain=doge").json()["balances"][0]["pending_units"] == "0", \
         "read from the chain: the index's own balance says it now"
+
+
+def test_a_token_lock_is_four_offers_and_ends_with_the_note_on_the_lock(client, monkeypatch, tmp_path):
+    """2026-10-22, PRC-20 / DRC-20 on the exchange (token20_swap): note 1 on this account's own address
+    (commit, reveal), the funding (note 1 to the lock, note 2's commit), then the lock (note 2 on the lock, the reserve
+    beside it), each signed and broadcast before the next; the amount held off the balance from the first."""
+    from arcade import htlc as H, rawchain, token20_send as t20, token20_swap as t20swap
+    from arcade.txbuild import p2pkh_script
+    app, state = client
+    doge, _ = _doge_account(app, state, monkeypatch, tmp_path)
+    key = _pubkey(int("31" * 32, 16))
+    assert app.post("/account/address", json={"address": ME, "chain": "doge", "coin_pubkey": key.hex()}).status_code \
+        == 200
+    buyer = _pubkey(int("41" * 32, 16))
+
+    class Index:
+        tip = 5_000_000
+
+        def lookup(self, q):
+            return {"balances": [{"tick": "dogi", "units": "1500", "transferable_units": "0", "decimals": 2}],
+                    "walked_to": 4_999_999}
+    monkeypatch.setattr(type(state), "ord_indexes", lambda self: {"doge": Index()})
+    sent: dict = {}
+
+    class Rpc:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def call(self, method, *args):
+            tx = rawchain.read_tx(bytes.fromhex(args[0] if method != "getrawtransaction" else sent[args[0]]))
+            vout = [{"n": n, "value": v / 1e8, "scriptPubKey": {"hex": s.hex()}} for n, (v, s) in enumerate(tx.vout)]
+            if method == "decoderawtransaction":
+                return {"vin": [{"txid": i["txid"], "vout": i["vout"]} for i in tx.vin], "vout": vout}
+            if method == "sendrawtransaction":
+                sent[tx.txid] = args[0]
+                return tx.txid
+            if method == "getrawtransaction":
+                return {"txid": tx.txid, "confirmations": 0, "vout": vout}
+            raise AssertionError(method)
+
+        def get_block_count(self):
+            return 5_000_000
+    real_rpc = type(doge).rpc
+    monkeypatch.setattr(type(doge), "rpc", lambda self: Rpc() if self.network == "doge" else real_rpc(self))
+
+    def sign(offer):
+        done = app.post("/account/sign", json={"offer": offer["offer"], "signatures": ["30" * 71] * len(
+            offer["sighashes"]), "pubkey": key.hex()})
+        assert done.status_code == 200, done.text
+        return done.json()["txid"]
+
+    secret, digest = H.make_secret()
+    redeem = H.redeem_script(digest, buyer, key, 1_900_000_000)
+    leg = {"kind": "token20", "asset": "dogi", "amount": 12}
+    too_much = app.post("/account/trade/lock20", json={"chain": "doge", "redeem": redeem.hex(),
+                                                       "leg": {**leg, "amount": 16}})
+    assert too_much.status_code == 400 and "more dogi" in too_much.json()["detail"], too_much.text
+    theirs = H.redeem_script(digest, key, buyer, 1_900_000_000)
+    assert "refund somebody else" in app.post("/account/trade/lock20", json={
+        "chain": "doge", "redeem": theirs.hex(), "leg": leg}).json()["detail"]
+    c = app.post("/account/trade/lock20", json={"chain": "doge", "redeem": redeem.hex(), "leg": leg}).json()
+    assert c["step"] == "commit" and c["note"] == '{"p":"drc-20","op":"transfer","tick":"dogi","amt":"12"}', c
+    assert c["lock"] == H.address_of(redeem, doge.params)
+    sign(c)
+    assert app.get("/account/token20?chain=doge").json()["balances"][0]["pending_units"] == "1200", "held from now"
+    r = app.post("/account/trade/lock20", json={"lock20": c["lock20"]}).json()
+    assert r["step"] == "reveal"
+    reveal = sign(r)
+    assert rawchain.read_tx(bytes.fromhex(sent[reveal])).vout == [(t20.POSTAGE, p2pkh_script(ME))]
+    f = app.post("/account/trade/lock20", json={"lock20": c["lock20"]}).json()
+    assert f["step"] == "fund" and (f["inputs"][0]["txid"], f["inputs"][0]["vout"]) == (reveal, 0)
+    fund = sign(f)
+    outs = rawchain.read_tx(bytes.fromhex(sent[fund])).vout
+    assert outs[0] == (t20.POSTAGE, H.p2sh_script(redeem)), "note 1, whole, to the lock: its first move"
+    pushes, note_redeem = t20.envelope(c["note"].encode(), key)
+    assert outs[1][1] == t20.commit_script(note_redeem), "and note 2's commit"
+    k = app.post("/account/trade/lock20", json={"lock20": c["lock20"]}).json()
+    assert k["step"] == "lock" and (k["inputs"][0]["txid"], k["inputs"][0]["vout"]) == (fund, 1)
+    lock = sign(k)
+    tx = rawchain.read_tx(bytes.fromhex(sent[lock]))
+    assert tx.vin[0]["script"].startswith(b"".join(pushes)), "note 2's envelope"
+    assert [o for o in tx.vout] == t20swap.lock_outputs(redeem, H.DOGINAL_RESERVE), "note 2 on the lock, reserve beside"
+    done = app.post("/account/trade/lock20", json={"lock20": c["lock20"]}).json()
+    assert done["step"] == "done" and done["lock_txid"] == lock and done["vout"] == 0

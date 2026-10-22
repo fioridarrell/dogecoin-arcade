@@ -72,30 +72,32 @@ def commit_script(redeem: bytes) -> bytes:
     return b"\xa9\x14" + hash160(redeem) + b"\x87"
 
 
-def reveal_fee(params, pushes: list[bytes], redeem: bytes, rate: int) -> int:
+def reveal_fee(params, pushes: list[bytes], redeem: bytes, rate: int, outputs: list | None = None) -> int:
     """The reveal's fee: its size known exactly but for the signature (73 at most), one sigop, and the soft-dust fee
-    of the POSTAGE output where the chain has one."""
+    of its outputs where the chain has one (the POSTAGE output, or `outputs`)."""
     script_sig = sum(len(p) for p in pushes) + 74 + len(push(redeem))
-    # version, input count, the outpoint, the scriptSig's length and itself, sequence, output count, the P2PKH output
-    # (value, length, 25 bytes), locktime
-    size = 4 + 1 + 36 + (1 if script_sig < 253 else 3) + script_sig + 4 + 1 + 8 + 1 + 25 + 4
-    outputs = [(POSTAGE, b"\x76\xa9\x14" + b"\x00" * 20 + b"\x88\xac")]
+    outputs = list(outputs) if outputs else [(POSTAGE, b"\x76\xa9\x14" + b"\x00" * 20 + b"\x88\xac")]
+    # version, input count, the outpoint, the scriptSig's length and itself, sequence, output count, the outputs
+    # (value, length, script), locktime
+    size = 4 + 1 + 36 + (1 if script_sig < 253 else 3) + script_sig + 4 + 1 + \
+        sum(8 + 1 + len(script) for _v, script in outputs) + 4
     soft = fees.soft_dust_fee(outputs) if getattr(params, "soft_dust", True) else 0
     return fees.fee_for(size, 1, fees.rate_for(params, rate)) + soft
 
 
-def build_reveal(params, commit: dict, pushes: list[bytes], redeem: bytes, address: str,
-                 what: str = "") -> Unsigned:
-    """The reveal, unsigned: the commit coin ({txid, vout, value}) in, the note's POSTAGE coin to `address` out, the
-    rest the fee. The browser signs over `redeem` (coins.js `noteKey` checks it is its own key's); the node puts the
-    envelope in front of the signature (funding.assemble, `envelope`)."""
+def build_reveal(params, commit: dict, pushes: list[bytes], redeem: bytes, address: str = "",
+                 what: str = "", outputs: list | None = None) -> Unsigned:
+    """The reveal, unsigned: the commit coin ({txid, vout, value}) in, the note's POSTAGE coin to `address` out (or
+    `outputs`, the note on the first one's first koinu: a swap's lock, token20_swap), the rest the fee. The browser
+    signs over `redeem` (coins.js `noteKey` checks it is its own key's); the node puts the envelope in front of the
+    signature (funding.assemble, `envelope`)."""
     value = int(commit["value"])
-    if value <= POSTAGE:
+    outputs = list(outputs) if outputs else [(POSTAGE, p2pkh_script(address))]
+    if value <= sum(v for v, _ in outputs):
         raise FundingError("the commit coin does not cover the note's coin")
-    outputs = [(POSTAGE, p2pkh_script(address))]
     given = [{"txid": str(commit["txid"]), "vout": int(commit["vout"]), "value": value,
               "address": b58check_encode(params.scripthash_version, hash160(redeem)),
               "redeem": redeem.hex(), "envelope": b"".join(pushes).hex()}]
     raw = build_raw_tx([(given[0]["txid"], given[0]["vout"])], outputs)
     return Unsigned(raw=raw, inputs=given, outputs=outputs, sighashes=[sighash(given, outputs, 0, redeem).hex()],
-                    fee=value - POSTAGE, change=0, what=what)
+                    fee=value - sum(v for v, _ in outputs), change=0, what=what)

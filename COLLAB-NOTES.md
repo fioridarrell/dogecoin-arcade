@@ -88,6 +88,33 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-22 DRC-20 / PRC-20 in the swap book: whole orders, cross-chain, the token locked as a note on the lock (Claude)
+The operator: "Add prc 20 and drc 20 tokens to the token/coin exchange", "list their PRC 20s in the exact same way that our
+current order book works", "added to the search of tokens with their ticker, followed by the protocol"; asked, "Yes,
+build it". Orders are taken whole as every swap-book order is (trade_orders: "a lock moves exactly its amount").
+* Why a note cannot just be sent into a lock: a transfer note credits on its FIRST move, so moving it into the lock
+  would give the tokens to the lock address and the claim would move nothing. arcade/token20_swap.py: the seller
+  inscribes note 1 on its own address, FUNDS the lock (one tx: note 1 to the lock -- its first move, the lock address
+  now holds the tokens -- and note 2's commit, so note 2 comes after it on the chain), then LOCKS (note 2's reveal, the
+  same amount, landing on the lock as output 0, the reserve as output 1: a Doginal lock's shape, so htlc.doginal_out
+  claims / refunds it, the claim being note 2's first move). Note 1's 0.001 coin stays at the lock address.
+* `token20_seen`: the lock counts only once a copy of the ord index has read note 2 as a valid note owned by the lock
+  address (new index question "note", DoginalIndex.note from `xfer`), with the agreed tick and amount in the reveal's
+  envelope; until then confirmations 0; `confirmations_for` is at least 1 for a token leg (Python and wallet_js).
+* Leg kind "token20": trade_orders `_side` / `parse_leg_key` / `one_chain_offer` (token20 + coin on one chain),
+  trade_messages, trade.py (lock_value 1, fund_value the Doginal reserve, check_lock as a Doginal's), app `_trade_leg`,
+  /account/trade/spend and /facts, node_trader (reads and claims a token lock; its own wallet never makes one),
+  wallet_js (tradeSpend, checkLock, lockValue, fundValue, canFund, swapFees, the lock step).
+* POST /account/trade/lock20 (door PUBLIC_POST): {chain, redeem, leg} checked against a complete index and the amount
+  on hand (less what is on its way, `_t20_pending`), then four offers in turn: commit, reveal, fund, lock; "done" with
+  `lock_txid` (the note at output 0). The tab's lock step runs them (wallet_js token20Post with the route).
+* The exchange: `_token20_choices` lists the reader's own ticks with whole tokens held and (search) every tick of the
+  chain from the most complete index (new question "ticklist", kept 10 min), keyed `<net>-token20-<tick>`, labelled
+  "frgy · PRC-20" / "dogi · DRC-20"; `_leg_info`, `_swap_amount`, `_side_label` name them; _tab_swaps.html lists them
+  in whole tokens and never delegates one (the node's wallet makes no token lock).
+Tests: tests/test_token20_swap.py (our walker: claimed -> the claimer's, refunded -> the seller's; the lock read as the
+other side reads it; the order rules), test_doginal_wallet.py (the four offers end to end). Not done: a real trade.
+
 ### 2026-10-22 Wallet drop-down: each address type is its own wallet, every wallet labelled "name · protocol" (Claude)
 The operator (a screenshot of L TEST's "Wallet 1" picker over a separate "Native SegWit" select): "The three different
 types of wallets should each get their own wallet in the Wallet drop-down instead of a separate drop-down. Each one of

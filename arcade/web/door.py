@@ -453,6 +453,8 @@ PUBLIC_POST = ("/auth/challenge", "/auth/login", "/auth/logout",
                "/account/doginal-txs",
                # a DRC-20 / PRC-20 send of the caller's own tokens: its three offers, one after the other
                "/account/token20/send",
+               # a DRC-20 / PRC-20 token into the caller's own trade lock: its four offers, one after the other
+               "/account/trade/lock20",
                # starring a market: the caller's own list of favorites, nothing else
                "/account/favorites",
                # the page holding this account's listed swaps is open (order_presence)

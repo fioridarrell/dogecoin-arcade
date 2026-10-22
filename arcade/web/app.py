@@ -10099,7 +10099,8 @@ def create_app(state: AppState) -> FastAPI:
     def _swap_amount(leg: dict, n: int) -> str:
         """'1,000 GOLD', '1.14 DOGE', '1 Skull #7': a lock-script swap leg as people say it."""
         amount = ("1" if leg["kind"] in ("nft", "doginal") else format_amount(n, leg["divisible"])
-                  if leg["kind"] == "token" else f"{n / COIN:,.8f}".rstrip("0").rstrip("."))
+                  if leg["kind"] == "token" else f"{int(n):,}" if leg["kind"] == "token20"
+                  else f"{n / COIN:,.8f}".rstrip("0").rstrip("."))
         return f"{amount} {leg['name']}"
 
     def _account_counts(request: Request) -> dict:
@@ -17420,10 +17421,17 @@ def create_app(state: AppState) -> FastAPI:
         Only what moving it needs -- the keys are the lock script's own."""
         leg = said if isinstance(said, dict) else {}
         kind = str(leg.get("kind") or "coin")
-        if kind not in ("coin", "token", "nft", "doginal"):
-            raise ValueError("a lock holds a coin, a token, an NFT or a Doginal")
+        if kind not in ("coin", "token", "nft", "doginal", "token20"):
+            raise ValueError("a lock holds a coin, a token, an NFT, a Doginal or a DRC-20 / PRC-20 token")
         asset = str(leg.get("asset") or "").lower()
         amount = int(leg.get("amount") or 0)
+        if kind == "token20":
+            # A DRC-20 / PRC-20 token (2026-10-22): its tick and a whole number of tokens (token20_swap).
+            from ..trade_orders import TICK20, TOKEN20_MAX
+            if chain.network not in ("doge", "main") or not TICK20.match(asset) or not 0 < amount <= TOKEN20_MAX:
+                raise ValueError("a DRC-20 / PRC-20 leg names its tick and a whole number of tokens, on Dogecoin or "
+                                 "Pepecoin mainnet")
+            return tradelib.Leg(chain.network, kind, asset, amount, "", "")
         if kind == "doginal":
             # A tab's own Doginal swaps (2026-10-15: "Build the things that are not built").
             from ..doginals import INSCRIPTION_ID
@@ -17564,6 +17572,8 @@ def create_app(state: AppState) -> FastAPI:
                 offer = _offers.add(account.pubkey, chain.network, unsigned, unsigned.what)
                 return JSONResponse({"offer": offer.id, "lock": htlclib.address_of(redeem, chain.params),
                                      "chain": chain.network, **unsigned.as_json()})
+            elif leg.kind == "token20":
+                raise ValueError("a DRC-20 / PRC-20 token goes into its lock in four steps: /account/trade/lock20")
             else:
                 raise ValueError("a coin goes into its lock with an ordinary send")
             address = htlclib.address_of(redeem, chain.params)
@@ -17579,6 +17589,147 @@ def create_app(state: AppState) -> FastAPI:
         offer = _offers.add(account.pubkey, chain.network, unsigned, unsigned.what)
         return JSONResponse({"offer": offer.id, "lock": address, "chain": chain.network,
                              **unsigned.as_json()})
+
+    #: DRC-20 / PRC-20 locks being made (token20_swap): id -> where it stands. In memory, as offers are.
+    _t20_locks: dict[str, dict] = {}
+
+    @app.post("/account/trade/lock20")
+    def account_trade_lock20(request: Request, payload: Any = Body(None)):
+        """Put a DRC-20 / PRC-20 token into one of this account's own trade locks (token20_swap; 2026-10-22:
+        PRC-20 / DRC-20 on the exchange): four offers, each signed by the tab and broadcast by /account/sign.
+
+        * `{chain, redeem, leg}` (and the leg's operator `fee`): checked against a complete copy of the ord index,
+          then note 1's COMMIT is offered; the answer carries `lock20` (its id) and the note.
+        * `{lock20}` again after each broadcast: note 1's REVEAL (on this account's own address), the FUNDING (note 1
+          to the lock, and note 2's commit), then the LOCK (note 2 on the lock, its reserve beside it); then "done"
+          with the lock's txid (`lock_txid`, the note at output 0)."""
+        from .. import htlc as htlclib, token20_send as t20, token20_swap as t20swap
+        account = _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        now = time.time()
+        for k, v in list(_t20_locks.items()):
+            if now - v["at"] > T20_SEND_SECONDS:
+                _t20_locks.pop(k, None)
+        lid = str(said.get("lock20") or "")
+        try:
+            if lid:
+                run = _t20_locks.get(lid)
+                if run is None or run["pubkey"] != account.pubkey:
+                    raise ValueError("that lock is not one this arcade is making (it may have expired): start again")
+                chain = next(c for c in state.token_chains if c.network == run["chain"])
+                return JSONResponse(_t20_lock_next(account, chain, run))
+            htlclib, chain, owner, redeem, lock = _lock_for(account, said)
+            key = _coin_pubkey(account.pubkey, chain)
+            if lock["refunder"] != key:
+                raise ValueError("that lock would refund somebody else; only lock your own")
+            leg = _trade_leg(said.get("leg"), chain, account)
+            if leg.kind != "token20":
+                raise ValueError("this route locks a DRC-20 / PRC-20 token")
+            cut = (_trade_operator(said.get("leg"), chain) or (0, ""))[0]
+            index = state.ord_indexes().get(chain.network)
+            if index is None:
+                raise ValueError("this arcade has no ord index of that chain")
+            got = index.lookup({"what": "balances", "owner": owner})
+            guard = fundinglib.guard_on(chain.network)
+            tip = int(index.tip or 0) or (guard._tip() if guard is not None else 0)
+            if not tip or int(got.get("walked_to") or 0) < tip - doginalslib.INDEX_READY_LAG:
+                raise ValueError("the arcades' ord index is not at the chain's tip yet: a token lock waits for it, so "
+                                 "the balance it is checked against is the whole one")
+            row = next((b for b in got.get("balances") or [] if str(b.get("tick")).lower() == leg.asset), None)
+            if row is None:
+                raise ValueError(f"this wallet holds no {leg.asset}")
+            units = leg.amount * 10 ** int(row.get("decimals") or 0)
+            on_way = _t20_pending_units(chain, owner, int(got.get("walked_to") or 0)).get(leg.asset, 0)
+            if units > int(row.get("units") or 0) - int(row.get("transferable_units") or 0) - on_way:
+                raise ValueError(f"that is more {row['tick']} than this wallet has to trade")
+            content = t20.note(t20.PROTOCOL[chain.network], str(row["tick"]), str(leg.amount))
+            pushes, note_redeem = t20.envelope(content, key)
+            outs = t20swap.lock_outputs(redeem, htlclib.DOGINAL_RESERVE + cut)
+            commit2 = sum(v for v, _ in outs) + t20.reveal_fee(chain.params, pushes, note_redeem,
+                                                                fees.MIN_FEE_PER_KB, outs)
+            commit1 = t20.POSTAGE + t20.reveal_fee(chain.params, pushes, note_redeem, fees.MIN_FEE_PER_KB)
+            with contextlib.closing(state.token_index(chain).open()) as db:
+                unsigned = fundinglib.build(db, chain.params, owner, [(commit1, t20.commit_script(note_redeem))],
+                                            rate=fees.MIN_FEE_PER_KB,
+                                            what=f"lock {leg.amount} {row['tick']} for a swap (1 of 4: the commit)",
+                                            exclude=_flights.spent_by(account.pubkey, chain.network),
+                                            extra=_flights.change_for(account.pubkey, chain.network))
+            _quota(account, "send")
+            lid = secrets.token_urlsafe(12)
+            run = {"pubkey": account.pubkey, "chain": chain.network, "address": owner, "tick": str(row["tick"]),
+                   "amount": str(leg.amount), "note": content.decode(), "pushes": [x.hex() for x in pushes],
+                   "redeem": note_redeem.hex(), "lock_redeem": redeem.hex(), "outs": [[v, sc.hex()] for v, sc in outs],
+                   "commit_value": commit1, "commit2": commit2, "step": "commit", "txids": {}, "at": now}
+            _t20_locks[lid] = run
+            offer = _offers.add(account.pubkey, chain.network, unsigned, unsigned.what,
+                                done=lambda txid, r=run, u=units: _t20_committed(r, u, txid))
+            return JSONResponse({"lock20": lid, "step": "commit", "of": 4, "offer": offer.id, "note": run["note"],
+                                 "lock": htlclib.address_of(redeem, chain.params), "chain": chain.network,
+                                 **unsigned.as_json()})
+        except (fundinglib.FundingError, ValueError, RpcError) as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        except Exception as exc:                          # noqa: BLE001 -- no copy of the index answered, the node...
+            return JSONResponse({"detail": str(exc)[:300]}, status_code=503)
+
+    def _t20_lock_next(account, chain, run: dict) -> dict:
+        """The next offer of a token lock being made, once the one before it went out."""
+        from .. import token20_send as t20
+        step, txids = run["step"], run["txids"]
+        pushes = [bytes.fromhex(x) for x in run["pushes"]]
+        note_redeem = bytes.fromhex(run["redeem"])
+        if step == "commit":
+            if not txids.get("commit"):
+                raise ValueError("the commit has not gone out yet: sign it first")
+            unsigned = t20.build_reveal(chain.params, {"txid": txids["commit"], "vout": _t20_vout_of(
+                chain, txids["commit"], t20.commit_script(note_redeem), run["commit_value"]),
+                "value": run["commit_value"]}, pushes, note_redeem, run["address"],
+                what=f"lock {run['amount']} {run['tick']} for a swap (2 of 4: the note)")
+            run["step"] = "reveal"
+            offer = _offers.add(account.pubkey, chain.network, unsigned, unsigned.what,
+                                done=lambda t, r=run: r["txids"].__setitem__("reveal", t))
+            return {"step": "reveal", "of": 4, "offer": offer.id, "note": run["note"], "chain": chain.network,
+                    **unsigned.as_json()}
+        if step == "reveal":
+            if not txids.get("reveal"):
+                raise ValueError("the note has not gone out yet: sign it first")
+            coin = {"txid": txids["reveal"], "vout": 0, "value": t20.POSTAGE, "address": run["address"]}
+            lock_script = bytes.fromhex(run["outs"][0][1])
+            with contextlib.closing(state.token_index(chain).open()) as db:
+                unsigned = fundinglib._doginal_first(
+                    db, run["address"], coin, "", lock_script, [(run["commit2"], t20.commit_script(note_redeem))],
+                    fees.MIN_FEE_PER_KB, _flights.spent_by(account.pubkey, chain.network),
+                    _flights.change_for(account.pubkey, chain.network),
+                    what=f"lock {run['amount']} {run['tick']} for a swap (3 of 4: the tokens to the lock)",
+                    vouched=True)
+            run["step"] = "fund"
+            offer = _offers.add(account.pubkey, chain.network, unsigned, unsigned.what,
+                                done=lambda t, r=run: r["txids"].__setitem__("fund", t))
+            return {"step": "fund", "of": 4, "offer": offer.id, "note": run["note"], "chain": chain.network,
+                    **unsigned.as_json()}
+        if step == "fund":
+            if not txids.get("fund"):
+                raise ValueError("the funding has not gone out yet: sign it first")
+            outs = [(int(v), bytes.fromhex(sc)) for v, sc in run["outs"]]
+            unsigned = t20.build_reveal(chain.params, {"txid": txids["fund"], "vout": 1, "value": run["commit2"]},
+                                        pushes, note_redeem, what=f"lock {run['amount']} {run['tick']} for a swap "
+                                        "(4 of 4: the lock)", outputs=outs)
+            run["step"] = "lock"
+            offer = _offers.add(account.pubkey, chain.network, unsigned, unsigned.what,
+                                done=lambda t, r=run: (r["txids"].__setitem__("lock", t), r.__setitem__("step", "done")))
+            return {"step": "lock", "of": 4, "offer": offer.id, "note": run["note"], "chain": chain.network,
+                    **unsigned.as_json()}
+        if step == "done":
+            return {"step": "done", "lock_txid": txids["lock"], "vout": 0, "txids": txids}
+        raise ValueError(f"the {step} has not gone out yet: sign it first")
+
+    def _t20_vout_of(chain, txid: str, script: bytes, value: int) -> int:
+        """Which output of `txid` pays `script` exactly `value` (a commit: the note's own coin)."""
+        with chain.rpc() as rpc:
+            tx = rpc.call("getrawtransaction", txid, 1)
+        for out in tx.get("vout") or []:
+            if (out.get("scriptPubKey") or {}).get("hex") == script.hex() and round(float(out["value"]) * 1e8) == value:
+                return int(out["n"])
+        raise ValueError("the commit on the chain is not the one this lock made")
 
     @app.post("/account/trade/spend")
     def account_trade_spend(request: Request, payload: Any = Body(None)):
@@ -17607,8 +17758,9 @@ def create_app(state: AppState) -> FastAPI:
             leg = _trade_leg(said.get("leg"), chain, account)
             # A claim pays the other side's operator the fee its lock holds; a refund gives everything back.
             operator = _trade_operator(said.get("leg"), chain) if kind == "claim" else None
-            if leg.kind == "doginal":
-                # Two inputs under the lock: the Doginal (output 0), then its reserve (output 1) as the fee.
+            if leg.kind in ("doginal", "token20"):
+                # Two inputs under the lock: the Doginal (output 0), then its reserve (output 1) as the fee. A DRC-20 /
+                # PRC-20 lock is the same shape (token20_swap): its note at output 0, the claim the note's first move.
                 with chain.rpc() as rpc:
                     beside = rpc.call("gettxout", txid, 1, True)
                 if vout != 0 or beside is None or beside["scriptPubKey"]["hex"] != out["scriptPubKey"]["hex"]:
@@ -17789,6 +17941,15 @@ def create_app(state: AppState) -> FastAPI:
                     if htlclib.parse(redeem) is None or guard is None:
                         raise ValueError("name the lock script to read a Doginal lock (and this node must check them)")
                     seen = doginal_seen(seen, leg, redeem, rpc, guard)
+                elif leg.kind == "token20" and seen is not None:
+                    # Counted once a copy of the ord index has read the lock's note as valid and the lock's own.
+                    from .. import htlc as htlclib, token20_swap as t20swap
+                    redeem = bytes.fromhex(str(said.get("redeem") or ""))
+                    index = state.ord_indexes().get(chain.network)
+                    if htlclib.parse(redeem) is None or index is None:
+                        raise ValueError("name the lock script to read a token lock (and this arcade must read the "
+                                         "chain's ord index)")
+                    seen = t20swap.token20_seen(seen, leg, redeem, rpc, index, chain.params)
                 elif leg.kind != "coin" and seen is not None:
                     # The ledger's word on the token or NFT at that lock (node_trader.asset_seen).
                     from ..node_trader import asset_seen
@@ -28350,6 +28511,57 @@ def create_app(state: AppState) -> FastAPI:
         return P.MetaDExCancelPair(property_id_for_sale=sale["property_id"],
                                    property_id_desired=want["property_id"])
 
+    #: Each chain's DRC-20 / PRC-20 ticks, as the most complete ord index lists them: network -> (when, [tick]).
+    _ticklists: dict[str, tuple[float, list[str]]] = {}
+
+    def _token20_choices(where: dict, everything: bool) -> list[dict[str, Any]]:
+        """DRC-20 / PRC-20 tokens for the exchange's boxes (2026-10-22: "Add prc 20 and drc 20 tokens to the
+        token/coin exchange" ... "with their ticker, followed by the protocol"): the reader's own, with how many whole
+        tokens it holds, then (`everything`) every tick of the chain. Keyed `<net>-token20-<tick>`, traded in whole
+        tokens (trade_orders.TICK20)."""
+        from ..trade_orders import TICK20
+        word = {"doge": "DRC-20", "main": "PRC-20"}
+        out: list[dict[str, Any]] = []
+        indexes = state.ord_indexes()
+        for net, proto in word.items():
+            index = indexes.get(net)
+            if index is None or not any(c.network == net for c in state.token_chains):
+                continue
+            mine: dict[str, dict] = {}
+            for address in (where.get(net) or ([], []))[0]:
+                try:
+                    rows = index.lookup({"what": "balances", "owner": address}).get("balances") or []
+                except Exception:                          # noqa: BLE001 -- no copy answered: none listed as held
+                    rows = []
+                for row in rows:
+                    tick = str(row.get("tick") or "")
+                    whole = (int(row.get("units") or 0) - int(row.get("transferable_units") or 0)) \
+                        // 10 ** int(row.get("decimals") or 0)
+                    if whole <= 0 or not TICK20.match(tick.lower()):
+                        continue
+                    one = mine.setdefault(tick.lower(), {"key": f"{net}-token20-{tick.lower()}", "kind": "token20",
+                                                         "net": net, "name": tick, "divisible": False,
+                                                         "label": f"{tick} \u00b7 {proto}", "mine": True, "whole": 0})
+                    one["whole"] += whole
+            for one in mine.values():
+                one["held"] = f"{one.pop('whole'):,}"
+            out += sorted(mine.values(), key=lambda t: t["label"].lower())
+            if everything:
+                kept = _ticklists.get(net)
+                if kept is None or time.time() - kept[0] > 600:
+                    try:
+                        kept = (time.time(), list(index.lookup({"what": "ticklist"}).get("ticklist") or []))
+                    except Exception:                      # noqa: BLE001 -- asked again next time
+                        kept = (time.time() - 540, kept[1] if kept else [])
+                    _ticklists[net] = kept
+                for tick in kept[1]:
+                    if tick.lower() in mine or not TICK20.match(str(tick).lower()):
+                        continue
+                    out.append({"key": f"{net}-token20-{str(tick).lower()}", "kind": "token20", "net": net,
+                                "name": tick, "divisible": False, "label": f"{tick} \u00b7 {proto}",
+                                "mine": False, "held": ""})
+        return out
+
     def _pair_choices(request: Request, viewer: str, everything: bool = False) -> list[dict[str, Any]]:
         """What the "Start a market" box offers (2026-10-15: every pair the same way):
         the coin of every chain this node runs, then the tokens and pieces this reader holds on
@@ -28440,6 +28652,7 @@ def create_app(state: AppState) -> FastAPI:
                 raise
             except Exception:
                 log.debug("what is held on %s could not be read", c.network, exc_info=True)
+        out += _token20_choices(where, everything)
         # A bid is usually for a token you do not hold yet (2026-10-15: "You should be able
         # to start a market with a bid or an ask"): any token, by its number.
         for c in chains:
@@ -28942,6 +29155,11 @@ def create_app(state: AppState) -> FastAPI:
                 raise ValueError("a Doginal is on Dogecoin, a Pepinal on Pepecoin mainnet")
             return {**leg, "divisible": False, "name": _doginal_name(leg["asset"]), "prop": None,
                     "chain": chain, "ready": True, "key": f"{net}-doginal-{leg['asset']}"}
+        if leg["kind"] == "token20":
+            # A DRC-20 / PRC-20 token, traded in whole tokens (token20_swap): "frgy · PRC-20".
+            proto = "DRC-20" if chain.is_doge else "PRC-20"
+            return {**leg, "divisible": False, "name": f"{leg['asset']} \u00b7 {proto}", "prop": None,
+                    "chain": chain, "ready": True, "key": f"{net}-token20-{leg['asset']}"}
         index = state.token_index(chain)
         if leg["kind"] == "token":
             prop = index.property(int(leg["asset"]))
@@ -30367,6 +30585,8 @@ def create_app(state: AppState) -> FastAPI:
             return f"{amount / COIN:g} {NETWORKS[net].coin}"
         if kind == "doginal":
             return _doginal_name(str(side["asset"]))
+        if kind == "token20":
+            return f"{amount:,} {side['asset']} \u00b7 {'DRC-20' if net == 'doge' else 'PRC-20'}"
         index = None
         try:
             ctx = next((c for c in state.token_chains if c.network == net), None)
