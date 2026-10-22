@@ -28562,6 +28562,31 @@ def create_app(state: AppState) -> FastAPI:
                                 "mine": False, "held": ""})
         return out
 
+    @app.get("/exchange/token20/search")
+    def exchange_token20_search(q: str = ""):
+        """DRC-20 / PRC-20 ticks starting with what was typed, for the exchange's search boxes (2026-10-22:
+        "added to the search of tokens with their ticker, followed by the protocol"): a dozen at most, from the most
+        complete copy of each chain's ord index; nothing for less than one character."""
+        from ..trade_orders import TICK20
+        typed = str(q or "").strip().lower()[:16]
+        out: list[dict[str, Any]] = []
+        if typed:
+            indexes = state.ord_indexes()
+            for net, proto in (("main", "PRC-20"), ("doge", "DRC-20")):
+                index = indexes.get(net)
+                if index is None or not any(c.network == net for c in state.token_chains):
+                    continue
+                try:
+                    first = (index.lookup({"what": "ticks", "prefix": typed}).get("ticks") or {}).get("first") or []
+                except Exception:                          # noqa: BLE001 -- that chain's index cannot say just now
+                    first = []
+                for row in first:
+                    tick = str(row.get("tick") or "")
+                    if TICK20.match(tick.lower()):
+                        out.append({"value": f"{net}-token20-{tick.lower()}", "label": f"{tick} \u00b7 {proto}",
+                                    "net": net, "kind": "token20", "name": tick, "div": 0})
+        return JSONResponse({"results": out[:12]}, headers={"Cache-Control": "public, max-age=60"})
+
     def _pair_choices(request: Request, viewer: str, everything: bool = False) -> list[dict[str, Any]]:
         """What the "Start a market" box offers (2026-10-15: every pair the same way):
         the coin of every chain this node runs, then the tokens and pieces this reader holds on
@@ -28652,7 +28677,9 @@ def create_app(state: AppState) -> FastAPI:
                 raise
             except Exception:
                 log.debug("what is held on %s could not be read", c.network, exc_info=True)
-        out += _token20_choices(where, everything)
+        # Only the reader's own: every tick of a chain is thousands (2026-10-22: the page was 1.9 MB with them); the
+        # search box asks /exchange/token20/search as it is typed into.
+        out += _token20_choices(where, False)
         # A bid is usually for a token you do not hold yet (2026-10-15: "You should be able
         # to start a market with a bid or an ask"): any token, by its number.
         for c in chains:

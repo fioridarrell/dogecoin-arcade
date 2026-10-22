@@ -65,6 +65,7 @@ PUBLIC_PAGES = frozenset({
     "/create/chain",          # which chain this browser creates on (a cookie, no spending)
     "/inscriptions",
     "/exchange",
+    "/exchange/token20/search",       # DRC-20 / PRC-20 ticks as they are typed into the exchange's search boxes
     "/exchange/pairs",            # the "open a pair" box: two token ids to a token/token pair's page
     "/games",                 # every inscribed game (arcade/games.py)
     "/account/escrows",       # an account's own escrows (needs a session)

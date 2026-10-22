@@ -88,6 +88,13 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-22 Exchange search: DRC-20 / PRC-20 ticks looked up as typed, not all in the page (Claude)
+With every tick of both chains in the pair boxes (about 400 PRC-20 and 4,900 DRC-20, twice), /exchange?tab=swaps was
+1.9 MB. `_pair_choices` now carries only the reader's own DRC-20 / PRC-20 (with whole tokens held); new GET
+/exchange/token20/search?q= (door PUBLIC_PAGES, cached 60 s) answers the ticks starting with what was typed from the
+most complete copy of each chain's index ("ticks"), a dozen at most, "frgy · PRC-20"; exchange.html's pick box asks it
+on the other half and adds what comes back to the select behind it. Test: tests/test_token20_swap.py.
+
 ### 2026-10-22 DRC-20 / PRC-20 in the swap book: whole orders, cross-chain, the token locked as a note on the lock (Claude)
 The operator: "Add prc 20 and drc 20 tokens to the token/coin exchange", "list their PRC 20s in the exact same way that our
 current order book works", "added to the search of tokens with their ticker, followed by the protocol"; asked, "Yes,

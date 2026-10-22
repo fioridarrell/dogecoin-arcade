@@ -11,6 +11,7 @@ from arcade.txbuild import p2pkh_script
 
 from test_doginal_index import FUND, Chain, _tx_to  # noqa: E402
 from test_ord_rules import TEXT, _drc, _json, _walk  # noqa: E402
+from test_web import app_state, client  # noqa: F401,E402
 
 SELLER = bytes.fromhex("02" + "11" * 32)
 BUYER = bytes.fromhex("03" + "22" * 32)
@@ -162,3 +163,29 @@ def test_a_token_order_names_its_tick_and_whole_tokens_and_waits_for_a_confirmat
     get = T.Leg("doge", "coin", "", 5 * 10 ** 8, SELLER.hex(), BUYER.hex())
     assert T.confirmations_for(give, get) == 1 and T.lock_value(give) == 1
     assert T.fund_value(give) == T.doginal_reserve(give)
+
+
+def test_the_exchange_looks_ticks_up_as_typed_and_never_lists_them_all(client, monkeypatch):
+    """2026-10-22: every tick of both chains in the page made it 1.9 MB. The page carries the reader's own; the box asks
+    /exchange/token20/search as it is typed into: "tick · PRC-20", a dozen at most."""
+    from arcade.web import door
+    app, state = client
+    asked = []
+
+    class Index:
+        tip = 0
+
+        def lookup(self, q):
+            asked.append(q)
+            if q["what"] == "ticks":
+                return {"ticks": {"count": 2, "first": [{"tick": "frgy"}, {"tick": "frog"}]}}
+            return {"balances": []}
+    monkeypatch.setattr(type(state), "ord_indexes", lambda self: {"main": Index()})
+    got = app.get("/exchange/token20/search?q=FR").json()["results"]
+    assert [r["label"] for r in got] == ["frgy · PRC-20", "frog · PRC-20"] and got[0]["value"] == "main-token20-frgy"
+    assert asked == [{"what": "ticks", "prefix": "fr"}]
+    assert app.get("/exchange/token20/search?q=").json()["results"] == []
+    assert "/exchange/token20/search" in door.PUBLIC_PAGES
+    assert "ticklist" not in str(asked)
+    page = app.get("/exchange?tab=swaps").text
+    assert "/exchange/token20/search?q=" in page
