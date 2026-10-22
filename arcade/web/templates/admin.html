@@ -1228,7 +1228,8 @@ section.panel h2{margin-top:0}
       var s0 = run[0] / ready, e0 = run[1] / ready;
       if (e0 - s0 < 1e-4) return;
       if (run[2] >= 3) three += e0 - s0;
-      svg += '<path d="' + arc(s0, Math.max(s0 + 1e-4, e0 - .001), 76) + '" fill="none" stroke="' + AGREE_COL[run[2]]
+      // edge to edge: a gap between runs showed the dark page through as black ticks (2026-10-22, 157 runs on PEP)
+      svg += '<path d="' + arc(s0, e0, 76) + '" fill="none" stroke="' + AGREE_COL[run[2]]
         + '" stroke-width="7"><title>' + (run[2] ? run[2] + (run[2] >= 3 ? '+' : '') + ' arcade' + (run[2] === 1 ? '' : 's')
         + ' agreeing' : 'not said yet') + '</title></path>';
     });
