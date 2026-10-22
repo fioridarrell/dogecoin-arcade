@@ -56,12 +56,18 @@ class Unknown(Exception):
 class Doginals:
     """What sits on each output of a transaction, read from the chain (and an ord-style server, when set), remembered."""
 
-    def __init__(self, path: Path, fetch=None, rpc_factory=None):
+    def __init__(self, path: Path, fetch=None, rpc_factory=None, index=None):
         self.path = Path(path)
         self.fetch = fetch or self._fetch
         # The Dogecoin node, when this arcade runs one: each small output is traced back to its inscription on the chain
         # itself (no index), 2026-10-15: Anti Doginal Dog #1089 on a 0.01 DOGE coin, which an outside index did not know.
         self.rpc_factory = rpc_factory
+        # The chain's own ord index (arcade/doginal_index.py), when it has one: () -> DoginalIndex or None. Then no
+        # output is traced back any more (2026-10-22, a wallet of 6,000+ Doginals traced one by one for hours:
+        # "stop the scan for doginals using our old backwards scanning technique ... Mark all of the small transactions
+        # as protected until scanned. And then wait until the new Doginals index is complete before scanning them").
+        self.index = index
+        self._tip_at = (0.0, 0)
         self._lock = threading.Lock()
         with self._db() as db:
             # `tx2`: answers that include the chain's own reading. The old `tx` table held an outside index's word alone.
@@ -104,6 +110,10 @@ class Doginals:
             unsure = any(i.get("unknown") for on in kept.values() for i in on)
             if not unsure or time.time() - float(row[1]) < UNKNOWN_RETRY:
                 return kept
+            # Protected, waiting for the index: nothing to read again while it is still walking (no call at all).
+            if all(i.get("wait") for on in kept.values() for i in on if i.get("unknown")) \
+                    and self._index_now() is not None and self._index_walked() is None:
+                return kept
         try:
             said = self.fetch(txid) or {}
         except Exception as exc:                            # noqa: BLE001
@@ -118,12 +128,84 @@ class Doginals:
                 continue
             held.setdefault(vout, []).append({"id": ins.get("inscription_id"), "offset": ins.get("sat_offset")})
         if self.rpc_factory is not None:
-            self._add_traced(txid, held)
+            index = self._index_now()
+            if index is not None:
+                self._add_indexed(index, txid, held)
+            else:
+                self._add_traced(txid, held)
         elif self.fetch == self._fetch and not (SOURCE == "ord" and ORD_URL):
             raise Unknown("this node reads no chain for inscriptions, and no ord-style server is set")
         with self._lock, self._db() as db:
             db.execute("INSERT OR REPLACE INTO tx2 VALUES (?,?,?)", (txid, json.dumps(held), time.time()))
         return held
+
+    def _index_now(self):
+        if self.index is None:
+            return None
+        try:
+            return self.index() or _NO_INDEX
+        except Exception:                                   # noqa: BLE001 -- not opened yet: protected meanwhile
+            return _NO_INDEX
+
+    def _tip(self) -> int:
+        at, tip = self._tip_at
+        if time.time() - at < 30:
+            return tip
+        with self.rpc_factory() as rpc:
+            tip = int(rpc.call("getblockcount"))
+        self._tip_at = (time.time(), tip)
+        return tip
+
+    def _index_walked(self) -> int | None:
+        """The block the most complete copy of the chain's ord index has walked to -- this arcade's own walk or a linked
+        walker's on the same rules (DoginalIndex.walkers) -- once it is within INDEX_READY_LAG of the tip; None while
+        no copy is complete (every small coin protected meanwhile)."""
+        index = self._index_now()
+        if index is None or index is _NO_INDEX:
+            return None
+        try:
+            own = index.walker.next_height() if index.mode() == "walk" and not index.store.old_layout else 0
+            walked = max([own] + [h for _n, h in index.walkers()])
+            tip = int(index.tip or 0) or self._tip()
+        except Exception:                                   # noqa: BLE001
+            return None
+        return walked if walked and walked >= tip - INDEX_READY_LAG else None
+
+    def _add_indexed(self, index, txid: str, held: dict[int, list[dict]]) -> None:
+        """Add what the chain's ord index says sits on each small output of `txid` (its "on" question, asked of the most
+        complete copy: DoginalIndex.lookup) -- once a copy is complete and has walked past the block holding `txid`.
+        Until then each small output is protected without naming anything ({"id": None, "unknown": True, "wait":
+        "index"}), as an unfinished trace was, and nothing is traced."""
+        try:
+            with self.rpc_factory() as rpc:
+                tx = rpc.call("getrawtransaction", txid, 1)
+        except Exception as exc:                            # noqa: BLE001 -- the node is the second opinion
+            raise Unknown(f"the node could not read {txid}: {exc}") from exc
+        small = [int(o["n"]) for o in tx.get("vout") or []
+                 if not held.get(int(o["n"])) and round(float(o["value"]) * 1e8) <= TRACE_MAX]
+        if not small:
+            return
+        walked = self._index_walked()
+        confirmations = int(tx.get("confirmations") or 0)
+        height = None
+        if walked is not None and confirmations:
+            try:
+                height = self._tip() - confirmations + 1
+            except Exception:                               # noqa: BLE001
+                height = None
+        for n in small:
+            said = None
+            if height is not None and height < walked:
+                try:
+                    said = index.lookup({"what": "on", "txid": txid, "vout": n})
+                except Exception:                           # noqa: BLE001 -- no copy answered: protected, asked again
+                    said = None
+                if said is not None and int(said.get("walked_to") or 0) <= height:
+                    said = None                             # answered by a copy not past this coin's block yet
+            if said is None:
+                held[n] = [{"id": None, "offset": None, "unknown": True, "wait": "index"}]
+            elif said.get("on"):
+                held[n] = [{"id": i.get("id"), "offset": i.get("offset")} for i in said["on"]]
 
     def _add_traced(self, txid: str, held: dict[int, list[dict]]) -> None:
         """Add what the chain itself says sits on each small output of `txid` that nothing was named on yet: an
@@ -269,6 +351,11 @@ TRACE_MAX = 10_000_000          # koinu (0.1 DOGE)
 TRACE_TXS = 600
 #: A coin whose walk is not finished yet is asked about again after this long (each ask goes TRACE_TXS further).
 UNKNOWN_RETRY = 60
+#: An ord index counts as complete once it has walked to within this many blocks of the tip (a walker stays about a
+#: dozen behind on purpose, for reorgs).
+INDEX_READY_LAG = 30
+#: An index that could not be opened yet: every small coin protected, nothing traced.
+_NO_INDEX = object()
 
 
 class TraceIncomplete(Exception):

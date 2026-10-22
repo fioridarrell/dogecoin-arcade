@@ -88,6 +88,19 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-22 Doginals guard: no more backwards tracing where the chain has an ord index (Claude)
+The operator (an imported wallet of 6,000+ small Doginal coins, each walked back by `doginals.trace` for hours): "stop the
+scan for doginals using our old backwards scanning technique ... Mark all of the small transactions as protected until
+scanned. And then wait until the new Doginals index is complete before scanning them". Now `Doginals(index=...)` (wired
+in app.py for every chain in doginal_index.STARTS: doge, main, ltc, ltctest) never traces: `_add_indexed` reads the
+transaction once and, while no copy of the ord index (this arcade's walk or a linked walker's on the same rules) is
+within `INDEX_READY_LAG` (30) blocks of the tip, files each small output (<= TRACE_MAX) as protected `{"id": None,
+"unknown": True, "wait": "index"}` -- out of every ordinary send, named nothing; asked again after UNKNOWN_RETRY with no
+read at all while the index still walks. Once a copy is complete and past the coin's block, the "on" question
+(`DoginalIndex.lookup`, the most complete copy) says what sits there. Answers already kept (traced before) stay.
+An index that is not opened yet protects too. The wallet page says "N small coins are protected until the arcades'
+Doginal index reaches the chain's tip". Consequence: a Doginal that reaches a wallet before Dogecoin's index is complete
+can't be sent, listed or swapped until then (Pepecoin's index is complete: answered at once). Tests: tests/test_doginals.py.
 ### 2026-10-22 To do: connect players' Chrome extension wallets (no code changed) (Claude)
 The operator: "We need Wallet connect to all of the Extension wallets." Players who keep their coins in a Chrome extension
 wallet should be able to connect it to the arcade and sign there. This would sit beside our own browser wallet and

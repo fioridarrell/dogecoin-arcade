@@ -153,3 +153,82 @@ def test_a_walk_too_long_for_one_ask_goes_on_from_where_it_stopped(tmp_path, mon
     assert g.held(chain.last) == {0: [{"id": "g0" * 32 + "i0", "offset": 0}]}, "found, 31 steps deep"
     assert asks == 3, asks                                   # 32 steps at 8 an ask: the 4th walk finds it
     assert len(calls) < 31 + 4 * 3, f"each ask went on from where the last stopped ({len(calls)} reads)"
+
+
+class _IndexChain(_Chain):
+    """_Chain that also says each transaction's confirmations and the tip, and counts every read."""
+
+    def __init__(self, hops, tip=5000):
+        super().__init__(hops)
+        self.tip, self.reads = tip, 0
+        for n, t in enumerate(self.txs.values()):
+            t["confirmations"] = 100 - n
+
+    def call(self, method, *args):
+        self.reads += 1
+        if method == "getblockcount":
+            return self.tip
+        return self.txs[args[0]]
+
+
+class _Index:
+    """A DoginalIndex as the guard sees it: its own walk, linked walkers, and the "on" answer."""
+
+    def __init__(self, walked, tip=5000, on=None):
+        self.walked, self.tip, self.on, self.asked = walked, tip, on or {}, []
+        self.store = type("S", (), {"old_layout": False})()
+        self.walker = type("W", (), {"next_height": lambda _s: self.walked})()
+
+    def mode(self):
+        return "help"
+
+    def walkers(self):
+        return [("peer", self.walked)]
+
+    def lookup(self, q):
+        self.asked.append((q["txid"], q["vout"]))
+        return {"on": self.on.get((q["txid"], q["vout"]), []), "walked_to": self.walked}
+
+
+def test_with_an_ord_index_no_coin_is_traced_and_small_ones_wait_protected_until_it_is_complete(tmp_path, monkeypatch):
+    """2026-10-22, a wallet of 6,000+ Doginals traced back one by one for hours: "stop the scan for doginals using
+    our old backwards scanning technique ... Mark all of the small transactions as protected until scanned. And then
+    wait until the new Doginals index is complete before scanning them". Nothing is walked back; while no copy of the
+    index is within INDEX_READY_LAG of the tip each small coin is protected (kept out of sends, named nothing) at one
+    read of its transaction, and asked again without a read; once one is, the index says what sits on it."""
+    chain = _IndexChain(60)
+    index = _Index(walked=1000, on={(chain.last, 0): [{"id": "g0" * 32 + "i0", "offset": 0}]})
+    g = doginals.Doginals(tmp_path / "d.sqlite", fetch=lambda t: {"txid": t, "inscriptions": []},
+                          rpc_factory=lambda: chain, index=lambda: index)
+    on = g.held(chain.last)
+    assert on == {0: [{"id": None, "offset": None, "unknown": True, "wait": "index"}]}
+    assert chain.reads <= 2, f"no walk back ({chain.reads} reads)"
+    assert g.spendable([{"txid": chain.last, "vout": 0, "value": 100_000}]) == [], "protected"
+    monkeypatch.setattr(doginals, "UNKNOWN_RETRY", 0)
+    reads = chain.reads
+    assert g.held(chain.last)[0][0]["wait"] and chain.reads == reads, "still walking: kept, nothing read"
+    assert index.asked == []
+    index.walked = chain.tip - 12                            # a copy at the tip, as a walker keeps it
+    assert g.held(chain.last) == {0: [{"id": "g0" * 32 + "i0", "offset": 0}]}
+    assert index.asked == [(chain.last, 0)]
+    assert chain.reads - reads <= 3, "the index answered: no walk back"
+
+
+def test_a_coin_newer_than_the_complete_index_waits_for_it_and_a_clean_one_may_go(tmp_path, monkeypatch):
+    chain = _IndexChain(3)
+    index = _Index(walked=chain.tip - 12)
+    g = doginals.Doginals(tmp_path / "d.sqlite", fetch=lambda t: {"txid": t, "inscriptions": []},
+                          rpc_factory=lambda: chain, index=lambda: index)
+    chain.txs[chain.last]["confirmations"] = 2              # mined after the index's last block
+    assert g.held(chain.last)[0][0]["wait"] == "index" and index.asked == []
+    monkeypatch.setattr(doginals, "UNKNOWN_RETRY", 0)
+    chain.txs[chain.last]["confirmations"] = 40
+    assert g.held(chain.last) == {}, "the index found nothing on it"
+    assert g.spendable([{"txid": chain.last, "vout": 0, "value": 100_000}])
+
+
+def test_an_index_not_opened_yet_protects_rather_than_traces(tmp_path):
+    chain = _IndexChain(60)
+    g = doginals.Doginals(tmp_path / "d.sqlite", fetch=lambda t: {"txid": t, "inscriptions": []},
+                          rpc_factory=lambda: chain, index=lambda: None)
+    assert g.held(chain.last)[0][0]["wait"] == "index" and chain.reads <= 2

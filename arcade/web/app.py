@@ -828,14 +828,23 @@ def create_app(state: AppState) -> FastAPI:
     fundinglib.GUARD_BY_NET = {}
     if getattr(state, "home", None) is not None:
         from .. import doginals as _doginals, rpc as _rpclib
+        from ..doginal_index import STARTS as _ORD_STARTS
         _guards = []
+
+        def _ord_index_of(net: str):
+            """The chain's ord index, for its guard (no backwards tracing where there is one, 2026-10-22)."""
+            if net not in _ORD_STARTS:
+                return None
+            return lambda: state.ord_indexes().get(net)
         if getattr(state, "doge", None) is not None:
-            fundinglib.GUARD = _doginals.Doginals(Path(state.home) / "doginals.sqlite", rpc_factory=state.doge.rpc)
+            fundinglib.GUARD = _doginals.Doginals(Path(state.home) / "doginals.sqlite", rpc_factory=state.doge.rpc,
+                                                    index=_ord_index_of("doge"))
             fundinglib.GUARD_BY_NET["doge"] = fundinglib.GUARD
             _guards.append(fundinglib.GUARD)
         _main = next((c for c in state.all_chains if c.network == "main"), None)
         if _main is not None:
-            _pep = _doginals.Doginals(Path(state.home) / "pep-inscriptions.sqlite", rpc_factory=_main.rpc)
+            _pep = _doginals.Doginals(Path(state.home) / "pep-inscriptions.sqlite", rpc_factory=_main.rpc,
+                                      index=_ord_index_of("main"))
             _version = NETWORKS["main"].pubkeyhash_version
 
             def _on_pep_main(address: str, _v=_version) -> bool:
@@ -856,7 +865,8 @@ def create_app(state: AppState) -> FastAPI:
             # Taproot inscriptions sent to a legacy Litecoin address are not seen by it (a witness
             # adapter is a later, Litecoin-only step; docs/litecoin.md says so). L test the same, on
             # its own versions only: its older P2SH byte 196 is Pepecoin testnet's too.
-            _ltc = _doginals.Doginals(Path(state.home) / _lfile, rpc_factory=_lchain.rpc)
+            _ltc = _doginals.Doginals(Path(state.home) / _lfile, rpc_factory=_lchain.rpc,
+                                      index=_ord_index_of(_lchain.network))
             _ltc_versions = {_lchain.params.pubkeyhash_version, _lchain.params.scripthash_version}
             if _lchain.network == "ltc":
                 _ltc_versions.add(5)
@@ -13649,7 +13659,8 @@ def create_app(state: AppState) -> FastAPI:
                 out[txid] = None
                 continue
             out[txid] = [{"vout": vout, "inscription_id": i.get("id"), "sat_offset": i.get("offset"),
-                          "unknown": bool(i.get("unknown"))} for vout, on in sorted(held.items()) for i in on]
+                          "unknown": bool(i.get("unknown")), "wait": bool(i.get("wait"))}
+                         for vout, on in sorted(held.items()) for i in on]
         return JSONResponse({"chain": one.network, "address": address, "txs": out},
                             headers={"Cache-Control": "no-store"})
 
@@ -13680,7 +13691,8 @@ def create_app(state: AppState) -> FastAPI:
         except D.Unknown as exc:
             return JSONResponse({"detail": str(exc)}, status_code=503)
         return JSONResponse({"txid": txid, "inscriptions": [
-            {"vout": vout, "inscription_id": i.get("id"), "sat_offset": i.get("offset"), "unknown": bool(i.get("unknown"))}
+            {"vout": vout, "inscription_id": i.get("id"), "sat_offset": i.get("offset"), "unknown": bool(i.get("unknown")),
+             "wait": bool(i.get("wait"))}
             for vout, on in sorted(held.items()) for i in on]})
 
     @app.post("/account/doginal/send")

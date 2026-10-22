@@ -1956,7 +1956,7 @@ async function dgAsk(net, txid) {
   if (said.txid && said.txid !== txid) throw new Error("the node answered about another transaction");
   const held = (said.inscriptions || []).filter((i) => i && i.vout != null)
     .map((i) => ({vout: Number(i.vout), id: i.inscription_id == null ? null : String(i.inscription_id),
-                  offset: i.sat_offset ?? null, unknown: !!i.unknown}));
+                  offset: i.sat_offset ?? null, unknown: !!i.unknown, wait: !!i.wait}));
   if (!held.some((i) => i.unknown)) {
     try { localStorage.setItem(DG_TX + net + "." + txid, JSON.stringify(held)); } catch (e) { /* read again next time */ }
   }
@@ -2067,7 +2067,7 @@ async function dgAskMany(net, address, txids) {
     if (one === null) { out[t] = null; continue; }               // unreadable just now
     const held = one.filter((i) => i && i.vout != null)
       .map((i) => ({vout: Number(i.vout), id: i.inscription_id == null ? null : String(i.inscription_id),
-                    offset: i.sat_offset ?? null, unknown: !!i.unknown}));
+                    offset: i.sat_offset ?? null, unknown: !!i.unknown, wait: !!i.wait}));
     if (!held.some((i) => i.unknown)) {
       try { localStorage.setItem(DG_TX + net + "." + t, JSON.stringify(held)); } catch (e) { /* asked again later */ }
     }
@@ -2145,8 +2145,16 @@ async function drawDoginals() {
     status.push(el("p", "wl-note", `Checking ${(txids.length - left.length).toLocaleString()} of `
       + `${txids.length.toLocaleString()} small coins' transactions… (each is checked once, then remembered)`));
   }
-  if (unread.length) {
-    status.push(el("p", "wl-note", `${unread.length} small coin${unread.length === 1 ? "" : "s"} could not be traced all `
+  // Waiting for the arcades' ord index (2026-10-22): protected, never traced back one by one any more.
+  const waiting = unread.filter((coin) => (dg.answers[coin.txid] || []).some((i) => i.vout === coin.vout && i.wait));
+  if (waiting.length) {
+    status.push(el("p", "wl-note", `${waiting.length.toLocaleString()} small coin${waiting.length === 1 ? " is" : "s are"} `
+      + `protected until the arcades' ${W} index reaches the chain's tip: kept out of ordinary sends meanwhile, then `
+      + `checked against the index.`));
+  }
+  if (unread.length > waiting.length) {
+    const n = unread.length - waiting.length;
+    status.push(el("p", "wl-note", `${n} small coin${n === 1 ? "" : "s"} could not be traced all `
       + "the way back, so they are kept out of ordinary sends in case they carry one."));
   }
   if (!left.length && !dg.failed && !found.length) {
