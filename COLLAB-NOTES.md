@@ -88,6 +88,12 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-22 Tokens tab: an empty DRC-20 list while the index walks says "none found yet", with how far it has read (Claude)
+The operator: "Add drc-20 balances to doge wallet tokens." The section was there (drawToken20), but for his imported address
+the most complete Dogecoin index (@strawberry, at block 4,766,321 of ~6.43 M) has not reached his DRC-20 activity, and
+the page said "No DRC-20 tokens on your address" as if final. While the index is short of the tip it now says "No DRC-20
+tokens found yet ... read the chain up to block X of Y (Z%), and balances appear here as it reaches them".
+
 ### 2026-10-22 Ord walk goes to 2 blocks under the tip (chunks stay 12 under) (Claude)
 The operator: "On strawberry ... 100% index for Pepe ORD's but now we are about 11 blocks behind. Why can't strawberry keep up
 with the confirmed blocks?" It was by design: the walk stopped at tip - SETTLE (12). Asked, the operator chose 2 blocks. New

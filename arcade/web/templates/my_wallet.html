@@ -1828,7 +1828,17 @@ async function drawToken20(box, c) {
     rows.push(el("p", "wl-note", `${word} balances can't be read right now: ${got.detail || "no arcade's index answered"}. `
       + "Asked again in a minute."));
   } else {
-    if (!got.balances.length) rows.push(el("div", "wl-empty", `No ${word} tokens on ${w ? w.name + "'s" : "your"} address.`));
+    const walked = Number(got.walked_to || 0), tip = Number(got.tip || 0);
+    const reading = walked && tip && walked < tip - 30;
+    // 2026-10-22 ("Add drc-20 balances to doge wallet tokens"): an empty list while the index still walks is not
+    // "none" -- it is "none found yet", with how far the index has read.
+    if (!got.balances.length) {
+      rows.push(el("div", "wl-empty", reading
+        ? `No ${word} tokens found yet on ${w ? w.name + "'s" : "your"} address: the arcades' index has read the chain up `
+          + `to block ${walked.toLocaleString()} of ${tip.toLocaleString()} (${Math.floor(100 * walked / tip)}%), and `
+          + "balances appear here as it reaches them."
+        : `No ${word} tokens on ${w ? w.name + "'s" : "your"} address.`));
+    }
     for (const b of got.balances) {
       const row = el("div", "wl-tok");
       const av = el("span", "wl-av", String(b.tick || "?").slice(0, 1).toUpperCase());
@@ -1839,8 +1849,7 @@ async function drawToken20(box, c) {
       row.append(av, mid, el("span", "wl-amt", units20(b.units, b.decimals)));
       rows.push(row);
     }
-    const walked = Number(got.walked_to || 0), tip = Number(got.tip || 0);
-    if (walked && tip && walked < tip - 30) {
+    if (reading && got.balances.length) {
       rows.push(el("p", "wl-note", `Read from the arcades' ord index, at block ${walked.toLocaleString()} of `
         + `${tip.toLocaleString()}: these balances update as it walks.`));
     }
