@@ -205,8 +205,9 @@ def test_a_coin_carrying_a_doginal_is_held_not_spendable(client, monkeypatch, tm
     assert row["spendable"] == row["balance"] - 200_000 - int(row.get("leaving") or 0) + int(row.get("incoming") or 0)
     assert row["spendable"] == 300_000_000, "the plain coin is still spendable"
     page = app.get("/me/wallet").text
-    assert ('held in ${c.network === "doge" ? "Doginals" : (c.network === "ltc" || c.network === "ltctest") ? '
-            '"Litecoin inscriptions" : c.network === "main" ? "Pepinals" : "inscriptions"}') in page
+    assert ('const inscWord = c.network === "doge" ? "Doginals" : (c.network === "ltc" || c.network === "ltctest") ? '
+            '"Litecoin inscriptions" : c.network === "main" ? "Pepinals" : "inscriptions";') in page
+    assert "held in ${inscWord}" in page
 
 
 def test_someone_elses_wallet_shows_their_doginals_with_an_offer(client, monkeypatch, tmp_path):
