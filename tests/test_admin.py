@@ -215,6 +215,12 @@ def test_the_ords_tab_lists_each_chain_with_its_official_start_and_saves_its_mod
     for net, r in rows.items():
         assert r["base"] == dx.STARTS[net] and r["source"]
     assert rows["main"]["mode"] == "help"
+    # 2026-10-22, the operator: the four choices "are not registering the clicks". Each of them, chosen right after a read
+    # (the status is kept 20 s), shows at once.
+    for mode in ("walk", "read", "off", "help"):
+        assert app.post("/admin/api/ords", headers={**LOCAL, **WRITE}, json={"net": "main", "mode": mode}).json()["ok"]
+        again = {r["net"]: r for r in app.get("/admin/api/ords", headers=LOCAL).json()["rows"]}
+        assert again["main"]["mode"] == mode, mode
     assert all(isinstance(r["disk"], int) and r["disk"] >= 0 for r in rows.values()), "each index's size on disk"
     assert all(isinstance(r["copies"], list) and isinstance(r["others"], list) for r in rows.values()), "the ring"
     assert all(r["icon"].startswith("/coin-") for r in rows.values()), "each chain's coin"

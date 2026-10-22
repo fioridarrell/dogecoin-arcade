@@ -25323,6 +25323,9 @@ def create_app(state: AppState) -> FastAPI:
                 continue
             index = indexes.get(net)
             st = index.status() if index is not None else {"mode": "off", "base": STARTS[net]}
+            # The mode as set now, never the status kept for 20 s (2026-10-22: the four choices "are not
+            # registering the clicks" -- the redraw after a click showed the kept mode and turned the choice back).
+            st = {**st, "mode": state.ord_mode(net)}
             tip = st.get("tip") or 0
             if not tip:
                 try:
@@ -25409,6 +25412,9 @@ def create_app(state: AppState) -> FastAPI:
         if net not in STARTS or mode not in MODES:
             return JSONResponse({"detail": "a chain, and walk, help or off"}, status_code=400)
         state.set_setting(f"ord_index:{net}", mode)
+        index = state.ord_indexes().get(net)
+        if index is not None:
+            index._status_kept = None                  # worked out again at the next ask, with the new mode
         return JSONResponse({"ok": True, "net": net, "mode": mode})
 
     @app.get("/admin/api/ords/lookup")

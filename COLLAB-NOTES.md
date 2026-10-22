@@ -88,6 +88,13 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-22 Admin -> Ords: the four choices register at once (Claude)
+The operator: "The operator cannot change how they interact with the ords. Read only help or keep a complete index buttons are
+not registering the clicks." The choice was saved, but the redraw right after read the index's status, kept 20 s
+(`DoginalIndex.STATUS_SECONDS`), whose `mode` was the old one, so the radio turned back. `GET /admin/api/ords` now
+gives each row the mode as set now (`state.ord_mode`), and `POST` clears that index's kept status. tests/test_admin.py
+checks all four (walk, read, off, help) show at once.
+
 ### 2026-10-21 Ords ring: the inner circle by agreement (Claude)
 The operator: "the inner circle should be red when there is a single node that has the index it should be yellow if there are
 two nodes with agreeing index, and it should be green when there are three". `DoginalIndex.status()` now gives
