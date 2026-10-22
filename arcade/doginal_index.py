@@ -2029,9 +2029,19 @@ class DoginalIndex:
         # Where along the chain how many arcades agree (2026-10-21: the Ords ring's inner circle "red when there
         # is a single node that has the index ... yellow if there are two nodes with agreeing index, and ... green when
         # there are three"): runs of chunks [first, last + 1, agreeing], agreeing 0 (nobody said it yet) to 3 (3 or more).
+        # 2026-10-22 (the operator: "The inner circle is not displaying correctly yet"): counted by the arcades HOLDING each
+        # chunk -- every walker whose walk has passed it -- not only those that scanned it and said its word (an arcade
+        # stitching another's notes never says one, so stretches two arcades hold showed red or grey). A chunk whose
+        # words disagree counts only as many as agree on its most-said word.
+        reached = sorted(int(h or 0) for _n, h in self.holders())
         runs: list[list[int]] = []
         for c in range(ready):
-            k = min(agreeing.get(c, 0), 3)
+            end = chunk_range(c, self.base)[1]
+            k = sum(1 for h in reached if h >= end)
+            words = per.get(c) or {}
+            if len(set(words.values())) > 1:
+                k = min(k, agreeing.get(c, 0))
+            k = min(k, 3)
             if runs and runs[-1][2] == k and runs[-1][1] == c:
                 runs[-1][1] = c + 1
             else:

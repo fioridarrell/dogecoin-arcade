@@ -95,7 +95,10 @@ two nodes with agreeing index, and it should be green when there are three". `Do
 capped at 3 (0: nobody yet). admin.html `ordRing` draws the thin inner ring from them: red 1, yellow 2, green 3+,
 grey 0 (each run titled on hover); the centre says the share of the chain with 3 agreeing. Runs are drawn edge to edge
 (2026-10-22: a 0.1% gap after each of PEP's 157 runs showed the page through as black ticks). Rings A, B, C are now
-red, yellow, green (ORD_COLORS), the inner ring's own three colours, as the operator asked. Before, it counted how far
+red, yellow, green (ORD_COLORS), the inner ring's own three colours, as the operator asked. 2026-10-22 ("The inner circle is
+not displaying correctly yet"): agree_runs now count the arcades HOLDING each chunk (every walker whose walk has
+passed it, DoginalIndex.holders) -- an arcade stitching another's notes never says a chunk's word, so stretches two
+arcades held showed red or grey -- and a chunk whose words disagree counts only as many as agree. Before, it counted how far
 each copy reached (2+ green, 1 amber), whether or not their words agreed. Test: tests/test_doginal_index.py
 `test_the_status_says_how_many_arcades_agree_along_the_chain`.
 

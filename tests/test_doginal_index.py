@@ -1004,17 +1004,17 @@ def test_a_small_machine_never_fetches_the_whole_index(tmp_path, monkeypatch):
     assert "free disk" in small.snapshots.may_fetch(10 ** 15), "and a big one with too little room says so"
 
 
-def test_the_status_says_how_many_arcades_agree_along_the_chain(tmp_path):
-    """2026-10-21: the Ords ring's inner circle red where one arcade alone has said a stretch, yellow where two
-    agree, green where three or more do; agree_runs are [first chunk, last + 1, agreeing (0-3)]."""
+def test_the_status_says_how_many_arcades_hold_each_stretch_and_agree(tmp_path, monkeypatch):
+    """2026-10-21/22: the Ords ring's inner circle red where one arcade holds a stretch, yellow where two do,
+    green where three or more do -- counted by the walks that have passed each chunk, a chunk whose words disagree
+    counting only as many as agree. agree_runs are [first chunk, last + 1, holding-and-agreeing (0-3)]."""
     chain = Chain()
     index = _walker(tmp_path, chain)
-    index.tip = dx.BASE + 6 * dx.CHUNK - 1 + dx.SETTLE               # six whole chunks ready
+    index.tip = dx.BASE + 6 * dx.CHUNK - 1 + dx.SETTLE                 # six whole chunks ready
+    C = dx.CHUNK
+    holders = [("", dx.BASE + 5 * C), ("b" * 64, dx.BASE + 3 * C), ("c" * 64, dx.BASE + 1 * C)]
+    monkeypatch.setattr(index, "holders", lambda: holders)
     st = index.store
-    st.say(0, "", "h0", 1)                                             # chunk 0: one alone
-    st.say(1, "", "h1", 0); st.say(1, "b" * 64, "h1", 0)               # chunk 1: two agree
-    st.say(2, "", "h2", 0); st.say(2, "b" * 64, "h2", 0); st.say(2, "c" * 64, "h2", 0); st.say(2, "d" * 64, "h2", 0)
-    st.say(3, "", "x", 0); st.say(3, "b" * 64, "y", 0)                 # chunk 3: two differ -> one agreeing
-    st.say(5, "", "h5", 0); st.say(5, "b" * 64, "h5", 0)               # chunk 4: nobody; chunk 5: two
-    runs = index._status_now()["agree_runs"] if hasattr(index, "_status_now") else index.status()["agree_runs"]
-    assert runs == [[0, 1, 1], [1, 2, 2], [2, 3, 3], [3, 4, 1], [4, 5, 0], [5, 6, 2]]
+    st.say(2, "", "x", 0); st.say(2, "b" * 64, "y", 0)                  # chunk 2: two hold it but disagree
+    runs = index.status()["agree_runs"]
+    assert runs == [[0, 1, 3], [1, 2, 2], [2, 5, 1], [5, 6, 0]], runs   # chunk 2 disagrees: 1, as chunks 3-4 held by one

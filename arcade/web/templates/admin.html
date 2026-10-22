@@ -1348,8 +1348,9 @@ section.panel h2{margin-top:0}
     ring.appendChild(ordEl('h3', '', 'The copies of the index'));
     ring.appendChild(ordEl('div', 'muted', '<span style="font-size:.84rem">Each ring is one whole copy of this chain’s '
       + 'index, drawn as far as it reaches. Two copies keep it safe if an arcade goes offline; a third ring opens as more '
-      + 'arcades take part. The thin ring inside shows how many arcades agree on each part: red one alone, yellow two '
-      + 'agreeing, green three or more, grey not said by any arcade yet.</span>'));
+      + 'arcades take part. The thin ring inside shows how many arcades hold each part and agree on it: red one alone, '
+      + 'yellow two, green three or more, grey none yet. Where their words for a part differ, it counts only those that '
+      + 'agree.</span>'));
     ring.appendChild(ordEl('div', '', ordRing(r)));
     var legend = copies.map(function (c, k) {
       return '<div style="display:flex;gap:8px;align-items:baseline;margin:4px 0"><span style="width:12px;height:12px;border-radius:3px;'
