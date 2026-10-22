@@ -88,6 +88,10 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-22 Ords rings: no @tag on the arcs (Claude)
+The operator: "Remove the @tag labels from the rings." Each copy's arc in Admin -> Ords now says only how far it has walked
+("57%"); who holds it is in the key under the rings, as before (admin.html, the rings' `label`).
+
 ### 2026-10-22 Repos to look at later for the arcade (no code changed) (Claude)
 The operator asked to note these for possible future use. Nothing has been taken or run yet. All of it was read through the GitHub
 API. **Check the license before copying anything:** GPL-3 code is for ideas only. Where no license file exists, the code is all

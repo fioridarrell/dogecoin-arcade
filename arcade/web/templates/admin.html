@@ -1213,7 +1213,9 @@ section.panel h2{margin-top:0}
       if (!c) return;
       var f = Math.max(c.frac || 0, .004), id = 'ordarc-' + r.net + '-' + k;
       svg += '<path id="' + id + '" d="' + arc(0, f, rad) + '" fill="none" stroke="' + ORD_COLORS[k] + '" stroke-width="22"/>';
-      var label = ordName(c) + (c.frac == null ? '' : ' ' + Math.round(c.frac * 100) + '%');
+      // The share walked only: the arcade is named in the key below (2026-10-22: "Remove the @tag labels").
+      var label = c.frac == null ? '' : Math.round(c.frac * 100) + '%';
+      if (!label) return;
       if (f * 2 * Math.PI * rad > label.length * 6.2 + 12) {
         svg += '<text dy="4" style="font:600 10.5px system-ui;fill:#fff"><textPath href="#' + id + '" startOffset="50%" '
           + 'text-anchor="middle">' + ordEsc(label) + '</textPath></text>';
