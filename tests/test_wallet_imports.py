@@ -574,6 +574,14 @@ def test_a_core_still_rescanning_is_said_so_with_its_countdown(client, monkeypat
     said = app.post("/account/imported/rescan", json={"chain": "ltctest", "address": asked["address"]}).json()
     assert said["state"] == "rescan" and said["says"].startswith("This arcade's node is rescanning the whole chain")
     assert "no node to borrow" not in said["says"] and said["eta"] > 0
+    # The Core's log read (core_log): its own share done, block and pace said instead of the guess.
+    from arcade import core_log
+    monkeypatch.setattr(core_log, "rescan_progress",
+                        lambda params, now=None: {"block": 5471263, "progress": 0.597658, "eta": 7200})
+    said = app.post("/account/imported/rescan", json={"chain": "ltctest", "address": asked["address"]}).json()
+    assert said["pct"] == 59.8 and said["block"] == 5471263 and said["eta"] == 7200 and "then" not in said
+    assert "59.8% done (block 5,471,263), about " in said["says"], said
+    monkeypatch.setattr(core_log, "rescan_progress", lambda params, now=None: None)
     # One sent before this wallet was imported: that one, then one more for it.
     state.set_setting("core_rescan_sent:ltctest", {"at": time.time() - 10, "addresses": ["someone else"]})
     said = app.post("/account/imported/rescan", json={"chain": "ltctest", "address": asked["address"]}).json()

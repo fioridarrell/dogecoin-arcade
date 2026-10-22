@@ -88,6 +88,17 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-22 Rescan %: the Core's own progress line, read from its debug.log (Claude)
+The operator: "Can we include rescan % to Arcade from RPC?" Dogecoin Core 1.14.9's RPC says nothing of a rescan (no
+`scanning` in getwalletinfo; the rescan holds the locks most calls need), so the RPC cannot. What it does write each
+minute is `Still rescanning. At block N. Progress=F` in debug.log. New `arcade/core_log.py` reads the tail of the
+chain's log (the datadir its config names, ~/<node_dir>, /var/lib/<coin>d), kept 20 s, only a line under 3 minutes
+old, and the countdown from the pace of the last half hour of lines. `_core_rescan_said` puts it in the wallet notice
+("59.8% done (block 5,471,263), about 2 hours left") with `pct`/`block` in the JSON; the wallet page draws a bar.
+No readable log: the arcade's guess, as before. On .25 the Core runs as `dogecoin` and keeps its log 0600, so the
+operator lets robin read it once (group + g+r; the dir is already g+x). Tests: tests/test_core_log.py, and the
+countdown test in test_wallet_imports.py.
+
 ### 2026-10-22 Ord snapshots: a fetch that gets nothing for 10 minutes is let go of (Claude)
 The operator: "@yourfirstname's node is stuck on block 186,920 for Pepe coin". Its hello said walk, rules 4, walked to the
 chain's first block, helped 0, while its Pepecoin Core was synced to the tip (1,261,353, seen in a test machine's getpeerinfo

@@ -290,6 +290,7 @@ a.wl-act:hover{text-decoration:none}
 .wl-wstate.wait{background:color-mix(in srgb,var(--accent) 12%,transparent);border:1px solid color-mix(in srgb,var(--accent) 40%,transparent)}
 .wl-wstate.none{background:color-mix(in srgb,var(--bad) 9%,transparent);border:1px solid color-mix(in srgb,var(--bad) 35%,transparent)}
 .wl-wstate.good{background:color-mix(in srgb,var(--ok) 10%,transparent);border:1px solid color-mix(in srgb,var(--ok) 35%,transparent)}
+.wl-rescanbar{display:block;width:100%;height:8px;margin-top:8px;accent-color:var(--accent)}
 .wl-segk{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--line);border-radius:10px;overflow:hidden;margin:12px 0 4px}
 .wl-segk button{border:0;border-radius:0;background:none;box-shadow:none;color:var(--fg);font-weight:600;padding:9px}
 .wl-segk button[aria-pressed="true"]{background:var(--accent);color:var(--accent-fg)}
@@ -645,7 +646,10 @@ function drawWalletState(w) {
     st.className = "wl-wstate " + (said1.state === "ready" ? "good" : said1.state === "none" ? "none" : "wait");
     const head = said1.state === "none" ? "No rescan yet. " : said1.state !== "ready" ? "A rescan is taking place. "
       : /^Imported\b/.test(said1.says) ? "" : "Imported. ";
-    st.replaceChildren(...(head ? [el("strong", "", head)] : []), said1.says);
+    // The Core's own share done, when its log can be read (2026-10-22: "include rescan %").
+    const bar = typeof said1.pct === "number" && said1.state === "rescan" ? el("progress", "wl-rescanbar") : null;
+    if (bar) { bar.max = 100; bar.value = said1.pct; bar.title = said1.pct.toFixed(1) + "%"; }
+    st.replaceChildren(...(head ? [el("strong", "", head)] : []), said1.says, ...(bar ? [bar] : []));
     st.hidden = false;
   }
 }

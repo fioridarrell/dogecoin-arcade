@@ -23918,6 +23918,27 @@ def create_app(state: AppState) -> FastAPI:
         except Exception:                                  # noqa: BLE001
             return False
 
+    def _core_rescan_said(chain, says: dict) -> dict:
+        """The notice of a whole-chain rescan on this arcade's Core, with the Core's own word on how far it is when its
+        log can be read (core_log; 2026-10-22: "include rescan % ... from RPC" -- the RPC of a 1.14 Core says
+        nothing of it): the share done, the block, and the countdown from its pace now, over the arcade's guess."""
+        from .. import core_log
+        then = says.pop("then", False)
+        try:
+            said = core_log.rescan_progress(chain.params)
+        except Exception:                                  # noqa: BLE001 -- the guess stands
+            said = None
+        if said is None:
+            return says
+        pct = round(said["progress"] * 100, 1)
+        eta = said["eta"]
+        when = f"about {importslib.say_wait(eta)} left" if eta is not None else "working out how long is left"
+        return {**says, "pct": pct, "block": said["block"], "eta": eta,
+                "says": (f"This arcade's node is rescanning the whole chain for imported wallets: {pct:.1f}% done "
+                         f"(block {said['block']:,}), {when}. Meanwhile the arcade reads the chain from another "
+                         f"arcade, so sends work as usual."
+                         + (" After it, one more rescan reads this wallet's coins." if then else ""))}
+
     def _rescan_says(chain, address: str) -> dict:
         """Where an imported address's read-back stands, with what to tell the person:
         "ready", "rescan" (reading back now or next in line), "none" (no node to read the chain), "stopped" (never
@@ -23931,13 +23952,13 @@ def create_app(state: AppState) -> FastAPI:
             if run.get("core"):
                 total = _run_left({**run, "core": None, "core_next": True})
                 late = time.time() - float(run.get("began") or time.time()) > total
-                return {"state": "rescan", "eta": int(eta), "core": True,
+                return _core_rescan_said(chain, {"state": "rescan", "eta": int(eta), "core": True,
                         "says": ("This arcade's node is rescanning the whole chain for this wallet's coins, and it is "
                                  "taking longer than expected; it is still running. Check back later."
                                  if late else
                                  f"This arcade's node is rescanning the whole chain for this wallet's coins (meanwhile "
                                  f"the arcade reads the chain from another arcade); check back in "
-                                 f"{importslib.say_wait(eta)}.")}
+                                 f"{importslib.say_wait(eta)}.")})
             return {"state": "rescan", "eta": int(eta),
                     "says": f"The arcade is reading back this wallet's coins; check back in "
                             f"{importslib.say_wait(eta)}."}
@@ -23958,15 +23979,15 @@ def create_app(state: AppState) -> FastAPI:
                 mine = address in (sent.get("addresses") or ())
                 then = "" if mine else " After it, one more rescan reads this wallet's coins."
                 if left <= 0:
-                    return {"state": "rescan", "eta": None, "core": True,
+                    return _core_rescan_said(chain, {"state": "rescan", "eta": None, "core": True, "then": not mine,
                             "says": "This arcade's node is rescanning the whole chain for imported wallets, and it is "
                                     "taking longer than expected; it is still running, and the arcade reads the chain "
-                                    f"from another arcade meanwhile.{then} Check back later."}
+                                    f"from another arcade meanwhile.{then} Check back later."})
                 eta = left + (0 if mine else total)
-                return {"state": "rescan", "eta": int(eta), "core": True,
+                return _core_rescan_said(chain, {"state": "rescan", "eta": int(eta), "core": True, "then": not mine,
                         "says": f"This arcade's node is rescanning the whole chain for imported wallets (meanwhile the "
                                 f"arcade reads the chain from another arcade, so sends work as usual).{then} Check back "
-                                f"in about {importslib.say_wait(eta)}."}
+                                f"in about {importslib.say_wait(eta)}."})
             if fails:
                 when = ("after the arcade restarts" if fails >= CORE_RETRY_MAX
                         else f"in {importslib.say_wait(max(0.0, until - time.time()))}")
