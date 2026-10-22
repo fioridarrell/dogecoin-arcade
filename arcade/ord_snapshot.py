@@ -39,6 +39,10 @@ WORTH_BLOCKS = 20_000
 #: Pieces asked for at once, each of another arcade where it can.
 IN_FLIGHT = 6
 PIECE_SECONDS = 60
+#: A fetch that got nothing (no manifest, no piece) for this long is let go of, and the newest copy started on (2026-10-22:
+#: @yourfirstname's Pepecoin walk sat at its first block all day on a snapshot the maker had long let go of and made
+#: again under a new id -- nobody offered the old one, so no piece ever came, and the walk waits while a fetch runs).
+FETCH_STALL = 600
 #: Chunks whose moves are compared with a second holder, picked at random through the copy.
 MOVES_SAMPLE = 64
 #: Tables a snapshot leaves out: work in hand, not the index.
@@ -255,6 +259,11 @@ class Snapshots:
                 self.fetch = f = {"id": o["id"], "from": node, "manifest": None, "have": set(), "asked": {},
                                   "started": time.time()}
                 self.said = f"fetching the index from arcade {node[:12]} (block {o['h']:,})"
+            if time.time() - f.get("moved", f["started"]) > FETCH_STALL:
+                log.info("ord index %s: snapshot %s from %s sent nothing for %d min: let go of", self.index.net,
+                         f["id"][:12], f["from"][:12], FETCH_STALL // 60)
+                self._drop(f"the index fetch from arcade {f['from'][:12]} stalled: started again on the newest copy")
+                return
             if f["manifest"] is None:
                 if time.time() - f.get("manifest_asked", 0) > PIECE_SECONDS:
                     f["manifest_asked"] = time.time()
@@ -301,6 +310,7 @@ class Snapshots:
                 self._drop(why)
                 return
             f["manifest"] = manifest
+            f["moved"] = time.time()
             with open(self.part_path, "wb") as out:
                 out.truncate(int(manifest["size"]))
 
@@ -319,6 +329,7 @@ class Snapshots:
                 out.seek(i * m["piece"])
                 out.write(data)
             f["have"].add(i)
+            f["moved"] = time.time()
             self.said = f"fetching the index: {len(f['have'])} of {len(m['pieces'])} pieces"
 
     def piece_failed(self, node: str, sid: str, i: int) -> None:

@@ -891,6 +891,44 @@ def test_the_whole_index_comes_from_the_arcades_that_hold_it(tmp_path, monkeypat
         "pieces from an arcade still fetching them: torrent style"
 
 
+def test_a_fetch_of_a_snapshot_nobody_offers_any_more_is_let_go_and_the_newest_taken(tmp_path, monkeypatch):
+    """2026-10-22: @yourfirstname's Pepecoin walk sat at its first block all day. Its fetch was of a snapshot the holder
+    had let go of and made again under a new id: no piece of the old one ever came, and the walk waits while a fetch
+    runs. A fetch that gets nothing for FETCH_STALL is let go of, and the copy on offer now is fetched."""
+    from arcade import ord_snapshot
+    monkeypatch.setattr(ord_snapshot, "WORTH_BLOCKS", 4)
+    monkeypatch.setattr(ord_snapshot, "PIECE", 4096)
+    chain = _story_chain()
+    mesh = Mesh()
+    holder = dx.DoginalIndex(tmp_path / "h.sqlite", lambda: chain, lambda: "walk", cores=lambda: 1)
+    newcomer = dx.DoginalIndex(tmp_path / "new.sqlite", lambda: chain, lambda: "walk", own_core=lambda: False)
+    holder.walker.step(chain, dx.BASE + 11, budget=60)
+    holder.store.x("DELETE FROM notes")
+    holder._snap_asked = True
+    for name, idx in (("holder", holder), ("new", newcomer)):
+        mesh.join(name, idx)
+        idx.me = name
+    for _ in range(6):
+        _hold_round(mesh, holder, newcomer)
+        if newcomer.snapshots.fetch is not None:
+            break
+    f = newcomer.snapshots.fetch
+    assert f is not None, newcomer.snapshots.said
+    f.update(id="0" * 64, manifest=None, have=set(), asked={})   # the copy it began on: gone, nobody offers it
+    f.pop("moved", None)
+    for _ in range(4):
+        _hold_round(mesh, holder, newcomer)
+    assert newcomer.snapshots.fetch is not None and newcomer.walker.next_height() == dx.BASE, "waits, as it did"
+    newcomer.snapshots.fetch["started"] -= ord_snapshot.FETCH_STALL + 1
+    for _ in range(12):
+        _hold_round(mesh, holder, newcomer)
+        if newcomer.snapshots.said.startswith("the index came"):
+            break
+    assert newcomer.snapshots.said.startswith("the index came"), newcomer.snapshots.said
+    assert newcomer.walker.next_height() == dx.BASE + 12
+    assert _dump(newcomer) == _dump(holder)
+
+
 def test_a_snapshot_whose_moves_another_holder_does_not_share_is_refused(tmp_path, monkeypatch):
     from arcade import ord_snapshot
     monkeypatch.setattr(ord_snapshot, "WORTH_BLOCKS", 4)

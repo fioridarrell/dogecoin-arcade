@@ -88,6 +88,17 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-22 Ord snapshots: a fetch that gets nothing for 10 minutes is let go of (Claude)
+The operator: "@yourfirstname's node is stuck on block 186,920 for Pepe coin". Its hello said walk, rules 4, walked to the
+chain's first block, helped 0, while its Pepecoin Core was synced to the tip (1,261,353, seen in a test machine's getpeerinfo
+through the mesh). The walk does nothing while a snapshot fetch runs (`_walk` returns on `snaps.fetch`), and nothing
+ever ended a fetch: a test machine lets an unfetched snapshot go after SNAP_IDLE and makes a new one under a new id (00:24,
+04:17, 07:34 today), so an arcade fetching the old id waited for a manifest or pieces nobody offered, for good. Now
+`Snapshots.step` lets a fetch go after `FETCH_STALL` (600 s) with no manifest and no piece ("moved" set by each), says
+so in the Ords tab, and the next pass starts on the newest copy on offer (or walks on). A slow fetch that still gets
+pieces is untouched. Test: `test_a_fetch_of_a_snapshot_nobody_offers_any_more_is_let_go_and_the_newest_taken`.
+@yourfirstname needs this update for its walk to move.
+
 ### 2026-10-22 Import rescans: a wallet that already found the address's history is not rescanned again (Claude)
 The operator: "looks like rescan started over". @apple's Dogecoin rescan on .25 finished about 09:35 CDT after ~22 h; when the
 Core answered, `utxos._rescan_already_ran` judged "Core restarted since the send" by its OLDEST PEER (getpeerinfo
