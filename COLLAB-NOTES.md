@@ -88,6 +88,15 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-22 Token orders past what is free come off the book on every post (Claude)
+The operator: "My listing amount was only 1000 FRGY. I didn't have that much to list so how could I have listed that much
+anyways listing should be limited to what you have available" (and: "Probably because it's a divisible coin and you're
+forgetting about the eight decimal points" -- yes, the box's 10^8). The order went on before `_listing_over` existed,
+and nothing looked at a standing order again. Now `_listing_over` returns (why, ids): DRC-20 / PRC-20 orders past what
+is free (in book order, the first that fit kept), a Doginal twice or also on the Doginals tab; /account/orders/post
+files the rest and cancels those (409 with `dropped`), so a book re-posted with a bad standing order takes it off.
+When a token can't be checked just now, only orders not standing already are held back.
+
 ### 2026-10-22 "Start a market" box: DRC-20 / PRC-20 in whole tokens (a listing went on as 10^8 times its amount) (Claude)
 The operator (a screenshot: frgy at -99,999,952,250, "100,000,000,000 listed"): "These PRC balances got all messed up". His
 1,000 frgy listing from the exchange's Start-a-market box (_tab_swaps.html `box2`) was filed as 100,000,000,000: its
