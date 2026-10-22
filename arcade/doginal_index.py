@@ -2065,7 +2065,10 @@ class DoginalIndex:
                 "cores": self._lanes_wanted(),
                 "walkers": [{"node": n[:12], "walked_to": h} for n, h in self.walkers()],
                 "helped": self.helped, "help_rate": round(self.help_rate, 2), "leases": sorted(leases, key=lambda l: l["chunk"]),
-                "peers": {n[:12]: p for n, p in self.chunks.peers.items()}, "walk": walk, "error": self.error,
+                # With the copy of the whole index each one is fetching, as its "hi" says it (2026-10-22: two arcades
+                # sat at one block for hours, and nothing here said whether they were fetching a copy or stuck).
+                "peers": {n[:12]: {**p, **_copy_said(self.snapshots.offers.get(n))}
+                          for n, p in self.chunks.peers.items()}, "walk": walk, "error": self.error,
                 "upgrading": (f"slimming the index (one time): {self.store.upgrading or 'starting'}"
                               if self.store.old_layout else "")}
 
@@ -2382,6 +2385,16 @@ class DoginalIndex:
             "LEFT JOIN ctypes c ON c.ct = i.ct "
             "WHERE substr(a.tx, 1, 8)=? AND a.tx=? AND a.vout=? ORDER BY a.off",
             (bytes.fromhex(txid)[:8], bytes.fromhex(txid), vout))]
+
+
+def _copy_said(offer) -> dict:
+    """{"copy": {"h", "have", "of"}} for a peer's snapshot word: "have" is "all" for a copy it made, else how many of
+    its "of" pieces it has fetched so far; {} when it says none."""
+    if not isinstance(offer, dict):
+        return {}
+    have = offer.get("have")
+    return {"copy": {"h": int(offer.get("h") or 0), "of": int(offer.get("n") or 0),
+                     "have": "all" if have == "all" else len(have) if isinstance(have, list) else 0}}
 
 
 class Runner:

@@ -88,6 +88,12 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-22 Admin -> Ords: each linked arcade's whole-index copy fetch is said in the rings' key (Claude)
+The operator: "It seems as though that the indexing is still stalled ... on yourfirstname and banana" (Pepecoin walks at
+186,920 and 803,295 for hours). Their "hi" already carries the copy they fetch (`sn<layout>`, with the pieces they
+have), heard into `snapshots.offers`, but nothing showed it. The status's `peers` now carry `copy` {h, of, have}
+(`_copy_said`), and the key under the rings says "fetching a copy of the index to block N: X of Y pieces (Z%)".
+
 ### 2026-10-22 Wallet NFTs: text, JSON and script inscriptions left out of the Doginals/Pepinals view (Claude)
 The operator: "In your wallet view of the doginals in the NFTs filter out txt json and js meme types." Each answer of
 /account/doginal-txs and /account/doginal-tx now carries `ctype`: the ord index's own (`DoginalIndex.on` joins

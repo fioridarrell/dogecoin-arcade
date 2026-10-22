@@ -1056,3 +1056,11 @@ def test_the_status_says_how_many_arcades_hold_each_stretch_and_agree(tmp_path, 
     st.say(2, "", "x", 0); st.say(2, "b" * 64, "y", 0)                  # chunk 2: two hold it but disagree
     runs = index.status()["agree_runs"]
     assert runs == [[0, 1, 3], [1, 2, 2], [2, 5, 1], [5, 6, 0]], runs   # chunk 2 disagrees: 1, as chunks 3-4 held by one
+
+
+def test_the_status_says_each_linked_arcades_copy_fetch():
+    """2026-10-22: two arcades sat at one block for hours, and nothing said whether they were fetching a copy."""
+    assert dx._copy_said({"id": "a" * 64, "h": 1009720, "n": 2978, "have": [0, 1, 2]}) == \
+        {"copy": {"h": 1009720, "of": 2978, "have": 3}}
+    assert dx._copy_said({"id": "a" * 64, "h": 5, "n": 9, "have": "all"})["copy"]["have"] == "all"
+    assert dx._copy_said(None) == {}

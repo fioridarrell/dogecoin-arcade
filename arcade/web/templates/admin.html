@@ -1186,6 +1186,13 @@ section.panel h2{margin-top:0}
       + 'stitched them. No index here. Uses the cores set below.'],
     ['read', 'Read only', 'Keeps nothing; asks an arcade that holds the index. Costs nothing here.'],
     ['off', 'Off', 'This arcade takes no part in this chain’s ords.']];
+  // What a linked arcade says of the whole-index copy it is fetching (2026-10-22): its pieces so far, or nothing.
+  function ordCopyWord(p) {
+    var c = p && p.copy;
+    if (!c || c.have === 'all' || !c.of) return '';
+    return ' <span class="muted">· fetching a copy of the index to block ' + num(c.h) + ': ' + num(c.have) + ' of '
+      + num(c.of) + ' pieces (' + Math.floor(100 * c.have / c.of) + '%)</span>';
+  }
   function ordName(c) { return c.tag ? '@' + c.tag : (c.me ? 'this arcade' : 'arcade ' + c.node); }
   function ordEl(tag, cls, html) { var e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; }
   function ordEsc(t) { var d = document.createElement('div'); d.textContent = String(t); return d.innerHTML; }
@@ -1359,7 +1366,7 @@ section.panel h2{margin-top:0}
         + 'flex:none;background:' + (k < 3 ? ORD_COLORS[k] : 'var(--line)') + '"></span><span><b>' + ordEsc(ordName(c)) + '</b>'
         + (c.me ? ' (this arcade)' : ' <span class="muted">arcade ' + ordEsc(c.node) + '</span>') + ': ring '
         + (k < 3 ? 'ABC'[k] : '–') + ', ' + (c.frac == null ? 'waiting for the tip' : Math.round(c.frac * 100) + '%')
-        + ' (block ' + num(c.walked_to) + ')</span></div>';
+        + ' (block ' + num(c.walked_to) + ')' + ordCopyWord((r.peers || {})[c.node]) + '</span></div>';
     }).join('');
     var others = (r.others || []).map(function (o) { return '<b>' + ordEsc(ordName(o)) + '</b> (' + (o.mode === 'help' ? 'helps scan' : 'read only') + ')'; });
     ring.appendChild(ordEl('div', '', legend + (others.length ? '<div class="muted" style="margin-top:6px">Also linked, holding '
