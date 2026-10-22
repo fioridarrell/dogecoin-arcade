@@ -205,7 +205,8 @@ class Doginals:
             if said is None:
                 held[n] = [{"id": None, "offset": None, "unknown": True, "wait": "index"}]
             elif said.get("on"):
-                held[n] = [{"id": i.get("id"), "offset": i.get("offset")} for i in said["on"]]
+                held[n] = [{"id": i.get("id"), "offset": i.get("offset"),
+                            **({"ctype": str(i["ctype"])} if i.get("ctype") else {})} for i in said["on"]]
 
     def _add_traced(self, txid: str, held: dict[int, list[dict]]) -> None:
         """Add what the chain itself says sits on each small output of `txid` that nothing was named on yet: an
@@ -257,6 +258,23 @@ class Doginals:
         (home / (inscription + ".type")).write_text(ctype)
         name.write_bytes(body)
         return ctype, body
+
+    def ctype_of(self, inscription: str, read: bool = True) -> str | None:
+        """An inscription's content type: kept beside its content once read (`content`), else read from the chain now
+        (`read`, two at a time); None when it cannot be said just now."""
+        if not re.fullmatch(r"[0-9a-f]{64}i\d+", str(inscription or "")):
+            return None
+        kept = self.path.parent / "inscription-content" / (inscription + ".type")
+        try:
+            return kept.read_text()
+        except OSError:
+            pass
+        if not read:
+            return None
+        try:
+            return self.content(inscription)[0]
+        except Exception:                                   # noqa: BLE001 -- said later
+            return None
 
     def kept(self, txid: str) -> dict[int, list[dict]] | None:
         """What is already known about a transaction, without asking anybody: None when it was never asked."""

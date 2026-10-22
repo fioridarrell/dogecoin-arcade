@@ -13658,8 +13658,11 @@ def create_app(state: AppState) -> FastAPI:
             except D.Unknown:
                 out[txid] = None
                 continue
+            # Each one's content type (2026-10-22: "filter out txt json and js meme types" from the NFTs): the
+            # index's word, else kept beside its content, else read from the chain once (and kept for good).
             out[txid] = [{"vout": vout, "inscription_id": i.get("id"), "sat_offset": i.get("offset"),
-                          "unknown": bool(i.get("unknown")), "wait": bool(i.get("wait"))}
+                          "unknown": bool(i.get("unknown")), "wait": bool(i.get("wait")),
+                          "ctype": (i.get("ctype") or guard.ctype_of(str(i["id"]))) if i.get("id") else None}
                          for vout, on in sorted(held.items()) for i in on]
         return JSONResponse({"chain": one.network, "address": address, "txs": out},
                             headers={"Cache-Control": "no-store"})
@@ -13692,7 +13695,8 @@ def create_app(state: AppState) -> FastAPI:
             return JSONResponse({"detail": str(exc)}, status_code=503)
         return JSONResponse({"txid": txid, "inscriptions": [
             {"vout": vout, "inscription_id": i.get("id"), "sat_offset": i.get("offset"), "unknown": bool(i.get("unknown")),
-             "wait": bool(i.get("wait"))}
+             "wait": bool(i.get("wait")),
+             "ctype": (i.get("ctype") or guard.ctype_of(str(i["id"]))) if i.get("id") else None}
             for vout, on in sorted(held.items()) for i in on]})
 
     @app.post("/account/doginal/send")

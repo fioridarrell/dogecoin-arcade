@@ -154,7 +154,7 @@ def test_the_walker_follows_an_inscription_koinu_by_koinu(tmp_path):
     index.step()
     where = index.where(iid)
     assert where["output"] == f"{buy[1]}:1" and where["offset"] == 10_000 and where["number"] == 0
-    assert index.on(buy[1], 1) == [{"id": iid, "offset": 10_000}]
+    assert index.on(buy[1], 1) == [{"id": iid, "offset": 10_000, "ctype": "text/plain"}]
     assert index.on(reveal[1], 0) == []
 
 
@@ -555,7 +555,7 @@ def test_read_only_holds_no_index_and_asks_an_arcade_that_walks(tmp_path):
         return where, on
     where, on = asyncio.run(go())
     assert where["where"]["output"] == f"{send[1]}:0" and where["from"] == "arcade walker-node"
-    assert on["on"] == [{"id": f"{reveal[1]}i0", "offset": 0}]
+    assert on["on"] == [{"id": f"{reveal[1]}i0", "offset": 0, "ctype": "text/plain"}]
     assert reader.store.q("SELECT COUNT(*) FROM insc")[0][0] == 0, "and the reader keeps no index"
 
 

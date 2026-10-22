@@ -258,3 +258,16 @@ def test_while_the_index_walks_a_send_leaves_unasked_small_coins_out_without_rea
     big = {"txid": "ee" * 32, "vout": 0, "value": 500_000_000}
     assert g.spendable([{"txid": chain.last, "vout": 0, "value": 100_000}, big]) == [big]
     assert chain.reads <= 1, f"the small coin was not read ({chain.reads} reads)"
+
+
+def test_the_index_says_each_inscriptions_content_type_and_the_guard_keeps_it(tmp_path):
+    """2026-10-22: the Wallet's NFTs leave text, JSON and scripts out -- so each answer carries its type."""
+    chain = _IndexChain(3)
+    index = _Index(walked=chain.tip - 12,
+                   on={(chain.last, 0): [{"id": "g0" * 32 + "i0", "offset": 0, "ctype": "application/json"}]})
+    g = doginals.Doginals(tmp_path / "d.sqlite", fetch=lambda t: {"txid": t, "inscriptions": []},
+                          rpc_factory=lambda: chain, index=lambda: index)
+    assert g.held(chain.last) == {0: [{"id": "g0" * 32 + "i0", "offset": 0, "ctype": "application/json"}]}
+    (tmp_path / "inscription-content").mkdir()
+    (tmp_path / "inscription-content" / ("ab" * 32 + "i0.type")).write_text("image/png")
+    assert g.ctype_of("ab" * 32 + "i0") == "image/png" and g.ctype_of("not an id") is None

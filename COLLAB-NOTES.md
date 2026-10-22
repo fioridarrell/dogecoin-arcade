@@ -88,6 +88,16 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-22 Wallet NFTs: text, JSON and script inscriptions left out of the Doginals/Pepinals view (Claude)
+The operator: "In your wallet view of the doginals in the NFTs filter out txt json and js meme types." Each answer of
+/account/doginal-txs and /account/doginal-tx now carries `ctype`: the ord index's own (`DoginalIndex.on` joins
+`ctypes`, and `Doginals._add_indexed` keeps it), else the `.type` kept beside the content once read, else read from the
+chain once (`Doginals.ctype_of`, two at a time, kept for good). The page (my_wallet.html `DG_NOT_ART`) leaves
+text/plain, application/json and text/javascript / application/(x-)javascript out of the cards and says how many it left
+out; they stay held like every inscription (an ordinary send never spends them). The browser's kept answers moved to
+`arcade.inscriptions.v3.` so the old ones (no type) are asked once more; an answer with an inscription whose type is not
+known yet is not kept. Tests: tests/test_doginals.py, test_doginal_wallet.py, test_doginal_index.py.
+
 ### 2026-10-22 Imported wallets: the balance is what it can send; Doginals and unchecked small coins said beside it (Claude)
 The operator: "on my imported wallet ... it shows that I have 77 Doge but it doesn't show how many are protected as doginals.
 Is the 77 Doge expendable or does that include the doginals?" It included them: `_imported_view`'s `spendable` summed

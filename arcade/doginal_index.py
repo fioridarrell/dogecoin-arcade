@@ -2376,8 +2376,10 @@ class DoginalIndex:
     def on(self, txid: str, vout: int) -> list[dict]:
         if self.store.old_layout:
             return []
-        return [{"id": iid_of(r[0], r[1]), "offset": r[2]} for r in self.store.q(
-            "SELECT i.tx, i.n, a.off FROM at a JOIN insc i ON i.rid = a.rid "
+        # With its content type (2026-10-22: the Wallet's NFTs leave text, JSON and scripts out).
+        return [{"id": iid_of(r[0], r[1]), "offset": r[2], "ctype": r[3]} for r in self.store.q(
+            "SELECT i.tx, i.n, a.off, c.ctype FROM at a JOIN insc i ON i.rid = a.rid "
+            "LEFT JOIN ctypes c ON c.ct = i.ct "
             "WHERE substr(a.tx, 1, 8)=? AND a.tx=? AND a.vout=? ORDER BY a.off",
             (bytes.fromhex(txid)[:8], bytes.fromhex(txid), vout))]
 

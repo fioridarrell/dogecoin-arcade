@@ -1947,7 +1947,7 @@ async function drawCollection() {
  * the outside Doginals API removed). A small coin the node could not read is said so and never shown as a plain coin.
  */
 
-const DG_TX = "arcade.inscriptions.v2.";         // + network + "." + txid: the chain's answer (v1 held an outside index's)
+const DG_TX = "arcade.inscriptions.v3.";         // + network + "." + txid: the chain's answer (v1 held an outside index's; v3 has each content type)
 let dg = {net: null, addr: "", coins: null, answers: {}, failed: 0, asking: false, page: 0};
 
 function dgKept(net, txid) {
@@ -1964,8 +1964,8 @@ async function dgAsk(net, txid) {
   if (said.txid && said.txid !== txid) throw new Error("the node answered about another transaction");
   const held = (said.inscriptions || []).filter((i) => i && i.vout != null)
     .map((i) => ({vout: Number(i.vout), id: i.inscription_id == null ? null : String(i.inscription_id),
-                  offset: i.sat_offset ?? null, unknown: !!i.unknown, wait: !!i.wait}));
-  if (!held.some((i) => i.unknown)) {
+                  offset: i.sat_offset ?? null, unknown: !!i.unknown, wait: !!i.wait, ctype: i.ctype ?? null}));
+  if (!held.some((i) => i.unknown || (i.id && !i.ctype))) {
     try { localStorage.setItem(DG_TX + net + "." + txid, JSON.stringify(held)); } catch (e) { /* read again next time */ }
   }
   return held;
@@ -2060,6 +2060,9 @@ async function strayDoginals(box) {
  * DG_PAGE cards a page, and a page's cards (each a picture frame) are built only when what is on it changes -- an
  * answer coming in, a block, or a redraw no longer rebuilds them, which reloaded every picture each time. */
 const DG_PAGE = 30, DG_BATCH = 100, DG_POSTAGE = 1000000;   // doginals.POSTAGE_MAX
+// 2026-10-22: "filter out txt json and js meme types" -- the NFTs are pictures and pages; plain text (token
+// transfers, names), JSON and scripts are held all the same (never spent by an ordinary send), just not shown here.
+const DG_NOT_ART = /^\s*(text\/plain|application\/json|text\/javascript|application\/(x-)?javascript)\b/i;
 const DG_PAGEKEY = "arcade.wallet.dgpage:";
 let dgUi = null;                      // {head, status, notes, stray, grid, pager, shown, paged}
 
@@ -2075,8 +2078,8 @@ async function dgAskMany(net, address, txids) {
     if (one === null) { out[t] = null; continue; }               // unreadable just now
     const held = one.filter((i) => i && i.vout != null)
       .map((i) => ({vout: Number(i.vout), id: i.inscription_id == null ? null : String(i.inscription_id),
-                    offset: i.sat_offset ?? null, unknown: !!i.unknown, wait: !!i.wait}));
-    if (!held.some((i) => i.unknown)) {
+                    offset: i.sat_offset ?? null, unknown: !!i.unknown, wait: !!i.wait, ctype: i.ctype ?? null}));
+    if (!held.some((i) => i.unknown || (i.id && !i.ctype))) {
       try { localStorage.setItem(DG_TX + net + "." + t, JSON.stringify(held)); } catch (e) { /* asked again later */ }
     }
     out[t] = held;
@@ -2134,10 +2137,12 @@ async function drawDoginals() {
   }
   const left = txids.filter((t) => !dg.answers[t]);
   const found = [], unread = [];
+  let notArt = 0;
   for (const coin of dg.coins) {
     for (const i of dg.answers[coin.txid] || []) {
       if (i.vout !== coin.vout) continue;
       if (i.unknown || !i.id) unread.push(coin);
+      else if (i.ctype && DG_NOT_ART.test(i.ctype)) notArt++;   // text, JSON, scripts: not shown as pictures
       else found.push({...i, txid: coin.txid, vout: coin.vout, value: coin.value, doginal: true});
     }
   }
@@ -2164,6 +2169,10 @@ async function drawDoginals() {
     const n = unread.length - waiting.length;
     status.push(el("p", "wl-note", `${n} small coin${n === 1 ? "" : "s"} could not be traced all `
       + "the way back, so they are kept out of ordinary sends in case they carry one."));
+  }
+  if (notArt) {
+    status.push(el("p", "wl-note", `${notArt.toLocaleString()} text, JSON and script inscription${notArt === 1 ? " is" : "s are"} `
+      + "not shown here. They stay held like the rest: an ordinary send never spends them."));
   }
   if (!left.length && !dg.failed && !found.length) {
     status.push(el("div", "wl-empty", `No ${W}s on ${w ? w.name + "'s" : "your"} ${coinWord} coins.`));
