@@ -88,6 +88,18 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-22 Wallet Doginals fill in as the ord index walks (Claude)
+The operator: "Can the doginals in my wallet that I have imported with 7000+ of them can the Wallet view be updated in real
+time as the index is built?" A coin can be answered as soon as some copy of the index has walked past the block that
+made it (every move before it is known), so the guard no longer waits for a complete index: `_add_indexed` asks the
+index once `Doginals.index_reach()` (the furthest copy, complete or not) is past the coin's block; a protected coin's
+marker keeps that block (`"h"`), and asking again reads nothing until the reach passes it. New GET
+/account/doginal-index {reach, tip} (door PUBLIC_PAGES); the wallet page asks it every DG_LIVE_MS (60 s) on the NFTs
+tab and asks again only about the coins the walk has just passed, so the cards fill in while the index walks; the note
+says "protected until the arcades' Doginal index (at block X of Y) reaches their blocks". Sends still leave every small
+coin with no answer out while the index is incomplete (`waiting_for_index`). Tests: test_doginals.py,
+test_doginal_wallet.py.
+
 ### 2026-10-22 Ord copies: a fetch carries on after a restart, and the walk goes on from the arcade's own Core meanwhile (Claude)
 Admin -> Ords' new readout showed @yourfirstname's fetch of Strawberry's Pepecoin copy go from 420 of 2,978 pieces back
 to 13 (its arcade restarted: the pieces were only in memory, and `_drop` threw the .part away), and both far-behind

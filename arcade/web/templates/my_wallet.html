@@ -2078,7 +2078,8 @@ async function dgAskMany(net, address, txids) {
     if (one === null) { out[t] = null; continue; }               // unreadable just now
     const held = one.filter((i) => i && i.vout != null)
       .map((i) => ({vout: Number(i.vout), id: i.inscription_id == null ? null : String(i.inscription_id),
-                    offset: i.sat_offset ?? null, unknown: !!i.unknown, wait: !!i.wait, ctype: i.ctype ?? null}));
+                    offset: i.sat_offset ?? null, unknown: !!i.unknown, wait: !!i.wait, h: i.h ?? null,
+                    ctype: i.ctype ?? null}));
     if (!held.some((i) => i.unknown || (i.id && !i.ctype))) {
       try { localStorage.setItem(DG_TX + net + "." + t, JSON.stringify(held)); } catch (e) { /* asked again later */ }
     }
@@ -2161,9 +2162,11 @@ async function drawDoginals() {
   // Waiting for the arcades' ord index (2026-10-22): protected, never traced back one by one any more.
   const waiting = unread.filter((coin) => (dg.answers[coin.txid] || []).some((i) => i.vout === coin.vout && i.wait));
   if (waiting.length) {
+    const at = dg.reach ? ` (at block ${Number(dg.reach).toLocaleString()}`
+      + (dg.tip ? ` of ${Number(dg.tip).toLocaleString()})` : ")") : "";
     status.push(el("p", "wl-note", `${waiting.length.toLocaleString()} small coin${waiting.length === 1 ? " is" : "s are"} `
-      + `protected until the arcades' ${W} index reaches the chain's tip: kept out of ordinary sends meanwhile, then `
-      + `checked against the index.`));
+      + `protected until the arcades' ${W} index${at} reaches ${waiting.length === 1 ? "its block" : "their blocks"}: `
+      + `kept out of ordinary sends meanwhile, and shown here as the index gets to each.`));
   }
   if (unread.length > waiting.length) {
     const n = unread.length - waiting.length;
@@ -2271,6 +2274,32 @@ async function drawDoginals() {
       }
     })().finally(() => { mine.asking = false; });
   }
+  // Filled in as the index walks (2026-10-22: "can the Wallet view be updated in real time as the index is
+  // built?"): every DG_LIVE_MS, how far the index has got, then only the coins it has just walked past are asked again.
+  if (!left.length && !dg.asking && waiting.length && !dg.live) {
+    const mine = dg;
+    mine.live = setTimeout(() => { mine.live = null; dgLive(mine).catch(() => {}); }, dg.reach ? DG_LIVE_MS : 1000);
+  }
+}
+
+const DG_LIVE_MS = 60000;
+async function dgLive(mine) {
+  if (dg !== mine || tab !== "nfts") return;
+  if (!document.hidden) {
+    const r = await fetch(`/account/doginal-index?chain=${encodeURIComponent(mine.net)}`, {cache: "no-store"});
+    const got = await r.json().catch(() => ({}));
+    if (r.ok) { mine.reach = got.reach || 0; mine.tip = got.tip || 0; }
+    const ready = Object.keys(mine.answers).filter((t) => (mine.answers[t] || []).some((i) => i.wait
+      && (i.h == null || (mine.reach && Number(i.h) < mine.reach))));
+    for (let k = 0; k < ready.length && dg === mine; k += DG_BATCH) {
+      try {
+        const answers = await dgAskMany(mine.net, mine.addr, ready.slice(k, k + DG_BATCH));
+        for (const [t, held] of Object.entries(answers)) if (held !== null) mine.answers[t] = held;
+      } catch (e) { break; }                                     // asked again next time
+      drawDoginals().catch(() => {});
+    }
+  }
+  if (dg === mine) drawDoginals().catch(() => {});
 }
 
 /* --- drawing it all ----------------------------------------------------- */

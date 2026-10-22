@@ -201,14 +201,16 @@ def test_with_an_ord_index_no_coin_is_traced_and_small_ones_wait_protected_until
     g = doginals.Doginals(tmp_path / "d.sqlite", fetch=lambda t: {"txid": t, "inscriptions": []},
                           rpc_factory=lambda: chain, index=lambda: index)
     on = g.held(chain.last)
-    assert on == {0: [{"id": None, "offset": None, "unknown": True, "wait": "index"}]}
+    height = chain.tip - chain.txs[chain.last]["confirmations"] + 1
+    assert on == {0: [{"id": None, "offset": None, "unknown": True, "wait": "index", "h": height}]}
     assert chain.reads <= 2, f"no walk back ({chain.reads} reads)"
     assert g.spendable([{"txid": chain.last, "vout": 0, "value": 100_000}]) == [], "protected"
     monkeypatch.setattr(doginals, "UNKNOWN_RETRY", 0)
     reads = chain.reads
     assert g.held(chain.last)[0][0]["wait"] and chain.reads == reads, "still walking: kept, nothing read"
     assert index.asked == []
-    index.walked = chain.tip - 12                            # a copy at the tip, as a walker keeps it
+    index.walked = height + 1                                # a copy past the coin's block (2026-10-22: "updated
+    #                                                          in real time as the index is built"): answered now
     assert g.held(chain.last) == {0: [{"id": "g0" * 32 + "i0", "offset": 0}]}
     assert index.asked == [(chain.last, 0)]
     assert chain.reads - reads <= 3, "the index answered: no walk back"
@@ -222,7 +224,9 @@ def test_a_coin_newer_than_the_complete_index_waits_for_it_and_a_clean_one_may_g
     chain.txs[chain.last]["confirmations"] = 2              # mined after the index's last block
     assert g.held(chain.last)[0][0]["wait"] == "index" and index.asked == []
     monkeypatch.setattr(doginals, "UNKNOWN_RETRY", 0)
-    chain.txs[chain.last]["confirmations"] = 40
+    reads = chain.reads
+    assert g.held(chain.last)[0][0]["wait"] and chain.reads == reads, "the index not past it yet: nothing read"
+    index.walked = chain.tip + 1
     assert g.held(chain.last) == {}, "the index found nothing on it"
     assert g.spendable([{"txid": chain.last, "vout": 0, "value": 100_000}])
 

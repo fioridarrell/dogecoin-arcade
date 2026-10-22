@@ -110,10 +110,14 @@ class Doginals:
             unsure = any(i.get("unknown") for on in kept.values() for i in on)
             if not unsure or time.time() - float(row[1]) < UNKNOWN_RETRY:
                 return kept
-            # Protected, waiting for the index: nothing to read again while it is still walking (no call at all).
-            if all(i.get("wait") for on in kept.values() for i in on if i.get("unknown")) \
-                    and self._index_now() is not None and self._index_walked() is None:
-                return kept
+            # Protected, waiting for the index: nothing to read again until a copy of it has walked past the coin's
+            # block (no call at all meanwhile). A coin is answered as soon as that is so, not when the whole index is
+            # (2026-10-22: "can the Wallet view be updated in real time as the index is built?").
+            waits = [i for on in kept.values() for i in on if i.get("unknown")]
+            if waits and all(i.get("wait") for i in waits) and self._index_now() is not None:
+                reach = self.index_reach()
+                if reach is None or all(i.get("h") is not None and reach <= int(i["h"]) for i in waits):
+                    return kept
         try:
             said = self.fetch(txid) or {}
         except Exception as exc:                            # noqa: BLE001
@@ -156,6 +160,18 @@ class Doginals:
         self._tip_at = (time.time(), tip)
         return tip
 
+    def index_reach(self) -> int | None:
+        """The block the furthest copy of the chain's ord index has walked to (this arcade's own walk or a linked
+        walker's on the same rules), complete or not: every coin made before it can be answered. None: no copy."""
+        index = self._index_now()
+        if index is None or index is _NO_INDEX:
+            return None
+        try:
+            own = index.walker.next_height() if index.mode() == "walk" and not index.store.old_layout else 0
+            return max([own] + [h for _n, h in index.walkers()]) or None
+        except Exception:                                   # noqa: BLE001
+            return None
+
     def _index_walked(self) -> int | None:
         """The block the most complete copy of the chain's ord index has walked to -- this arcade's own walk or a linked
         walker's on the same rules (DoginalIndex.walkers) -- once it is within INDEX_READY_LAG of the tip; None while
@@ -173,9 +189,10 @@ class Doginals:
 
     def _add_indexed(self, index, txid: str, held: dict[int, list[dict]]) -> None:
         """Add what the chain's ord index says sits on each small output of `txid` (its "on" question, asked of the most
-        complete copy: DoginalIndex.lookup) -- once a copy is complete and has walked past the block holding `txid`.
-        Until then each small output is protected without naming anything ({"id": None, "unknown": True, "wait":
-        "index"}), as an unfinished trace was, and nothing is traced."""
+        complete copy: DoginalIndex.lookup) -- once a copy has walked past the block holding `txid` (2026-10-22: the
+        Wallet fills in as the index walks, no longer only once it is complete). Until then each small output is
+        protected without naming anything ({"id": None, "unknown": True, "wait": "index", "h": its block}), as an
+        unfinished trace was, and nothing is traced."""
         try:
             with self.rpc_factory() as rpc:
                 tx = rpc.call("getrawtransaction", txid, 1)
@@ -185,17 +202,17 @@ class Doginals:
                  if not held.get(int(o["n"])) and round(float(o["value"]) * 1e8) <= TRACE_MAX]
         if not small:
             return
-        walked = self._index_walked()
+        walked = self.index_reach()
         confirmations = int(tx.get("confirmations") or 0)
         height = None
-        if walked is not None and confirmations:
+        if confirmations:
             try:
                 height = self._tip() - confirmations + 1
             except Exception:                               # noqa: BLE001
                 height = None
         for n in small:
             said = None
-            if height is not None and height < walked:
+            if height is not None and walked is not None and height < walked:
                 try:
                     said = index.lookup({"what": "on", "txid": txid, "vout": n})
                 except Exception:                           # noqa: BLE001 -- no copy answered: protected, asked again
@@ -203,7 +220,7 @@ class Doginals:
                 if said is not None and int(said.get("walked_to") or 0) <= height:
                     said = None                             # answered by a copy not past this coin's block yet
             if said is None:
-                held[n] = [{"id": None, "offset": None, "unknown": True, "wait": "index"}]
+                held[n] = [{"id": None, "offset": None, "unknown": True, "wait": "index", "h": height}]
             elif said.get("on"):
                 held[n] = [{"id": i.get("id"), "offset": i.get("offset"),
                             **({"ctype": str(i["ctype"])} if i.get("ctype") else {})} for i in said["on"]]

@@ -13661,10 +13661,27 @@ def create_app(state: AppState) -> FastAPI:
             # Each one's content type (2026-10-22: "filter out txt json and js meme types" from the NFTs): the
             # index's word, else kept beside its content, else read from the chain once (and kept for good).
             out[txid] = [{"vout": vout, "inscription_id": i.get("id"), "sat_offset": i.get("offset"),
-                          "unknown": bool(i.get("unknown")), "wait": bool(i.get("wait")),
+                          "unknown": bool(i.get("unknown")), "wait": bool(i.get("wait")), "h": i.get("h"),
                           "ctype": (i.get("ctype") or guard.ctype_of(str(i["id"]))) if i.get("id") else None}
                          for vout, on in sorted(held.items()) for i in on]
         return JSONResponse({"chain": one.network, "address": address, "txs": out},
+                            headers={"Cache-Control": "no-store"})
+
+    @app.get("/account/doginal-index")
+    def account_doginal_index(request: Request, chain: str = "doge"):
+        """How far the chain's ord index has walked -- the furthest copy, this arcade's or a linked one's -- and the
+        tip, for the Wallet's Doginals (2026-10-22: "can the Wallet view be updated in real time as the index is
+        built?"): a coin waiting for the index is asked about again once `reach` has passed its block, and not before."""
+        _signed_in_account(request)
+        one = next((c for c in state.token_chains if c.network == chain), None)
+        guard = fundinglib.guard_on(chain) if one is not None else None
+        if guard is None:
+            return JSONResponse({"detail": "this node does not check inscriptions on that chain"}, status_code=404)
+        try:
+            tip = guard._tip()
+        except Exception:                                 # noqa: BLE001
+            tip = None
+        return JSONResponse({"chain": chain, "reach": guard.index_reach(), "tip": tip},
                             headers={"Cache-Control": "no-store"})
 
     @app.get("/account/doginal-tx/{txid}")

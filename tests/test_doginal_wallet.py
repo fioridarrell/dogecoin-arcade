@@ -185,7 +185,7 @@ def test_many_transactions_are_read_in_one_call_own_coins_only(client, monkeypat
     assert got.status_code == 200, got.text
     txs = got.json()["txs"]
     assert txs[T1] == [{"vout": 0, "inscription_id": INS, "sat_offset": 0, "unknown": False, "wait": False,
-                        "ctype": "text/plain;charset=utf-8"}]
+                        "h": None, "ctype": "text/plain;charset=utf-8"}]
     assert txs[T3] == [] and txs[T2] is None and "99" * 32 not in txs
     app.post("/account/doginal-txs", json={"chain": "doge", "txids": [T1]})
     assert calls.count(T1) == 1, "asked once, kept for good"
@@ -261,3 +261,20 @@ def test_machine_records_are_not_anybodys_nfts(tmp_path):
     import fnmatch
     assert fnmatch.fnmatch("application/vnd.arcade.orders+json", MACHINE_TYPES.replace("%", "*"))
     assert not fnmatch.fnmatch("image/png", MACHINE_TYPES.replace("%", "*"))
+
+
+def test_the_wallet_asks_how_far_the_ord_index_has_walked(client, monkeypatch, tmp_path):
+    """2026-10-22: "can the Wallet view be updated in real time as the index is built?" -- the page asks how far
+    the index has got, and asks again only about the coins it has walked past."""
+    from arcade import funding
+    from arcade.web import door
+    app, state = client
+    _doge_account(app, state, monkeypatch, tmp_path)
+    monkeypatch.setattr(funding.GUARD, "index_reach", lambda: 4_700_000)
+    monkeypatch.setattr(funding.GUARD, "_tip", lambda: 6_426_000)
+    got = app.get("/account/doginal-index?chain=doge")
+    assert got.status_code == 200, got.text
+    assert got.json() == {"chain": "doge", "reach": 4_700_000, "tip": 6_426_000}
+    assert "/account/doginal-index" in door.PUBLIC_PAGES
+    page = app.get("/me/wallet").text
+    assert "/account/doginal-index?chain=" in page and "shown here as the index gets to each" in page
