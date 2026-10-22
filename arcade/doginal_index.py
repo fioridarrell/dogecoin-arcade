@@ -326,6 +326,17 @@ INDEXES = """
 #: copy of a test machine's Dogecoin balances, 532,353 of them: 19.9 MB beside a 9.3 GB index (0.2%), built in 0.24 s; a page
 #: 2,000 holders down the biggest token (45,677 holders) reads in under a millisecond.
 RICH_ORDER = "ORDER BY length(overall) DESC, overall DESC"
+#: Inscriptions this index numbers by the chain and its indexer's published rules that other explorers do not show,
+#: found comparing numbers by hand (2026-10-21: "Let's keep it. it follows the rules and it renders as an
+#: image ... Can we flag it ... in a lightweight way?"). Shown beside the inscription in Admin -> Ords; numbering is
+#: never touched by it. Outside indexes are not named (2026-10-20): the note says what is so, not who differs.
+SEEN_ELSEWHERE: dict[str, dict[str, str]] = {
+    "main": {
+        "83d1cbea653d4c8e8f729dc1af8fea4802b27abdafde436524ff8882768d0a31i0":
+            "Other explorers do not show this one. It is a whole inscription by ord-pepecoin's own rules (an image, "
+            "block 292,159), so it is numbered here, and every number after it is one higher than theirs.",
+    },
+}
 #: Holders on one page of the rich list, and ticks offered at once by the ticker search.
 RICH_PAGE = 20
 TICKS_AT_ONCE = 12
@@ -2236,7 +2247,8 @@ class DoginalIndex:
                               # rules 4: the inscription its tags name (Admin -> Ords shows and opens them), and the
                               # delegate's content type -- what /content serves for it
                               "delegate": iid_of_blob(delegate), "parent": iid_of_blob(parent),
-                              "delegate_content_type": self._ctype_of(bytes(delegate)) if delegate else None}
+                              "delegate_content_type": self._ctype_of(bytes(delegate)) if delegate else None,
+                              "note": SEEN_ELSEWHERE.get(self.net, {}).get(iid_of(tx, n))}
         return out
 
     def _ctype_of(self, blob: bytes) -> str | None:

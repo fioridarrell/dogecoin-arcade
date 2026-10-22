@@ -1537,7 +1537,9 @@ section.panel h2{margin-top:0}
         ['Burned', x.burned ? 'yes' : 'no'],
         ['Sits on', x.burned ? null : where],
         ['Owner', x.burned ? null : (x.owner || 'not known here (the walking arcade has no Core to ask)')],
-        ['Moved at block', x.moved_at && x.moved_at !== x.height ? num(x.moved_at) : null]]);
+        ['Moved at block', x.moved_at && x.moved_at !== x.height ? num(x.moved_at) : null],
+        // 2026-10-21: an inscription by the rules that other explorers do not show (doginal_index.SEEN_ELSEWHERE)
+        ['Note', x.note ? ordEl('span', '', ordEsc(x.note)) : null]]);
       facts.appendChild(ordEl('dt', '', '')); var dd = ordEl('dd'); dd.appendChild(ordxFrom(j)); facts.appendChild(dd);
     }
     $('ordnum').value = ORDX.number;

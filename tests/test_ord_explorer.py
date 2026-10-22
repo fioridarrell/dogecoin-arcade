@@ -256,3 +256,12 @@ def test_the_explorer_on_the_page_follows_the_chain_at_the_top(walking):
                  'class="pick-q"', "window.arcadePick", 'sandbox'):
         assert part in page, part
     assert page.count("window.arcadePick = window.arcadePick") == 1, "the Exchange's one search tool, included once"
+
+
+def test_an_inscription_other_explorers_miss_carries_a_note(tmp_path):
+    """2026-10-21: 83d1cbea...i0 (PEP block 292,159) is a whole inscription by ord-pepecoin's rules that another
+    explorer does not show; it stays numbered, with a note (doginal_index.SEEN_ELSEWHERE) the explorer shows."""
+    from arcade import doginal_index as dx
+    iid = "83d1cbea653d4c8e8f729dc1af8fea4802b27abdafde436524ff8882768d0a31i0"
+    assert "Other explorers do not show this one" in dx.SEEN_ELSEWHERE["main"][iid]
+    assert "pepeblocks" not in dx.SEEN_ELSEWHERE["main"][iid].lower(), "no outside index named"

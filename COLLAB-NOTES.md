@@ -88,6 +88,16 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-21 PEP rebuilt under rules 4 matches the other explorer but for one inscription, kept and noted (Claude)
+After the rules-4 rebuild a test machine's PEP index was compared by hand with an outside explorer again: the three
+inscriptions missing at #30,410-30,412 are in, and a random sample to #3.6 million matches exactly but for ONE:
+our #29,809, 83d1cbea...0a31i0 (an image, block 292,159), which that explorer says it has no record of; every later
+number of ours is one higher. Its envelope is ordinary ("ord", OP_2 pieces, image/png, 240 + 179 bytes); ord-pepecoin's
+published parser reads it complete, the coin it spends carries nothing, and no partial chain is involved. The operator:
+"Let's keep it. it follows the rules and it renders as an image ... it is the truth from the Blockchain." So it stays
+numbered; `doginal_index.SEEN_ELSEWHERE` (a small fixed list, nothing stored) gives it a note that Admin -> Ords shows
+("Other explorers do not show this one ..."), naming no outside index.
+
 ### 2026-10-21 Ord notes: multisig spends not followed back (a test machine's and .25's walks stood still) (Claude)
 Both walks stood on their first Dogecoin block after the rules-3 reset: a test machine's lane finished chunk 0 and then hung
 in `Store.finish_notes -> ord_notes.finish -> genesis_before` (faulthandler, a scratch walk on a test machine's Core). Ordinary
