@@ -88,6 +88,14 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-22 "Start a market" box: DRC-20 / PRC-20 in whole tokens (a listing went on as 10^8 times its amount) (Claude)
+The operator (a screenshot: frgy at -99,999,952,250, "100,000,000,000 listed"): "These PRC balances got all messed up". His
+1,000 frgy listing from the exchange's Start-a-market box (_tab_swaps.html `box2`) was filed as 100,000,000,000: its
+`whole` counted only NFTs and whole Omni tokens, so a token20 amount was multiplied by 10^8 like a coin's. Now token20
+is whole there too, its tick read as everything after "<net>-<kind>-", and the wallet never shows a token balance below
+zero. The bad order has to be cancelled by its lister (Swaps listed -> Cancel; a book with it is refused by
+/account/orders/post as more than is free, its cancel goes through).
+
 ### 2026-10-22 Listings hold what they list until unlisted or taken (Claude)
 The operator: "I made a listing of frgy from my @apple but it remains in my balance so it seems like I could list it and send
 it at the same time ... It should be locked as listed until it is unlisted or purchased", "This should happen for all
