@@ -54,8 +54,12 @@ SOURCES = {
 TAPROOT = frozenset({"ltc", "ltctest"})
 BASE = STARTS["doge"]
 CHUNK = 100
-#: Blocks this far under the tip are scanned; the newest ones may still be replaced by a reorg.
+#: Blocks this far under the tip are scanned in chunks; the newest ones may still be replaced by a reorg. A chunk is
+#: scanned by many arcades and its word compared, so it covers only blocks a reorg will not move.
 SETTLE = 12
+#: How close to the tip the walk goes (2026-10-22: "Why can't strawberry keep up with the confirmed blocks?" --
+#: it sat 12 blocks under). The last blocks past the chunks are read from the Core; a reorg is walked back (rollback).
+WALK_SETTLE = 2
 #: How many different arcades must say the same hash before a chunk is `agreed` (fewer than 5 arcades: every chunk
 #: is scanned twice).
 AGREE = 2
@@ -939,7 +943,7 @@ class Walker:
         return "script:" + hash160(script).hex()
 
     def step(self, rpc, tip: int, budget: float = 5.0, notes: Callable[[int], Any] | None = None) -> int:
-        """Walk on for about `budget` seconds, never past tip - SETTLE. Returns the blocks walked.
+        """Walk on for about `budget` seconds, never past tip - WALK_SETTLE. Returns the blocks walked.
 
         `notes(chunk)` says where each chunk's blocks come from (2026-10-20: scanned in line by whoever is free,
         stitched here in order): ([blocks], this arcade's own scan?) from its spend notes; False to wait for them;
@@ -949,7 +953,7 @@ class Walker:
         start, done = time.monotonic(), 0
         while True:
             h = self.next_height()
-            if h > tip - SETTLE or (done and time.monotonic() - start >= budget):
+            if h > tip - WALK_SETTLE or (done and time.monotonic() - start >= budget):
                 break
             c = chunk_of(h, self.base)
             got = notes(c) if notes is not None else None
@@ -2015,7 +2019,7 @@ class DoginalIndex:
         if self.mode() == "walk":
             nxt = self.walker.next_height()
             counts = self._counts()
-            walk = {"next": nxt, "tip": self.tip, "left": max(0, self.tip - SETTLE - nxt + 1),
+            walk = {"next": nxt, "tip": self.tip, "left": max(0, self.tip - WALK_SETTLE - nxt + 1),
                     "inscriptions": counts.get("inscriptions", 0), "burned": counts.get("burned", 0),
                     "tokens": counts.get("tokens", 0), "holders": counts.get("holders", 0),
                     "names": counts.get("names", {}),

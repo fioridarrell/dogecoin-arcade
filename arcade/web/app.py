@@ -25452,7 +25452,7 @@ def create_app(state: AppState) -> FastAPI:
         official first-inscription height of that chain's ord indexer), how far it is, and every linked arcade's
         chunks (arcade/doginal_index.py)."""
         _admin_check(request)
-        from ..doginal_index import SETTLE, SOURCES, STARTS
+        from ..doginal_index import SOURCES, STARTS, WALK_SETTLE as SETTLE
         indexes = state.ord_indexes()
         share = getattr(getattr(state, "mesh", None), "operators", None)
         names = {r["node"]: r.get("tag") or "" for r in (share.status() if share is not None else [])}
@@ -26215,7 +26215,7 @@ def create_app(state: AppState) -> FastAPI:
 
     def _arcades_view() -> dict:
         from .. import cores as coreslib
-        from ..doginal_index import SETTLE
+        from ..doginal_index import WALK_SETTLE as SETTLE
         mesh = getattr(state, "mesh", None)
         up = mesh is not None and getattr(mesh, "loop", None) is not None
         running = _arcades_running(with_ids=True)

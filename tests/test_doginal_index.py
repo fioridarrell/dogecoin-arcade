@@ -112,6 +112,7 @@ FUND = "aa" * 32
 def small(monkeypatch):
     monkeypatch.setattr(dx, "CHUNK", 4)
     monkeypatch.setattr(dx, "SETTLE", 0)
+    monkeypatch.setattr(dx, "WALK_SETTLE", 0)
 
 
 def _walker(tmp_path, chain):
@@ -1151,3 +1152,17 @@ def test_the_status_says_each_linked_arcades_copy_fetch():
         {"copy": {"h": 1009720, "of": 2978, "have": 3}}
     assert dx._copy_said({"id": "a" * 64, "h": 5, "n": 9, "have": "all"})["copy"]["have"] == "all"
     assert dx._copy_said(None) == {}
+
+
+def test_the_walk_goes_to_two_blocks_under_the_tip_and_chunks_stay_twelve_under(tmp_path, monkeypatch):
+    """2026-10-22: "Why can't strawberry keep up with the confirmed blocks?" -- it sat 12 under the tip. The walk
+    now goes to WALK_SETTLE (2) under it, reading the last blocks from its Core; a chunk, compared across arcades, is
+    still only whole SETTLE (12) under the tip."""
+    monkeypatch.setattr(dx, "WALK_SETTLE", 2)
+    monkeypatch.setattr(dx, "SETTLE", 12)
+    chain = _story_chain()
+    tip = dx.BASE + 11
+    index = dx.DoginalIndex(tmp_path / "w.sqlite", lambda: chain, lambda: "walk", cores=lambda: 1)
+    index.walker.step(chain, tip, budget=60)
+    assert index.walker.next_height() == tip - 2 + 1
+    assert dx.ready_chunks(tip, dx.BASE) == 0, "no chunk is whole twelve under this tip"

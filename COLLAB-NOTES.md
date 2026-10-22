@@ -88,6 +88,14 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-22 Ord walk goes to 2 blocks under the tip (chunks stay 12 under) (Claude)
+The operator: "On strawberry ... 100% index for Pepe ORD's but now we are about 11 blocks behind. Why can't strawberry keep up
+with the confirmed blocks?" It was by design: the walk stopped at tip - SETTLE (12). Asked, the operator chose 2 blocks. New
+`WALK_SETTLE = 2` for the walk (Walker.step, the status's `left`, and Admin's walked percentages in app.py); SETTLE stays
+12 for whole chunks (`ready_chunks`), whose words are compared across arcades, so a reorg near the tip never moves a
+chunk word. The blocks past the last chunk are read from the Core, and a reorg is walked back by the walk's rollback
+(the prev-hash check before every block). Test: tests/test_doginal_index.py.
+
 ### 2026-10-22 Imports across arcades: coins brought over in batches, all of them; asked again for one being read back; no new import on a chain with fewer than two nodes (Claude)
 The operator: "the rescan is done on dogecoinarcade.com but when I go to Pepecoinarcade.com it says that the re-scan is in
 progress on the same Doge wallet" (7,000+ coins); and "importing a wallet to LTC right now should not be possible
