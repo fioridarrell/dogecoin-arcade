@@ -88,6 +88,17 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-22 DRC-20 / PRC-20: a sent amount is off the balance until the index reads its note (Claude)
+The operator, after sending 500 frgy from @apple to @yourfirstname (note ea32fec4...i0, send f109fbc3..., block 1,261,650):
+"my balance remain the same. So it appears as though I could send same tokens more than once this needs to be fixed"
+and "It should remove the amount sent from the balance total until it can be updated from the chain". The index walks
+2 under the tip, so for a few minutes it had not read the note. Now `_t20_pending` keeps each send from its commit's
+broadcast (`_t20_committed`, the commit offer's done hook) until the index has walked past its note's block (or the note
+never went out within T20_SEND_SECONDS, or T20_PENDING_SECONDS); /account/token20 says `pending_units` beside each
+balance, the start of a send takes it off what can go ("some is still on its way from an earlier send"), and the
+Tokens tab and the card show the balance less it, "X on its way". In memory: after a restart a second note would be
+void by the rules (never a double spend), only fees lost. Test: test_doginal_wallet.py (the three offers test).
+
 ### 2026-10-22 DRC-20 / PRC-20 send from the Wallet, one Send press, counted as pepeblocks and nintondo count it (Claude)
 The operator: "look at the recent PRC-20 that @apple recently received ... I want the ability to send a PRC 20 token in the
 same way I can send any other token" and "Our transfer and send protocol needs to match that of Pepe block and

@@ -13693,14 +13693,58 @@ def create_app(state: AppState) -> FastAPI:
             tip = int(index.tip or 0) or (guard._tip() if guard is not None else None)
         except Exception:                                 # noqa: BLE001
             tip = None
+        # Sent here but not read from the chain yet (2026-10-22: "It should remove the amount sent from the
+        # balance total until it can be updated from the chain"): said beside each balance, and taken off on the page.
+        pending = _t20_pending_units(one, address, int(said.get("walked_to") or 0))
+        balances = [{**b, "pending_units": str(pending.get(str(b.get("tick")).lower(), 0))}
+                    for b in said.get("balances") or []]
         return JSONResponse({"chain": one.network, "address": address, "protocol": protocol,
-                             "balances": said.get("balances") or [], "walked_to": said.get("walked_to"), "tip": tip},
+                             "balances": balances, "walked_to": said.get("walked_to"), "tip": tip},
                             headers={"Cache-Control": "no-store"})
 
     #: DRC-20 / PRC-20 sends in progress (token20_send): id -> where it stands. In memory, as offers are: a send cut
     #: short by a restart is said so, and its note (if revealed) stays on the account's own address, sendable again.
     _t20_sends: dict[str, dict] = {}
     T20_SEND_SECONDS = 1800
+    #: Sends whose commit went out and whose note the index has not read yet: (network, address) -> [{tick, units,
+    #: run, at}]. Their amounts are off the balance until then (2026-10-22: he sent frgy, "my balance remain the
+    #: same. So it appears as though I could send same tokens more than once"). In memory: a restart forgets them,
+    #: and by then the index has usually read the note; at worst a second note is void by the rules (never a double
+    #: spend), only its fees lost.
+    _t20_pending: dict[tuple[str, str], list[dict]] = {}
+    T20_PENDING_SECONDS = 6 * 3600
+
+    def _t20_pending_units(chain, address: str, walked_to: int) -> dict[str, int]:
+        """tick (lower case) -> units sent from `address` and not yet read by the index: an entry goes once the
+        index has walked past its note's block (from then the index's own transferable / balance say it), when it
+        never got past its commit within T20_SEND_SECONDS, or after T20_PENDING_SECONDS."""
+        now = time.time()
+        kept, out = [], {}
+        for e in _t20_pending.get((chain.network, address), []):
+            run = e["run"]
+            if now - e["at"] > T20_PENDING_SECONDS:
+                continue
+            reveal = run["txids"].get("reveal")
+            if reveal is None and now - e["at"] > T20_SEND_SECONDS:
+                continue                                  # the note never went out: nothing was sent
+            if reveal and walked_to:
+                try:
+                    with chain.rpc() as rpc:
+                        conf = int((rpc.call("getrawtransaction", reveal, 1) or {}).get("confirmations") or 0)
+                        height = int(rpc.get_block_count()) - conf + 1 if conf else None
+                except Exception:                         # noqa: BLE001 -- kept until it can be read
+                    height = None
+                if height is not None and height < walked_to:
+                    continue
+            kept.append(e)
+            out[e["tick"]] = out.get(e["tick"], 0) + int(e["units"])
+        _t20_pending[(chain.network, address)] = kept
+        return out
+
+    def _t20_committed(run: dict, units: int, txid: str) -> None:
+        run["txids"]["commit"] = txid
+        _t20_pending.setdefault((run["chain"], run["address"]), []).append(
+            {"tick": run["tick"].lower(), "units": units, "run": run, "at": time.time()})
 
     @app.post("/account/token20/send")
     def account_token20_send(request: Request, payload: Any = Body(None)):
@@ -13755,9 +13799,11 @@ def create_app(state: AppState) -> FastAPI:
             if row is None:
                 raise ValueError(f"this wallet holds no {tick}")
             text, units = t20.amount_text(str(said.get("amount") or ""), int(row.get("decimals") or 0))
-            free = int(row.get("units") or 0) - int(row.get("transferable_units") or 0)
+            on_way = _t20_pending_units(chain, address, int(got.get("walked_to") or 0)).get(str(row["tick"]).lower(), 0)
+            free = int(row.get("units") or 0) - int(row.get("transferable_units") or 0) - on_way
             if units > free:
-                raise ValueError(f"that is more {row['tick']} than this wallet has to send")
+                raise ValueError(f"that is more {row['tick']} than this wallet has to send"
+                                 + (" (some is still on its way from an earlier send)" if on_way else ""))
             # The key of this account's address on the chain (the browser's coin key, not the login key): the note's
             # script is its, so only it reveals the note. Taken only when it is the address's own.
             try:
@@ -13784,7 +13830,7 @@ def create_app(state: AppState) -> FastAPI:
                    "step": "commit", "txids": {}, "at": now}
             _t20_sends[sid] = run
             offer = _offers.add(account.pubkey, chain.network, unsigned, unsigned.what,
-                                done=lambda txid, r=run: r["txids"].__setitem__("commit", txid))
+                                done=lambda txid, r=run, u=units: _t20_committed(r, u, txid))
             send_fee = fundinglib.price(2, [(t20.POSTAGE, txbuild.p2pkh_script(to))], fees.rate_for(
                 chain.params, fees.MIN_FEE_PER_KB), change=True, params=chain.params)
             return JSONResponse({"send": sid, "step": "commit", "of": 3, "offer": offer.id, "note": run["note"],

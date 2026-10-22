@@ -327,6 +327,7 @@ def test_a_drc20_send_is_three_offers_signed_and_broadcast_one_after_the_other(c
                     "walked_to": 4_999_999}
     monkeypatch.setattr(type(state), "ord_indexes", lambda self: {"doge": Index()})
     sent: dict = {}
+    mined: dict = {}
 
     class Rpc:
         def __enter__(self):
@@ -347,8 +348,9 @@ def test_a_drc20_send_is_three_offers_signed_and_broadcast_one_after_the_other(c
                 return tx.txid
             if method == "getrawtransaction":
                 tx = rawchain.read_tx(bytes.fromhex(sent[args[0]]))
-                return {"txid": tx.txid, "vout": [{"n": n, "value": v / 1e8, "scriptPubKey": {"hex": s.hex()}}
-                                                  for n, (v, s) in enumerate(tx.vout)]}
+                return {"txid": tx.txid, "confirmations": mined.get(args[0], 0),
+                        "vout": [{"n": n, "value": v / 1e8, "scriptPubKey": {"hex": s.hex()}}
+                                 for n, (v, s) in enumerate(tx.vout)]}
             raise AssertionError(method)
 
         def get_block_count(self):
@@ -391,3 +393,19 @@ def test_a_drc20_send_is_three_offers_signed_and_broadcast_one_after_the_other(c
     tx = rawchain.read_tx(bytes.fromhex(sent[final]))
     assert tx.vout[0] == (t20.POSTAGE, p2pkh_script(them)), "the note's coin, whole, to them as output 0"
     assert app.post("/account/token20/send", json={"send": c["send"]}).json()["step"] == "done"
+    # 2026-10-22: "It should remove the amount sent from the balance total until it can be updated from the
+    # chain" -- 12.5 held back (1300 on hand less 1250), and no second send of the same tokens.
+    row = app.get("/account/token20?chain=doge").json()["balances"][0]
+    assert row["pending_units"] == "1250", row
+    again = app.post("/account/token20/send", json={"chain": "doge", "tick": "dogi", "amount": "1", "to": them,
+                                                     "pubkey": key})
+    assert again.status_code == 400 and "on its way" in again.json()["detail"], again.text
+    assert app.post("/account/token20/send", json={"chain": "doge", "tick": "dogi", "amount": "0.5", "to": them,
+                                                    "pubkey": key}).status_code == 200, "what is left can still go"
+    mined[reveal] = 1                                        # the note in the tip's block: not read by the index yet
+    assert app.get("/account/token20?chain=doge").json()["balances"][0]["pending_units"] == "1250"
+    mined[reveal] = 3                                        # block 4,999,998: the index (at 4,999,999) walked past it
+    Index.lookup = lambda self, q: {"balances": [{"tick": "dogi", "units": "250", "transferable_units": "200",
+                                                  "decimals": 2}], "walked_to": 5_000_000}
+    assert app.get("/account/token20?chain=doge").json()["balances"][0]["pending_units"] == "0", \
+        "read from the chain: the index's own balance says it now"
