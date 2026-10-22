@@ -15,6 +15,7 @@ from test_doginal_index import FUND, SIG, Chain, _envelope, _push, _tx  # noqa: 
 def small(monkeypatch):
     monkeypatch.setattr(dx, "CHUNK", 4)
     monkeypatch.setattr(dx, "SETTLE", 0)
+    monkeypatch.setattr(dx, "WALK_SETTLE", 0)
 
 
 def _walk(tmp_path, chain):

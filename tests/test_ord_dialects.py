@@ -27,6 +27,7 @@ TAIL = _push(b"\x30" * 71) + _push(b"\x51" * 30)            # the signature and 
 def small(monkeypatch):
     monkeypatch.setattr(dx, "CHUNK", 4)
     monkeypatch.setattr(dx, "SETTLE", 0)
+    monkeypatch.setattr(dx, "WALK_SETTLE", 0)
     monkeypatch.setitem(dx.STARTS, "main", dx.BASE)        # Pepecoin's index over the made-up chain's heights
 
 

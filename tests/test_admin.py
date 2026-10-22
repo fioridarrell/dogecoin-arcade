@@ -425,7 +425,7 @@ def test_overview_lists_every_arcade_this_one_first_with_its_cores_ords_and_link
 
     class Index:
         def __init__(self):
-            self.base, self.tip = base, base + 1000 + dx.SETTLE - 1
+            self.base, self.tip = base, base + 1000 + dx.WALK_SETTLE - 1
 
         def holders(self):
             return [(fast, base + 500), ("", base + 1000)]
