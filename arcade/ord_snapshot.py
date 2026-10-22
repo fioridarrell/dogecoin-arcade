@@ -95,7 +95,7 @@ class Snapshots:
             # it was offered and its gigabytes stayed on the disk; an arcade fetching refused it, by its manifest).
             if self.snap_path.exists() and self.snap_path.stat().st_size == kept["manifest"]["size"] \
                     and kept["manifest"].get("layout", 1) == LAYOUT \
-                    and kept["manifest"].get("rules") == ord_rules.RULES:
+                    and kept["manifest"].get("rules") == self.index.rules:
                 self.made = {**kept, "path": self.snap_path}
             else:
                 self.forget()
@@ -148,7 +148,7 @@ class Snapshots:
                 size += len(piece)
         from . import ord_rules
         from .doginal_index import LAYOUT
-        manifest = {"net": self.index.net, "base": self.index.base, "rules": ord_rules.RULES, "layout": LAYOUT,
+        manifest = {"net": self.index.net, "base": self.index.base, "rules": self.index.rules, "layout": LAYOUT,
                     "height": height,
                     "size": size, "piece": PIECE, "pieces": hashes, "at": int(time.time())}
         os.replace(tmp, self.snap_path)
@@ -292,7 +292,7 @@ class Snapshots:
                 self._drop(f"arcade {node[:12]} sent a manifest that is not the one it offered")
                 return
             if manifest.get("net") != self.index.net or manifest.get("base") != self.index.base \
-                    or manifest.get("rules") != ord_rules.RULES or manifest.get("piece") != PIECE \
+                    or manifest.get("rules") != self.index.rules or manifest.get("piece") != PIECE \
                     or manifest.get("layout", 1) != LAYOUT:
                 self._drop("the snapshot is of another chain, start, rules or layout")
                 return
@@ -363,7 +363,7 @@ class Snapshots:
             for i, want in enumerate(manifest["pieces"]):
                 if _sha(f.read(manifest["piece"])) != want:
                     raise SnapshotError(f"piece {i} is not the manifest's")
-        copy = Store(path, self.index.base)
+        copy = Store(path, self.index.base, self.index.dialect, self.index.net)
         try:
             words = self.index.store.all_notes_words(10 ** 9)
             for c, by in words.items():

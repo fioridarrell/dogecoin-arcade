@@ -88,6 +88,22 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-22 Dogecoin rules 5: reinscriptions numbered like nintondo; per-chain rules versions (Claude)
+The operator compared our Dogecoin numbers with nintondo.io: identical to #3,052, then nintondo pulled ahead (152,856 by our
+#63.4 million). The first one, nintondo's #3,053 (3af064b2...i0, block 4,610,566), is a REINSCRIPTION -- written on the
+coin carrying #3,052 -- which wonky-ord / ord-dogecoin never number (a new one only on an uninscribed first koinu).
+The operator: "Number them like nintondo". So on Dogecoin (`store.net == "doge"`) the walker looks for a new inscription in
+every transaction, as Pepecoin already does; Litecoin's Doginals kind keeps the first-koinu rule.
+- **Rules per chain:** `ord_rules.RULES_BY_NET = {"doge": 5}`, `rules_for(net)` (RULES stays 4): `Store.rules`,
+  `DoginalIndex.rules`, the mesh "hi", walkers, snapshots (and the snapshot verifier opens its copy with the chain), so
+  ONLY Dogecoin indexes are cut again; PEP and Litecoin keep theirs.
+- **Checked against nintondo** on a fresh scratch walk to block 4,653,100 (101,216 inscriptions): identical to #54,423
+  (reinscriptions included: #3,053 = 3af064b2...), then nintondo is ONE ahead (its #54,424, between our #54,423 at
+  4,625,077 and #54,424 at 4,625,078) -- not an envelope starting or completing there, nor an unfinished one (nintondo
+  does not number those either); still to find. Pepecoin against nintondo: identical to #8,571,312; past it we are
+  ahead by zero-piece inscriptions only (ord-pepecoin numbers them, nintondo does not; the operator: keep ord-pepecoin's rule).
+- Tests: tests/test_ord_dialects.py (Dogecoin numbers the reinscription, Litecoin does not; per-chain rules, only
+  Dogecoin cut again), tests/test_ord_rules.py (the first-koinu rule on Litecoin), fixtures on each chain's rules.
 ### 2026-10-22 Admin -> Ords: the four choices register at once (Claude)
 The operator: "The operator cannot change how they interact with the ords. Read only help or keep a complete index buttons are
 not registering the clicks." The choice was saved, but the redraw right after read the index's status, kept 20 s

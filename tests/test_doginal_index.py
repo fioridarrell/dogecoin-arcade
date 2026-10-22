@@ -327,7 +327,7 @@ def test_a_helper_that_lies_shows_as_a_difference(tmp_path):
     chain = _busy_chain(8)
     walker = _walker(tmp_path, chain)
     walker.step()
-    walker.heard("liar", {"op": "hi", "mode": "help", "rules": dx.ord_rules.RULES})
+    walker.heard("liar", {"op": "hi", "mode": "help", "rules": dx.ord_rules.rules_for("doge")})
     walker.heard("liar", {"op": "dn", "rows": [[0, "ab" * 32, 0]]})
     status = walker.status()
     assert status["differ"] == 1 and status["differs"][0]["chunk"] == 0
@@ -829,7 +829,7 @@ def test_a_chunk_stitched_from_notes_the_audit_outvotes_is_said_never_wiped(tmp_
     holder._prune_notes()
     assert holder.walker.next_height() == dx.BASE + 12, "one word, not outvoted: kept"
     for liar in ("x", "y"):
-        holder.heard(liar, {"op": "hi", "mode": "help", "rules": dx.ord_rules.RULES})
+        holder.heard(liar, {"op": "hi", "mode": "help", "rules": dx.ord_rules.rules_for("doge")})
         holder.heard(liar, {"op": "dn", "rows": [[1, "cd" * 32, 0, "ef" * 32]]})
     kept = holder.store.q("SELECT COUNT(*) FROM insc")[0][0]
     holder._pruned = 0
@@ -837,7 +837,7 @@ def test_a_chunk_stitched_from_notes_the_audit_outvotes_is_said_never_wiped(tmp_
     assert holder.status()["disputed"] == [1] or holder.disputed == [1]
     assert holder.walker.next_height() == dx.BASE + 12 and holder.store.q("SELECT COUNT(*) FROM insc")[0][0] == kept
     for liar in ("p", "q"):                              # other notes, the same births: not a dispute
-        holder.heard(liar, {"op": "hi", "mode": "help", "rules": dx.ord_rules.RULES})
+        holder.heard(liar, {"op": "hi", "mode": "help", "rules": dx.ord_rules.rules_for("doge")})
     assert holder.disputed == [1]
 
 
@@ -930,7 +930,7 @@ def test_a_chunk_only_an_older_arcade_said_is_scanned_here_not_waited_for(tmp_pa
         if not needed:
             holder._needed = lambda: []                   # as it was before: the lane goes on with the cover
         Mesh().join(name, holder)
-        holder.heard("old", {"op": "hi", "mode": "help", "rules": dx.ord_rules.RULES, "v": 2})
+        holder.heard("old", {"op": "hi", "mode": "help", "rules": dx.ord_rules.rules_for("doge"), "v": 2})
         holder.heard("old", {"op": "dn", "rows": [[1, "ab" * 32, 0]]})
         for _ in range(3):
             holder.step()

@@ -417,10 +417,12 @@ def _first_page_of(token: dict | None) -> dict | None:
 # --------------------------------------------------------------------------- the store
 
 class Store:
-    def __init__(self, path: Path, base: int | None = None, dialect: str = "dogecoin"):
+    def __init__(self, path: Path, base: int | None = None, dialect: str = "dogecoin", net: str = ""):
         self.path = Path(path)
         self.base = BASE if base is None else base
         self.dialect = dialect                         # how the chain's envelopes read (ord_rules.dialect_of)
+        self.net = net                                 # its chain, for its rules version (ord_rules.rules_for)
+        self.rules = ord_rules.rules_for(net)
         self._lock = threading.RLock()                 # the one writer connection
         self._readers = threading.local()              # a read connection per thread (q)
         self._gen = 0                                  # bumped when the file is swapped (a snapshot installed)
@@ -436,7 +438,7 @@ class Store:
         # Kept under other rules (or none, before 2026-10-20's): cut again from the start.
         # All or nothing (2026-10-21, rules 3 on .25: PEP's index was left with 5 of its tables and the new rules,
         # taken for layout 2, so the rest were never made): the drop, the meta and the new marks in one transaction.
-        if self.meta("rules") != ord_rules.RULES:
+        if self.meta("rules") != self.rules:
             self._db.execute("BEGIN IMMEDIATE")
             try:
                 for (table,) in self._db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name != 'meta'"
@@ -444,7 +446,7 @@ class Store:
                     self._db.execute(f"DROP TABLE IF EXISTS {table}")
                 self._db.execute("DELETE FROM meta")
                 self._db.execute("INSERT OR REPLACE INTO meta VALUES ('layout', ?)", (json.dumps(LAYOUT),))
-                self._db.execute("INSERT OR REPLACE INTO meta VALUES ('rules', ?)", (json.dumps(ord_rules.RULES),))
+                self._db.execute("INSERT OR REPLACE INTO meta VALUES ('rules', ?)", (json.dumps(self.rules),))
                 self._db.execute("COMMIT")
             except BaseException:
                 self._db.execute("ROLLBACK")
@@ -1013,7 +1015,9 @@ class Walker:
                 # inscription_updater.rs `if inscriptions.iter().all(|flotsam| flotsam.offset != 0)`). Pepecoin: in
                 # every transaction (ord-pepecoin's: "In Pepecoin, we always check for new inscriptions to support
                 # parent/child collection provenance" -- `if true`), rules 4.
-                if (self.dialect == "pepecoin" or all(c[1] != 0 for c in carried)) and tx.vin \
+                # Dogecoin numbers a reinscription too since rules 5 (2026-10-22: "Number them like nintondo"),
+                # so only Litecoin's Doginals kind still waits for an uninscribed first koinu.
+                if (self.dialect == "pepecoin" or self.store.net == "doge" or all(c[1] != 0 for c in carried)) and tx.vin \
                         and tx.vin[0]["vout"] != -1:
                     prev = tx.vin[0]["txid"]
                     chain = w.get("pending", (prev,))
@@ -1381,7 +1385,8 @@ class DoginalIndex:
         self.taproot, self.mweb = net in TAPROOT, mweb
         # Each chain read as its own official indexer reads it (rules 4, 2026-10-21): births, completions, notes.
         self.dialect = ord_rules.dialect_of(net)
-        self.store = Store(path, self.base, self.dialect)
+        self.store = Store(path, self.base, self.dialect, net)
+        self.rules = self.store.rules
         self.rpc_factory = rpc_factory
         self.mode = mode
         self.own_core = own_core
@@ -1881,7 +1886,7 @@ class DoginalIndex:
         if op == "hi":
             self.chunks.peers[node] = {k: header.get(k) for k in ("mode", "walk", "helped", "v", "rules")} | \
                 {"at": time.time()}
-            if header.get("rules") == ord_rules.RULES:
+            if header.get("rules") == self.rules:
                 # "sn<layout>": a snapshot of this layout, said under its own key so an arcade of another layout
                 # never fetches one it cannot read ("sn" was layout 1, "sn2" layout 2).
                 self.snapshots.heard_offer(node, header.get(f"sn{LAYOUT}"))
@@ -1889,7 +1894,7 @@ class DoginalIndex:
         if op == "sq":                                   # a linked arcade far behind asks for a snapshot
             self._snap_asked = True
             return
-        if (self.chunks.peers.get(node) or {}).get("rules") != ord_rules.RULES:
+        if (self.chunks.peers.get(node) or {}).get("rules") != self.rules:
             return                         # an arcade on other rules (or not heard from yet): its chunks are not ours
         if op == "ls":
             c, at = int(header["c"]), int(header.get("at") or 0)
@@ -1916,7 +1921,7 @@ class DoginalIndex:
     def hello(self) -> dict:
         said = {"op": "hi", "net": self.net, "base": self.base, "mode": self.mode(),
                 "walk": self.walker.next_height() if self.mode() == "walk" else None, "helped": self.helped, "v": 3,
-                "rules": ord_rules.RULES}
+                "rules": self.rules}
         offer = self.snapshots.offer()
         if offer is not None:
             said[f"sn{LAYOUT}"] = offer
@@ -2148,7 +2153,7 @@ class DoginalIndex:
         """Linked arcades that walk this chain, furthest first: (node, the block they have walked to)."""
         # Only arcades on these rules (2026-10-21): an index built under other rules numbers otherwise.
         rows = [(node, int(p.get("walk") or 0)) for node, p in self.chunks.peers.items()
-                if p.get("mode") == "walk" and p.get("rules") == ord_rules.RULES
+                if p.get("mode") == "walk" and p.get("rules") == self.rules
                 and time.time() - float(p.get("at") or 0) < 300]
         return sorted(rows, key=lambda r: -r[1])
 
