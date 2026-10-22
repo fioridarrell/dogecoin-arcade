@@ -1975,11 +1975,13 @@ class DoginalIndex:
         # Confidence (2026-10-20): how many arcades said the same of a chunk -- 1 found, 2 legitimate, more
         # raises it. Chunks and the inscriptions in them, at each level (AUDIT_MAX and over together).
         levels = {k: {"chunks": 0, "inscriptions": 0} for k in range(1, AUDIT_MAX + 1)}
+        agreeing: dict[int, int] = {}                     # chunk -> arcades saying its most-said hash
         for c, words in per.items():
             tally: dict[str, int] = {}
             for h in words.values():
                 tally[h] = tally.get(h, 0) + 1
             best = max(tally, key=tally.get)
+            agreeing[c] = tally[best]
             level = levels[min(tally[best], AUDIT_MAX)]
             level["chunks"] += 1
             level["inscriptions"] += born.get((c, best), 0)
@@ -2024,7 +2026,17 @@ class DoginalIndex:
                     "fetching": ({"from": f["from"][:12], "have": len(f["have"]),
                                   "pieces": len(f["manifest"]["pieces"]) if f.get("manifest") else None}
                                  if f else None)}
-        return {"net": self.net, "levels": levels, "covered": covered, "snapshot": snapshot,
+        # Where along the chain how many arcades agree (2026-10-21: the Ords ring's inner circle "red when there
+        # is a single node that has the index ... yellow if there are two nodes with agreeing index, and ... green when
+        # there are three"): runs of chunks [first, last + 1, agreeing], agreeing 0 (nobody said it yet) to 3 (3 or more).
+        runs: list[list[int]] = []
+        for c in range(ready):
+            k = min(agreeing.get(c, 0), 3)
+            if runs and runs[-1][2] == k and runs[-1][1] == c:
+                runs[-1][1] = c + 1
+            else:
+                runs.append([c, c + 1, k])
+        return {"net": self.net, "levels": levels, "covered": covered, "snapshot": snapshot, "agree_runs": runs,
                 "disputed": list(getattr(self, "disputed", []))[:20],
                 "rebuilt": self.store.meta("rebuilt"),
                 "phase": "cover" if covered < ready else "audit",

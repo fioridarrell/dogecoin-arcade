@@ -88,6 +88,15 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-21 Ords ring: the inner circle by agreement (Claude)
+The operator: "the inner circle should be red when there is a single node that has the index it should be yellow if there are
+two nodes with agreeing index, and it should be green when there are three". `DoginalIndex.status()` now gives
+`agree_runs`: runs of chunks [first, last + 1, agreeing], agreeing = how many arcades said a chunk's most-said hash,
+capped at 3 (0: nobody yet). admin.html `ordRing` draws the thin inner ring from them: red 1, yellow 2, green 3+,
+grey 0 (each run titled on hover); the centre says the share of the chain with 3 agreeing. Before, it counted how far
+each copy reached (2+ green, 1 amber), whether or not their words agreed. Test: tests/test_doginal_index.py
+`test_the_status_says_how_many_arcades_agree_along_the_chain`.
+
 ### 2026-10-21 PEP rebuilt under rules 4 matches the other explorer but for one inscription, kept and noted (Claude)
 After the rules-4 rebuild a test machine's PEP index was compared by hand with an outside explorer again: the three
 inscriptions missing at #30,410-30,412 are in, and a random sample to #3.6 million matches exactly but for ONE:
