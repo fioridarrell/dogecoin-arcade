@@ -161,7 +161,7 @@ def test_the_node_reads_the_accounts_own_coins_only(client, monkeypatch, tmp_pat
     got = app.get(f"/account/doginal-tx/{T1}")
     assert got.status_code == 200, got.text
     assert got.json() == {"txid": T1, "inscriptions": [{"vout": 0, "inscription_id": INS, "sat_offset": 0,
-                                                        "unknown": False}]}
+                                                        "unknown": False, "wait": False}]}
     assert app.get(f"/account/doginal-tx/{T3}").json()["inscriptions"] == []
     app.get(f"/account/doginal-tx/{T1}")
     assert calls.count(T1) == 1, "asked once, kept for good"
@@ -179,7 +179,7 @@ def test_many_transactions_are_read_in_one_call_own_coins_only(client, monkeypat
     got = app.post("/account/doginal-txs", json={"chain": "doge", "txids": [T1, T2, T3, "99" * 32]})
     assert got.status_code == 200, got.text
     txs = got.json()["txs"]
-    assert txs[T1] == [{"vout": 0, "inscription_id": INS, "sat_offset": 0, "unknown": False}]
+    assert txs[T1] == [{"vout": 0, "inscription_id": INS, "sat_offset": 0, "unknown": False, "wait": False}]
     assert txs[T3] == [] and txs[T2] is None and "99" * 32 not in txs
     app.post("/account/doginal-txs", json={"chain": "doge", "txids": [T1]})
     assert calls.count(T1) == 1, "asked once, kept for good"
