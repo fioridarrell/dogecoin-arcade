@@ -88,6 +88,17 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-22 Imported wallets: the balance is what it can send; Doginals and unchecked small coins said beside it (Claude)
+The operator: "on my imported wallet ... it shows that I have 77 Doge but it doesn't show how many are protected as doginals.
+Is the 77 Doge expendable or does that include the doginals?" It included them: `_imported_view`'s `spendable` summed
+every coin, while a send from it (funding.choose -> guard.spendable) already left them out. Now `Doginals.sort_known`
+sorts the coins from what is known, reading nothing (a Doginal's coin; a small coin with no answer, or protected:
+waiting for the ord index or an unfinished trace; the rest), and the view says `spendable` (free only), `inscribed` and
+`unchecked` (with counts). The wallet header says "X held in Doginals · Y in N small coins protected until checked" for
+an imported wallet, as the main wallet already said its locked Doginals. And while the ord index walks, `spendable`
+leaves an unasked small coin out without reading it from the Core (a 6,000-coin wallet was read coin by coin for one
+send). Tests: tests/test_doginals.py.
+
 ### 2026-10-22 Doginals guard: no more backwards tracing where the chain has an ord index (Claude)
 The operator (an imported wallet of 6,000+ small Doginal coins, each walked back by `doginals.trace` for hours): "stop the
 scan for doginals using our old backwards scanning technique ... Mark all of the small transactions as protected until

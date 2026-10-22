@@ -232,3 +232,29 @@ def test_an_index_not_opened_yet_protects_rather_than_traces(tmp_path):
     g = doginals.Doginals(tmp_path / "d.sqlite", fetch=lambda t: {"txid": t, "inscriptions": []},
                           rpc_factory=lambda: chain, index=lambda: None)
     assert g.held(chain.last)[0][0]["wait"] == "index" and chain.reads <= 2
+
+
+def test_a_wallets_coins_sort_into_free_inscribed_and_unchecked_from_what_is_known(tmp_path):
+    """2026-10-22: "it shows that I have 77 Doge but it doesn't show how many are protected as doginals". The
+    balance line sorts the coins from what is known, reading nothing: a Doginal's coin, a small coin with no answer or a
+    protected one, and the rest."""
+    g = doginals.Doginals(tmp_path / "d.sqlite", fetch=lambda t: {"txid": t, "inscriptions": []})
+    with g._db() as db:
+        db.execute("INSERT INTO tx2 VALUES (?,?,?)", (T1, '{"0": [{"id": "%si0", "offset": 0}]}' % T1, 0))
+        db.execute("INSERT INTO tx2 VALUES (?,?,?)", (T2, '{"1": [{"id": null, "offset": null, "unknown": true, '
+                                                         '"wait": "index"}]}', 0))
+    coins = [{"txid": T1, "vout": 0, "value": 100_000}, {"txid": T1, "vout": 1, "value": 50_000},
+             {"txid": T2, "vout": 1, "value": 100_000}, {"txid": "cc" * 32, "vout": 0, "value": 100_000},
+             {"txid": "dd" * 32, "vout": 0, "value": 7_000_000_000}]
+    free, inscribed, unchecked = g.sort_known(coins)
+    assert [c["value"] for c in free] == [50_000, 7_000_000_000]
+    assert inscribed == [coins[0]] and unchecked == [coins[2], coins[3]]
+
+
+def test_while_the_index_walks_a_send_leaves_unasked_small_coins_out_without_reading_them(tmp_path):
+    chain = _IndexChain(3)
+    g = doginals.Doginals(tmp_path / "d.sqlite", fetch=lambda t: {"txid": t, "inscriptions": []},
+                          rpc_factory=lambda: chain, index=lambda: _Index(walked=1000))
+    big = {"txid": "ee" * 32, "vout": 0, "value": 500_000_000}
+    assert g.spendable([{"txid": chain.last, "vout": 0, "value": 100_000}, big]) == [big]
+    assert chain.reads <= 1, f"the small coin was not read ({chain.reads} reads)"

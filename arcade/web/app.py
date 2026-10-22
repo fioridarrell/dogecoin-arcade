@@ -24149,14 +24149,22 @@ def create_app(state: AppState) -> FastAPI:
                 since = utxoslib.since(db, address)
             coins += [dict(c) for c in _flights.change_for(account.pubkey, chain.network)
                       if c.get("address") == address]
-            seen, spendable = set(), 0
+            seen, mine = set(), []
             for c in coins:
                 outpoint = (c["txid"], int(c["vout"]))
                 if outpoint in gone or outpoint in seen:
                     continue
                 seen.add(outpoint)
-                spendable += int(c["value"])
-            out.append({"address": address, "kind": entry["k"], "since": since, "spendable": spendable,
+                mine.append(c)
+            # What a send from it may use, and what is held (2026-10-22: "it shows that I have 77 Doge but it
+            # doesn't show how many are protected as doginals"): the coins Doginals sit on, and the small coins not
+            # checked yet (protected until the ord index reaches them) -- from what is known, reading nothing.
+            guard = fundinglib.guard_for(address)
+            free, inscribed, unchecked = guard.sort_known(mine) if guard is not None else (mine, [], [])
+            out.append({"address": address, "kind": entry["k"], "since": since,
+                        "spendable": sum(int(c["value"]) for c in free),
+                        "inscribed": sum(int(c["value"]) for c in inscribed), "inscribed_n": len(inscribed),
+                        "unchecked": sum(int(c["value"]) for c in unchecked), "unchecked_n": len(unchecked),
                         "registered": entry["t"], **_rescan_says(chain, address)})
         return out
 

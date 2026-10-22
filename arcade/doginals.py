@@ -278,10 +278,42 @@ class Doginals:
                 out.append(coin)
         return out
 
+    def sort_known(self, coins: list[dict]) -> tuple[list[dict], list[dict], list[dict]]:
+        """(free, inscribed, unchecked) from what is already known, reading nothing new -- for a wallet's balance line
+        (2026-10-22: "it shows that I have 77 Doge but it doesn't show how many are protected as doginals"):
+        a coin a Doginal sits on is inscribed; a small coin with no answer yet, or one protected (waiting for the ord
+        index, or a trace not finished), is unchecked; the rest are free -- what `spendable_known` lets go."""
+        free, inscribed, unchecked = [], [], []
+        known: dict[str, dict | None] = {}
+        for coin in coins:
+            txid = coin["txid"]
+            if txid not in known:
+                known[txid] = self.kept(txid)
+            on = known[txid]
+            here = on.get(int(coin["vout"])) if on is not None else None
+            if on is None:
+                (free if int(coin["value"]) > POSTAGE_MAX else unchecked).append(coin)
+            elif not here:
+                free.append(coin)
+            elif any(i.get("id") for i in here):
+                inscribed.append(coin)
+            else:
+                unchecked.append(coin)
+        return free, inscribed, unchecked
+
+    def waiting_for_index(self) -> bool:
+        """Whether small coins wait for the chain's ord index (it has one, and no copy of it is complete yet)."""
+        return self._index_now() is not None and self._index_walked() is None
+
     def spendable(self, coins: list[dict]) -> list[dict]:
         """The coins an ordinary send may use: none carrying an inscription, and no small one that could not be read."""
         out = []
+        # While the index walks, a small coin nothing is known about yet stays out without a read of its own: a
+        # wallet of 6,000 small coins is not read from the Core coin by coin for one send (2026-10-22).
+        waiting = self.waiting_for_index()
         for coin in coins:
+            if waiting and int(coin["value"]) <= TRACE_MAX and self.kept(coin["txid"]) is None:
+                continue
             try:
                 on = self.held(coin["txid"]).get(int(coin["vout"]))
             except Unknown:

@@ -938,7 +938,12 @@ function drawHead() {
   // Set aside for this account's offers and orders, on this arcade or another (2026-10-19): not leaving, not to spend.
   if (c.held) bits.push(["out", `${coinsOf(c.held)} held for your offers`]);
   // Coins carrying an inscription are held, not spendable (2026-10-15): said beside the number they are left out of.
-  if (c.inscribed) bits.push(["out", `${coinsOf(c.inscribed)} held in ${c.network === "doge" ? "Doginals" : (c.network === "ltc" || c.network === "ltctest") ? "Litecoin inscriptions" : c.network === "main" ? "Pepinals" : "inscriptions"}`]);
+  const inscWord = c.network === "doge" ? "Doginals" : (c.network === "ltc" || c.network === "ltctest") ? "Litecoin inscriptions" : c.network === "main" ? "Pepinals" : "inscriptions";
+  // An imported wallet's own (2026-10-22): its number is what it can send; what is held is said beside it.
+  const held1 = w ? (w.status || {}) : c;
+  if (held1.inscribed) bits.push(["out", `${coinsOf(held1.inscribed)} held in ${inscWord}`]);
+  if (w && held1.unchecked) bits.push(["out", `${coinsOf(held1.unchecked)} in ${Number(held1.unchecked_n || 0).toLocaleString()} `
+    + `small coins protected until checked`]);
   if (asset) {
     const page = el("a", "", `Token #${asset.property_id}`);
     page.href = `/tokens/${asset.property_id}?chain=${encodeURIComponent(c.network)}`;
@@ -963,8 +968,11 @@ function drawHead() {
     loadKind(c, k).catch(() => {});
   }
   if (w) {
+    const held = bits.filter(([, text]) => / held in |protected until checked/.test(text));
     bits.length = 0;
-    sub.textContent = w.kind === "wif" ? "Imported from a private key." : "Imported from a seed phrase.";
+    bits.push(...held);
+    sub.textContent = (w.kind === "wif" ? "Imported from a private key." : "Imported from a seed phrase.")
+      + (held.length ? " " : "");
   }
   bits.forEach(([cls, text], i) => {
     if (i) sub.append(" · ");
