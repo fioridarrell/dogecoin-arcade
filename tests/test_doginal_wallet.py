@@ -496,3 +496,51 @@ def test_a_token_lock_is_four_offers_and_ends_with_the_note_on_the_lock(client, 
     assert [o for o in tx.vout] == t20swap.lock_outputs(redeem, H.DOGINAL_RESERVE), "note 2 on the lock, reserve beside"
     done = app.post("/account/trade/lock20", json={"lock20": c["lock20"]}).json()
     assert done["step"] == "done" and done["lock_txid"] == lock and done["vout"] == 0
+
+
+def test_a_listing_holds_what_it_lists_until_it_is_unlisted_or_taken(client, monkeypatch, tmp_path):
+    """2026-10-22: "I made a listing of frgy from my @apple but it remains in my balance ... It should be locked
+    as listed until it is unlisted or purchased" -- and "all tokens and all coins listed", "And NFTs listed". A swap
+    order of a DRC-20 / PRC-20 token or a Doginal stays on the account's address until taken, so it is held: off the
+    balance, off a send, and a listing past what is free is refused."""
+    import json as _json
+    app, state = client
+    _doge_account(app, state, monkeypatch, tmp_path)
+    them = b58check_encode(30, hash160(_pubkey(int("41" * 32, 16))))
+
+    class Index:
+        tip = 5_000_000
+
+        def lookup(self, q):
+            return {"balances": [{"tick": "dogi", "units": "1500", "transferable_units": "0", "decimals": 2}],
+                    "walked_to": 4_999_999}
+    monkeypatch.setattr(type(state), "ord_indexes", lambda self: {"doge": Index()})
+    held: list = []
+    monkeypatch.setattr(type(state.trade_orders), "standing_of", lambda self, listers, now=None: list(held))
+    key = _pubkey(int("31" * 32, 16)).hex()
+    held.append({"id": "ord-1", "give": {"network": "doge", "kind": "token20", "asset": "dogi", "amount": 10},
+                 "get": {"network": "main", "kind": "coin", "amount": 1}})
+    row = app.get("/account/token20?chain=doge").json()["balances"][0]
+    assert row["listed_units"] == "1000", row
+    sent = app.post("/account/token20/send", json={"chain": "doge", "tick": "dogi", "amount": "6", "to": them,
+                                                    "pubkey": key})
+    assert sent.status_code == 400 and "listed on the exchange" in sent.json()["detail"], sent.text
+    assert app.post("/account/token20/send", json={"chain": "doge", "tick": "dogi", "amount": "5", "to": them,
+                                                    "pubkey": key}).status_code == 200, "what is not listed can go"
+    order = lambda i, n: {"id": i, "give": {"network": "doge", "kind": "token20", "asset": "dogi", "amount": n},  # noqa
+                          "get": {"network": "main", "kind": "coin", "amount": 100}}
+    acct = state.messaging
+    lister = b58check_encode(acct.params.pubkeyhash_version, hash160(_pubkey(int("31" * 32, 16))))
+    assert app.post("/account/address", json={"address": lister, "chain": acct.network}).status_code == 200
+    over = app.post("/account/orders/post", json={"orders": [order("ord-1", 10), order("ord-2", 6)]})
+    assert over.status_code == 409 and "16 dogi in all" in over.json()["detail"], over.text
+    # The Doginal on a swap order cannot be sent meanwhile.
+    held.append({"id": "ord-3", "give": {"network": "doge", "kind": "doginal", "asset": INS, "amount": 1},
+                 "get": {"network": "main", "kind": "coin", "amount": 1}})
+    got = app.post("/account/doginal/send", json={"chain": "doge", "txid": T1, "vout": 0, "inscription": INS,
+                                                   "to": them})
+    assert got.status_code == 400 and "listed for sale" in got.json()["detail"], got.text
+    assert app.get("/account/listed").json() == {"doginals": {"doge": [INS]}, "token20": {"doge": {"dogi": 10}}}
+    held.clear()
+    assert app.get("/account/token20?chain=doge").json()["balances"][0]["listed_units"] == "0", "unlisted: free again"
+    _ = _json

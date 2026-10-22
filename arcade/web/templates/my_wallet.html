@@ -1919,7 +1919,10 @@ async function drawToken20(box, c) {
       const row = el(sendable ? "button" : "div", "wl-tok");
       // Sent and not read from the chain yet (2026-10-22): off the balance until the index has the note.
       const onWay = BigInt(String(b.pending_units || "0"));
-      const onHand = (BigInt(String(b.units || "0")) - BigInt(String(b.transferable_units || "0")) - onWay).toString();
+      // Listed on the exchange (2026-10-22): held until it is unlisted or sold, so not on hand.
+      const listed = BigInt(String(b.listed_units || "0"));
+      const onHand = (BigInt(String(b.units || "0")) - BigInt(String(b.transferable_units || "0")) - onWay
+                      - listed).toString();
       if (asset && asset.token20 && asset.tick === b.tick) {
         row.classList.add("on");
         if (asset.balance !== onHand) { asset.balance = onHand; drawHead(); }   // the index walked on: the card follows
@@ -1938,9 +1941,11 @@ async function drawToken20(box, c) {
       const mid = el("span", "wl-mid");
       const free = b.transferable_units && b.transferable_units !== "0"
         ? ` · ${units20(b.transferable_units, b.decimals)} transferable` : "";
-      const way = onWay > 0n ? ` · ${units20(onWay.toString(), b.decimals)} on its way` : "";
+      const way = (onWay > 0n ? ` · ${units20(onWay.toString(), b.decimals)} on its way` : "")
+        + (listed > 0n ? ` · ${units20(listed.toString(), b.decimals)} listed` : "");
       mid.append(el("b", "", b.tick), el("small", "", word + free + way));
-      row.append(av, mid, el("span", "wl-amt", units20((BigInt(String(b.units || "0")) - onWay).toString(), b.decimals)));
+      row.append(av, mid, el("span", "wl-amt", units20((BigInt(String(b.units || "0")) - onWay - listed).toString(),
+                                                       b.decimals)));
       rows.push(row);
     }
     if (reading && got.balances.length) {
@@ -2369,7 +2374,17 @@ async function drawDoginals() {
   const pages = Math.max(1, Math.ceil(found.length / DG_PAGE));
   const page = Math.min(Math.max(0, dg.page | 0), pages - 1);
   const here = found.slice(page * DG_PAGE, (page + 1) * DG_PAGE);
-  const shown = JSON.stringify([here.map((g) => g.id + ":" + g.txid + ":" + g.vout), sendShort, swapShort, !!w]);
+  // Listed ones are held (2026-10-22: "locked as listed until it is unlisted or purchased"): no Send or Swap.
+  if (!w && !dg.listed) {
+    dg.listed = new Set();
+    fetch("/account/listed", {cache: "no-store"}).then((r) => r.json()).then((got) => {
+      dg.listed = new Set(((got.doginals || {})[c.network]) || []);
+      if (dg.listed.size) { ui.shown = null; drawDoginals().catch(() => {}); }
+    }).catch(() => {});
+  }
+  const isListed = (g) => !!(dg.listed && dg.listed.has(g.id));
+  const shown = JSON.stringify([here.map((g) => g.id + ":" + g.txid + ":" + g.vout + (isListed(g) ? ":L" : "")),
+                                sendShort, swapShort, !!w]);
   if (ui.shown !== shown) {
     ui.shown = shown;
     const cards = [];
@@ -2378,7 +2393,9 @@ async function drawDoginals() {
       card.dataset.doginal = g.id;
       const id = el("div", "wl-dgid", g.id); id.title = g.id;
       card.append(doginalPic(g), id);
-      if (!w) {
+      if (!w && isListed(g)) {
+        card.append(el("span", "wl-piecesend ghost", "Listed"));
+      } else if (!w) {
         const send = el("button", "wl-piecesend", "Send"); send.type = "button";
         send.setAttribute("aria-label", `Send ${W} ${g.id}`);
         send.onclick = () => openSend("", g);

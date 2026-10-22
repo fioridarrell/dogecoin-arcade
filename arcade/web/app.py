@@ -13697,7 +13697,10 @@ def create_app(state: AppState) -> FastAPI:
         # Sent here but not read from the chain yet (2026-10-22: "It should remove the amount sent from the
         # balance total until it can be updated from the chain"): said beside each balance, and taken off on the page.
         pending = _t20_pending_units(one, address, int(said.get("walked_to") or 0))
-        balances = [{**b, "pending_units": str(pending.get(str(b.get("tick")).lower(), 0))}
+        main = address == _account_address(account.pubkey, one)       # listings stand on the account's own address
+        balances = [{**b, "pending_units": str(pending.get(str(b.get("tick")).lower(), 0)),
+                     "listed_units": str(_t20_listed_units(account, one, str(b.get("tick")), int(b.get("decimals") or 0))
+                                         if main else 0)}
                     for b in said.get("balances") or []]
         return JSONResponse({"chain": one.network, "address": address, "protocol": protocol,
                              "balances": balances, "walked_to": said.get("walked_to"), "tip": tip},
@@ -13741,6 +13744,96 @@ def create_app(state: AppState) -> FastAPI:
             out[e["tick"]] = out.get(e["tick"], 0) + int(e["units"])
         _t20_pending[(chain.network, address)] = kept
         return out
+
+    def _listed_holds(account) -> dict:
+        """What this account's standing listings hold of what is still on its own addresses (2026-10-22: a
+        listing "should be locked as listed until it is unlisted or purchased" -- "all tokens and all coins listed" and
+        "NFTs listed"). A delegated swap order holds nothing here: its side moved to the order's own address when it
+        was listed (wallet_js delegateOrder) -- coins, Omni tokens and NFTs go that way. What stays is a DRC-20 /
+        PRC-20 token or a Doginal on a swap order (locked only once taken), and a Doginal on the Doginals tab.
+        {"token20": {(network, tick): whole tokens}, "doginal": {(network, inscription id)}}."""
+        out: dict = {"token20": {}, "doginal": set()}
+        lister = _account_address(account.pubkey, _account_chain())
+        try:
+            standing = state.trade_orders.standing_of([lister] if lister else [])
+        except Exception:                                  # noqa: BLE001
+            standing = []
+        for body in standing:
+            give = body.get("give") or {}
+            if body.get("delegated"):
+                continue
+            if give.get("kind") == "token20":
+                key = (str(give.get("network")), str(give.get("asset")).lower())
+                out["token20"][key] = out["token20"].get(key, 0) + int(give.get("amount") or 0)
+            elif give.get("kind") == "doginal":
+                out["doginal"].add((str(give.get("network")), str(give.get("asset")).lower()))
+                out.setdefault("doginal_swap", set()).add((str(give.get("network")), str(give.get("asset")).lower()))
+        for chain in state.token_chains:
+            if chain.network not in ("doge", "main"):
+                continue
+            mine = _account_address(account.pubkey, chain)
+            try:
+                rows = state.doginal_book.open_listings(chain.network) if mine else []
+            except Exception:                              # noqa: BLE001
+                rows = []
+            out["doginal"] |= {(chain.network, str(r["inscription"]).lower()) for r in rows if r["seller"] == mine}
+        return out
+
+    def _listing_over(account, orders: list[dict]) -> str:
+        """Why a book of this account's swap orders lists more than it has ("" when it does not): a DRC-20 / PRC-20
+        amount past what is free (the balance less what is set aside on notes and on its way), the same Doginal twice,
+        or a Doginal also listed on the Doginals tab. Delegated orders are left out: their side already moved."""
+        want: dict = {}
+        seen_dg: set = set()
+        tab_book = set()
+        for chain in state.token_chains:
+            if chain.network in ("doge", "main"):
+                mine = _account_address(account.pubkey, chain)
+                try:
+                    tab_book |= {(chain.network, str(r["inscription"]).lower())
+                                 for r in state.doginal_book.open_listings(chain.network) if r["seller"] == mine}
+                except Exception:                          # noqa: BLE001
+                    pass
+        for o in orders:
+            if o.get("delegated"):
+                continue
+            give = o.get("give") or {}
+            net, kind, asset = str(give.get("network")), give.get("kind"), str(give.get("asset") or "").lower()
+            if kind == "token20":
+                want[(net, asset)] = want.get((net, asset), 0) + int(give.get("amount") or 0)
+            elif kind == "doginal":
+                if (net, asset) in seen_dg:
+                    return f"that Doginal is already listed in another of your swaps"
+                if (net, asset) in tab_book:
+                    return "that Doginal is listed on the Doginals tab: unlist it there first"
+                seen_dg.add((net, asset))
+        for (net, tick), whole in want.items():
+            chain = next((c for c in state.token_chains if c.network == net), None)
+            index = state.ord_indexes().get(net)
+            address = _account_address(account.pubkey, chain) if chain is not None else ""
+            if chain is None or index is None or not address:
+                return f"this arcade cannot read {tick} on that chain"
+            try:
+                got = index.lookup({"what": "balances", "owner": address})
+            except Exception as exc:                       # noqa: BLE001
+                return f"{tick} can't be checked right now: {str(exc)[:120]}"
+            guard = fundinglib.guard_on(net)
+            tip = int(index.tip or 0) or (guard._tip() if guard is not None else 0)
+            if not tip or int(got.get("walked_to") or 0) < tip - doginalslib.INDEX_READY_LAG:
+                return f"the arcades' index is not at the chain's tip yet, so {tick} can't be listed"
+            row = next((b for b in got.get("balances") or [] if str(b.get("tick")).lower() == tick), None)
+            if row is None:
+                return f"this wallet holds no {tick}"
+            dec = int(row.get("decimals") or 0)
+            on_way = _t20_pending_units(chain, address, int(got.get("walked_to") or 0)).get(tick, 0)
+            free = int(row.get("units") or 0) - int(row.get("transferable_units") or 0) - on_way
+            if whole * 10 ** dec > free:
+                return (f"that lists {whole:,} {row['tick']} in all, and only {free // 10 ** dec:,} is free to list "
+                        "(the rest is on its way, set aside, or listed already)")
+        return ""
+
+    def _t20_listed_units(account, chain, tick: str, decimals: int) -> int:
+        return _listed_holds(account)["token20"].get((chain.network, tick.lower()), 0) * 10 ** int(decimals or 0)
 
     def _t20_committed(run: dict, units: int, txid: str) -> None:
         run["txids"]["commit"] = txid
@@ -13801,10 +13894,12 @@ def create_app(state: AppState) -> FastAPI:
                 raise ValueError(f"this wallet holds no {tick}")
             text, units = t20.amount_text(str(said.get("amount") or ""), int(row.get("decimals") or 0))
             on_way = _t20_pending_units(chain, address, int(got.get("walked_to") or 0)).get(str(row["tick"]).lower(), 0)
-            free = int(row.get("units") or 0) - int(row.get("transferable_units") or 0) - on_way
+            listed = _t20_listed_units(account, chain, str(row["tick"]), int(row.get("decimals") or 0))
+            free = int(row.get("units") or 0) - int(row.get("transferable_units") or 0) - on_way - listed
             if units > free:
                 raise ValueError(f"that is more {row['tick']} than this wallet has to send"
-                                 + (" (some is still on its way from an earlier send)" if on_way else ""))
+                                 + (" (some is still on its way from an earlier send)" if on_way else "")
+                                 + (" (some is listed on the exchange: unlist it first)" if listed else ""))
             # The key of this account's address on the chain (the browser's coin key, not the login key): the note's
             # script is its, so only it reveals the note. Taken only when it is the address's own.
             try:
@@ -13889,6 +13984,21 @@ def create_app(state: AppState) -> FastAPI:
             return {"step": "done", "txids": run["txids"], "note": run["note"], "to": run["to"]}
         raise ValueError(f"the {step} has not gone out yet: sign it first")
 
+    @app.get("/account/listed")
+    def account_listed(request: Request):
+        """What this account's standing listings hold on its own addresses (`_listed_holds`), for the Wallet: its
+        listed Doginals / Pepinals by network ({network: [inscription id]}) and DRC-20 / PRC-20 by network and tick
+        (whole tokens)."""
+        account = _signed_in_account(request)
+        held = _listed_holds(account)
+        dg: dict[str, list[str]] = {}
+        for net, iid in sorted(held["doginal"]):
+            dg.setdefault(net, []).append(iid)
+        t20: dict[str, dict[str, int]] = {}
+        for (net, tick), whole in held["token20"].items():
+            t20.setdefault(net, {})[tick] = whole
+        return JSONResponse({"doginals": dg, "token20": t20}, headers={"Cache-Control": "no-store"})
+
     @app.get("/account/doginal-index")
     def account_doginal_index(request: Request, chain: str = "doge"):
         """How far the chain's ord index has walked -- the furthest copy, this arcade's or a linked one's -- and the
@@ -13972,6 +14082,9 @@ def create_app(state: AppState) -> FastAPI:
             inscription = str(said.get("inscription", "")).strip().lower()
             if not re.fullmatch(r"[0-9a-f]{64}i\d+", inscription):
                 raise ValueError(f"that is not a {_ord_word(chain)}'s id")
+            # Held while it is listed (2026-10-22: "locked as listed until it is unlisted or purchased").
+            if (chain.network, inscription) in _listed_holds(account)["doginal"]:
+                raise ValueError(f"that {_ord_word(chain)} is listed for sale: unlist it before sending it")
             coin = next((c for c in _own_coins(account, chain)
                          if (c["txid"], c["vout"]) == (txid, vout)), None)
             if coin is None:
@@ -17523,6 +17636,13 @@ def create_app(state: AppState) -> FastAPI:
                     break
             if found is None:
                 raise ValueError(f"this account does not hold Doginal {leg.asset} (or the chain cannot be read right now)")
+            try:
+                on_tab = any(r["seller"] == owner and str(r["inscription"]).lower() == leg.asset
+                             for r in state.doginal_book.open_listings(chain.network))
+            except Exception:                              # noqa: BLE001
+                on_tab = False
+            if on_tab:
+                raise ValueError("that Doginal is listed for sale on the Doginals tab: unlist it there first")
             return fundinglib.build_doginal_lock(
                 db, chain.params, owner, found, leg.asset, htlclib.p2sh_script(redeem),
                 htlclib.DOGINAL_RESERVE if reserve is None else int(reserve),
@@ -17640,8 +17760,11 @@ def create_app(state: AppState) -> FastAPI:
                 raise ValueError(f"this wallet holds no {leg.asset}")
             units = leg.amount * 10 ** int(row.get("decimals") or 0)
             on_way = _t20_pending_units(chain, owner, int(got.get("walked_to") or 0)).get(leg.asset, 0)
-            if units > int(row.get("units") or 0) - int(row.get("transferable_units") or 0) - on_way:
-                raise ValueError(f"that is more {row['tick']} than this wallet has to trade")
+            # Standing listings hold theirs; the order this lock is for is being taken, so it holds nothing.
+            listed = _t20_listed_units(account, chain, leg.asset, int(row.get("decimals") or 0))
+            if units > int(row.get("units") or 0) - int(row.get("transferable_units") or 0) - on_way - listed:
+                raise ValueError(f"that is more {row['tick']} than this wallet has to trade"
+                                 + (" (the rest is listed on the exchange)" if listed else ""))
             content = t20.note(t20.PROTOCOL[chain.network], str(row["tick"]), str(leg.amount))
             pushes, note_redeem = t20.envelope(content, key)
             outs = t20swap.lock_outputs(redeem, htlclib.DOGINAL_RESERVE + cut)
@@ -19869,6 +19992,9 @@ def create_app(state: AppState) -> FastAPI:
         address = _account_address(account.pubkey, chain)
         if not address:
             raise ValueError(f"this account has no {chain.label} address yet")
+        # Not on the Doginals tab while a swap order of this account's holds it (2026-10-22).
+        if (chain.network, str(said.get("inscription") or "").lower()) in _listed_holds(account).get("doginal_swap", ()):
+            raise ValueError(f"that {_ord_word(chain)} is listed in one of your swaps: cancel that swap first")
         price = parse_amount(str(said.get("amount", "")), True)
         _above_dust(price, "price")
         coin = {"txid": str(said.get("txid") or "").lower(), "vout": int(said.get("vout", -1))}
@@ -30442,6 +30568,12 @@ def create_app(state: AppState) -> FastAPI:
             return JSONResponse({"detail": "this account has no address yet"}, status_code=400)
         orders = [o for o in (said.get("orders") or []) if isinstance(o, dict)][:trade_orders.MAX_ORDERS]
         cancels = [str(c) for c in (said.get("cancels") or []) if isinstance(c, str)][:100]
+        # Nothing listed twice, and no more of a token than is free (2026-10-22: a listing "should be locked
+        # as listed until it is unlisted or purchased"): the page posts its whole book, so these are its totals.
+        cancelled = set(cancels)
+        over = _listing_over(account, [o for o in orders if str(o.get("id")) not in cancelled])
+        if over:
+            return JSONResponse({"detail": over}, status_code=409)
         body = json.dumps({"arcade": "orders", "v": trade_orders.VERSION, "orders": orders, "cancels": cancels})
         filed = state.trade_orders.file_batch(lister, chain.network, f"node-{secrets.token_hex(8)}", body.encode())
         if cancels:

@@ -88,6 +88,23 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-22 Listings hold what they list until unlisted or taken (Claude)
+The operator: "I made a listing of frgy from my @apple but it remains in my balance so it seems like I could list it and send
+it at the same time ... It should be locked as listed until it is unlisted or purchased", "This should happen for all
+tokens and all coins listed", "And NFTs listed". A delegated swap order (coins, Omni tokens, NFTs: the swap tab's
+default) already moves its side to the order's own address when listed, and signed NFT listings already set their coins
+aside (`_listed_coins`); what stayed on the account's address was a DRC-20 / PRC-20 or Doginal swap order (locked
+only once taken) and a Doginal on the Doginals tab. Now `_listed_holds(account)` (trade_orders.standing_of: the
+account's orders not cancelled, not being taken, not expired, not delegated; plus its open Doginals-tab listings):
+* DRC-20 / PRC-20: `listed_units` beside each balance (/account/token20), taken off a send and a token lock ("listed
+  on the exchange: unlist it first"); the Tokens tab and the card show it held ("X listed").
+* /account/orders/post refuses a book that lists more of a token than is free (`_listing_over`: balance less set
+  aside, on its way), or one Doginal twice, or one also on the Doginals tab (409, said on the page).
+* A listed Doginal can't be sent (/account/doginal/send), can't go on the Doginals tab while a swap holds it, and a
+  swap can't lock one listed on the Doginals tab; the wallet's card says "Listed" instead of Send / Swap
+  (GET /account/listed, door PUBLIC_PAGES). An order being taken holds nothing: its own lock goes ahead.
+Test: test_doginal_wallet.py.
+
 ### 2026-10-22 Exchange search: DRC-20 / PRC-20 ticks looked up as typed, not all in the page (Claude)
 With every tick of both chains in the pair boxes (about 400 PRC-20 and 4,900 DRC-20, twice), /exchange?tab=swaps was
 1.9 MB. `_pair_choices` now carries only the reader's own DRC-20 / PRC-20 (with whole tokens held); new GET

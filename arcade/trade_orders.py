@@ -322,6 +322,18 @@ class OrderBook:
                             "inscription": row["inscription"], "network": row["network"]})
         return out
 
+    def standing_of(self, listers: list[str], now: float | None = None) -> list[dict]:
+        """`listers`' orders standing on the book right now (not cancelled, not being taken, not expired), as their
+        bodies: what each holds of its lister's (2026-10-22: a listing "should be locked as listed until it is
+        unlisted or purchased"). One being taken (cancelled=2) holds nothing here: its own lock is under way."""
+        if not listers:
+            return []
+        now = int(now or time.time())
+        with self._open() as conn:
+            rows = conn.execute(f"SELECT body FROM trade_order WHERE cancelled=0 AND expires>? AND lister IN "
+                                f"({','.join('?' * len(listers))})", (now, *listers)).fetchall()
+        return [json.loads(r["body"]) for r in rows]
+
     def lister_of(self, order_id: str) -> str:
         """Who listed an order (expired or cancelled included): "" if it was never filed here."""
         with self._open() as conn:
