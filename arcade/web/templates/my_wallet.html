@@ -635,7 +635,16 @@ function drawMenu() {
                                                  : "Open your imported wallets…"), null, false, openUnlockImports);
   }
   // No imports on PEP TEST (2026-10-21); the node refuses one there too.
-  if (chainNow() !== "test") option(el("span", "", "+ Import a wallet"), null, false, openImport, "import");
+  // Greyed where a new import cannot be made (2026-10-22: fewer than two of the chain's nodes on the network).
+  const closed = ((imp.node || {}).import_closed || {})[c.network];
+  if (chainNow() !== "test") {
+    if (closed) {
+      const o = el("button", "wl-opt import"); o.type = "button"; o.disabled = true; o.title = closed;
+      o.setAttribute("aria-disabled", "true"); o.style.opacity = ".5";
+      o.append(el("span", "", "+ Import a wallet"), el("span", "bal", "not available"));
+      menu.append(o, el("div", "wl-note", closed));
+    } else option(el("span", "", "+ Import a wallet"), null, false, openImport, "import");
+  }
 }
 
 /** Where the picked wallet's read-back stands, or the import that just happened. */

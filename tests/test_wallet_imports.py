@@ -638,3 +638,20 @@ def test_a_rescan_that_found_history_is_not_sent_again_though_the_peers_are_new(
     utxos.seed_from_core_wallet(index, empty, P, [a], 500, sent={"at": sent_at, "addresses": [a]},
                                 remember=lambda said: None)
     assert empty.batches == [[a]]
+
+
+def test_no_new_import_on_a_chain_with_fewer_than_two_nodes_on_the_network(client, monkeypatch):
+    """2026-10-22: "importing a wallet to LTC right now should not be possible since there is only one LTC node.
+    So that option should be grayed out on all arcades." This arcade's own Core and the linked sharers are counted;
+    under two, the import is refused, and the Wallet page is told why (it greys the option out)."""
+    from arcade.web import app as webapp
+    app, state, chain, account = _ready(client, monkeypatch)
+    monkeypatch.setattr(webapp, "IMPORT_CORES_MIN", 2)
+    view = app.get("/account/imported").json()
+    assert "needs at least 2" in view["import_closed"]["ltctest"]
+    got = app.post("/account/imported/address", json=_proof(account, 0x9201))
+    assert got.status_code == 400 and "needs at least 2" in got.json()["detail"]
+    page = app.get("/me/wallet").text
+    assert "import_closed" in page and "not available" in page
+    monkeypatch.setattr(webapp, "IMPORT_CORES_MIN", 1)          # a second node joins: open again
+    assert "ltctest" not in app.get("/account/imported").json()["import_closed"]

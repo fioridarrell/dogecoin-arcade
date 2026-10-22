@@ -23713,6 +23713,28 @@ def create_app(state: AppState) -> FastAPI:
     CORE_RESCAN_ON = ("doge", "main")
     #: Chains no wallet may be imported on (2026-10-21: "No imports for pep test").
     NO_IMPORTS = ("test",)
+    def _import_cores(chain) -> int:
+        """How many Cores of `chain` there are to read an imported wallet from: this arcade's own (not borrowed), and
+        each linked arcade sharing its Core of it (coreshare tips)."""
+        own = 0 if getattr(chain, "borrowed", False) else 1
+        mesh = getattr(state, "mesh", None)
+        share = getattr(mesh, "coreshare", None) if mesh is not None else None
+        try:
+            others = len(share.tips(chain.network)) if share is not None else 0
+        except Exception:                                  # noqa: BLE001
+            others = 0
+        return own + others
+
+    def _import_closed(chain) -> str:
+        """Why no wallet may be imported on `chain` now ("" when one may)."""
+        if chain.network in NO_IMPORTS:
+            return f"Wallets cannot be imported on {chain.title}."
+        n = _import_cores(chain)
+        if n < IMPORT_CORES_MIN:
+            word = chain.params.label if hasattr(chain.params, "label") else chain.title
+            return (f"Importing a wallet on {chain.title} needs at least {IMPORT_CORES_MIN} {word} nodes on the "
+                    f"arcades' network; there {'is' if n == 1 else 'are'} {n} now.")
+        return ""
     #: A chain whose Core rescan failed: network -> (failures in a row, not before this time). A Core is never made to
     #: rescan its whole chain again at once: 10 minutes, then 20, then it stops until the arcade restarts.
     _core_retry: dict[str, tuple[int, float]] = {}
@@ -24269,6 +24291,7 @@ def create_app(state: AppState) -> FastAPI:
                                           for one in record.siblings(account.pubkey)],
                              "tag": str((vault or {}).get("tag") or ""), "host": _proof_host(),
                              "no_imports": list(NO_IMPORTS),
+                             "import_closed": {c.network: why for c in _account_chains() if (why := _import_closed(c))},
                              "vault": json.loads(vault["blob"]) if vault else None,
                              "chains": chains, "names": names, "cap": importslib.CAP_PER_CHAIN})
 
@@ -24351,8 +24374,12 @@ def create_app(state: AppState) -> FastAPI:
             chain = _chain_asked(said)
         except ValueError as exc:
             return JSONResponse({"detail": str(exc)}, status_code=400)
-        if chain.network in NO_IMPORTS:
-            return JSONResponse({"detail": f"wallets cannot be imported on {chain.title}"}, status_code=400)
+        sync = bool(said.get("sync"))
+        # A new import needs two Cores of the chain on the network; a wallet already in the record, brought to this
+        # arcade, is registered here all the same (its import was made where it could be).
+        closed = _import_closed(chain) if not sync or chain.network in NO_IMPORTS else ""
+        if closed:
+            return JSONResponse({"detail": closed}, status_code=400)
         address = str(said.get("address") or "").strip()
         kind = str(said.get("kind") or "p2pkh")
         try:
@@ -24366,16 +24393,41 @@ def create_app(state: AppState) -> FastAPI:
         # record of many wallets over does not use up the day's imports. This node cannot open the record to see
         # that the wallet is in it, so the allowance is the bound (as large as PER_DAY), and it is open only to an
         # account whose signed record is here.
-        sync = bool(said.get("sync"))
         coins_proof = said.get("coins") if isinstance(said.get("coins"), dict) else None
         if sync and not (state.imported_wallets().get(account.pubkey) or {}).get("signed"):
             return JSONResponse({"detail": "this arcade has no signed record of your imported wallets yet"},
                                 status_code=400)
         with _imports_lock:
             listed = _imported(account, chain)
-            if any(e["a"] == address for e in listed):
+            again = any(e["a"] == address for e in listed)
+            # Already registered here but still being read back, and another arcade the account uses can say its coins
+            # (2026-10-22: rescanned on dogecoinarcade.com, "re-scan in progress" on pepecoinarcade.com): asked now.
+            if again and (coins_proof is None or _rescan_done(chain, address)
+                          or (chain.network, address) in _asking_peers):
                 return JSONResponse({"address": address, "chain": chain.network, "already": True,
                                      **_rescan_begin(chain, address)})
+            if again:
+                _asking_peers[(chain.network, address)] = time.time()
+        if again:
+            try:
+                got = _imported_coins_elsewhere(account, chain, address, kind, str(said.get("pubkey") or ""),
+                                                coins_proof)
+            finally:
+                _asking_peers.pop((chain.network, address), None)
+            if got is not None:
+                filed, host = got
+                state.set_setting(f"backfilled:{chain.network}:{address}", filed)
+                if _core_rescan_on(chain):
+                    state.set_setting(f"core_rescanned:{chain.network}:{address}", int(time.time()))
+                _backfill_runs.pop(address, None)
+                _rescan_queue.pop((chain.network, address), None)
+                state.bump_generation()
+                return JSONResponse({"address": address, "chain": chain.network, "already": True, "state": "ready",
+                                     "from": host, "says": f"Ready: brought over from {host}, every coin checked here."})
+            return JSONResponse({"address": address, "chain": chain.network, "already": True,
+                                 **_rescan_begin(chain, address)})
+        with _imports_lock:
+            listed = _imported(account, chain)
             if _account_own_addresses(account, chain).get(address):
                 return JSONResponse({"detail": "that is already your arcade wallet's own address on this chain"},
                                     status_code=400)
@@ -31414,24 +31466,47 @@ def _post_arcade(url: str, **kwargs):
 def _file_checked_coins(state, chain, address: str, coins) -> int:
     """Coins another arcade says `address` holds, each checked against this arcade's own chain (gettxout: unspent,
     in a block, paying `address`) and filed; how many. Nothing another arcade says is filed unchecked."""
+    # Every coin, read in batches (2026-10-22: a 7,000-coin Dogecoin wallet brought to an arcade that borrows Dogecoin
+    # through the mesh -- two calls a coin over the mesh, and only the first 5,000 coins were ever looked at). A batch
+    # that cannot be read even once more raises: the caller reads the wallet back instead of filing part of it.
+    wanted: list[tuple[str, int]] = []
+    for coin in coins if isinstance(coins, list) else []:
+        try:
+            wanted.append((str(coin["txid"]).lower(), int(coin["vout"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+    wanted = list(dict.fromkeys(wanted))[:CHECKED_COINS_MAX]
     filed = 0
     index = state.token_index(chain)
     with chain.rpc() as rpc, index.open() as db:
-        for coin in (coins if isinstance(coins, list) else [])[:5000]:
+        tip = int(rpc.get_block_count())
+        for at in range(0, len(wanted), CHECKED_COINS_BATCH):
+            part = wanted[at:at + CHECKED_COINS_BATCH]
+            calls = [("gettxout", [txid, vout, False]) for txid, vout in part]
             try:
-                txid, vout = str(coin["txid"]).lower(), int(coin["vout"])
-                out = rpc.call("gettxout", txid, vout, False)
-            except Exception:                           # noqa: BLE001 -- not this chain's word: left out
-                continue
-            if not out or int(out.get("confirmations", 0)) < 1:
-                continue
-            spk = out.get("scriptPubKey") or {}
-            owners = spk.get("addresses") or ([spk["address"]] if spk.get("address") else [])
-            if address not in owners:
-                continue
-            value = int(round(float(out.get("value", 0)) * 100_000_000))
-            height = int(rpc.get_block_count()) - int(out["confirmations"]) + 1
-            db.conn.execute("INSERT OR IGNORE INTO utxo (txid, vout, address, value, height) VALUES (?,?,?,?,?)",
-                            (txid, vout, address, value, height))
-            filed += 1
+                outs = rpc.batch(calls)
+            except Exception:                           # noqa: BLE001 -- once more, then the read-back
+                outs = rpc.batch(calls)
+            for (txid, vout), out in zip(part, outs):
+                if not out or int(out.get("confirmations", 0)) < 1:
+                    continue
+                spk = out.get("scriptPubKey") or {}
+                owners = spk.get("addresses") or ([spk["address"]] if spk.get("address") else [])
+                if address not in owners:
+                    continue
+                value = int(round(float(out.get("value", 0)) * 100_000_000))
+                height = tip - int(out["confirmations"]) + 1
+                db.conn.execute("INSERT OR IGNORE INTO utxo (txid, vout, address, value, height) VALUES (?,?,?,?,?)",
+                                (txid, vout, address, value, height))
+                filed += 1
     return filed
+
+
+#: Cores of a chain the arcades' network must have for a wallet to be imported on it (2026-10-22: "importing a
+#: wallet to LTC right now should not be possible since there is only one LTC node. So that option should be grayed
+#: out on all arcades"): this arcade's own, and the linked arcades sharing theirs.
+IMPORT_CORES_MIN = 2
+#: Coins another arcade says an imported address holds, checked here at most (a sanity bound, not a wallet's size).
+CHECKED_COINS_MAX = 100_000
+#: Coins read in one batch while checking them.
+CHECKED_COINS_BATCH = 250

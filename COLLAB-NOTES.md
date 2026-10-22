@@ -88,6 +88,21 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-22 Imports across arcades: coins brought over in batches, all of them; asked again for one being read back; no new import on a chain with fewer than two nodes (Claude)
+The operator: "the rescan is done on dogecoinarcade.com but when I go to Pepecoinarcade.com it says that the re-scan is in
+progress on the same Doge wallet" (7,000+ coins); and "importing a wallet to LTC right now should not be possible
+since there is only one LTC node. So that option should be grayed out on all arcades." .25 answered the coins in 1.1 s;
+the arcade being brought the wallet then checked them one gettxout + one getblockcount each (over a borrowed Core on
+pepecoinarcade.com: 14,000 mesh calls) and only the first 5,000.
+* `_file_checked_coins`: every coin (CHECKED_COINS_MAX 100,000, a sanity bound), `rpc.batch` of CHECKED_COINS_BATCH
+  (250) gettxout, the tip read once; a batch that fails twice raises (the caller reads the wallet back, never files
+  part of it).
+* An address already registered here and still read back is brought over when the page registers it again with the
+  coins proof (`_imported_coins_elsewhere`), the read-back's entry dropped (its thread finishes harmlessly).
+* `IMPORT_CORES_MIN` (2, module level): `_import_cores` counts this arcade's own Core of the chain and the linked
+  sharers (coreshare tips); under it a new import is refused (a sync of a wallet already in the record is not), and
+  GET /account/imported says `import_closed` {net: why}, which greys "+ Import a wallet" out with the reason.
+  tests/conftest.py treats a lone test arcade as having enough Cores; the rule has its own test.
 ### 2026-10-22 Wallet Tokens tab: DRC-20 / PRC-20 balances from the ord index, refreshed as it walks (Claude)
 The operator: "under Wallet tokens tab DRC-20 and PRC-20 balances should be displayed updated as the index is updated." The
 tab listed only the arcade's own (Omni-style) tokens. New GET /account/token20?chain=doge|main[&address=own] (door
