@@ -31777,7 +31777,7 @@ def create_app(state: AppState) -> FastAPI:
     from . import llmweb
     llmweb.register(app, state, signed_in=signed_in, account_address=_account_address, account_chain=_account_chain,
                     admin_check=_admin_check, name_of=_name_of,
-                    pay_choices=lambda request: _pair_choices(request, "nobody", everything=True))
+                    pay_choices=lambda request: _pair_choices(request, "nobody", everything=True), render=render)
     return app
 
 

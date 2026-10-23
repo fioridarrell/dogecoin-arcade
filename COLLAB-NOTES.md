@@ -88,6 +88,25 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-23 LLM service: models found by themselves, how busy each is, a usage analytics page (Claude)
+The operator: "It should automatically scan the LLM service for the models that are available and then the admin should be
+able to just select which model they want to share"; "Users also need a way to know if one of the models is congested
+or being frequently used" -- "So should the admin"; "The admin should be able to [have] a link on their model that
+they're sharing and get all of the usage analytics"; "Straighten out the text input fields"; the share switch reads
+"Tick to share on the exchange". Branch claude/llm-stats (on claude/llm-exchange).
+* Admin -> LLM: the server's /v1/models is read on load and as the address is typed ("Scan again" by hand); every
+  model listed with a tick; a shared model no longer on the server says so. The three fields have the same rows (name,
+  box, a line under it). A "Right now" panel (polled every 5 s, `/admin/api/llm/load`) and a "Usage analytics" link.
+* `Seller.load()`: active, waiting, at_once, replies in the last 15 min and hour, failures, output tok/s, first-word
+  time; `Seller.word()` idle | steady | busy | full. Carried on the offer (`load`); llmshare says the offer again
+  every 15 s when it changed (`LOAD_EVERY`). The tab draws a pill and a line on each card and re-reads the book
+  every 10 s.
+* `usage` table gains `ms`, `first_ms`, `ok` (added to an existing table on open: checked on copies of .25's and
+  Strawberry's llm.sqlite); failed and timed-out replies are logged at no cost. `via` is web | api | <peer id>.
+* `/admin/llm/usage` (llm_usage.html) + `/admin/api/llm/usage?days=`: right now, totals, replies and output tokens
+  per 5 min / hour / day, by coin (earned), by way in, by model, top buyers, the last 50 replies, the series as a table.
+* Tests: test_llm.py (16).
+
 ### 2026-10-23 LLM service: no asks = free for everyone (Claude)
 The operator: "Should be able to offer my model for free" and "if I offer my model for free, it should have all the same
 capabilities as a paid model. But I should be able to change it from free to pay at any time by adding an ask to my

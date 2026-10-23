@@ -445,26 +445,41 @@
     <div style="min-width:0"><h2 style="margin:0">Sell your model</h2>
       <p class="muted" style="margin:2px 0 0">Your own OpenAI-compatible server (vLLM, llama.cpp, Ollama), sold to players and apps on every arcade.
         Buyers prepay credit to your address; each reply is charged from what your server says it used.</p></div>
-    <label class="onoff off" id="llm-onoff"><input type="checkbox" id="llm-on" style="width:20px;height:20px"> <span id="llm-onword">Not selling</span></label>
+    <label class="onoff off" id="llm-onoff"><input type="checkbox" id="llm-on" style="width:20px;height:20px"> <span id="llm-onword">Tick to share on the exchange</span></label>
   </div>
+  {#- Each field the same three rows -- its name, the box, a line under it -- so the boxes line up (2026-10-23:
+     "Straighten out the text input fields"). #}
   <div class="lgrid" style="margin-top:16px">
-    <label class="f">Server address <input class="mono" id="llm-url" placeholder="http://127.0.0.1:8000" autocomplete="off"></label>
-    <label class="f">API key <span class="h">(only if your server needs one)</span>
-      <input type="password" id="llm-key" autocomplete="new-password" placeholder="Stays on this machine"></label>
-    <label class="f">Name buyers see <input id="llm-name" maxlength="60" placeholder="e.g. a test machine &middot; Qwen" autocomplete="off"></label>
-    <div style="display:flex;flex-direction:column;gap:5px;min-width:0"><span style="font-size:.82rem;font-weight:650">Connection</span>
-      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-        <button type="button" class="small" id="llm-test" style="height:42px">Test the server</button>
-        <span class="pill" id="llm-tested" hidden></span></div></div>
+    <label class="f">Server address <input class="mono" id="llm-url" placeholder="http://127.0.0.1:8000" autocomplete="off">
+      <span class="h">Its models are found by themselves.</span></label>
+    <label class="f">API key <input type="password" id="llm-key" autocomplete="new-password" placeholder="Stays on this machine">
+      <span class="h">Only if your server needs one.</span></label>
+    <label class="f">Name buyers see <input id="llm-name" maxlength="60" placeholder="e.g. a test machine &middot; Qwen" autocomplete="off">
+      <span class="h">Shown on the Exchange's LLM tab.</span></label>
   </div>
-  <div style="margin-top:16px"><span style="font-size:.82rem;font-weight:650">Models to sell</span>
-    <div id="llm-models"><p class="muted" style="margin:6px 0 0">Test the server to list its models.</p></div></div>
+  <div style="margin-top:16px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+    <span style="font-size:.82rem;font-weight:650">Models on your server <span class="muted" style="font-weight:400">&mdash; tick the ones to share</span></span>
+    <span style="display:flex;gap:8px;align-items:center"><span class="pill" id="llm-tested" hidden></span>
+      <button type="button" class="small ghost" id="llm-test" style="height:34px">Scan again</button></span></div>
+  <div id="llm-models"><p class="muted" style="margin:6px 0 0">Enter the server address to find its models.</p></div>
   <div class="lgrid" style="margin-top:16px">
     <label class="f">Replies at once <input type="number" min="1" max="32" id="llm-atonce" autocomplete="off">
       <span class="h">Others wait in line, so your own use stays quick.</span></label>
     <label class="f">Longest reply, in tokens <input type="number" min="16" max="65536" id="llm-maxout" autocomplete="off">
       <span class="h">Shorter when a buyer's credit runs out first.</span></label>
   </div>
+</section>
+
+{#- How busy it is (2026-10-23: "Users also need a way to know if one of the models is congested" -- "So should the
+   admin"), and the link to every number about it ("a link on their model that they're sharing and get all of the usage
+   analytics"). #}
+<section class="panel">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+    <div><h2 style="margin:0">Right now <span class="pill" id="llm-word" style="vertical-align:middle"></span></h2>
+      <p class="muted" style="margin:2px 0 0">What buyers see on the book, refreshed every few seconds.</p></div>
+    <a href="/admin/llm/usage" style="display:inline-flex;align-items:center;height:42px;padding:0 16px;border-radius:10px;border:1px solid var(--line);text-decoration:none;font-weight:650">Usage analytics &rarr;</a>
+  </div>
+  <div class="stats" id="llm-load" style="margin-top:12px"></div>
 </section>
 
 <section class="panel">
@@ -511,15 +526,18 @@
   function drawOn() {
     var on = $('llm-on').checked;
     $('llm-onoff').className = 'onoff' + (on ? '' : ' off');
-    $('llm-onword').textContent = on ? (data && data.selling ? 'Selling on the exchange' : 'Selling (once saved)') : 'Not selling';
+    // 2026-10-23: "The not selling checkbox is kind of confusing. It should say check to sell".
+    $('llm-onword').textContent = !on ? 'Tick to share on the exchange'
+      : data && data.selling ? 'Shared on the exchange' : 'Shared once you save';
   }
   function drawModels() {
-    var all = models.length ? models : chosen.map(function (m) { return {id: m, ctx: 0}; });
+    var all = models.slice();
+    chosen.forEach(function (m) { if (!all.some(function (x) { return x.id === m; })) all.push({id: m, ctx: 0, gone: !!models.length}); });
     $('llm-models').innerHTML = all.length ? all.map(function (m) {
       return '<label class="model"><input type="checkbox" value="' + esc(m.id) + '"' + (chosen.indexOf(m.id) >= 0 ? ' checked' : '') +
         ' style="width:20px;height:20px"><span style="display:flex;flex-direction:column;min-width:0"><b class="mono" style="overflow-wrap:anywhere">' +
-        esc(m.id) + '</b><span class="muted" style="font-size:.8rem">' + (m.ctx ? m.ctx.toLocaleString() + '-token context' : 'saved') + '</span></span></label>';
-    }).join('') : '<p class="muted" style="margin:6px 0 0">Test the server to list its models.</p>';
+        esc(m.id) + '</b><span class="muted" style="font-size:.8rem">' + (m.gone ? 'no longer on the server' : m.ctx ? m.ctx.toLocaleString() + '-token context' : 'shared') + '</span></span></label>';
+    }).join('') : '<p class="muted" style="margin:6px 0 0">Enter the server address to find its models.</p>';
   }
   function drawPrices() {
     $('llm-prices').innerHTML = prices.length ? prices.map(function (p, i) {
@@ -550,23 +568,37 @@
   };
   $('llm-on').onchange = drawOn;
 
-  $('llm-test').onclick = function () {
-    var t = $('llm-tested'); t.hidden = false; t.textContent = 'Asking…'; t.style.cssText = 'background:var(--code)';
-    post('/admin/api/llm/test', {url: $('llm-url').value.trim(), key: $('llm-key').value.trim()}).then(function (j) {
+  // The server's models, found by themselves (2026-10-23: "It should automatically scan the LLM service for the
+  // models that are available and then the admin should be able to just select which model they want to share").
+  function keepTicks() {
+    var box = document.querySelectorAll('#llm-models input');
+    if (box.length) chosen = Array.prototype.filter.call(box, function (c) { return c.checked; }).map(function (c) { return c.value; });
+  }
+  var scanned = '';
+  function scan(force) {
+    var url = $('llm-url').value.trim();
+    if (!url || (!force && url === scanned)) return;
+    scanned = url; keepTicks();
+    var t = $('llm-tested'); t.hidden = false; t.textContent = 'Looking…'; t.style.cssText = 'background:var(--code)';
+    post('/admin/api/llm/test', {url: url, key: $('llm-key').value.trim()}).then(function (j) {
       models = j.models || [];
-      if (!chosen.length && models.length) chosen = [models[0].id];
-      t.textContent = 'Answered in ' + j.ms + ' ms · ' + models.length + ' model' + (models.length === 1 ? '' : 's');
+      t.textContent = models.length + ' model' + (models.length === 1 ? '' : 's') + ' found · ' + j.ms + ' ms';
       t.style.cssText = 'background:color-mix(in srgb,var(--ok) 15%,var(--panel));color:var(--ok)'; drawModels();
-    }).catch(function (e) { t.textContent = e.message; t.style.cssText = 'background:color-mix(in srgb,#a33 12%,var(--panel));color:#a33'; });
-  };
+    }).catch(function (e) { models = []; drawModels(); t.textContent = e.message; t.style.cssText = 'background:color-mix(in srgb,#a33 12%,var(--panel));color:#a33'; });
+  }
+  $('llm-test').onclick = function () { scan(true); };
+  var scanTimer = null;
+  $('llm-url').addEventListener('input', function () { clearTimeout(scanTimer); scanTimer = setTimeout(function () { scan(false); }, 900); });
+  $('llm-url').addEventListener('change', function () { scan(false); });
+  $('llm-key').addEventListener('change', function () { scan(true); });
   $('llm-save').onclick = function () {
-    chosen = Array.prototype.map.call(document.querySelectorAll('#llm-models input:checked'), function (c) { return c.value; });
+    keepTicks();
     var body = {on: $('llm-on').checked, url: $('llm-url').value.trim(), name: $('llm-name').value.trim(), models: chosen,
                 at_once: Number($('llm-atonce').value) || 1, max_out: Number($('llm-maxout').value) || 4096, prices: prices};
     if ($('llm-key').value.trim()) body.key = $('llm-key').value.trim();
     said('Saving…');
     post('/admin/api/llm', body).then(function (j) {
-      said(j.selling ? 'Saved. Your model is on the exchange.' : 'Saved. Not selling.'); $('llm-key').value = ''; load();
+      said(j.selling ? 'Saved. Your model is on the exchange.' : 'Saved. Not shared: tick the box at the top to share it.'); $('llm-key').value = ''; load();
     }).catch(function (e) { said(e.message, true); });
   };
   function load() {
@@ -578,7 +610,8 @@
       $('llm-key').placeholder = c.has_key ? 'Saved (type to replace)' : 'Stays on this machine';
       $('llm-atonce').value = c.at_once || 2; $('llm-maxout').value = c.max_out || 4096;
       chosen = c.models || []; prices = (c.prices || []).map(function (p) { return Object.assign({}, p); });
-      drawOn(); drawModels(); drawPrices();
+      drawOn(); drawModels(); drawPrices(); drawLoad(j.load);
+      if (c.url && !scanned) scan(false);
       var e = j.earned || [];
       $('llm-earned').innerHTML = e.length ? e.map(function (r) {
         var k = prices.find(function (p) { return p.leg === r.leg; });
@@ -588,6 +621,23 @@
       }).join('') : '<p class="muted" style="margin:0">Nothing sold yet.</p>';
     }).catch(function (e) { said('Could not load: ' + e.message, true); });
   }
+  var WORDS = {idle: ['Idle', 'var(--muted)'], steady: ['In use', 'var(--ok)'], busy: ['Busy', '#b7791f'], full: ['Full: buyers waiting', '#a33']};
+  function drawLoad(l) {
+    if (!l) return;
+    var w = WORDS[l.word] || WORDS.idle;
+    $('llm-word').textContent = w[0]; $('llm-word').style.cssText = 'color:' + w[1] + ';background:color-mix(in srgb,' + w[1] + ' 14%,var(--panel))';
+    function tile(name, big, small) { return '<div class="stat"><span class="muted" style="font-size:.8rem">' + name + '</span><strong>' + big + '</strong><span class="muted" style="font-size:.8rem">' + small + '</span></div>'; }
+    $('llm-load').innerHTML = tile('Replies running', l.active + ' of ' + l.at_once, l.waiting ? l.waiting + ' waiting' : 'none waiting') +
+      tile('Last 15 minutes', (l.last_15m || 0).toLocaleString(), 'replies') +
+      tile('Last hour', (l.last_hour || 0).toLocaleString(), (l.failed_hour ? l.failed_hour + ' failed' : 'no failures')) +
+      tile('Speed', l.tok_s ? l.tok_s + ' tok/s' : '—', l.first_ms ? 'first word in ' + (l.first_ms / 1000).toFixed(1) + ' s' : 'no replies yet');
+  }
+  function pollLoad() {
+    if (!document.querySelector('.admintab[data-tab="llm"].on') || document.hidden) return;
+    fetch('/admin/api/llm/load', {credentials: 'same-origin', cache: 'no-store'}).then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) { if (j) drawLoad(j); }).catch(function () {});
+  }
+  setInterval(pollLoad, 5000);
   document.querySelectorAll('.admintabs button[data-tab="llm"]').forEach(function (b) { b.addEventListener('click', load); });
   if (location.hash === '#llm') load();
 })();

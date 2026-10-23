@@ -137,6 +137,21 @@ function price(p) {                  // the dearest part shown plainly: no expon
 }
 function cheapness(o) { return o.free || !o.prices.length ? 0 : Math.min(...o.prices.map((p) => Number(p.out) || 0)); }
 const legsOf = (o) => o.free ? [{leg: "free", label: "Free", in: "0", out: "0"}] : o.prices;
+// How busy a model is (2026-10-23: "Users also need a way to know if one of the models is congested or being
+// frequently used"): the seller's own word for it on the book, said again whenever it changes.
+const WORDS = {idle: ["Idle", "var(--muted)"], steady: ["In use", "var(--ok)"], busy: ["Busy", "#b7791f"], full: ["Full: queue", "#a33"]};
+function loadPill(o) {
+  const w = WORDS[(o.load || {}).word] || WORDS.idle;
+  return `<span class="llm-pill" style="color:${w[1]};background:color-mix(in srgb,${w[1]} 14%,var(--panel))">${w[0]}</span>`;
+}
+function loadLine(o) {
+  const l = o.load || {}; if (!l.at_once) return "";
+  const bits = [`${l.active || 0} of ${l.at_once} running`];
+  if (l.waiting) bits.push(`${l.waiting} waiting`);
+  bits.push(`${(l.last_hour || 0).toLocaleString()} ${l.last_hour === 1 ? "reply" : "replies"} in the last hour`);
+  if (l.tok_s) bits.push(`${l.tok_s} tok/s`);
+  return `<div style="font-size:.8rem;color:var(--muted);margin-top:-4px">${bits.join(" \u00b7 ")}</div>`;
+}
 function sellerName(o) { return o.here ? (o.tag ? "@" + o.tag : "This arcade") : (o.tag ? "@" + o.tag : o.seller.slice(0, 10) + "…"); }
 
 function drawChips() {
@@ -168,7 +183,8 @@ function draw() {
       const c = creditText(o), mine = picked && picked.seller === o.seller;
       return `<article class="llm-card${mine ? " picked" : ""}" data-s="${esc(o.seller)}">
         <div class="who"><div style="min-width:0"><strong>${esc(sellerName(o))}</strong><small>${esc(o.name || "")}${o.host ? " · " + esc(o.host) : ""}</small></div>
-          <span class="llm-pill">${o.here ? "This arcade" : "Online"}</span></div>
+          ${loadPill(o)}</div>
+        ${loadLine(o)}
         ${o.models.map((m) => `<div class="llm-model"><code>${esc(m.id)}</code><span style="color:var(--muted)">up to ${(o.max_out || 0).toLocaleString()} out</span></div>`).join("")}
         ${o.free ? `<div class="llm-note"><b>Free for everyone.</b> Sign in and chat, or make an API key; nothing to pay.</div>` : `<div class="llm-prices"><span class="h">Coin</span><span class="h">In</span><span class="h">Out</span>
           ${o.prices.map((p) => `<span><b>${esc(short(p.label))}</b></span><span>${price(p.in)}</span><span>${price(p.out)}</span>`).join("")}</div>`}
@@ -416,5 +432,5 @@ async function load() {
   loadKeys();
 }
 load(); claimPending();
-setInterval(() => { if (!document.hidden && !busy) getJSON("/account/llm/offers").then((b) => { book = b; if (picked) picked = b.offers.find((o) => o.seller === picked.seller) || picked; draw(); }).catch(() => {}); }, 30000);
+setInterval(() => { if (!document.hidden && !busy) getJSON("/account/llm/offers").then((b) => { book = b; if (picked) picked = b.offers.find((o) => o.seller === picked.seller) || picked; draw(); }).catch(() => {}); }, 10000);
 </script>

@@ -26,7 +26,7 @@ HERE = "here"
 
 
 def register(app, state, *, signed_in: Callable, account_address: Callable, account_chain: Callable,
-             admin_check: Callable, name_of: Callable, pay_choices: Callable) -> None:
+             admin_check: Callable, name_of: Callable, pay_choices: Callable, render: Callable | None = None) -> None:
     books = llmlib.Books(state.home)
 
     def mesh():
@@ -98,10 +98,10 @@ def register(app, state, *, signed_in: Callable, account_address: Callable, acco
             raise llmlib.LlmError("sign once to use this seller (your wallet signs who you are)")
         return {"address": g["address"], "expires": g["expires"], "sig": g["sig"]}
 
-    def ask(account, address: str, sid: str, what: str, leg: str, body: dict) -> Iterator[dict]:
+    def ask(account, address: str, sid: str, what: str, leg: str, body: dict, via: str = "web") -> Iterator[dict]:
         if is_here(sid):
             if what == "chat":
-                yield from seller.chat(address, leg, body, via="here")
+                yield from seller.chat(address, leg, body, via=via)
             elif what == "topup":
                 yield seller.topup(address, body.get("leg", ""), body.get("txid", ""), body.get("sig", ""))
             else:
@@ -160,8 +160,93 @@ def register(app, state, *, signed_in: Callable, account_address: Callable, acco
             earned.append({**row, "text": llmlib.fmt(int(row["units"] or 0), sc)})
         kinds = [c for c in pay_choices(request) if c.get("kind") in ("coin", "token")]
         return JSONResponse({"config": {**{k: v for k, v in cfg.items() if k != "key"}, "has_key": bool(cfg.get("key"))},
-                             "earned": earned, "kinds": kinds, "selling": bool(seller.offer())},
+                             "earned": earned, "kinds": kinds, "selling": bool(seller.offer()), "load": load_now()},
                             headers={"Cache-Control": "no-store"})
+
+    def load_now() -> dict:
+        got = seller.load(fresh=True)
+        return {**got, "word": seller.word(got)}
+
+    @app.get("/admin/api/llm/load")
+    def admin_llm_load(request: Request):
+        admin_check(request)
+        return JSONResponse(load_now(), headers={"Cache-Control": "no-store"})
+
+    @app.get("/admin/api/llm/usage")
+    def admin_llm_usage(request: Request, days: float = 7):
+        """Everything about the shared model's use (2026-10-23: "a link on their model that they're sharing and
+        get all of the usage analytics"): a series, totals by model, buyer, payment kind and way in, the last replies."""
+        admin_check(request)
+        days = max(1 / 24, min(float(days), 365))
+        bucket = 300 if days <= 1 else 3600 if days <= 14 else 86400
+        got = books.analytics(time.time() - days * 86400, bucket)
+        s = share()
+        peers = {}
+        for peer, o in (dict(s.offers) if s is not None else {}).items():
+            peers[peer] = ("@" + o["tag"]) if o.get("tag") else o.get("host") or peer[:12]
+        try:
+            ops = dict(getattr(getattr(mesh(), "operators", None), "peers", {}) or {})
+        except Exception:                                           # noqa: BLE001
+            ops = {}
+
+        def where(v: str) -> str:
+            if v in ("web", "here"):
+                return "This arcade (Exchange tab and apps)"
+            if v == "api":
+                return "API keys"
+            if v in peers:
+                return "Arcade " + peers[v]
+            o = ops.get(v) if isinstance(ops, dict) else None
+            tag = (o or {}).get("tag") or ""
+            hosts = (o or {}).get("hosts") or []
+            return "Arcade " + ("@" + tag if tag else hosts[0] if hosts else v[:12])
+
+        tags: dict[str, str] = {}
+
+        def who(address: str) -> str:
+            if address not in tags:
+                try:
+                    tags[address] = name_of(address) or ""
+                except Exception:                                   # noqa: BLE001
+                    tags[address] = ""
+            return tags[address]
+
+        def coin(leg: str) -> dict:
+            if leg == "free":
+                return {"label": "Free", "scale": llmlib.COIN}
+            p = next((x for x in llmlib.config(state).get("prices") or [] if x.get("leg") == leg), None)
+            try:
+                sc = scale(leg)
+            except Exception:                                       # noqa: BLE001
+                sc = llmlib.COIN
+            return {"label": (p or {}).get("label") or leg, "scale": sc}
+        for row in got["by"]["buyer"]:
+            row["tag"] = who(row["key"])
+        for row in got["by"]["via"]:
+            row["label"] = where(row["key"])
+        for row in got["by"]["leg"]:
+            c = coin(row["key"])
+            row["label"], row["text"] = c["label"], llmlib.fmt(int(row["units"] or 0), c["scale"])
+        for row in got["last"]:
+            c = coin(row["leg"])
+            row["tag"], row["coin"] = who(row["buyer"]), c["label"].split(" \u00b7 ")[0]
+            row["cost"] = llmlib.fmt(int(row["units"] or 0), c["scale"])
+            row["where"] = where(row["via"])
+        return JSONResponse({**got, "days": days, "bucket": bucket, "load": load_now(),
+                             "models": llmlib.config(state).get("models") or []},
+                            headers={"Cache-Control": "no-store"})
+
+    if render is not None:
+        @app.get("/admin/llm/usage")
+        def admin_llm_usage_page(request: Request):
+            from fastapi.responses import RedirectResponse
+            try:
+                admin_check(request)
+            except Exception as exc:                                # noqa: BLE001
+                if getattr(exc, "status_code", 0) == 401:
+                    return RedirectResponse("/admin/login", status_code=303)
+                raise
+            return render(request, "llm_usage.html")
 
     @app.post("/admin/api/llm")
     async def admin_llm_save(request: Request):
@@ -394,7 +479,8 @@ def register(app, state, *, signed_in: Callable, account_address: Callable, acco
             pubkey = row["account"]
         import asyncio
         try:
-            gen = await asyncio.to_thread(first, ask(_Acct, row["address"], row["seller"], "chat", row["leg"], said))
+            gen = await asyncio.to_thread(first, ask(_Acct, row["address"], row["seller"], "chat", row["leg"], said,
+                                                     via="api"))
         except llmlib.LlmError as exc:
             msg = str(exc)
             return oai_error(msg, 402 if "credit" in msg else 429 if "busy" in msg else 400)

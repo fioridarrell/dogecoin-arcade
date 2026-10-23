@@ -35,6 +35,7 @@ CHUNK = 48 * 1024
 MAX_ASKED = 6 * 1024 * 1024
 AT_ONCE_PER_PEER = 8
 ANSWER_SECONDS = llmlib.REQUEST_SECONDS + 30
+LOAD_EVERY = 15.0
 
 
 def grant_ok(grant: Any, seller: str, now: float | None = None) -> str:
@@ -84,6 +85,18 @@ class LlmShare:
         self.loop = asyncio.get_running_loop()
         self._said = await asyncio.to_thread(self._offer_now)
         await self._send(link, {"op": "offer", "o": self._said})
+        if getattr(self, "_ticker", None) is None and self.node is not None:
+            self._ticker = self.node._spawn(self._tick())
+
+    async def _tick(self) -> None:
+        """The offer said again whenever it changed, at most every LOAD_EVERY seconds: its load (how busy the model
+        is) moves far more often than the minute's rebalance."""
+        while True:
+            await asyncio.sleep(LOAD_EVERY)
+            try:
+                await self.rebalance()
+            except Exception:                        # noqa: BLE001
+                log.debug("llm tick", exc_info=True)
 
     async def link_down(self, peer_id: str) -> None:
         self.offers.pop(peer_id, None)
@@ -269,6 +282,20 @@ def _clean_offer(o: dict) -> dict:
         except (llmlib.LlmError, KeyError):
             continue
     models = [{"id": str(m.get("id"))[:200]} for m in o.get("models")[:20] if isinstance(m, dict) and m.get("id")]
+    load = o.get("load") if isinstance(o.get("load"), dict) else {}
+    keep = {}
+    for k in ("active", "waiting", "at_once", "last_15m", "last_hour", "failed_hour", "first_ms"):
+        try:
+            keep[k] = max(0, int(load.get(k) or 0))
+        except (TypeError, ValueError):
+            pass
+    try:
+        keep["tok_s"] = max(0.0, float(load.get("tok_s") or 0))
+    except (TypeError, ValueError):
+        pass
+    if load.get("word") in ("idle", "steady", "busy", "full"):
+        keep["word"] = load["word"]
     return {"name": str(o.get("name") or "")[:60], "models": models, "prices": prices, "free": o.get("free") is True,
+            "load": keep,
             "max_out": int(o.get("max_out") or 0) if str(o.get("max_out") or "0").isdigit() else 0,
             "tag": str(o.get("tag") or "")[:24], "host": str(o.get("host") or "")[:100]}

@@ -356,6 +356,13 @@ class Books:
         self._lock = threading.Lock()
         with self._db() as db:
             db.executescript(SCHEMA)
+            # How long each reply took, its first piece, and whether it failed (2026-10-23: the admin's analytics page
+            # and the load the book shows). Added to a usage table from before them.
+            have = {r[1] for r in db.execute("PRAGMA table_info(usage)")}
+            for col, kind in (("ms", "INTEGER NOT NULL DEFAULT 0"), ("first_ms", "INTEGER NOT NULL DEFAULT 0"),
+                              ("ok", "INTEGER NOT NULL DEFAULT 1")):
+                if col not in have:
+                    db.execute(f"ALTER TABLE usage ADD COLUMN {col} {kind}")
 
     @contextmanager
     def _db(self):
@@ -395,11 +402,13 @@ class Books:
         return True
 
     def charge(self, buyer: str, leg: str, model: str, tokens_in: int, tokens_out: int, units: int,
-               via: str = "") -> int:
+               via: str = "", ms: int = 0, first_ms: int = 0, ok: bool = True) -> int:
         """Take a reply's cost (never below zero) and log it; the balance left."""
         with self._lock, self._db() as db:
-            db.execute("INSERT INTO usage VALUES (?,?,?,?,?,?,?,?)",
-                       (time.time(), buyer, model, leg, int(tokens_in), int(tokens_out), int(units), via))
+            db.execute("INSERT INTO usage (at, buyer, model, leg, tokens_in, tokens_out, units, via, ms, first_ms, ok) "
+                       "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                       (time.time(), buyer, model, leg, int(tokens_in), int(tokens_out), int(units), via, int(ms),
+                        int(first_ms), 1 if ok else 0))
             db.execute("INSERT INTO credit VALUES (?,?,0) ON CONFLICT(buyer, leg) DO "
                        "UPDATE SET units=MAX(0, units-?)", (buyer, leg, int(units)))
             row = db.execute("SELECT units FROM credit WHERE buyer=? AND leg=?", (buyer, leg)).fetchone()
@@ -411,6 +420,35 @@ class Books:
             return [dict(r) for r in db.execute(
                 "SELECT leg, COUNT(*) AS replies, SUM(tokens_in) AS tokens_in, SUM(tokens_out) AS tokens_out, "
                 "SUM(units) AS units, COUNT(DISTINCT buyer) AS buyers FROM usage WHERE at>=? GROUP BY leg", (since,))]
+
+    def recently(self, since: float) -> dict:
+        """Replies, failures, output tokens and time spent writing since `since` (the load the book shows)."""
+        with self._db() as db:
+            r = db.execute("SELECT COUNT(*) AS n, SUM(1-ok) AS bad, SUM(tokens_out) AS out, SUM(ms) AS ms, "
+                           "SUM(first_ms) AS first FROM usage WHERE at>=?", (since,)).fetchone()
+        return {k: int(r[k] or 0) for k in ("n", "bad", "out", "ms", "first")}
+
+    def analytics(self, since: float, bucket: int = 3600) -> dict:
+        """Everything the admin's usage page draws, from `since`: a series per `bucket` seconds and the totals by
+        model, by buyer, by payment kind and by where it came from."""
+        q = ("SELECT COUNT(*) AS replies, SUM(1-ok) AS failed, SUM(tokens_in) AS tokens_in, SUM(tokens_out) AS "
+             "tokens_out, SUM(units) AS units, AVG(CASE WHEN ok=1 AND ms>0 THEN ms END) AS avg_ms, "
+             "AVG(CASE WHEN ok=1 AND first_ms>0 THEN first_ms END) AS avg_first_ms, "
+             "SUM(CASE WHEN ok=1 THEN ms END) AS ms_sum, COUNT(DISTINCT buyer) AS buyers")
+        with self._db() as db:
+            total = dict(db.execute(q + " FROM usage WHERE at>=?", (since,)).fetchone())
+            series = [dict(r) for r in db.execute(
+                f"SELECT CAST(at/{int(bucket)} AS INTEGER)*{int(bucket)} AS t, " + q[7:] +
+                " FROM usage WHERE at>=? GROUP BY t ORDER BY t", (since,))]
+            by = {}
+            for name, col in (("model", "model"), ("buyer", "buyer"), ("leg", "leg"), ("via", "via")):
+                by[name] = [dict(r) for r in db.execute(
+                    f"SELECT {col} AS key, " + q[7:] + f" FROM usage WHERE at>=? GROUP BY {col} "
+                    "ORDER BY replies DESC LIMIT 50", (since,))]
+            last = [dict(r) for r in db.execute(
+                "SELECT at, buyer, model, leg, tokens_in, tokens_out, units, via, ms, first_ms, ok FROM usage "
+                "WHERE at>=? ORDER BY at DESC LIMIT 50", (since,))]
+        return {"total": total, "series": series, "by": by, "last": last}
 
     def recent(self, buyer: str, limit: int = 20) -> list[dict]:
         with self._db() as db:
@@ -591,6 +629,9 @@ class Seller:
         self._slots: threading.BoundedSemaphore | None = None
         self._slots_n = 0
         self._lock = threading.Lock()
+        self.active = 0                                # replies being written now
+        self.waiting = 0                               # replies waiting for a slot
+        self._load: tuple[float, dict] | None = None
 
     def _slot(self) -> threading.BoundedSemaphore:
         n = int(self.config().get("at_once") or 1)
@@ -598,6 +639,33 @@ class Seller:
             if self._slots is None or n != self._slots_n:
                 self._slots, self._slots_n = threading.BoundedSemaphore(n), n
             return self._slots
+
+    def load(self, fresh: bool = False) -> dict:
+        """How busy this arcade's model is (2026-10-23: "Users also need a way to know if one of the models is
+        congested or being frequently used" -- "So should the admin"): replies running and waiting now, replies in the
+        last 15 minutes and hour, output speed, and one word for it."""
+        now = time.time()
+        if not fresh and self._load and now - self._load[0] < 10:
+            return {**self._load[1], "active": self.active, "waiting": self.waiting}
+        cfg = self.config()
+        q15, h1 = self.books.recently(now - 900), self.books.recently(now - 3600)
+        at_once = int(cfg.get("at_once") or 1)
+        tok_s = round(h1["out"] / (h1["ms"] / 1000), 1) if h1["ms"] else 0.0
+        out = {"at_once": at_once, "last_15m": q15["n"], "last_hour": h1["n"], "failed_hour": h1["bad"],
+               "tok_s": tok_s, "first_ms": round(h1["first"] / h1["n"]) if h1["n"] else 0}
+        self._load = (now, out)
+        return {**out, "active": self.active, "waiting": self.waiting}
+
+    @staticmethod
+    def word(load: dict) -> str:
+        """idle | steady | busy | full: what the book's pill says."""
+        if load.get("waiting"):
+            return "full"
+        if load.get("active", 0) >= max(1, load.get("at_once", 1)):
+            return "busy"
+        if load.get("active") or load.get("last_15m", 0) >= 3:
+            return "steady"
+        return "idle"
 
     def offer(self) -> dict | None:
         """What this arcade says on the LLM book, or None when it sells nothing."""
@@ -616,7 +684,9 @@ class Seller:
         if not prices and not free:
             return None
         about = self.about() or {}
-        return {"name": cfg.get("name") or "", "models": [{"id": m} for m in cfg["models"]], "free": free,
+        load = self.load()
+        load["word"] = self.word(load)
+        return {"name": cfg.get("name") or "", "models": [{"id": m} for m in cfg["models"]], "free": free, "load": load,
                 "max_out": int(cfg.get("max_out") or 0), "prices": prices,
                 "tag": str(about.get("tag") or ""), "host": str(about.get("host") or "")}
 
@@ -689,8 +759,20 @@ class Seller:
         out.pop("max_completion_tokens", None)
         out.update(model=model, max_tokens=most, n=1)
         slot = self._slot()
-        if not slot.acquire(timeout=WAIT_FOR_SLOT):
+        with self._lock:
+            self.waiting += 1
+        try:
+            got = slot.acquire(timeout=WAIT_FOR_SLOT)
+        finally:
+            with self._lock:
+                self.waiting -= 1
+        if not got:
+            self.books.charge(buyer, leg if not free else "free", model, 0, 0, 0, via, ok=False)
             raise LlmError("the model is busy; try again in a minute")
+        with self._lock:
+            self.active += 1
+        t0 = time.monotonic()
+        first_ms = 0
         used_in = used_out = 0
         chars = 0
         heard = False
@@ -704,18 +786,26 @@ class Seller:
                     used_out = int(usage.get("completion_tokens") or used_out)
                 for ch in chunk.get("choices") or []:
                     d = ch.get("delta") or {}
+                    if not first_ms and (d.get("content") or d.get("reasoning_content") or d.get("tool_calls")):
+                        first_ms = int((time.monotonic() - t0) * 1000)
                     chars += len(d.get("content") or "") + len(d.get("reasoning_content") or "")
                     chars += len(json.dumps(d["tool_calls"])) if d.get("tool_calls") else 0
                 yield chunk
         finally:
             slot.release()
+            with self._lock:
+                self.active -= 1
+            ms = int((time.monotonic() - t0) * 1000)
             if heard:                                           # a server that never answered costs nothing
                 if not used_in:
                     used_in = guess_in
                 if not used_out and chars:
                     used_out = chars // 4 + 1
                 cost = 0 if free else cost_units(prices, used_in, used_out, scale)
-                left = self.books.charge(buyer, leg if not free else "free", model, used_in, used_out, cost, via)
+                left = self.books.charge(buyer, leg if not free else "free", model, used_in, used_out, cost, via,
+                                         ms=ms, first_ms=first_ms)
+            else:
+                self.books.charge(buyer, leg if not free else "free", model, 0, 0, 0, via, ms=ms, ok=False)
         yield {"arcade": {"tokens_in": used_in, "tokens_out": used_out, "cost": cost,
                           "cost_text": fmt(cost, scale), "left": left, "left_text": fmt(left, scale),
                           "free": free, "leg": leg}}

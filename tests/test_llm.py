@@ -389,3 +389,36 @@ def test_a_model_can_be_offered_free_for_everyone(arcade):
     assert late.status_code == 400 and "charges" in late.json()["error"]["message"]
     client.post("/admin/api/llm", headers=h, json={"prices": [{"leg": "main-coin", "in": "0", "out": "0"}]})
     assert client.get("/account/llm/offers").json()["offers"][0]["free"] is True, "an ask of 0 and 0 is free too"
+
+
+def test_the_book_and_the_admin_see_how_busy_a_model_is_and_its_analytics(arcade):
+    """2026-10-23: "Users also need a way to know if one of the models is congested or being frequently used" --
+    "So should the admin" -- and "a link on their model ... and get all of the usage analytics"."""
+    client, state, pubkey, seen = arcade
+    state.llm_seller.books.credit("34" * 32, "main-coin", ADDR, llm.COIN)
+    (o,) = client.get("/account/llm/offers").json()["offers"]
+    assert o["load"]["word"] == "idle" and o["load"]["at_once"] == 2
+    for _ in range(3):
+        assert client.post("/account/llm/chat", json={"seller": "here", "leg": "main-coin",
+                                                      "messages": [{"role": "user", "content": "hi"}]}).status_code == 200
+    load = client.get("/admin/api/llm/load").json()
+    assert load["last_15m"] == 3 and load["word"] == "steady" and load["tok_s"] > 0
+    assert llm.Seller.word({"active": 2, "at_once": 2}) == "busy" and llm.Seller.word({"waiting": 1}) == "full"
+    got = client.get("/admin/api/llm/usage?days=1").json()
+    assert got["total"]["replies"] == 3 and got["total"]["tokens_out"] == 60 and got["bucket"] == 300
+    assert got["by"]["model"][0]["key"] == "tiny" and got["by"]["via"][0]["label"].startswith("This arcade")
+    assert got["by"]["leg"][0]["text"] and got["last"][0]["ms"] >= 0
+    assert client.get("/admin/llm/usage").status_code == 200
+
+
+def test_an_old_usage_table_gains_the_new_columns(tmp_path):
+    import sqlite3
+    db = sqlite3.connect(tmp_path / "llm.sqlite")
+    db.execute("CREATE TABLE usage (at REAL NOT NULL, buyer TEXT NOT NULL, model TEXT NOT NULL, leg TEXT NOT NULL, "
+               "tokens_in INTEGER NOT NULL, tokens_out INTEGER NOT NULL, units INTEGER NOT NULL, via TEXT NOT NULL DEFAULT '')")
+    db.execute("INSERT INTO usage VALUES (1, 'b', 'm', 'main-coin', 1, 2, 3, 'web')")
+    db.commit()
+    db.close()
+    books = llm.Books(tmp_path)
+    books.charge("b", "main-coin", "m", 1, 1, 0, "web", ms=500, first_ms=100)
+    assert books.analytics(0)["total"]["replies"] == 2
