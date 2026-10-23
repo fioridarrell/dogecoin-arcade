@@ -295,6 +295,22 @@
   <div id="meshinfo" class="muted" style="font-size:.88rem">Loading&hellip;</div>
 </section>
 
+{# 2026-10-23: calls between homes need a relay (Starlink's shared IPv4); "Cloudflare TURN". #}
+<section class="panel" id="turnrelay">
+  <h2>Call relay</h2>
+  <p class="muted" style="margin-top:0">Video calls and fast games connect players&rsquo; browsers directly. Some homes
+    (Starlink, mobile data) cannot be reached that way; a relay carries their calls instead. Make a TURN key in
+    Cloudflare (Realtime &rarr; TURN Server &rarr; Create), then paste its id and API token here. Signed-in players get
+    short-lived logins to it; strangers do not. Cloudflare bills what it carries past its free allowance.</p>
+  <div class="row" style="gap:8px;flex-wrap:wrap">
+    <input autocomplete="off" id="turnid" placeholder="TURN key id (32 characters)" style="flex:2;min-width:220px">
+    <input autocomplete="new-password" type="password" id="turntoken" placeholder="API token" style="flex:2;min-width:200px">
+    <button type="button" class="small" id="turnsave">Save &amp; test</button>
+    <button type="button" class="small ghost" id="turnclear" hidden>Remove</button>
+  </div>
+  <p class="muted" id="turnsaid"></p>
+</section>
+
 {# 2026-10-20: "a list of other operators" -- each linked arcade says who runs it (mesh/operators.py). #}
 <section class="panel" id="operators">
   <h2>Other operators</h2>
@@ -754,6 +770,12 @@ section.panel h2{margin-top:0}
     (x.stuck || []).forEach(function (p) { lines.push('Stuck ' + p.id + ': ' + p.error); });
     xs.textContent = '';
     lines.forEach(function (l) { var div = document.createElement('div'); div.textContent = l; xs.appendChild(div); });
+    var turn = d.turn || {};
+    $('turnid').value = turn.key_id || '';
+    $('turntoken').value = '';
+    $('turntoken').placeholder = turn.has_token ? 'API token saved (type to replace)' : 'API token';
+    $('turnclear').hidden = !turn.key_id;
+    $('turnsaid').textContent = turn.key_id && turn.has_token ? 'The relay is on: signed-in players get it.' : 'No relay: direct links only.';
     $('modurl').value = (d.moderation && d.moderation.url) || '';
     $('modmodel').value = (d.moderation && d.moderation.model) || '';
     $('modkey').value = '';
@@ -1944,6 +1966,17 @@ section.panel h2{margin-top:0}
       moderation: {url: $('modurl').value.trim(), model: $('modmodel').value.trim(),
                    key: $('modkey').value.trim(), clear_key: $('modclear').checked}})
       .then(function () { say('Switches saved.'); load(); }).catch(function (e) { say(e.message, 'err'); });
+  };
+
+  $('turnsave').onclick = function () {
+    $('turnsaid').textContent = 'Trying it with Cloudflare\u2026';
+    call('/admin/api/settings', {turn: {key_id: $('turnid').value.trim(), token: $('turntoken').value.trim()}})
+      .then(function () { say('Relay saved: Cloudflare took the key.'); load(); })
+      .catch(function (e) { $('turnsaid').textContent = e.message; say(e.message, 'err'); });
+  };
+  $('turnclear').onclick = function () {
+    call('/admin/api/settings', {turn: {clear: true}}).then(function () { say('Relay removed.'); load(); })
+      .catch(function (e) { say(e.message, 'err'); });
   };
 
   $('saveflags').onclick = function () {

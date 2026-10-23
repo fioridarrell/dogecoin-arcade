@@ -88,6 +88,17 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-23 The call relay: Cloudflare TURN for signed-in players (Claude)
+The operator, live test from two homes: "We can't hear or see each other. I can see myself." Gathering here was quick and
+complete, but this home's IPv4 is Starlink's shared one (129.222.x, carrier NAT): no direct link to another home gets
+through, and the fast lane had no relay. The operator chose "Cloudflare TURN". Admin -> Network -> Call relay: a TURN key's
+id and API token, tried with Cloudflare before it is kept (setting `turn`; the token never goes back to the page).
+/realtime/ice adds fresh logins (generate-ice-servers, 6 h, kept half that per player) for a signed-in player or the
+operator; a guest gets none ("relay": false), so strangers cannot spend it. The fast lane packs the relay's and public
+candidates before local ones (up to 10: relay 3, srflx 4, prflx 2, host the rest; a PC with many local addresses no
+longer crowds them out) and waits up to 6 s for the relay's when one was handed out. Tests: test_stun.py (both of
+Cloudflare's answer shapes, guests get none, kept not re-asked); the fast-lane and media browser tests still pass.
+
 ### 2026-10-23 Ringing a player whose app is closed: a Notifications switch per app (Claude)
 The operator: call "at any time, even if the application is not open through push notifications as long as we have push
 notifications enabled for the app just like the Wallet access and camera and microphone access switches", "Keeping

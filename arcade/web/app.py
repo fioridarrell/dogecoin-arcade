@@ -26093,6 +26093,9 @@ def create_app(state: AppState) -> FastAPI:
             "faucet": {"gift": int(state.setting("faucet", faucetlib.GIFT)),
                        "daily": state.setting("faucet_daily"),
                        "real_coins": bool(state.setting("faucet_real_coins", False))},
+            # The call relay (web/realtime.py, THE RELAY): the key's id, never its token.
+            "turn": {"key_id": (state.setting("turn") or {}).get("key_id") or "",
+                     "has_token": bool((state.setting("turn") or {}).get("token"))},
             # Never the access token itself: only that there is one.
             "moderation": {k: v for k, v in (state.setting("moderation") or {}).items()
                            if k != "key"}
@@ -26570,6 +26573,22 @@ def create_app(state: AppState) -> FastAPI:
             for flag in ("auto_update", "auto_sell", "auto_fill", "node_trades"):
                 if flag in said:
                     state.set_setting(flag, bool(said[flag]))
+            if isinstance(said.get("turn"), dict):
+                # The call relay (2026-10-23, "Cloudflare TURN"): tried before it is kept, so a wrong key says so.
+                t, kept = said["turn"], state.setting("turn") or {}
+                if t.get("clear"):
+                    state.set_setting("turn", None)
+                else:
+                    key_id = str(t.get("key_id") or kept.get("key_id") or "").strip()
+                    token = str(t.get("token") or "").strip() or str(kept.get("token") or "")
+                    if not re.fullmatch(r"[0-9a-fA-F]{32}", key_id) or not token:
+                        raise ValueError("a TURN key is its 32-character id and its API token")
+                    from .realtime import turn_servers
+                    try:
+                        turn_servers(key_id, token, ttl=60)
+                    except Exception as exc:                    # noqa: BLE001
+                        raise ValueError(f"Cloudflare did not take that key: {exc}") from None
+                    state.set_setting("turn", {"key_id": key_id, "token": token})
             # Moved here from Overview (2026-10-19, the operator: "the overview page needs to be re-organized"): extra
             # room for sale (the /settings/quotas form's boost fields) and this node's cut of trades (/settings/cut).
             if isinstance(said.get("boost"), dict):

@@ -40,6 +40,7 @@ thread while it waits, and it does nothing but wait on the mesh's queue.
 from __future__ import annotations
 
 import base64
+import logging
 import json
 import re
 import time
@@ -50,6 +51,8 @@ from fastapi import Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from ..mesh.node import MAX_PAYLOAD, MeshError
+
+log = logging.getLogger("arcade.realtime")
 from ..mesh.service import GUEST, MESSAGE_MAGIC, cert_message
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
@@ -58,8 +61,31 @@ CORS_HEADERS = {"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Method
                 "Access-Control-Allow-Headers": "Content-Type", "Access-Control-Max-Age": "600"}
 ROOM_MAX = 60
 HEARTBEAT = 4.0
-PUBLIC_STUN = "stun:stun.cloudflare.com:3478"   # after the nodes' own, unless the operator says not (realtime_ice)
+PUBLIC_STUN = "stun:stun.cloudflare.com:3478"
+# THE RELAY (2026-10-23: two homes "can't hear or see each other" -- Starlink's shared IPv4 lets no direct
+# link through; chose "Cloudflare TURN"). The operator's TURN key (Admin, Network: setting `turn`); signed-in players
+# get short-lived logins to it, so a stranger's browser cannot spend the arcade's relay.
+TURN_API = "https://rtc.live.cloudflare.com/v1/turn/keys/{key}/credentials/generate-ice-servers"
+TURN_TTL = 6 * 3600   # after the nodes' own, unless the operator says not (realtime_ice)
 MAX_ICE_NODES = 4                               # more STUN servers only slow a browser's gathering
+
+
+def turn_servers(key_id: str, token: str, ttl: int = TURN_TTL, post=None) -> list[dict]:
+    """Fresh logins to the operator's Cloudflare TURN key: ICE servers with a username and credential.
+    Raises on anything but a good answer."""
+    import requests
+    post = post or requests.post
+    answer = post(TURN_API.format(key=key_id), timeout=10, json={"ttl": int(ttl)},
+                  headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+    if not 200 <= answer.status_code < 300:
+        raise MeshError(f"Cloudflare answered {answer.status_code}")
+    said = answer.json().get("iceServers")
+    servers = said if isinstance(said, list) else [said] if isinstance(said, dict) else []
+    out = [{k: v for k, v in s.items() if k in ("urls", "username", "credential")}
+           for s in servers if isinstance(s, dict) and s.get("username") and s.get("credential")]
+    if not out:
+        raise MeshError("Cloudflare gave no relay")
+    return out
 
 
 def room_key(game: Any, room: Any) -> str:
@@ -305,11 +331,33 @@ def register(app, state, *, account_view: Callable, signed_in: Callable,
             pass
         return JSONResponse({"ok": True, "self": svc.node_id, "nodes": out})
 
+    relay_kept: dict[str, tuple[float, list]] = {}
+
+    def relay_for(request: Request) -> list[dict]:
+        """The operator's TURN relay, for a signed-in player (or the operator) only; kept half its life per player."""
+        turn = state.settings().get("turn") or {}
+        if not (isinstance(turn, dict) and turn.get("key_id") and turn.get("token")):
+            return []
+        kind, address = identity(request)
+        if kind == "guest" or not address:
+            return []
+        kept = relay_kept.get(address)
+        if kept and time.time() - kept[0] < TURN_TTL / 2:
+            return kept[1]
+        try:
+            servers = turn_servers(str(turn["key_id"]), str(turn["token"]))
+        except Exception as exc:                     # noqa: BLE001 -- no relay this time: direct only
+            log.info("turn: %s", exc)
+            return []
+        relay_kept[address] = (time.time(), servers)
+        return servers
+
     @app.get("/realtime/ice")
     def realtime_ice(request: Request):
         """The STUN servers a browser should use for the fast lane (2026-10-18, the operator: "Nodes, then public"):
         every arcade node's STUN that another node has proved reachable (mesh/stun.py), then a public one unless
-        the operator turned that off (setting realtime_public_stun). Never a relay: a relay is a paid lease."""
+        the operator turned that off (setting realtime_public_stun). And the operator's TURN relay, if set, for a
+        signed-in player (relay_for)."""
         servers = []
         try:
             share = getattr(mesh(), "stun", None)
@@ -319,7 +367,9 @@ def register(app, state, *, account_view: Callable, signed_in: Callable,
             servers.append({"urls": f"stun:[{host}]:{port}" if ":" in host else f"stun:{host}:{port}"})
         if state.settings().get("realtime_public_stun", True) is not False:
             servers.append({"urls": PUBLIC_STUN})
-        return JSONResponse({"ok": True, "iceServers": servers},
+        relay = relay_for(request)
+        servers.extend(relay)
+        return JSONResponse({"ok": True, "iceServers": servers, "relay": bool(relay)},
                             headers={"Cache-Control": "no-store"})
 
     @app.get("/r/realtime.js")

@@ -103,3 +103,73 @@ def test_ice_lists_the_nodes_stun_then_the_public_one(tmp_path):
     state.set_setting("realtime_public_stun", False)
     assert [s["urls"] for s in client.get("/realtime/ice").json()["iceServers"]] == [
         "stun:[2001:db8::1]:3478", "stun:203.0.113.5:3478"], "the operator turned the public one off"
+
+
+class _Answer:
+    def __init__(self, status, body):
+        self.status_code, self._body = status, body
+
+    def json(self):
+        return self._body
+
+
+def test_cloudflare_relay_logins_in_either_shape():
+    """THE RELAY (web/realtime.py, 2026-10-23 "Cloudflare TURN"): Cloudflare's answer is a list of servers
+    (generate-ice-servers) or one object (the older generate); only those with a login are the relay."""
+    import pytest
+
+    from arcade.web.realtime import turn_servers
+    from arcade.mesh.node import MeshError
+    asked = []
+    listed = {"iceServers": [{"urls": ["stun:stun.cloudflare.com:3478"]},
+                             {"urls": ["turn:turn.cloudflare.com:3478?transport=udp",
+                                       "turns:turn.cloudflare.com:443?transport=tcp"],
+                              "username": "u1", "credential": "c1"}]}
+
+    def post(url, **kw):
+        asked.append((url, kw))
+        return _Answer(201, listed)
+    got = turn_servers("ab" * 16, "tok", ttl=60, post=post)
+    assert got == [{"urls": listed["iceServers"][1]["urls"], "username": "u1", "credential": "c1"}]
+    assert asked[0][0].endswith("/turn/keys/" + "ab" * 16 + "/credentials/generate-ice-servers")
+    assert asked[0][1]["headers"]["Authorization"] == "Bearer tok" and asked[0][1]["json"] == {"ttl": 60}
+    one = {"iceServers": {"urls": ["turn:turn.cloudflare.com:3478"], "username": "u2", "credential": "c2"}}
+    assert turn_servers("ab" * 16, "tok", post=lambda url, **kw: _Answer(201, one))[0]["username"] == "u2"
+    with pytest.raises(MeshError):
+        turn_servers("ab" * 16, "bad", post=lambda url, **kw: _Answer(401, {}))
+
+
+def test_the_relay_goes_to_players_who_are_somebody_and_not_to_guests(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from arcade.web import realtime
+    from arcade.web.app import create_app
+    sys.path.insert(0, str(pathlib.Path(__file__).parent))
+    from test_realtime_web import make_state
+
+    state = make_state(tmp_path, "node")
+
+    class _Mesh:
+        node_id = "n"
+        loop = object()
+    _Mesh.stun = stun.StunShare(None)
+    state.mesh = _Mesh()
+    made = []
+
+    def fake(key_id, token, ttl=realtime.TURN_TTL, post=None):
+        made.append((key_id, token))
+        return [{"urls": ["turn:turn.cloudflare.com:3478"], "username": "u", "credential": "c"}]
+    monkeypatch.setattr(realtime, "turn_servers", fake)
+    client = TestClient(create_app(state))
+    assert client.get("/realtime/ice").json()["relay"] is False, "no key: no relay"
+    state.set_setting("turn", {"key_id": "ab" * 16, "token": "tok"})
+    monkeypatch.setattr(type(state), "derived_address", "nOperator" + "a" * 25, raising=False)
+    said = client.get("/realtime/ice").json()
+    assert said["relay"] is True and said["iceServers"][-1]["username"] == "u", said
+    client.get("/realtime/ice")
+    assert len(made) == 1, "kept, not asked of Cloudflare every time"
+    # A stranger on the public site (a guest) gets no relay.
+    public = TestClient(create_app(state), base_url="https://app.example.com")
+    monkeypatch.setattr(realtime, "turn_servers", fake)
+    said = public.get("/realtime/ice", headers={"Host": "app.example.com", "X-Forwarded-For": "203.0.113.9"}).json()
+    assert said.get("relay") is not True

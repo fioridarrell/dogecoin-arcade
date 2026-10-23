@@ -335,6 +335,7 @@
         if (!h.fast || h.fast.peers[peer.p.id] !== peer) throw new Error('gone');
         try { if (peer.pc) peer.pc.close(); } catch (err) {}
         var pc = peer.pc = new RTCPeerConnection({iceServers: servers});
+        pc._relay = servers.some(function(s){ return !!s.username; });
         peer.u = pc.createDataChannel('u', {negotiated: true, id: 0, ordered: false, maxRetransmits: 0});
         peer.r = pc.createDataChannel('r', {negotiated: true, id: 1, ordered: true});
         mediaPc(name, h, peer, pc);
@@ -359,27 +360,44 @@
         return pc;
       });
     }
+    // Until gathering is complete, or 2.5 s -- or, when a relay was handed out, until it has answered too (up to
+    // 6 s): a home behind Starlink's shared IPv4 is reached only through it (2026-10-23).
     function fastGathered(pc){
       return new Promise(function(done){
         if (pc.iceGatheringState === 'complete') return done();
-        var t = setTimeout(done, 2500);
+        var relayed = false, start = Date.now(), wantsRelay = !!pc._relay;
+        var finish = function(){ clearInterval(t); done(); };
+        var t = setInterval(function(){
+          var waited = Date.now() - start;
+          if (waited >= 6000 || (waited >= 2500 && (!wantsRelay || relayed))) finish();
+        }, 100);
+        pc.addEventListener('icecandidate', function(e){
+          if (e.candidate && / typ relay/.test(e.candidate.candidate)) relayed = true;
+        });
         pc.addEventListener('icegatheringstatechange', function(){
-          if (pc.iceGatheringState === 'complete') { clearTimeout(t); done(); }
+          if (pc.iceGatheringState === 'complete') finish();
         });
       });
     }
     // The description boiled down to what the other side needs (a full one is about 1 KB, the room takes 512 B):
-    // ICE user and password, the DTLS fingerprint and role, and the UDP candidates.
+    // ICE user and password, the DTLS fingerprint and role, and the UDP candidates -- at most 10, the relay's and
+    // the public ones first, so a machine with many local addresses never crowds out the ones another home can use.
+    var SDP_KEEP = {r: 3, s: 4, p: 2, h: 10}, SDP_MOST = 10;
     function sdpPack(sdp, kind){
-      var out = {t: kind, c: []};
+      var out = {t: kind, c: []}, found = {r: [], s: [], p: [], h: []};
       sdp.split(/\r?\n/).forEach(function(l){
         var m;
         if ((m = /^a=ice-ufrag:(.+)$/.exec(l))) out.u = m[1];
         else if ((m = /^a=ice-pwd:(.+)$/.exec(l))) out.p = m[1];
         else if ((m = /^a=fingerprint:sha-256 (.+)$/i.exec(l))) out.f = m[1].replace(/:/g, '');
         else if ((m = /^a=setup:(\w+)$/.exec(l))) out.s = m[1];
-        else if ((m = /^a=candidate:\S+ 1 udp \d+ (\S+) (\d+) typ (host|srflx|prflx|relay)/i.exec(l))
-                 && out.c.length < 8) out.c.push(m[1] + ' ' + m[2] + ' ' + m[3][0]);
+        else if ((m = /^a=candidate:\S+ 1 udp \d+ (\S+) (\d+) typ (host|srflx|prflx|relay)/i.exec(l))) {
+          var k = m[3][0].toLowerCase();
+          if (found[k].length < SDP_KEEP[k]) found[k].push(m[1] + ' ' + m[2] + ' ' + k);
+        }
+      });
+      ['r', 's', 'p', 'h'].forEach(function(k){
+        found[k].forEach(function(c){ if (out.c.length < SDP_MOST) out.c.push(c); });
       });
       return out;
     }
@@ -466,7 +484,7 @@
       var key = p.id + '/' + msg.k, got = h.fast.parts[key] || (h.fast.parts[key] = []);
       got[msg.i | 0] = msg.d;
       var n = msg.n | 0;
-      if (n < 1 || n > 8) { delete h.fast.parts[key]; return; }
+      if (n < 1 || n > 8) { delete h.fast.parts[key]; return; }   // 8 x RTC_PIECE: room for 10 candidates
       for (var i = 0; i < n; i++) if (got[i] == null) return;
       delete h.fast.parts[key];
       var o; try { o = JSON.parse(got.join('')); } catch (err) { return; }
