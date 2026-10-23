@@ -95,6 +95,15 @@ status after a restart held every Ords request behind it (the stall watch showed
 _counts). doginal_index._counts now works a walking index's totals out on a thread of its own ("ord-counts", one at a
 time) and answers with the last ones, or "counting" (the panel says so) until the first arrive; "found" (a block sum,
 0.7 s) stays as it was. Test: test_the_totals_never_hold_up_the_status.
+### 2026-10-22 Compression, step 1: index copies cross the mesh zlib-compressed (Claude)
+The operator: "start with the compression plan", "Make sure you test everything thoroughly". mesh/doginalshare.py: every
+"g" (a snapshot's manifest or piece) now says `z: 1`; an arcade that reads it compresses its answer (zlib 6) and marks
+each "gb" part `z: 1`; the asker unpacks (`_inflate`, never past INFLATE_MAX 16 MB -- a bomb or a non-zlib answer is a
+failed piece, asked elsewhere) and checks the RAW piece against the manifest's hash as before. An older holder ignores
+`z` and answers raw; an older asker never asks: both still work. Real pieces of @strawberry's 3.1 GB Pepecoin copy:
+0.59 of the size, 25 ms each, round trip and hash exact. Tests (tests/test_doginal_index.py): a whole copy fetched
+over two real DxShare objects, compressed, installs the holder's index exactly in fewer bytes; with "z" stripped (an
+older arcade) it goes raw and still arrives; a bomb and a non-zlib answer are failed pieces, nothing installed.
 
 ### 2026-10-22 Plan (no code yet): compressing what arcades send each other (Claude)
 The operator, after SadFrog's game-bundle note (minify, one gzipped bundle, DecompressionStream): "Can we do something similar
