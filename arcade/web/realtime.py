@@ -402,10 +402,15 @@ def register(app, state, *, account_view: Callable, signed_in: Callable,
 
     state.relay_meter = relay_meter                  # Admin's Call relay panel reads it
 
-    def relay_for(request: Request) -> list[dict]:
-        """The operator's TURN relay, for a signed-in player (or the operator) only; kept half its life per player."""
+    def relay_for(request: Request, app_id: str = "") -> list[dict]:
+        """The operator's TURN relay, for a signed-in player (or the operator) only, in the apps the operator chose
+        (2026-10-23: "what apps on my arcade are allowed to use my relay?" -- "Apps I choose, any account";
+        setting turn.apps, the page each app's Open opens; none chosen yet: every app). Kept half its life per player."""
         turn = state.settings().get("turn") or {}
         if not (isinstance(turn, dict) and turn.get("key_id") and turn.get("token")):
+            return []
+        chosen = turn.get("apps")
+        if isinstance(chosen, list) and str(app_id or "").lower() not in chosen:
             return []
         kind, address = identity(request)
         if kind == "guest" or not address:
@@ -438,7 +443,7 @@ def register(app, state, *, account_view: Callable, signed_in: Callable,
             servers.append({"urls": f"stun:[{host}]:{port}" if ":" in host else f"stun:{host}:{port}"})
         if state.settings().get("realtime_public_stun", True) is not False:
             servers.append({"urls": PUBLIC_STUN})
-        relay = relay_for(request)
+        relay = relay_for(request, request.query_params.get("app", ""))
         servers.extend(relay)
         return JSONResponse({"ok": True, "iceServers": servers, "relay": bool(relay)},
                             headers={"Cache-Control": "no-store"})

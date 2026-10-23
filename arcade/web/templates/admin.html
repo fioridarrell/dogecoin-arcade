@@ -309,6 +309,14 @@
     <button type="button" class="small ghost" id="turnclear" hidden>Remove</button>
   </div>
   <p class="muted" id="turnsaid"></p>
+  {# 2026-10-23: a future subscription fee for this relay (hosting-plan.md 6a). #}
+  <p class="muted" style="font-size:.84rem;margin:4px 0 0">&#9432; Coming later: a subscription fee, so the apps (or
+    players) that use your relay pay you for it, instead of the whole bill being yours.</p>
+  <h3 style="margin:14px 0 4px;font-size:1rem">Apps that may use it</h3>
+  <label class="switch"><input type="radio" name="turnwhich" value="all" id="turnall"> Every app</label>
+  <label class="switch"><input type="radio" name="turnwhich" value="some" id="turnsome"> Only the apps ticked below</label>
+  <div id="turnapps" style="max-height:220px;overflow:auto;margin:6px 0 6px 28px;font-size:.9rem"></div>
+  <button type="button" class="small" id="turnappssave">Save apps</button>
   <h3 style="margin:14px 0 4px;font-size:1rem">Usage this month</h3>
   <div id="turnmeter" class="meterbar" style="height:14px;border-radius:7px;background:var(--line,#ddd);overflow:hidden;max-width:520px">
     <div id="turnfill" style="height:100%;width:0;background:var(--ok,#2a2)"></div></div>
@@ -789,6 +797,22 @@ section.panel h2{margin-top:0}
     $('turntoken').value = '';
     $('turntoken').placeholder = turn.has_token ? 'API token saved (type to replace)' : 'API token';
     $('turnclear').hidden = !turn.key_id;
+    var chosen = Array.isArray(turn.apps) ? turn.apps : null;
+    $('turnall').checked = !chosen; $('turnsome').checked = !!chosen;
+    var box = $('turnapps');
+    if (!box.childElementCount) box.textContent = 'Loading the apps\u2026';
+    fetch('/admin/api/relay-apps', {credentials: 'same-origin', cache: 'no-store'})
+      .then(function (r) { return r.json(); }).then(function (j) {
+        box.textContent = '';
+        (j.apps || []).forEach(function (a) {
+          var l = document.createElement('label'); l.className = 'switch'; l.style.display = 'block';
+          var c = document.createElement('input'); c.type = 'checkbox'; c.value = a.id;
+          c.checked = !!chosen && chosen.indexOf(a.id) >= 0;
+          l.append(c, ' ' + a.name + ' \u00b7 ' + a.publisher + (a.net ? ' (' + a.net + ')' : ''));
+          box.appendChild(l);
+        });
+        if (!(j.apps || []).length) box.textContent = 'No apps on the Apps tab yet.';
+      }).catch(function () { box.textContent = 'Could not list the apps.'; });
     var m = turn.meter || {}, lim = m.limit_gb || 1000;
     $('turnacct').value = turn.account_id || '';
     $('turnanalytics').value = '';
@@ -2003,6 +2027,12 @@ section.panel h2{margin-top:0}
     call('/admin/api/settings', {turn: {key_id: $('turnid').value.trim(), token: $('turntoken').value.trim()}})
       .then(function () { say('Relay saved: Cloudflare took the key.'); load(); })
       .catch(function (e) { $('turnsaid').textContent = e.message; say(e.message, 'err'); });
+  };
+  $('turnappssave').onclick = function () {
+    var apps = Array.prototype.map.call(document.querySelectorAll('#turnapps input:checked'), function (c) { return c.value; });
+    call('/admin/api/settings', {turn_apps: {all: $('turnall').checked, apps: apps}})
+      .then(function () { say($('turnall').checked ? 'Every app may use the relay.' : apps.length + ' app(s) may use the relay.'); load(); })
+      .catch(function (e) { say(e.message, 'err'); });
   };
   $('turnmetersave').onclick = function () {
     $('turnusage').textContent = 'Asking Cloudflare\u2026';

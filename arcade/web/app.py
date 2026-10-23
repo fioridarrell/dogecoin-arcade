@@ -23937,6 +23937,20 @@ def create_app(state: AppState) -> FastAPI:
                 found.append({**dict(r), "game": game})
         return gameslib.newest_per_game(found) if newest else found
 
+    def _relay_app_choices() -> list[dict]:
+        """The apps on the tab, as the relay's choice lists them: the page each opens, its name and publisher."""
+        out, seen = [], set()
+        for c, ix in [_token_chain()] + _other_indexes():
+            for r in _game_rows(ix):
+                page = _game_opens(ix, r["creator"], r["txid"], r["game"])
+                if page in seen:
+                    continue
+                seen.add(page)
+                tag = _name_of(r["creator"])
+                out.append({"id": page, "name": r["game"]["name"], "net": c.network,
+                            "publisher": f"@{tag}" if tag else r["creator"][:10] + "\u2026"})
+        return sorted(out, key=lambda a: a["name"].casefold())
+
     def _app_versions(txid: str) -> list[str]:
         """Every card of the same app on its chain -- the same maker and name, the rule the Apps tab keeps the newest
         by (gameslib.newest_per_game) -- newest first; [txid] when it is no card. Hearts, dislikes, comments and tips
@@ -26142,7 +26156,9 @@ def create_app(state: AppState) -> FastAPI:
                      "has_token": bool((state.setting("turn") or {}).get("token")),
                      "account_id": (state.setting("turn") or {}).get("account_id") or "",
                      "has_analytics": bool((state.setting("turn") or {}).get("analytics")),
-                     "meter": (state.relay_meter() if hasattr(state, "relay_meter") else {})},
+                     "meter": (state.relay_meter() if hasattr(state, "relay_meter") else {}),
+                     # Which apps may use it (None: every app) and the apps there are to choose from.
+                     "apps": (state.setting("turn") or {}).get("apps")},
             # Never the access token itself: only that there is one.
             "moderation": {k: v for k, v in (state.setting("moderation") or {}).items()
                            if k != "key"}
@@ -26164,6 +26180,12 @@ def create_app(state: AppState) -> FastAPI:
             "brand": {"current": brandlib.current().key, "locked": brandlib.FROM_ENV,
                       "choices": [[b.key, b.name] for b in brandlib.BRANDS.values()]},
         }, headers={"Cache-Control": "no-store"})
+
+    @app.get("/admin/api/relay-apps")
+    def admin_relay_apps(request: Request):
+        """The apps the Call relay's choice lists (asked on its own: listing every chain's apps is not quick)."""
+        _admin_check(request)
+        return JSONResponse({"apps": _relay_app_choices()})
 
     @app.get("/admin/api/swaps")
     def admin_swaps(request: Request):
@@ -26636,6 +26658,15 @@ def create_app(state: AppState) -> FastAPI:
                     except Exception as exc:                    # noqa: BLE001
                         raise ValueError(f"Cloudflare did not take that key: {exc}") from None
                     state.set_setting("turn", {**kept, "key_id": key_id, "token": token})
+            if isinstance(said.get("turn_apps"), dict):
+                # The apps the relay serves (2026-10-23, "Apps I choose, any account"): every app, or a list.
+                t, kept = said["turn_apps"], state.setting("turn") or {}
+                if t.get("all"):
+                    kept = {k: v for k, v in kept.items() if k != "apps"}
+                else:
+                    apps = [str(a).lower() for a in (t.get("apps") or []) if re.fullmatch(r"[0-9a-fA-F]{64}", str(a))]
+                    kept = {**kept, "apps": sorted(set(apps))[:500]}
+                state.set_setting("turn", kept)
             if isinstance(said.get("turn_meter"), dict):
                 # The relay's meter (2026-10-23: "so that I don't go over the limit"): an Account Analytics
                 # token and the account's id, tried with Cloudflare before they are kept, and the month's limit.

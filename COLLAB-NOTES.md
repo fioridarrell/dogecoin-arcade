@@ -88,6 +88,18 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-23 The operator chooses which apps get the relay; a relay subscription fee is planned (Claude)
+The operator: "Can I decide what clients are allowed to use the relay? Or what apps on my arcade are allowed to use my
+relay?" -- chose "Apps I choose, any account". The viewer's /realtime/ice now names its app (?app=<page>); relay_for
+hands logins only to apps in setting turn.apps (the page each card opens; none chosen yet: every app, so nothing
+broke). Admin -> Network -> Call relay -> "Apps that may use it": Every app / only the ticked ones, listed by
+/admin/api/relay-apps (on its own: listing every chain's apps slowed the Admin state answer, and
+test_admin_arcades_browser raced it -- it now waits for its card). A signed-in person could name an allowed app by
+hand to get a login: per-app is a choice of use, not a lock. And the operator: "a future subscription fee for this type of
+relay should be added" -- planned in hosting-plan.md 6a (who subscribes, per month or per GB, assets, lapse ->
+direct only: to be designed); Admin's Call relay card carries a short note saying it is coming. Test:
+test_stun.py::test_the_operator_chooses_which_apps_get_the_relay.
+
 ### 2026-10-23 The relay's usage meter, and a stop at the monthly limit (Claude)
 The operator (calls work through the relay now): "I need some sort of usage meter on my node so that I don't go over the
 limit." Cloudflare bills TURN by egress and reports it only through its GraphQL analytics (callsTurnUsageAdaptiveGroups,

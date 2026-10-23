@@ -287,7 +287,8 @@
     var RTC = '\u001farcade-rtc:', FAST_WAIT = 12000, FAST_MAX = 16384, FAST_PEERS = 19, RTC_PIECE = 300;
     var fastIce = null;
     function fastServers(){
-      if (!fastIce) fastIce = fetch('/realtime/ice', {cache: 'no-store'}).then(function(r){ return r.json(); })
+      // Which app asks: the operator chooses the apps their relay serves (realtime.py relay_for, 2026-10-23).
+      if (!fastIce) fastIce = fetch('/realtime/ice?app=' + encodeURIComponent(here), {cache: 'no-store'}).then(function(r){ return r.json(); })
         .then(function(j){ return (j && j.iceServers) || []; })
         .catch(function(){ fastIce = null; return []; });
       return fastIce;

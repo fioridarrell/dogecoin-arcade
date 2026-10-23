@@ -231,3 +231,32 @@ def test_at_the_limit_the_relay_is_no_longer_handed_out(tmp_path, monkeypatch):
     used["egress"] = 10_500_000_000
     assert state.relay_meter(fresh=True)["over"] is True
     assert client.get("/realtime/ice").json()["relay"] is False, "over the month's limit: direct links only"
+
+
+def test_the_operator_chooses_which_apps_get_the_relay(tmp_path, monkeypatch):
+    """2026-10-23: "what apps on my arcade are allowed to use my relay?" -- "Apps I choose, any account".
+    None chosen yet: every app (nothing breaks); chosen: only those pages."""
+    from fastapi.testclient import TestClient
+
+    from arcade.web import realtime
+    from arcade.web.app import create_app
+    sys.path.insert(0, str(pathlib.Path(__file__).parent))
+    from test_realtime_web import make_state
+
+    state = make_state(tmp_path, "node")
+
+    class _Mesh:
+        node_id = "n"
+        loop = object()
+    _Mesh.stun = stun.StunShare(None)
+    state.mesh = _Mesh()
+    monkeypatch.setattr(type(state), "derived_address", "nOperator" + "a" * 25, raising=False)
+    monkeypatch.setattr(realtime, "turn_servers", lambda *a, **k: [{"urls": ["turn:x"], "username": "u", "credential": "c"}])
+    call, chess = "a7" * 32, "c5" * 32
+    state.set_setting("turn", {"key_id": "ab" * 16, "token": "t"})
+    client = TestClient(create_app(state))
+    assert client.get(f"/realtime/ice?app={chess}").json()["relay"] is True, "none chosen: every app"
+    state.set_setting("turn", {"key_id": "ab" * 16, "token": "t", "apps": [call]})
+    assert client.get(f"/realtime/ice?app={call}").json()["relay"] is True
+    assert client.get(f"/realtime/ice?app={chess}").json()["relay"] is False, "not chosen: direct links only"
+    assert client.get("/realtime/ice").json()["relay"] is False, "an asker that names no app gets none"
