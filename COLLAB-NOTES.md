@@ -88,6 +88,12 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-23 Image model scan wakes ComfyUI (Claude)
+The operator: "when i scan it says comfy is not running" -- an on-demand ComfyUI had idled off and the scan only used a SAVED
+wake command. `/admin/api/llm/images/scan` now takes the `wake` typed in the box (node machine only, as saving it is)
+and, on Scan again / leaving the address or wake box, wakes ComfyUI before listing its models ("Waking ComfyUI..").
+Test: test_llm.py::test_a_scan_wakes_comfyui_with_the_wake_typed_at_the_node_machine. Branch claude/llm-images.
+
 ### 2026-10-23 Pictures on the LLM tab: share a ComfyUI image model, priced in credits (Claude)
 The operator: "I would like to also be able to share my image generation model" -- per image (his choice), make AND edit;
 then "it should be credits ... an edit should cost two credits and a plain picture should stay at one credit" ("it's
