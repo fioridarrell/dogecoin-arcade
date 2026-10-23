@@ -30957,6 +30957,10 @@ def create_app(state: AppState) -> FastAPI:
         cancels = [str(c) for c in (said.get("cancels") or []) if isinstance(c, str)][:100]
         # Nothing listed twice, and no more of a token than is free (2026-10-22: a listing "should be locked
         # as listed until it is unlisted or purchased"): the page posts its whole book, so these are its totals.
+        # Orders this book already holds as cancelled are not the tab's any more: left out, and named back so the tab
+        # forgets them (2026-10-23: two dead frgy orders rode along with every new listing of @apple's).
+        gone = set(state.trade_orders.cancelled_of(lister, [str(o.get("id")) for o in orders]))
+        orders = [o for o in orders if str(o.get("id")) not in gone]
         cancelled = set(cancels)
         why, drop = _listing_over(account, [o for o in orders if str(o.get("id")) not in cancelled])
         if drop:
@@ -30968,9 +30972,13 @@ def create_app(state: AppState) -> FastAPI:
         if cancels:
             state.trade_orders.cancel_local([lister], cancels)
         state.bump_generation()
+        # The rest of the book WAS filed: a dropped order is a note, not a failure of the listing just made (2026-10-23:
+        # a 409 here told @apple their PEP listing failed, over an old frgy order of theirs). `forget`: the tab's own
+        # list drops these.
+        out = {"filed": filed, "cancelled": len(cancels), "forget": sorted(gone | drop)}
         if drop:
-            return JSONResponse({"detail": why, "filed": filed, "dropped": sorted(drop)}, status_code=409)
-        return JSONResponse({"filed": filed, "cancelled": len(cancels)})
+            out.update(notice=why, dropped=sorted(drop))
+        return JSONResponse(out)
 
     @app.get("/account/orders/delegated")
     def orders_delegated(request: Request):

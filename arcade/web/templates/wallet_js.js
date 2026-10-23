@@ -3505,12 +3505,17 @@ async function postNow(wallet) {
     body: JSON.stringify({orders, cancels: book.cancels || []}),
   });
   const sent = await asked.json().catch(() => ({}));
-  if (!asked.ok) throw new Error(sent.detail || "the swap could not be posted");
+  // An older arcade answers 409 when it took some of the book off but filed the rest: that is not a failed post.
+  if (!asked.ok && !(asked.status === 409 && sent.dropped)) throw new Error(sent.detail || "the swap could not be posted");
   // Read again: the cursor, or another listing, may have moved while this was posting.
   const now2 = myOrdersOf(wallet);
   now2.posted = Date.now();
   now2.cancels = (now2.cancels || []).filter((c) => !(book.cancels || []).includes(c));
+  // Orders the node took off (more than is free) or already holds as cancelled: this tab forgets them, so they stop
+  // riding along with every later listing (2026-10-23).
+  for (const id of [...(sent.forget || []), ...(sent.dropped || [])]) delete now2.orders[id];
   keepMyOrders(wallet, now2);
+  if (sent.notice || sent.detail) sent.notice = sent.notice || sent.detail;
   return sent;
 }
 
@@ -3571,7 +3576,11 @@ export async function listOrder(wallet, give, get, options = {}) {
   book.orders[id] = {id, ...sides, labels: [give.label || "", get.label || ""],
                      approved: !!options.approved, ...keys};
   keepMyOrders(wallet, book);
-  await postMyOrders(wallet);
+  const sent = await postMyOrders(wallet);
+  // This listing itself taken off (more than is free): that IS the answer to this press. Another, older one taken off
+  // is said as a note, and this listing stands (2026-10-23).
+  if ((sent.dropped || []).includes(id)) throw new Error(sent.notice || "that listing could not be filed");
+  if (sent.notice && globalThis.arcadeToast) globalThis.arcadeToast("Listed. An older listing of yours was taken off: " + sent.notice);
   await sayAlive(wallet);
   return book.orders[id];
 }

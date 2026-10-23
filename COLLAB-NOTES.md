@@ -88,6 +88,19 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-23 A listing no longer "fails" over an old order the node took off; tabs forget cancelled orders (Claude)
+Live, @apple listing 100,000 PEP test for PEP main: "that lists more frgy than this wallet has free ... that order is off
+the book". The tab posts its whole own book with every listing, and its localStorage still held two frgy orders that
+the book had long cancelled (one the 100,000,000,000-frgy listing from the 10^8 bug of 2026-10-22). `_listing_over`
+dropped them every time and `/account/orders/post` answered **409** although the new PEP listing WAS filed, and because
+the tab only tidies its list after a good answer, the dead orders rode along again on every post.
+* `/account/orders/post`: posted orders the book holds as cancelled (`OrderBook.cancelled_of`) are left out; the answer
+  is 200 with `forget` (cancelled or dropped ids) and, when something past what is free came off, `notice` + `dropped`.
+* wallet.js postNow: forgets `forget`/`dropped` ids from the tab's own list (and takes an older arcade's 409 with
+  `dropped` as filed); `listOrder` throws only when the listing just made is the one dropped, otherwise a toast notes
+  that an older listing came off. Tests: test_doginal_wallet (the 200 + forget answers), test_trade_orders_web
+  (cancelled_of).
+
 ### 2026-10-23 "Inscribe now" on a picture from the LLM tab (Claude)
 The operator: "underneath each image in the [cache], add an inscribe now Button that brings them to the [inscriber] with the
 image that they just generated picked as the file that they want to inscribe". "Your pictures" has Inscribe now ->

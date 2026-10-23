@@ -232,6 +232,16 @@ class OrderBook:
             conn.execute("UPDATE trade_order SET cancelled=1 WHERE id=?", (order_id,))
         self._changed([order_id])
 
+    def cancelled_of(self, lister: str, ids: list[str]) -> list[str]:
+        """Which of `ids`, listed by `lister`, this book already holds as cancelled (a tab that still lists them should
+        forget them: 2026-10-23, @apple's tab re-posted two long-cancelled frgy orders with every new listing)."""
+        if not lister or not ids:
+            return []
+        with self._open() as conn:
+            return [r[0] for r in conn.execute(
+                f"SELECT id FROM trade_order WHERE cancelled=1 AND lister=? AND id IN ({','.join('?' * len(ids))})",
+                (lister, *ids))]
+
     def cancel_local(self, listers: list[str], ids: list[str]) -> int:
         """Mark `ids` cancelled, where one of `listers` listed them (its own withdraw, said to this node)."""
         if not listers or not ids:
