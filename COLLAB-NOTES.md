@@ -88,6 +88,13 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-23 The helper robot can be dragged anywhere on a desktop (Claude)
+The operator: "When you click and drag the robot head in desktop mode, you should be able to move the robot head and text bubble
+to anywhere on the screen." `_helper.html`: a mouse drag (pointer events, 6 px before it counts, so a click stays a
+click) moves the robot; the spot is kept in `arcade.helper.pos` and clamped to the window on resize; the chat opens
+beside it -- above when there is room, else below, inside the window; a double-click puts it back in the corner. Touch
+screens keep the corner (no touch drag; on a phone the chat is full width as before).
+
 ### 2026-10-23 A model page's chat: an "Arcade docs" switch, and the conversation kept in the browser (Claude)
 The operator: "You should be able to disable the arcade context for the in page LLM chat for the models in the LLM exchange.
 Also have the models store their context window in the browser, the same way as the helper [bot] does." `_llm_tab.html`:

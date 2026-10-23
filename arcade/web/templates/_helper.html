@@ -9,6 +9,7 @@
 #arc-bot{position:fixed;right:16px;bottom:16px;z-index:9000;width:52px;height:52px;border-radius:14px;border:2px solid var(--line);
   background:var(--panel);box-shadow:0 6px 18px rgba(0,0,0,.18);display:none;align-items:center;justify-content:center;cursor:pointer;padding:0}
 #arc-bot:hover{transform:translateY(-1px);box-shadow:0 8px 22px rgba(0,0,0,.24)}
+@media (hover:hover) and (pointer:fine){ #arc-bot{cursor:grab;touch-action:none} }
 #arc-bot svg{width:40px;height:40px;image-rendering:pixelated}
 #arc-bot-box{position:fixed;right:16px;bottom:78px;z-index:9001;width:min(380px,calc(100vw - 32px));height:min(560px,calc(100vh - 110px));
   background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:16px;box-shadow:0 12px 40px rgba(0,0,0,.25);
@@ -118,9 +119,57 @@
       (heads.length ? '; sections on it: ' + heads.join(', ') : '') +
       (who !== 'guest' ? '; signed in as @' + who : '; not signed in')).slice(0, 600);
   }
-  function open() { box.style.display = 'flex'; drawAll(); document.getElementById('arc-bot-in').focus(); }
+  // Dragged anywhere on a desktop (2026-10-23: "When you click and drag the robot head in desktop mode, you should
+  // be able to move the robot head and text bubble to anywhere on the screen"), the spot kept in this browser; the chat
+  // opens beside it, above when there is room, inside the window. On a touch screen it stays in its corner.
+  var POS = 'arcade.helper.pos', pos = null, dragged = false;
+  try { pos = JSON.parse(localStorage.getItem(POS) || 'null'); } catch (e) {}
+  function clampPos() {
+    if (!pos) return;
+    var w = bot.offsetWidth || 52, h = bot.offsetHeight || 52;
+    pos.x = Math.max(4, Math.min(window.innerWidth - w - 4, pos.x));
+    pos.y = Math.max(4, Math.min(window.innerHeight - h - 4, pos.y));
+  }
+  function place() {
+    if (pos) {
+      clampPos();
+      bot.style.left = pos.x + 'px'; bot.style.top = pos.y + 'px'; bot.style.right = 'auto'; bot.style.bottom = 'auto';
+    }
+    if (box.style.display !== 'flex') return;
+    if (!pos || window.innerWidth <= 520) { box.style.left = box.style.top = ''; box.style.right = box.style.bottom = ''; return; }
+    var r = bot.getBoundingClientRect(), bw = box.offsetWidth, bh = box.offsetHeight, gap = 10;
+    var top = r.top - bh - gap >= 4 ? r.top - bh - gap : Math.min(window.innerHeight - bh - 4, r.bottom + gap);
+    var left = Math.max(4, Math.min(window.innerWidth - bw - 4, r.right - bw));
+    box.style.left = left + 'px'; box.style.top = Math.max(4, top) + 'px'; box.style.right = 'auto'; box.style.bottom = 'auto';
+  }
+  bot.addEventListener('pointerdown', function (e) {
+    if (e.pointerType !== 'mouse' || e.button !== 0) return;
+    var r = bot.getBoundingClientRect(), dx = e.clientX - r.left, dy = e.clientY - r.top, sx = e.clientX, sy = e.clientY;
+    dragged = false;
+    function move(ev) {
+      if (!dragged && Math.abs(ev.clientX - sx) + Math.abs(ev.clientY - sy) < 6) return;
+      dragged = true; bot.style.cursor = 'grabbing';
+      pos = {x: ev.clientX - dx, y: ev.clientY - dy}; place();
+    }
+    function up() {
+      document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', up);
+      bot.style.cursor = '';
+      if (dragged) { try { localStorage.setItem(POS, JSON.stringify(pos)); } catch (err) {} }
+    }
+    document.addEventListener('pointermove', move); document.addEventListener('pointerup', up);
+  });
+  bot.addEventListener('dblclick', function () {                 // double-click: back to the corner
+    pos = null; try { localStorage.removeItem(POS); } catch (err) {}
+    bot.style.left = bot.style.top = ''; bot.style.right = bot.style.bottom = ''; place();
+  });
+  window.addEventListener('resize', place);
+  function open() { box.style.display = 'flex'; drawAll(); place(); document.getElementById('arc-bot-in').focus(); }
   function close() { box.style.display = 'none'; }
-  bot.addEventListener('click', function () { box.style.display === 'flex' ? close() : open(); });
+  bot.addEventListener('click', function (e) {
+    if (dragged) { dragged = false; e.preventDefault(); return; }   // the end of a drag is not a click
+    box.style.display === 'flex' ? close() : open();
+  });
+  place();
   document.getElementById('arc-bot-x').addEventListener('click', close);
   document.getElementById('arc-bot-new').addEventListener('click', function () { msgs = []; keep(); drawAll(); });
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && box.style.display === 'flex') close(); });
