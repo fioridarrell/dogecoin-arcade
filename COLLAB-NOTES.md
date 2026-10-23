@@ -88,6 +88,14 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-23 Exchange opens on LLMs; the LLMs tab's Sign in works on a public arcade; a new key fills the curl example (Claude)
+The operator: "I want the exchange tab to open directly to the LLM's market" -- `/exchange` (and an unknown tab) is
+`tab=llm` now; tests test_the_exchange_opens_on_llms, test_litecoin_network (asks ?tab=tokens). The tab's Sign in was a
+link to /signin, which a public arcade refuses (test_public caught it): it opens arcadeSignIn now. "When a user
+generates a key, it should auto populate into the curl command example": the example shows the key just made and a
+model of its seller (an image-only seller: /v1/images/generations). Measured the same day: pepecoinarcade.com's
+Tokens tab answers in 2.7-4.0 s against 0.7 s on .25 for a guest, the LLMs tab in 0.9 s -- @banana's machine, same code.
+
 ### 2026-10-23 Image model scan wakes ComfyUI (Claude)
 The operator: "when i scan it says comfy is not running" -- an on-demand ComfyUI had idled off and the scan only used a SAVED
 wake command. `/admin/api/llm/images/scan` now takes the `wake` typed in the box (node machine only, as saving it is)
