@@ -318,6 +318,7 @@ def _clean_offer(o: dict) -> dict:
         keep["word"] = load["word"]
     pics = _clean_images(o.get("images")) if isinstance(o.get("images"), dict) else None
     return {**({"images": pics} if pics else {}),
+            "free_tags": [str(t)[:24] for t in (o.get("free_tags") or [])[:100] if isinstance(t, str)],
             "name": str(o.get("name") or "")[:60], "models": models, "prices": prices, "free": o.get("free") is True,
             "load": keep,
             "max_out": int(o.get("max_out") or 0) if str(o.get("max_out") or "0").isdigit() else 0,

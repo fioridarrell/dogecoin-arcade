@@ -199,6 +199,10 @@ def register(app, state, *, signed_in: Callable, account_address: Callable, acco
         return JSONResponse({"config": {**{k: v for k, v in cfg.items() if k != "key"}, "has_key": bool(cfg.get("key"))},
                              "earned": earned, "kinds": kinds, "selling": bool(seller.offer()), "load": load_now(),
                              "operators": operators,
+                             "helper": [{"seller": x["o"]["seller"], "here": x["o"]["here"], "tag": x["o"].get("tag", ""),
+                                         "model": x["o"]["models"][0]["id"], "ready": x["ready"],
+                                         "needs_grant": x.get("needs_grant", False) and helper_identity()[0] != "node"}
+                                        for x in helper_sources()],
                              "images": images_admin(request)},
                             headers={"Cache-Control": "no-store"})
 
@@ -542,6 +546,105 @@ def register(app, state, *, signed_in: Callable, account_address: Callable, acco
         except llmlib.LlmError as exc:
             return refuse(exc)
         return JSONResponse(got)
+
+    # ---------------------------------------------------------------- the arcade helper (the robot in every page's corner)
+    # 2026-10-23: "a pixel art robot head ... in the lower right hand corner that persists across all tabs and
+    # pages. When you click on it. It should open a chat dialog box with that same Dogecoin arcade chat harness as From
+    # the LLM marketplace but using any LLM that is shared with the operator of that arcade." It speaks AS the operator:
+    # this arcade's own model (the operator uses it free) or another arcade's that shares with this operator free
+    # (its offer names the operator in `free_tags`; the operator's own key signed a grant for it in Admin -> LLM).
+    # Never a paid source: the leg is "free", which a seller that charges refuses. Each person may ask HELPER_HOUR times
+    # an hour (a guest fewer), so nobody spends the shared model on everyone's behalf.
+    HELPER_HOUR, HELPER_GUEST_HOUR, HELPER_OUT = 40, 15, 1200
+    asked_at: dict[str, list[float]] = {}
+
+    def helper_identity() -> tuple[str, str]:
+        """Who the helper speaks as: the operator's account (its browser signs grants in Admin -> LLM), or -- on an
+        arcade whose operator IS its node, as on .25 -- the node's identity, whose key this arcade holds and signs with."""
+        if state.operator:
+            return state.operator, operator_address()
+        return "node", str(getattr(state, "derived_address", "") or "")
+
+    def node_grant(sid: str, address: str) -> None:
+        """A grant for `sid`, signed by this node's own identity key (keywallet.node_key), kept as the helper's."""
+        from .. import keywallet
+        from ..service import sign_message
+        key = keywallet.node_key(state)
+        expires = int(time.time()) + 30 * 86400
+        sig = sign_message(key._secret, llmlib.grant_words(sid, address, expires), llmlib.MAGIC)
+        books.keep_grant("node", sid, address, expires, sig)
+
+    def helper_sources() -> list[dict]:
+        op_tag = (state.operator_tag() if hasattr(state, "operator_tag") else "") or ""
+        ident, address = helper_identity()
+        out = []
+        if not address:
+            return out
+        for o in offers():
+            if not o.get("models"):
+                continue
+            if o["here"]:
+                out.append({"o": o, "ready": True})
+            elif op_tag and op_tag in (o.get("free_tags") or []):
+                ready = ident == "node" or books.grant(ident, o["seller"]) is not None
+                out.append({"o": o, "ready": ready, "needs_grant": books.grant(ident, o["seller"]) is None})
+        return out
+
+    def helper_pick() -> dict | None:
+        ready = [x for x in helper_sources() if x["ready"]]
+        if not ready:
+            return None
+        rank = {"idle": 0, "steady": 1, "busy": 2, "full": 3}
+        ready.sort(key=lambda x: (0 if x["o"]["here"] else 1, rank.get((x["o"].get("load") or {}).get("word"), 1)))
+        return ready[0]["o"]
+
+    @app.get("/account/llm/helper")
+    def llm_helper_state(request: Request):
+        o = helper_pick()
+        return JSONResponse({"available": o is not None, "model": (o["models"][0]["id"] if o else ""),
+                             "seller": (o and ("This arcade" if o["here"] else ("@" + o["tag"] if o.get("tag") else
+                                                                                 o.get("host") or "another arcade"))) or ""},
+                            headers={"Cache-Control": "no-store"})
+
+    @app.post("/account/llm/helper")
+    async def llm_helper(request: Request):
+        import asyncio
+        try:
+            said = await body_of(request)
+            account, address = who(request)
+            client = account.pubkey if account else "ip:" + (request.headers.get("cf-connecting-ip") or
+                                                            (request.client.host if request.client else "?"))
+            now = time.time()
+            recent = [t for t in asked_at.get(client, []) if now - t < 3600]
+            if len(recent) >= (HELPER_HOUR if account else HELPER_GUEST_HOUR):
+                raise llmlib.LlmError("that is a lot of questions for one hour; ask again a little later"
+                                      + ("" if account else ", or sign in for more"))
+            o = helper_pick()
+            if o is None:
+                raise llmlib.LlmError("no model is shared with this arcade right now")
+            messages = [m for m in (said.get("messages") or []) if isinstance(m, dict)
+                        and m.get("role") in ("user", "assistant") and isinstance(m.get("content"), str)][-16:]
+            if not messages or messages[-1]["role"] != "user":
+                raise llmlib.LlmError("ask something")
+            for m in messages:
+                m["content"] = m["content"][:6000]
+            page = str(said.get("page") or "")[:600]
+            # Answer at once: a helper's question wants no long private thinking first (Qwen-style chat templates read
+            # this; other servers ignore a field they do not know).
+            body = {"model": o["models"][0]["id"], "messages": messages, "docs": True, "page": page,
+                    "max_tokens": HELPER_OUT, "chat_template_kwargs": {"enable_thinking": False}}
+            recent.append(now)
+            asked_at[client] = recent
+            ident, address = helper_identity()
+            if not o["here"] and ident == "node" and books.grant("node", o["seller"]) is None:
+                await asyncio.to_thread(node_grant, o["seller"], address)
+
+            class _Op:
+                pubkey = ident
+            gen = await asyncio.to_thread(first, ask(_Op, address, o["seller"], "chat", "free", body, via="helper"))
+        except llmlib.LlmError as exc:
+            return refuse(exc)
+        return stream(gen, openai=False)
 
     @app.get("/account/llm/keys")
     def llm_keys(request: Request):

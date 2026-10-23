@@ -504,7 +504,7 @@ async function sendChat() {
         for (const ch of ev.choices || []) {
           const d = ch.delta || {};
           if (d.reasoning_content) { thought += d.reasoning_content; think.hidden = false; think.querySelector("span").textContent = thought; }
-          if (d.content) { said += d.content; out.textContent = said.replace(/^\s+/, ""); }
+          if (d.content) { said += d.content; if (window.arcadeMd) out.innerHTML = arcadeMd(said.replace(/^\s+/, "")); else out.textContent = said.replace(/^\s+/, ""); }
         }
         $("llm-msgs").scrollTop = 1e9;
       }

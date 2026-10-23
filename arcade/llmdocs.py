@@ -115,8 +115,9 @@ def pick(question: str, budget: int = BUDGET) -> list[dict]:
     return out
 
 
-def system_message(messages: list, arcade: str = "DogecoinArcade") -> str:
-    """The system prompt for a chat: who the model is, then the sections that bear on what the person asked last."""
+def system_message(messages: list, arcade: str = "DogecoinArcade", page: str = "") -> str:
+    """The system prompt for a chat: who the model is, where the person is in the arcade (the helper says it: the operator
+    2026-10-23 "should have context on what tab the user is on"), then the sections that bear on what they asked."""
     asked = [str(m.get("content") or "") for m in messages if isinstance(m, dict) and m.get("role") == "user"
              and isinstance(m.get("content"), str)]
     question = " ".join(asked[-3:])[-4000:]
@@ -125,6 +126,12 @@ def system_message(messages: list, arcade: str = "DogecoinArcade") -> str:
         head = PROMPT + f"\nThis arcade is {arcade}, a DogecoinArcade node."
     else:
         head = PROMPT
+    page = re.sub(r"[\x00-\x1f]+", " ", str(page or ""))[:600].strip()
+    if page:
+        head += ("\n\nWhere the person is right now in the arcade (use it to understand questions like \"what is this\" "
+                 "or \"how do I do this here\"): " + page)
+        question = (question + " " + page)[-4600:]
+        parts = pick(question)
     if not parts:
         return head + "\n\n(No section of the documentation matched this question.)"
     docs = "\n\n".join(f"### {p['title']} -- {p['head']} (/docs/{p['doc']})\n{p['text']}" for p in parts)

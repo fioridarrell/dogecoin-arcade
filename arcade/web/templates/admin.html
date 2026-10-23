@@ -572,6 +572,14 @@
   <div id="ff-suggest" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px"></div>
 </section>
 
+{#- The robot in every page's corner (_helper.html): what it can use. #}
+<section class="panel" id="helper-panel">
+  <h2 style="margin:0">Arcade helper</h2>
+  <p class="muted" style="margin:2px 0 10px">The robot in the corner of every page answers your players' questions with the docs. It uses your own
+    model, or one another operator shares with you free &mdash; never a paid one &mdash; and each player may ask 40 times an hour (guests 15).</p>
+  <div id="helper-list"></div>
+</section>
+
 <section class="panel">
   <h2 style="margin:0">Earned in the last 30 days</h2>
   <p class="muted" style="margin:2px 0 10px">Top-ups land in your operator account's Wallet like any other payment.</p>
@@ -685,6 +693,7 @@
       chosen = c.models || []; prices = (c.prices || []).map(function (p) { return Object.assign({}, p); });
       drawOn(); drawModels(); drawPrices(); drawLoad(j.load); imgFill(j.images);
       ff = (c.free_for || []).map(function (r) { return r.tag; }).filter(Boolean); ffDraw(j.operators || []);
+      helperDraw(j.helper || []);
       if (c.url && !scanned) scan(false);
       var e = j.earned || [];
       $('llm-earned').innerHTML = e.length ? e.map(function (r) {
@@ -712,6 +721,35 @@
       .then(function (j) { if (j) drawLoad(j); }).catch(function () {});
   }
   setInterval(pollLoad, 5000);
+
+  // --- the arcade helper's sources ---
+  function helperDraw(list) {
+    $('helper-list').innerHTML = list.length ? list.map(function (h) {
+      return '<div class="model" style="justify-content:space-between;flex-wrap:wrap"><span><b class="mono">' + esc(h.model) + '</b> <span class="muted">' +
+        (h.here ? 'your own model' : 'shared free by @' + esc(h.tag || '?')) + '</span></span>' +
+        (h.ready ? '<span class="pill" style="color:var(--ok);background:color-mix(in srgb,var(--ok) 14%,var(--panel))">In use by the helper</span>'
+          : '<button type="button" class="small" data-hsign="' + esc(h.seller) + '" style="height:36px">Sign once to use it</button>') + '</div>';
+    }).join('') : '<p class="muted" style="margin:0">Nothing yet: share your own model above, or ask another operator to add you to their "Free for other operators". The robot appears once one is there.</p>';
+  }
+  $('helper-list').addEventListener('click', async function (e) {
+    var b = e.target.closest('[data-hsign]'); if (!b) return;
+    try {
+      var said = await (await fetch('/account/llm/grant?seller=' + encodeURIComponent(b.dataset.hsign), {credentials: 'same-origin'})).json();
+      if (said.detail) throw new Error(said.detail);
+      if (!said.ok) {
+        var w = await import('/wallet.js'), net = said.sign.chain.network;
+        var chain = (await w.chains()).find(function (c) { return c.network === net; }) || said.sign.chain;
+        var keys = (await w.opened(chain)) || (window.arcadeKeys ? await arcadeKeys(chain, 'Your wallet signs, once a month, that the helper may use this model as you.') : null);
+        if (!keys || !keys.on || !keys.on[net]) throw new Error('Sign in as this arcade\'s operator and unlock the wallet first.');
+        var coins = await import('/coins.js');
+        var sig = await coins.signMessage(keys.on[net].key, said.sign.message, said.sign.magic);
+        var r = await fetch('/account/llm/grant', {method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({seller: b.dataset.hsign, expires: said.sign.expires, sig: sig})});
+        if (!r.ok) throw new Error((await r.json()).detail || 'refused');
+      }
+      load();
+    } catch (err) { $('llm-said').textContent = err.message; }
+  });
 
   // --- free for other operators ---
   var ff = [];

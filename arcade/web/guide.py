@@ -49,6 +49,8 @@ ORDER = (
     ("how-it-works.md", "How DogecoinArcade works",
      "What it is, what lives on the chain, and what your browser and a node each do."),
     ("features.md", "What it does", "Every part of the application, in one page."),
+    ("llm.md", "AI models and pictures on the exchange",
+     "Use, buy, sell and share AI models and pictures: credit, chat, API keys, the arcade helper."),
     ("prize-pools.md", "Prize pools",
      "How a game or any page pays out tokens to whoever wins, and how to make one."),
     ("referee.md", "The referee: prizes for a verified win",

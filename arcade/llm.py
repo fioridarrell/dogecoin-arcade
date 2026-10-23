@@ -715,7 +715,9 @@ class Seller:
         out = {"name": cfg.get("name") or (pictures or {}).get("name") or "",
                "models": [{"id": m} for m in cfg["models"]] if text else [], "free": free and text,
                "load": load if text else {}, "max_out": int(cfg.get("max_out") or 0) if text else 0,
-               "prices": prices, "tag": str(about.get("tag") or ""), "host": str(about.get("host") or "")}
+               "prices": prices, "tag": str(about.get("tag") or ""), "host": str(about.get("host") or ""),
+               # The operators this arcade shares its models with free, by name: their arcades' helpers may use them
+               "free_tags": sorted({r["tag"] for r in cfg.get("free_for") or [] if r.get("tag")})[:100]}
         if pictures:
             out["images"] = pictures
         return out
@@ -793,7 +795,7 @@ class Seller:
         guess_own = guess_tokens(body)                          # the buyer's own words: what the credit must cover
         if body.get("docs") is True:
             from . import llmdocs
-            sysmsg = llmdocs.system_message(messages, self.arcade_name())
+            sysmsg = llmdocs.system_message(messages, self.arcade_name(), str(body.get("page") or ""))
             messages = [{"role": "system", "content": sysmsg}] + [
                 m for m in messages if not (isinstance(m, dict) and m.get("role") == "system")]
             body = {**body, "messages": messages}

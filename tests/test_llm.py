@@ -644,3 +644,39 @@ def test_an_operator_can_be_given_the_models_free(arcade, monkeypatch):
                                                   "messages": [{"role": "user", "content": "hi"}]})
     assert said.status_code == 200 and _events(said.text)[-1]["arcade"]["free"] is True, "no credit, still served"
     assert client.get("/account/llm/offers").json()["offers"][0]["prices"], "still listed for everybody else"
+
+
+def test_the_arcade_helper_answers_with_the_page_it_was_asked_on(arcade, monkeypatch):
+    """2026-10-23: the robot in the corner of every page, "that same Dogecoin arcade chat harness ... but using
+    any LLM that is shared with the operator", with "context on what tab the user is on"; never a paid source."""
+    client, state, pubkey, seen = arcade
+    node = b58check_encode(0x37, b"\x07" * 20)
+    monkeypatch.setattr(type(state), "derived_address", node, raising=False)
+    got = client.get("/account/llm/helper").json()
+    assert got["available"] and got["model"] == "tiny", "this arcade's own model, which its operator uses free"
+    said = client.post("/account/llm/helper", json={"messages": [{"role": "user", "content": "what is this tab?"}],
+                                                    "page": "Page /exchange?tab=llm; open tab(s): LLMs"})
+    assert said.status_code == 200, said.text
+    end = _events(said.text)[-1]["arcade"]
+    assert end["free"] is True and end["cost"] == 0
+    system = seen[-1]["messages"][0]["content"]
+    assert "open tab(s): LLMs" in system and "DogecoinArcade" in system
+    assert seen[-1]["max_tokens"] <= 1200
+    assert state.llm_seller.books.analytics(0)["by"]["via"][0]["key"] == "helper"
+    # the page carries the robot; a person may turn it off on Your arcade (kept in their browser)
+    assert 'id="arc-bot"' in client.get("/exchange?tab=llm").text
+    assert 'id="helper-on"' in client.get("/me").text
+
+
+def test_the_helper_never_runs_up_a_bill_and_is_limited_per_person(arcade, monkeypatch):
+    client, state, pubkey, seen = arcade
+    monkeypatch.setattr(type(state), "derived_address", None, raising=False)
+    assert client.get("/account/llm/helper").json()["available"] is False, "no operator identity: no helper"
+    node = b58check_encode(0x37, b"\x08" * 20)
+    monkeypatch.setattr(type(state), "derived_address", node, raising=False)
+    import arcade.web.llmweb as lw
+    ok = 0
+    for _ in range(45):
+        r = client.post("/account/llm/helper", json={"messages": [{"role": "user", "content": "hi"}]})
+        ok += r.status_code == 200
+    assert ok == 40, "40 an hour for a signed-in person"

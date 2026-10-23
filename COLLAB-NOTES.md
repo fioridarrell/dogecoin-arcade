@@ -88,6 +88,26 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-23 The arcade helper: a pixel robot in every page's corner (Claude)
+The operator: "a pixel art robot head ... in the lower right hand corner that persists across all tabs and pages. When you
+click on it. It should open a chat dialog box with that same Dogecoin arcade chat harness as From the LLM marketplace
+but using any LLM that is shared with the operator of that arcade"; "should have context on what tab the user is on";
+"its context window stored in the users arcade local storage"; "In the users your arcade tab you should be able to
+disable the robot helper". Branch claude/llm-images.
+* `_helper.html` (included by base.html; not on /inscriptions/<id>/full): a 16x16 SVG robot, a chat dialog, the
+  conversation in localStorage `arcade.helper.chat:<account|guest>` (last 60, last 16 sent), each question carrying
+  `page` (path, title, h1, open tabs, section headings, who is signed in). Hidden when `arcade.helper.off` (Your arcade
+  -> Arcade helper switch) or when no model is shared with the operator.
+* `/account/llm/helper` GET (available, model) / POST (stream): speaks AS the operator -- `state.operator`'s account,
+  or the node's identity where the operator IS the node (.25), whose grants the node signs itself with
+  keywallet.node_key. Sources: this arcade's own model, or another's whose offer lists the operator in `free_tags`
+  (offers now carry the names they share free with). Leg "free" only, so a seller that charges refuses (never a bill).
+  40 questions an hour per account, 15 per guest IP; 1,200 tokens out; `enable_thinking: false`; docs + page context
+  through llmdocs (`page`); usage `via` = helper. Admin -> LLM "Arcade helper" lists the sources ("Sign once" where an
+  operator account must sign a grant).
+* New public doc **docs/llm.md** ("AI models and pictures on the exchange") so the helper and the chat answer about the
+  LLM service itself; both chats render a little markdown (arcadeMd). Tests: test_llm.py (25).
+
 ### 2026-10-23 The Exchange chat knows DogecoinArcade's docs; models free for chosen operators (Claude)
 * The operator: "that model should include a system prompt that it is an expert on Dogecoin arcade and it should have access to
   all of the Dogecoin arcade documentation" -- his choice: the relevant parts, not charged. **arcade/llmdocs.py**: the
