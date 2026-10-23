@@ -402,14 +402,6 @@ class ImageSeller:
         if len(prompt) > 4000:
             raise llmlib.LlmError("that description is too long")
         free = bool(self.free(buyer)) or is_free(cfg)
-        price = {"per": "0"}
-        if not free:
-            price = next((p for p in cfg.get("prices") or [] if p.get("leg") == leg), None)
-            if price is None:
-                raise llmlib.LlmError("this arcade does not take that coin or token for its pictures"
-                                      if leg != "free" else
-                                      "this seller charges for its pictures now; top up and use one of its coins")
-        sc = self.scale(leg) if not free else llmlib.COIN
         edit = body.get("image")
         most = int(cfg.get("max_side") or 1000)
         if edit:
@@ -420,6 +412,23 @@ class ImageSeller:
         else:
             w, h = size_of(body.get("size"), most)
             credits = credits_for(w, h)
+
+        def cost_in(p: dict) -> int:
+            return int(math.ceil(llmlib.price(p.get("per", 0)) * self.scale(p["leg"]) * credits))
+        price = {"per": "0"}
+        if not free:
+            asks = cfg.get("prices") or []
+            if leg in ("", "auto", "free"):                        # whichever coin the buyer's credit covers it in
+                legs = self.books.balances(buyer)
+                leg = next((p["leg"] for p in sorted(asks, key=lambda p: -legs.get(p["leg"], 0))
+                            if legs.get(p["leg"], 0) >= cost_in(p)), "")
+                if not leg:
+                    raise llmlib.LlmError(f"not enough credit: this costs {credits} credit{'' if credits == 1 else 's'};"
+                                          " top up first")
+            price = next((p for p in asks if p.get("leg") == leg), None)
+            if price is None:
+                raise llmlib.LlmError("this arcade does not take that coin or token for its pictures")
+        sc = self.scale(leg) if not free else llmlib.COIN
         per = llmlib.price(price["per"])
         cost = 0 if free else int(math.ceil(per * sc * credits))
         if not free and self.books.balance(buyer, leg) < cost:

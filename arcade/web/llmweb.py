@@ -619,6 +619,25 @@ def register(app, state, *, signed_in: Callable, account_address: Callable, acco
                             "until": meta["at"] + PICS_KEEP})
         return JSONResponse({"pictures": out}, headers={"Cache-Control": "no-store"})
 
+    @app.post("/account/llm/pictures/delete")
+    async def llm_picture_delete(request: Request):
+        """Take a picture out of the 24-hour cache (2026-10-23: "User should be able to delete generated images
+        from the cache")."""
+        try:
+            account, _ = need_account(request)
+            pid = str((await body_of(request)).get("id") or "")
+            if not re.fullmatch(r"\d{6,12}-[0-9a-f]{8}", pid):
+                raise llmlib.LlmError("no such picture")
+            d = pics_dir(account)
+            gone = False
+            for f in (d / f"{pid}.png", d / f"{pid}.json"):
+                if f.exists():
+                    f.unlink()
+                    gone = True
+        except llmlib.LlmError as exc:
+            return refuse(exc)
+        return JSONResponse({"ok": gone})
+
     @app.get("/account/llm/pictures/{pid}.png")
     def llm_picture_file(request: Request, pid: str):
         from fastapi.responses import FileResponse
@@ -746,8 +765,8 @@ def register(app, state, *, signed_in: Callable, account_address: Callable, acco
         try:
             account, address = need_account(request)
             said = await body_of(request)
-            sid, leg = str(said.get("seller") or HERE), str(said.get("leg") or "")
-            if leg != "free":
+            sid, leg = str(said.get("seller") or HERE), str(said.get("leg") or "auto")
+            if leg not in ("free", "auto"):                         # "auto": whatever coin the credit is in
                 llmlib.leg_parts(leg)
             if not is_here(sid):
                 grant_for(account, sid)

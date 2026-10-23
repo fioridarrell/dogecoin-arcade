@@ -386,7 +386,8 @@ def test_a_model_can_be_offered_free_for_everyone(arcade):
     assert client.get("/account/llm/offers").json()["offers"][0]["free"] is False
     late = client.post("/v1/chat/completions", headers={"Authorization": f"Bearer {key}"},
                        json={"messages": [{"role": "user", "content": "hi"}]})
-    assert late.status_code == 400 and "charges" in late.json()["error"]["message"]
+    assert late.status_code == 402 and "credit" in late.json()["error"]["message"], \
+        "a key made while it was free now spends credit, of any coin; with none it says so"
     client.post("/admin/api/llm", headers=h, json={"prices": [{"leg": "main-coin", "in": "0", "out": "0"}]})
     assert client.get("/account/llm/offers").json()["offers"][0]["free"] is True, "an ask of 0 and 0 is free too"
 
@@ -740,3 +741,28 @@ def test_a_reply_that_breaks_off_with_an_error_costs_nothing(tmp_path, monkeypat
         list(seller.chat("b", "main-coin", {"messages": [{"role": "user", "content": "hi"}]}))
     assert books.balance("b", "main-coin") == llm.COIN, "nothing taken"
     assert books.analytics(0)["total"]["failed"] == 1
+
+
+def test_credit_pays_in_whatever_coin_it_was_bought_in_and_pictures_can_be_deleted(pictures):
+    """2026-10-23: "you shouldn't have to select the coin ... it should just automatically deduct your credit";
+    "User should be able to delete generated images from the cache"."""
+    client, state, pubkey, jobs, url = pictures
+    h = {"X-Arcade-Admin": "1"}
+    client.post("/admin/api/llm/images", headers=h, json={
+        "on": True, "url": url, "models": ["qwen_image_2.1_int8_convrot.safetensors"],
+        "prices": [{"leg": "main-coin", "label": "PEP", "per": "0.5"}, {"leg": "regtest-coin", "label": "T", "per": "1"}]})
+    state.llm_seller.books.credit("80" * 32, "regtest-coin", ADDR, llm.COIN)          # 1 credit's worth in the 2nd coin
+    got = client.post("/account/llm/image", json={"seller": "here", "leg": "auto", "prompt": "x", "size": "250x250"})
+    assert got.status_code == 200 and got.json()["arcade"]["leg"] == "regtest-coin", got.text
+    said = client.post("/account/llm/chat", json={"seller": "here", "leg": "auto",
+                                                  "messages": [{"role": "user", "content": "hi"}]})
+    assert said.status_code == 400 and "credit" in said.json()["detail"], "no credit left in any coin the words take"
+    state.llm_seller.books.credit("81" * 32, "main-coin", ADDR, llm.COIN)
+    said = client.post("/account/llm/chat", json={"seller": "here", "messages": [{"role": "user", "content": "hi"}]})
+    assert said.status_code == 200 and _events(said.text)[-1]["arcade"]["leg"] == "main-coin", "picked by itself"
+    key = client.post("/account/llm/keys/new", json={"seller": "here"}).json()["key"]
+    assert client.get("/account/llm/keys").json()["keys"][0]["leg"] == "auto"
+    pics = client.get("/account/llm/pictures").json()["pictures"]
+    assert client.post("/account/llm/pictures/delete", json={"id": pics[0]["id"]}).json()["ok"]
+    assert client.get("/account/llm/pictures").json()["pictures"] == []
+    assert client.get(pics[0]["url"]).status_code == 404

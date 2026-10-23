@@ -737,11 +737,23 @@ class Seller:
                 legs |= {p["leg"] for p in icfg.get("prices") or []}
         return legs
 
+    def pick_leg(self, buyer: str, prices: list, enough) -> str:
+        """The coin a buyer's credit pays in, chosen for them (2026-10-23: "you shouldn't have to select the coin
+        that you used to buy the credits it should just automatically deduct your credit"): the first of the seller's
+        asks whose balance `enough(price row, units)` says covers it; "" when none does."""
+        legs = self.books.balances(buyer)
+        rows = sorted(prices, key=lambda p: -legs.get(p["leg"], 0))
+        for p in rows:
+            units = legs.get(p["leg"], 0)
+            if units > 0 and enough(p, units):
+                return p["leg"]
+        return ""
+
     def _price(self, leg: str) -> dict:
         if is_free(self.config()):
             return {"leg": leg, "in": "0", "out": "0"}
         if leg == "free":
-            raise LlmError("this seller charges for its model now; top up and use one of the coins it takes")
+            raise LlmError("this seller charges for its model now; top up first")
         for p in self.config().get("prices") or []:
             if p.get("leg") == leg:
                 return p
@@ -755,9 +767,11 @@ class Seller:
         own = bool(self.free(buyer))
         icfg = self.images.config() if self.images is not None else {}
         from .imagegen import is_free as pictures_free
+        def entry(leg: str, units: int) -> dict:
+            return {"units": units, "text": fmt(units, self.scale(leg)), "scale": self.scale(leg)}
         return {"free": own or is_free(self.config()), "own": own,
                 "images_free": own or bool(icfg.get("on") and pictures_free(icfg)),
-                "credit": {leg: {"units": u, "text": fmt(u, self.scale(leg))} for leg, u in legs.items()}}
+                "credit": {leg: entry(leg, u) for leg, u in legs.items() if leg != "free"}}
 
     def topup(self, buyer: str, leg: str, txid: str, sig: str) -> dict:
         legs = self.paid_legs()
@@ -809,6 +823,11 @@ class Seller:
             body = {**body, "messages": messages}
             house = Server(cfg["url"], cfg.get("key") or "").count(sysmsg, model) or len(sysmsg) // 4
         free = bool(self.free(buyer)) or is_free(cfg)
+        if not free and leg in ("", "auto", "free"):          # any coin the buyer holds credit in, chosen here
+            leg = self.pick_leg(buyer, cfg.get("prices") or [], lambda p, units: affordable_out(
+                p, units, guess_own, self.scale(p["leg"])) != 0) or "auto"
+            if leg == "auto":
+                raise LlmError("not enough credit for that; top up first")
         prices = {"in": 0, "out": 0} if free else self._price(leg)
         scale = self.scale(leg) if not free else COIN
         balance = 0 if free else self.books.balance(buyer, leg)

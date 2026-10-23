@@ -118,6 +118,12 @@ a.llm-card:hover{transform:translateY(-2px);box-shadow:0 2px 4px rgba(0,0,0,.05)
         </div>
         <label>Change a picture of yours <span style="font-weight:400;color:var(--muted)">(optional)</span>
           <input type="file" id="pic-file" accept="image/png,image/jpeg,image/webp" style="height:auto;padding:8px"></label>
+        {#- 2026-10-23: "There should be a thumbnail of uploaded images when editing". #}
+        <div id="pic-up" hidden style="display:flex;gap:10px;align-items:center">
+          <img id="pic-up-thumb" alt="The picture to change" style="width:96px;height:96px;object-fit:cover;border-radius:10px;border:1px solid var(--line)">
+          <span style="display:flex;flex-direction:column;gap:4px;font-size:.82rem;color:var(--muted)"><span id="pic-up-size"></span>
+            <button type="button" class="llm-btn" id="pic-up-clear" style="height:32px;padding:0 10px;width:fit-content">Remove</button></span>
+        </div>
         <button type="button" class="llm-btn go" id="pic-go" style="height:46px">Make it</button>
         <p class="sub" id="pic-said"></p>
       </div>
@@ -275,15 +281,31 @@ function cheapOf(x) {
   const ps = legsFor(x).filter((p) => filter === "all" || p.leg === filter || (filter === "tokens" && legIsToken(p.leg)));
   return ps.length ? Math.min(...ps.map((p) => Number(x.kind === "image" ? p.per : p.out) || 0)) : Infinity;
 }
-function creditOf(x) {
-  const c = credit[x.o.seller];
-  if (!book.signed_in) return "Sign in to buy";
-  if (freeFor(x)) return "Free for everyone";
-  if (c && c.own) return x.o.here ? "Free · your own model" : "Free · shared with you";
-  if (!c) return x.o.here || x.o.granted ? "…" : "—";
-  const rows = legsFor(x).map((p) => c.credit && c.credit[p.leg] && c.credit[p.leg].units ? `${c.credit[p.leg].text} ${short(p.label)}` : "").filter(Boolean);
-  return rows.length ? rows.join(" · ") : "None yet";
+// Credit said as credits at the model's own rate (2026-10-23: "it should be listing the credits as credits with the
+// listed conversion rate"), whatever coins bought it: pictures in credits, words in the tokens it still writes.
+function creditsOf(x) {
+  const c = credit[x.o.seller] || {}, out = {n: 0, rate: []};
+  legsFor(x).forEach((p) => {
+    const e = c.credit && c.credit[p.leg]; if (!e || !e.units) return;
+    const sc = e.scale || 1e8;
+    if (x.kind === "image") { const per = Math.ceil(Number(p.per) * sc); if (per > 0) out.n += Math.floor(e.units / per); }
+    else if (Number(p.out) > 0) out.n += Math.floor(e.units / sc / Number(p.out));
+  });
+  out.rate = legsFor(x).map((p) => x.kind === "image" ? `1 credit = ${price(p.per)} ${short(p.label)}` : `${price(p.out)} ${short(p.label)} / token out`);
+  return out;
 }
+function creditLine(x) {
+  const c = credit[x.o.seller];
+  if (!book.signed_in) return {big: "Sign in to buy", small: ""};
+  if (freeFor(x)) return {big: "Free for everyone", small: ""};
+  if (c && c.own) return {big: "Free", small: x.o.here ? "your own model" : "shared with you"};
+  if (!c) return {big: x.o.here || x.o.granted ? "\u2026" : "\u2014", small: ""};
+  const got = creditsOf(x), r = got.rate.join(" \u00b7 ");
+  if (!got.n) return {big: "No credits yet", small: r};
+  return x.kind === "image" ? {big: `${got.n.toLocaleString()} credit${got.n === 1 ? "" : "s"}`, small: r}
+    : {big: `\u2248 ${got.n.toLocaleString()} tokens`, small: r};
+}
+function creditOf(x) { const l = creditLine(x); return l.big; }
 function card(x, link) {
   const l = loadOf(x), w = WORDS[l.word] || WORDS.idle, key = pageOf(x);
   const used = x.kind === "image" ? `${(l.last_hour || 0).toLocaleString()} in the last hour` : `${(l.last_hour || 0).toLocaleString()} ${l.last_hour === 1 ? "reply" : "replies"} / hour`;
@@ -302,7 +324,7 @@ function card(x, link) {
       <div><small>Use</small><b>${esc(used)}</b></div>
       <div><small>${x.kind === "image" ? "Largest side" : "Longest reply"}</small><b>${x.kind === "image" ? (x.o.images.max_side || 1024) + "px" : (x.o.max_out || 0).toLocaleString() + " tokens"}</b></div>
     </div>
-    <div class="llm-foot" style="padding-top:8px"><div style="min-width:0"><small>Your credit</small><strong style="font-size:.95rem">${esc(creditOf(x))}</strong></div>
+    <div class="llm-foot" style="padding-top:8px"><div style="min-width:0"><small>Your credit</small><strong style="font-size:.95rem">${esc(creditLine(x).big)}</strong>${creditLine(x).small ? `<small>${esc(creditLine(x).small)}</small>` : ""}</div>
       ${link ? `<span class="llm-btn go" style="display:inline-flex;align-items:center;height:38px">Open</span>` : ""}</div>
   </${tag}>`;
 }
@@ -470,14 +492,24 @@ async function loadGallery() {
     return `<figure style="margin:0;display:flex;flex-direction:column;gap:4px;min-width:0">
       <a href="${esc(p.url)}" target="_blank" rel="noopener"><img src="${esc(p.url)}" alt="${esc(p.prompt)}" loading="lazy" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px;border:1px solid var(--line)"></a>
       <figcaption style="font-size:.75rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.prompt)}">${esc(p.prompt || "picture")}</figcaption>
-      <span style="display:flex;justify-content:space-between;font-size:.72rem;color:var(--muted)"><span>${left} h left</span>
-        <a href="${esc(p.url)}" download="arcade-${esc(p.id)}.png">Download</a></span></figure>`;
+      <span style="display:flex;justify-content:space-between;gap:6px;font-size:.72rem;color:var(--muted)"><span>${left} h left</span>
+        <span style="display:flex;gap:8px"><a href="${esc(p.url)}" download="arcade-${esc(p.id)}.png">Download</a>
+        <a href="#" data-del="${esc(p.id)}" style="color:#a33">Delete</a></span></span></figure>`;
   }).join("");
 }
+document.addEventListener("click", async (e) => {
+  const d = e.target.closest("[data-del]"); if (!d) return;
+  e.preventDefault();
+  if (window.arcadeAsk && !(await arcadeAsk("Delete this picture?", "It is taken off your arcade now; download it first if you want to keep it.", "Delete"))) return;
+  try { await postJSON("/account/llm/pictures/delete", {id: d.dataset.del}); } catch (err) { toast(err.message); }
+  loadGallery();
+});
 function picLeft() {
   if (!picPicked) return;
-  const im = picPicked.images, c = credit[picPicked.seller], leg = $("pic-leg").value, p = im.prices.find((x) => x.leg === leg);
-  $("pic-left").textContent = im.free || (c && c.images_free) ? "Free" : c && c.credit && c.credit[leg] ? `${c.credit[leg].text} ${short(p && p.label)} left` : "No credit";
+  const im = picPicked.images, c = credit[picPicked.seller] || {};
+  $("pic-leg").hidden = true;                              // the credit pays, in whatever coin it is (2026-10-23)
+  const got = creditsOf({kind: "image", o: picPicked, m: im.models[0] || {}});
+  $("pic-left").textContent = im.free || c.images_free ? "Free" : got.n ? `${got.n.toLocaleString()} credit${got.n === 1 ? "" : "s"} left` : "No credits";
 }
 $("pic-leg").addEventListener("change", picLeft);
 let picMost = 1000, upSize = null;
@@ -503,12 +535,20 @@ function picCost() {
 }
 $("pic-w").addEventListener("input", picCost); $("pic-h").addEventListener("input", picCost);
 $("pic-presets").addEventListener("click", (e) => { const b = e.target.closest("button[data-w]"); if (!b) return; $("pic-w").value = b.dataset.w; $("pic-h").value = b.dataset.h; picCost(); });
+$("pic-up-clear").addEventListener("click", () => {
+  $("pic-file").value = ""; upSize = null; $("pic-up").hidden = true; $("pic-up").style.display = "none"; picCost();
+});
 $("pic-file").addEventListener("change", () => {
   upSize = null;
   const f = $("pic-file").files[0];
-  if (!f) { picCost(); return; }
+  if (!f) { $("pic-up").hidden = true; $("pic-up").style.display = "none"; picCost(); return; }
   const img = new Image(), url = URL.createObjectURL(f);
-  img.onload = () => { upSize = [img.naturalWidth, img.naturalHeight]; URL.revokeObjectURL(url); picCost(); };
+  img.onload = () => {
+    upSize = [img.naturalWidth, img.naturalHeight];
+    $("pic-up-thumb").src = url; $("pic-up").hidden = false; $("pic-up").style.display = "flex";
+    $("pic-up-size").textContent = `${f.name.slice(0, 40)} \u00b7 ${upSize[0]}\u00d7${upSize[1]}`;
+    picCost();
+  };
   img.onerror = () => { URL.revokeObjectURL(url); picCost(); };
   img.src = url;
   picCost();
@@ -520,7 +560,7 @@ $("pic-go").addEventListener("click", async () => {
   const btn = $("pic-go"); btn.disabled = true;
   $("pic-said").textContent = "Drawing\u2026 a picture takes about half a minute, longer if the model has to wake up.";
   try {
-    const body = {seller: o.seller, leg: $("pic-leg").value, model: (o.images.models[0] || {}).id, prompt, size: `${Math.round(num($("pic-w").value))}x${Math.round(num($("pic-h").value))}`};
+    const body = {seller: o.seller, leg: "auto", model: (o.images.models[0] || {}).id, prompt, size: `${Math.round(num($("pic-w").value))}x${Math.round(num($("pic-h").value))}`};
     const f = $("pic-file").files[0];
     if (f) body.image = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(f); });
     const got = await postJSON("/account/llm/image", body);
@@ -531,7 +571,7 @@ $("pic-go").addEventListener("click", async () => {
     $("pic-said").textContent = `Done in ${((a.ms || 0) / 1000).toFixed(0)} s \u00b7 ${got.credits || 1} credit${got.credits === 1 ? "" : "s"} \u00b7 ${a.free ? "free" : a.cost_text + " " + short(p && p.label)} \u00b7 kept 24 hours below`;
     loadGallery();
     if (!a.free) { credit[o.seller] = credit[o.seller] || {credit: {}}; credit[o.seller].credit = credit[o.seller].credit || {};
-      credit[o.seller].credit[a.leg] = {units: a.left, text: a.left_text}; picLeft(); }
+      credit[o.seller].credit[a.leg] = {...(credit[o.seller].credit[a.leg] || {}), units: a.left, text: a.left_text}; picLeft(); }
   } catch (err) { $("pic-said").textContent = String(err.message || err); }
   finally { btn.disabled = false; draw(); }
 });
@@ -638,8 +678,9 @@ function openChat(o) {
 }
 function drawLeft() {
   if (!picked) return;
-  const c = credit[picked.seller], leg = $("llm-chat-leg").value, p = picked.prices.find((x) => x.leg === leg);
-  $("llm-left").textContent = picked.free || (c && c.free) ? "Free" : c && c.credit && c.credit[leg] ? `${c.credit[leg].text} ${short(p && p.label)} left` : "No credit";
+  const m = (picked.models[0] || {}), l = creditLine({kind: "text", o: picked, m});
+  $("llm-chat-leg").hidden = true;                          // the credit pays, in whatever coin it is (2026-10-23)
+  $("llm-left").textContent = l.big === "No credits yet" ? "No credit" : l.big + (l.big.startsWith("\u2248") ? " left" : "");
 }
 $("llm-chat-leg").addEventListener("change", drawLeft);
 $("llm-new-chat").addEventListener("click", () => { history = []; $("llm-msgs").innerHTML = ""; });
@@ -661,7 +702,7 @@ async function sendChat() {
   try {
     const r = await fetch("/account/llm/chat", {method: "POST", credentials: "same-origin", headers: {"Content-Type": "application/json"},
       // docs: the seller adds what DogecoinArcade's documentation says about the question, free (llmdocs.py).
-      body: JSON.stringify({seller: picked.seller, leg: $("llm-chat-leg").value, model: picked.models[0] && picked.models[0].id, messages: history, docs: true})});
+      body: JSON.stringify({seller: picked.seller, leg: "auto", model: picked.models[0] && picked.models[0].id, messages: history, docs: true})});
     if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.detail || `HTTP ${r.status}`); }
     const reader = r.body.getReader(), dec = new TextDecoder(); let buf = "";
     for (;;) {
@@ -680,7 +721,7 @@ async function sendChat() {
           small.textContent = `${yours} in · ${a.tokens_out} out · ${a.free ? "free" : a.cost_text + " " + short(p && p.label)}` +
             (a.docs_tokens ? ` · ${a.docs_tokens.toLocaleString()} tokens of DogecoinArcade docs, free` : "");
           if (!a.free) { credit[picked.seller] = credit[picked.seller] || {credit: {}}; credit[picked.seller].credit = credit[picked.seller].credit || {};
-            credit[picked.seller].credit[a.leg] = {units: a.left, text: a.left_text}; drawLeft(); }
+            credit[picked.seller].credit[a.leg] = {...(credit[picked.seller].credit[a.leg] || {}), units: a.left, text: a.left_text}; drawLeft(); }
           continue;
         }
         for (const ch of ev.choices || []) {
@@ -706,12 +747,11 @@ function drawKeys() {
   $("llm-base").textContent = book.api_base;
   $("llm-api").hidden = !book.signed_in || !FOCUS;          // keys belong to a model's own page
   const on = [];
-  book.offers.forEach((o) => (o.models.length ? legsOf(o) : o.images && o.images.free ? [{leg: "free", label: "Free"}] : (o.images || {}).prices || [])
-    .concat(o.models.length && o.images && !o.images.free ? o.images.prices.filter((p) => !o.prices.some((x) => x.leg === p.leg)) : []).forEach((p) => on.push(`<option value="${esc(o.seller)}|${esc(p.leg)}">${esc(sellerName(o))} · ${esc(short(p.label))}</option>`)));
+  book.offers.forEach((o) => [{leg: "auto", label: "any of its coins"}].forEach((p) => on.push(`<option value="${esc(o.seller)}|${esc(p.leg)}">${esc(sellerName(o))} · ${esc(short(p.label))}</option>`)));
   const keep = $("llm-key-on").value; $("llm-key-on").innerHTML = on.join(""); if (keep) $("llm-key-on").value = keep;
   const name = (sid) => { const o = book.offers.find((x) => x.seller === sid); return o ? sellerName(o) : sid.slice(0, 10) + "…"; };
   $("llm-keys").innerHTML = keys.length ? `<span class="h">Key</span><span class="h">Name</span><span class="h">Spends</span><span class="h">Last used</span><span></span>` +
-    keys.map((k) => `<code>…${esc(k.tail)}</code><span style="overflow-wrap:anywhere">${esc(k.name || "—")}</span><span>${esc(name(k.seller))} · ${esc(k.leg)}</span>
+    keys.map((k) => `<code>…${esc(k.tail)}</code><span style="overflow-wrap:anywhere">${esc(k.name || "—")}</span><span>${esc(name(k.seller))} · ${esc(k.leg === "auto" ? "any coin" : k.leg)}</span>
       <span style="color:var(--muted)">${k.used ? new Date(k.used * 1000).toLocaleString() : "never"}</span>
       <button type="button" class="llm-btn bad" data-drop="${esc(k.hash)}" style="height:36px">Revoke</button>`).join("") : "";
   // The key just made goes into the example, with a model of the seller it spends at (2026-10-23: "When a user

@@ -88,6 +88,19 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-23 LLM credit shown as credits and spent in any coin; delete a cached picture; the upload's thumbnail (Claude)
+The operator: "it should be listing the credits as credits with the listed conversion rate"; "you shouldn't have to select the
+coin that you used to buy the credits it should just automatically deduct your credit"; "User should be able to delete
+generated images from the cache"; "There should be a thumbnail of uploaded images when editing". Branch claude/llm-credits.
+* Leg `auto` (also "" and a stale "free"): `Seller.pick_leg` -- a chat pays in the coin the buyer's credit buys most
+  in; a picture in the first coin whose balance covers its credits. The Exchange's chat and picture panels send `auto`
+  (no coin picker); a new API key spends `auto` ("any coin"); a key made while a model was free carries on once it
+  charges, from whatever credit there is. `Seller.balance` gives each coin's `scale`.
+* Cards, the model page and the panels say credit as credits at the model's rate: "10 credits · 1 credit = 0.5 PEP"
+  for pictures (sum over coins of units / ceil(per * scale)), "about 50,000 tokens · 0.0001 PEP / token out" for words.
+* `POST /account/llm/pictures/delete {id}` (door), a Delete on each picture in "Your pictures"; the chosen picture's
+  thumbnail, size and a Remove under "Change a picture of yours". Tests: test_llm.py (29).
+
 ### 2026-10-23 The helper appears as soon as a shared model comes online (Claude)
 The operator: "the robot [should] become visible as soon as a shared model comes online". `_helper.html` asks
 `/account/llm/helper` every 20 s while the page is open (and on coming back to the tab), not once per page with a

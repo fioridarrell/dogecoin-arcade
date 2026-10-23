@@ -42,6 +42,9 @@ A coin payment counts as soon as the seller's node sees it -- usually within sec
 An Omni token payment counts once the token index has read its block.
 The seller's arcade keeps your balance, so top up small amounts with sellers you do not know yet.
 
+You never choose a coin when you use a model: it takes whatever credit you hold with that seller. Your credit is shown
+as **credits** for pictures (with the rate, for example 1 credit = 0.5 PEP) and as the tokens it still buys for words.
+
 Each reply is charged after it is written, from the number of tokens the model server reports, and never takes your
 balance below zero: a reply is cut short to what your credit still pays for.
 
@@ -59,7 +62,7 @@ every 250 pixels of the picture's longest side**, rounded up -- 250x250 is 1 cre
 new one coming down. Open the model, describe the picture, set any width and height (or pick a preset), optionally add
 a picture of yours to change, and the button shows the exact credits before you press it. A picture that fails costs
 nothing. Every picture you make is kept on your own arcade for **24 hours** -- even if you closed the page before it was
-done -- under **Your pictures** on the model's page, to view and download.
+done -- under **Your pictures** on the model's page, to view, download or delete.
 The same balance with a seller pays for words and pictures.
 
 ### Using a model from your own programs (API keys)
