@@ -51,6 +51,8 @@ ORDER = (
     ("features.md", "What it does", "Every part of the application, in one page."),
     ("llm.md", "AI models and pictures on the exchange",
      "Use, buy, sell and share AI models and pictures: credit, chat, API keys, the arcade helper."),
+    ("ords.md", "Inscribing ords from your wallet",
+     "Doginals, Pepinals, Bellinals and Luckinals from the Creator tab, each chain's rules, and collection indexes."),
     ("prize-pools.md", "Prize pools",
      "How a game or any page pays out tokens to whoever wins, and how to make one."),
     ("referee.md", "The referee: prizes for a verified win",

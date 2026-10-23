@@ -1,0 +1,278 @@
+{% extends "base.html" %}
+{% block title %}Inscribe an ord · {{ brand.name }}{% endblock %}
+{% block body %}
+{# 2026-10-23: "I want to add the option to inscribe an ORD under the creator tab. Make sure that the inscriber
+   follows the rules of each chain individually"; DOGE, PEP, BEL and LKY, signed by the player's own wallet; single ords
+   with the collection index the Doginal Dogs, the Doginal Frogs and the Anti Doginal Dogs use. The node builds each
+   transaction (arcade/ord_inscribe.py) and wallet.js checks every one before this tab signs it. #}
+<p style="margin:0 0 6px"><a href="/create">&larr; Creator</a></p>
+<h1>Inscribe an ord</h1>
+<p class="muted" style="max-width:760px">A Doginal on Dogecoin, a Pepinal on Pepecoin, a Bellinal on Bellscoin or a
+  Luckinal on Luckycoin, from your own wallet: you pay the fees in that chain's coin, your browser signs every
+  transaction, and the ord lands on your own address there. Each chain is written the way its own indexer reads it.</p>
+<p class="err" id="trouble" hidden></p>
+<p class="ok" id="news" hidden></p>
+{% if not account_here %}
+<div class="panel"><p style="margin:0">Sign in to inscribe from your wallet.</p></div>
+{% else %}
+<div id="ord-unfinished"></div>
+<div class="panel" id="ord-make">
+  <h3 style="margin:0 0 8px">Inscribe a file</h3>
+  <div class="ord-grid">
+    <label>Chain <select id="ord-chain"><option value="">Loading&hellip;</option></select></label>
+    <label>File <input type="file" id="ord-file"></label>
+  </div>
+  <p class="muted ord-rules" id="ord-rules"></p>
+  <p class="muted" id="ord-picked" hidden></p>
+  <div class="row" style="margin-top:8px">
+    <button type="button" id="ord-go" disabled>Inscribe</button>
+  </div>
+  <div id="ord-progress" hidden>
+    <div class="ord-bar"><span id="ord-bar"></span></div>
+    <p class="muted" id="ord-says" style="margin:6px 0 0"></p>
+  </div>
+</div>
+
+<div class="panel" id="ord-index">
+  <h3 style="margin:0 0 6px">Make a collection index</h3>
+  <p class="muted" style="font-size:.88rem;margin:0 0 10px">Group your ords into a collection the way the Doginal Dogs,
+    the Doginal Frogs and the Anti Doginal Dogs are: an index inscribed by your account names each ord, its number and
+    its traits, and every arcade shows the collection on the Exchange. The first index to name an ord owns it; only
+    you can replace yours.</p>
+  <div class="ord-grid">
+    <label>Name <input id="ix-name" maxlength="80" placeholder="My collection"></label>
+    <label>Items live on <select id="ix-chain"></select></label>
+  </div>
+  <label style="display:block;margin-top:8px">Description <input id="ix-desc" maxlength="600"></label>
+  <table class="ix-table" id="ix-table"><thead><tr><th>Ord</th><th>Number</th><th>Traits <small class="muted">(Trait=Value, &hellip;)</small></th><th></th></tr></thead>
+    <tbody id="ix-rows"></tbody></table>
+  <div class="row" style="margin-top:6px;gap:8px;flex-wrap:wrap">
+    <input id="ix-add" placeholder="Add an inscription id (txid i0)" style="flex:1 1 320px;margin:0">
+    <button type="button" class="ghost" id="ix-add-go">Add</button>
+  </div>
+  <details style="margin-top:8px"><summary class="muted">Or a trait file (doggy.market or OW JSON)</summary>
+    <textarea id="ix-file" rows="5" placeholder='[{"inscriptionId": "...i0", "name": "My #1", "attributes": {"Eyes": "Red"}}]'
+      style="width:100%;margin-top:6px"></textarea></details>
+  <label style="display:flex;gap:8px;align-items:center;justify-content:flex-start;margin-top:8px;font-size:.9rem">
+    <input type="checkbox" id="ix-cover-first" checked style="width:auto;flex:none;margin:0"> <span>Use number 1 as the cover</span></label>
+  <div class="row" style="margin-top:10px"><button type="button" id="ix-go">Inscribe the index</button></div>
+  <p class="muted" id="ix-says" style="margin:6px 0 0"></p>
+</div>
+{% endif %}
+<style>
+.ord-grid{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
+.ord-grid label{display:flex;flex-direction:column;gap:4px;font-size:.88rem;color:var(--muted)}
+.ord-grid select,.ord-grid input{margin:0}
+.ord-rules{font-size:.84rem;margin:8px 0 0}
+.ord-bar{height:8px;border-radius:6px;background:var(--line);overflow:hidden;margin-top:12px}
+.ord-bar span{display:block;height:100%;width:0;background:var(--accent);transition:width .3s}
+.ord-run{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;padding:8px 0;border-top:1px solid var(--line)}
+.ord-run:first-of-type{border-top:0}
+.ord-run code{font-size:.78rem;word-break:break-all}
+.ix-table{width:100%;border-collapse:collapse;margin-top:10px;font-size:.86rem}
+.ix-table th{text-align:left;color:var(--muted);font-weight:normal;padding:4px}
+.ix-table td{padding:4px;vertical-align:middle}
+.ix-table td input{margin:0;width:100%}
+.ix-table td.id code{font-size:.74rem;word-break:break-all}
+.ix-table td.n{width:90px}
+@media (max-width:620px){.ix-table thead{display:none}.ix-table tr{display:grid;grid-template-columns:1fr 80px auto;gap:4px;border-top:1px solid var(--line);padding:6px 0}
+  .ix-table td.id{grid-column:1/-1}}
+</style>
+{% if account_here %}
+<script type="module">
+import * as wallet from "/wallet.js";
+
+const $ = (id) => document.getElementById(id);
+const say = (t) => { $("trouble").textContent = t; $("trouble").hidden = !t; };
+const news = (t) => { $("news").textContent = t; $("news").hidden = !t; };
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const commas = (n) => Number(n || 0).toLocaleString();
+const TAG = ARCADE_CHAIN;            // where the collection index is inscribed: this arcade's own chain
+let chains = [], runs = [], busy = false;
+const chainOf = (net) => chains.find((c) => c.chain === net);
+const coins = (sats, net) => `${(Number(sats || 0) / 1e8).toLocaleString(undefined, {maximumFractionDigits: 8})} ${(chainOf(net) || {}).coin || ""}`;
+const keysNow = async () => (await wallet.opened(ARCADE_CHAIN)) || await arcadeKeys(ARCADE_CHAIN);
+const b64 = (bytes) => { let s = ""; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(s); };
+const shaOf = async (bytes) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
+
+async function getJSON(url, opts) {
+  const r = await fetch(url, {cache: "no-store", credentials: "same-origin", ...(opts || {})});
+  const said = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(said.detail || `HTTP ${r.status}`);
+  return said;
+}
+const postJSON = (url, body) => getJSON(url, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+
+/* --- chains and their rules --- */
+function drawRules() {
+  const c = chainOf($("ord-chain").value);
+  if (!c) { $("ord-rules").textContent = ""; return; }
+  const kb = coins(c.fee_per_kb, c.chain);
+  $("ord-rules").textContent = `${c.label}: written as a ${c.ord} the way ${c.indexer} reads it, in ${c.part}-byte parts, `
+    + `about 1,500 bytes a transaction. Fees ${kb} a kB${c.soft_dust ? ", plus the chain's soft-dust fee on the small coin the ord sits on" : ", no soft-dust fee"}. `
+    + `The ord is a ${coins(c.postage, c.chain)} coin on your own address.${c.empty_ok ? "" : " An empty file is not an inscription here."}`
+    + ` Up to ${commas(c.max_bytes)} bytes; a big file waits for a block every 20 transactions.`;
+  drawPicked();
+}
+function drawPicked() {
+  const f = $("ord-file").files[0], c = chainOf($("ord-chain").value);
+  $("ord-go").disabled = busy || !f || !c;
+  if (!f) { $("ord-picked").hidden = true; return; }
+  const txs = 1 + Math.max(1, Math.ceil(f.size / 1450));
+  $("ord-picked").hidden = false;
+  $("ord-picked").textContent = `${f.name} · ${commas(f.size)} bytes · ${f.type || "type from its name"} · about ${commas(txs)} transactions`
+    + (c && f.size > c.max_bytes ? " — too big for this inscriber" : "");
+}
+async function loadChains() {
+  try { chains = (await getJSON("/account/ord/chains")).chains || []; } catch (e) { say(e.message); return; }
+  const opts = chains.map((c) => `<option value="${esc(c.chain)}">${esc(c.label)} · ${esc(c.ord)}${c.mainnet ? "" : " (testnet)"}</option>`).join("");
+  $("ord-chain").innerHTML = opts || `<option value="">This arcade runs none of these chains</option>`;
+  $("ix-chain").innerHTML = opts;
+  try { const last = localStorage.getItem("arcade.ord.chain"); if (last && chainOf(last)) { $("ord-chain").value = last; $("ix-chain").value = last; } } catch (e) {}
+  drawRules();
+}
+$("ord-chain").onchange = () => { try { localStorage.setItem("arcade.ord.chain", $("ord-chain").value); } catch (e) {} drawRules(); };
+$("ord-file").onchange = drawPicked;
+
+/* --- a run's progress --- */
+function progress(said, name) {
+  $("ord-progress").hidden = false;
+  const of = Number(said.of || 1), sent = Number(said.sent || 0);
+  $("ord-bar").style.width = `${Math.round(100 * Math.min(sent, of) / of)}%`;
+  $("ord-says").textContent = said.done ? `${name}: all ${commas(of)} transactions sent.`
+    : said.restarting ? `${name}: the arcade is not answering (it may be restarting); trying again…`
+    : said.wait ? `${name}: ${commas(sent)} of ${commas(of)} sent. Waiting for a block before the next ones (the chain takes ${20} unconfirmed in a row)…`
+    : `${name}: ${commas(sent)} of ${commas(of)} sent… keep this tab open.`;
+}
+async function run(first, file, bytes) {
+  const name = file ? file.name : (first.name || "ord");
+  busy = true; drawPicked();
+  const stay = (e) => { e.preventDefault(); e.returnValue = ""; };
+  window.addEventListener("beforeunload", stay);
+  document.body.dataset.inscribing = "1";
+  try {
+    const held = await keysNow();
+    const id = await wallet.inscribeOrd(held, first, async () => b64(bytes), (s) => progress(s, name));
+    news(`Inscribed: ${name} is ${id}. It lands on your address when its last block is mined.`);
+  } finally {
+    busy = false; drawPicked();
+    window.removeEventListener("beforeunload", stay);
+    delete document.body.dataset.inscribing;
+    loadRuns();
+  }
+}
+
+$("ord-go").onclick = async () => {
+  say(""); news("");
+  const f = $("ord-file").files[0], c = chainOf($("ord-chain").value);
+  if (!f || !c) return;
+  try {
+    const bytes = new Uint8Array(await f.arrayBuffer());
+    const held = await keysNow();
+    if (!held) return;
+    const first = await wallet.startOrd(held, {chain: c.chain, content: b64(bytes), content_type: f.type, name: f.name});
+    const k = first.costs, shown = await wallet.checked(first, held);
+    const network = Number(shown.fee || 0) + Number(k.reveal_fees || 0);
+    const label = `Inscribe ${f.name} (${commas(f.size)} bytes) as a ${first.label}: ${commas(first.of)} transactions, `
+      + `signed here without asking again. ${coins(k.postage, c.chain)} stays yours as the ord's own coin.`;
+    const ok = c.mainnet
+      ? await arcadeMainnetReview({label, network, data: 0, others: 0, operator: 0, total: network + Number(k.postage), chain: c.chain})
+      : await arcadeAsk(`Inscribe ${f.name}?`, `${label} Network fees: ${coins(network, c.chain)}.`, "Inscribe");
+    if (!ok) return;
+    await run(first, f, bytes);
+  } catch (e) { say(String(e.message || e)); busy = false; drawPicked(); }
+};
+
+/* --- unfinished and made here --- */
+async function loadRuns() {
+  try { runs = (await getJSON("/account/ord/runs")).runs || []; } catch (e) { return; }
+  const open = runs.filter((r) => !r.done), made = runs.filter((r) => r.done);
+  const box = $("ord-unfinished");
+  box.innerHTML = open.length ? `<div class="panel"><h3 style="margin:0 0 6px">Not finished yet</h3>
+    <p class="muted" style="font-size:.86rem;margin:0 0 6px">The coins for the rest wait in your own lock. Choose the same file and it carries on where it stopped.</p>
+    ${open.map((r) => `<div class="ord-run"><div><b>${esc(r.name || r.content_type)}</b> <span class="muted">· ${esc(r.label)} · ${commas(r.sent)} of ${commas(r.of)} sent</span></div>
+      <label class="button ghost" style="cursor:pointer">Finish<input type="file" data-finish="${esc(r.run)}" hidden></label></div>`).join("")}</div>` : "";
+  box.querySelectorAll("[data-finish]").forEach((inp) => inp.onchange = async () => {
+    const r = open.find((x) => x.run === inp.dataset.finish), f = inp.files[0];
+    if (!r || !f) return;
+    say(""); news("");
+    try {
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      if ((await shaOf(bytes)) !== r.sha256) throw new Error("that is not the same file this inscription started with");
+      await run({run: r.run, chain: r.chain, name: r.name}, f, bytes);
+    } catch (e) { say(String(e.message || e)); }
+  });
+  // Ords made here fill the index table (on their chain), once each.
+  made.forEach((r) => addRow(r.inscription, r.chain, r.name));
+}
+
+/* --- the collection index --- */
+const rows = [];
+function addRow(id, chain, name = "") {
+  id = String(id || "").trim().toLowerCase();
+  if (!/^[0-9a-f]{64}i[0-9]{1,6}$/.test(id) || rows.some((r) => r.id === id)) return false;
+  rows.push({id, chain: chain || $("ix-chain").value, name, number: rows.length + 1, traits: ""});
+  drawRows();
+  return true;
+}
+function drawRows() {
+  const net = $("ix-chain").value;
+  const shown = rows.filter((r) => r.chain === net);
+  $("ix-rows").innerHTML = shown.length ? shown.map((r) => `<tr data-id="${esc(r.id)}">
+      <td class="id"><code>${esc(r.id)}</code>${r.name ? `<br><small class="muted">${esc(r.name)}</small>` : ""}</td>
+      <td class="n"><input type="number" min="1" value="${esc(r.number)}" data-k="number" aria-label="Number"></td>
+      <td><input value="${esc(r.traits)}" data-k="traits" placeholder="Background=Blue, Eyes=Red" aria-label="Traits"></td>
+      <td><button type="button" class="ghost" data-drop="1" aria-label="Remove">&times;</button></td></tr>`).join("")
+    : `<tr><td colspan="4" class="muted">Ords you inscribe here on this chain appear here; add others by id.</td></tr>`;
+  $("ix-rows").querySelectorAll("tr[data-id]").forEach((tr) => {
+    const r = rows.find((x) => x.id === tr.dataset.id);
+    tr.querySelectorAll("input").forEach((inp) => inp.oninput = () => { r[inp.dataset.k] = inp.value; });
+    tr.querySelector("[data-drop]").onclick = () => { rows.splice(rows.indexOf(r), 1); drawRows(); };
+  });
+}
+$("ix-chain").onchange = drawRows;
+$("ix-add-go").onclick = () => { if (addRow($("ix-add").value, $("ix-chain").value)) $("ix-add").value = ""; else say("that is not an inscription id (a txid, then i0)"); };
+const traitsOf = (text) => Object.fromEntries(String(text || "").split(",").map((p) => p.split("=")).filter((kv) => kv.length === 2 && kv[0].trim() && kv[1].trim()).map(([k, v]) => [k.trim(), v.trim()]));
+
+async function inscribeJSON(held, value, name) {
+  const bytes = new TextEncoder().encode(JSON.stringify(value));
+  const start = await postJSON("/account/inscribe", {content: b64(bytes), content_type: "application/vnd.arcade.collection+json", name, chain: TAG.network});
+  if (Number(start.chunks || 1) > 1) throw new Error(`${name} came out too big for one transaction`);
+  const out = await wallet.confirm(held, start);
+  return out.txid;
+}
+$("ix-go").onclick = async () => {
+  say(""); $("ix-says").textContent = "";
+  const net = $("ix-chain").value, file = $("ix-file").value.trim();
+  const body = {name: $("ix-name").value.trim(), chain: net, description: $("ix-desc").value.trim()};
+  try {
+    if (file) body.dm = JSON.parse(file);
+    else body.items = rows.filter((r) => r.chain === net).map((r) => ({id: r.id, number: Number(r.number), traits: traitsOf(r.traits)}));
+  } catch (e) { say("the trait file is not JSON"); return; }
+  try {
+    const plan = await postJSON("/account/ord/collection", body);
+    if ($("ix-cover-first").checked) {
+      const one = (body.items || []).find((r) => r.number === 1) || (body.dm || [])[0];
+      if (one) plan.root.cover = String(one.id || one.inscriptionId || "").toLowerCase();
+    }
+    if (!(await arcadeAsk(`Inscribe the index of ${body.name}?`,
+        `${commas(plan.items)} ords on ${(chainOf(net) || {}).label || net}${plan.traits.length ? `, traits ${plan.traits.join(", ")}` : ""}: `
+        + `${plan.parts.length} part${plan.parts.length === 1 ? "" : "s"} and the root, inscribed by your account on this arcade's chain. `
+        + "The first index to name an ord owns it.", "Inscribe"))) return;
+    const held = await keysNow();
+    const ids = [];
+    for (let n = 0; n < plan.parts.length; n++) {
+      $("ix-says").textContent = `Part ${n + 1} of ${plan.parts.length}…`;
+      ids.push(await inscribeJSON(held, plan.parts[n], `part-${String(n + 1).padStart(2, "0")}.json`));
+    }
+    $("ix-says").textContent = "The root…";
+    const root = await inscribeJSON(held, {...plan.root, parts: ids}, "root.json");
+    $("ix-says").textContent = "";
+    news(`Index inscribed: ${root}. The collection appears on the Exchange once its blocks are mined and the arcades read it.`);
+  } catch (e) { say(String(e.message || e)); }
+};
+
+loadChains().then(loadRuns);
+</script>
+{% endif %}
+{% endblock %}

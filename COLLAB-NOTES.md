@@ -88,6 +88,25 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-23 Creator tab: inscribe an ord from your own wallet, each chain by its own rules (Claude)
+The operator: "I want to add the option to inscribe an ORD under the creator tab. Make sure that the inscriber follows the rules
+of each chain individually ... Change the create tab to the creator tab"; asked: DOGE, PEP, BEL, LKY first (LTC Taproot
+later), the player's own wallet signs, single ords plus the Doginal Dogs' collection index. Branch `claude/ord-inscriber`.
+- `arcade/ord_inscribe.py`: ~/doginal-mint/inscribe.py's layout (the Anti Doginal Dogs inscriber: 240-byte parts,
+  1,500 bytes a reveal, P2SH lock chain, id = reveal 1 + i0), but the commit pre-pays every reveal so each reveal is one
+  lock in, one lock (or the ord) out -- no wallet coin spent after the commit. `RULES` per chain: dialect (ord_rules),
+  empty file (PEP only), fees/soft dust from Params (BEL: 0.0001/kB, none). Every plan is read back with
+  `ord_rules.read` in that chain's dialect before anything is offered.
+- Routes: `/account/ord/inscribe` (commit, then `{run}` -> next reveal / `wait` past 20 unconfirmed / `need_content`
+  after a restart), `/account/ord/runs`, `/account/ord/forget`, `/account/ord/chains`, `/account/ord/collection`
+  (root + parts sized for one transaction each). Runs persist in `<home>/ord-runs.json`. Door entries added.
+- `wallet.js` `startOrd` / `inscribeOrd`: checks each reveal spends the coin the last made and pays only this key's own
+  next lock (`noteKey`) or own address; one mainnet review for the whole ord. Page `/create/ord`, card on /create,
+  nav "Create" -> "Creator". `collection_json.CHAINS` += bel, lky. Docs: `docs/ords.md`.
+- Tests: test_ord_inscribe (53: every chain x sizes read back, fees, a whole ord walked by our index, the routes incl.
+  waits and restart), test_ord_inscribe_browser (real Firefox: Creator -> review -> 5 signed txs, signatures verified).
+- Needs from SadFrog: nothing; Bellinal/Luckinal postage is 100,000 like the others -- say if Nintondo wants another.
+
 ### 2026-10-23 The helper uses a shared model only once this arcade approves it (Claude)
 The operator: "I want to be able to choose, which shared models my arcade uses. Because [@yourfirstname] is sharing a 9B model
 which cannot keep the context ... If one arcade shares their model to another, the other arcade will need to approve the

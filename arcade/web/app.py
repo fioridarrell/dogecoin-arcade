@@ -444,8 +444,9 @@ NAV = [
     ("/contacts",     "Address book", None,        True),
     ("/backup",       "Backup",       None,        True),
     ("/wallet",       "Wallet",       None,        True),
-    # One Create tab for NFTs, tokens and the launchpad wizard (2026-09-27).
-    ("/create",       "Create",       "mainnet",   True),
+    # One Create tab for NFTs, tokens and the launchpad wizard (2026-09-27); "Creator" since 2026-10-23 (the operator:
+    # "Change the create tab to the creator tab"), with ords beside them.
+    ("/create",       "Creator",      "mainnet",   True),
     ("/exchange",     "Exchange",     "mainnet",   True),
     # Who the arcade works with (2026-10-15: "Between the exchange and the Docs tab,
     # add an affiliate tab").
@@ -477,7 +478,7 @@ ACCOUNT_NAV = [
     # Backup is a button on the Wallet page, not a tab (2026-09-27).
     ("/me/wallet",       "Wallet",       None,        True),
     # NFTs, Tokens and the launchpad wizard, behind one tab (2026-09-27).
-    ("/create",          "Create",       "mainnet",   True),
+    ("/create",          "Creator",      "mainnet",   True),
     ("/exchange",        "Exchange",     "mainnet",   True),
     ("/affiliates",      "Affiliates",   None,        True),
     ("/docs",            "Docs",         None,        True),
@@ -5599,6 +5600,12 @@ def create_app(state: AppState) -> FastAPI:
         """One tab for making things (2026-09-27): NFTs, tokens, and
         the launchpad wizard, each a button to the page that does it."""
         return render(request, "create.html", chain=_token_chain()[0])
+
+    @app.get("/create/ord", response_class=HTMLResponse)
+    def create_ord_page(request: Request):
+        """Inscribe an ord from the account's own wallet, and make a collection index of them (2026-10-23;
+        arcade/ord_inscribe.py)."""
+        return render(request, "create_ord.html", chain=_token_chain()[0])
 
     @app.get("/nfts", response_class=HTMLResponse)
     def nfts_page(request: Request, page: int = 1):
@@ -14242,6 +14249,286 @@ def create_app(state: AppState) -> FastAPI:
         if step == "done":
             return {"step": "done", "txids": run["txids"], "note": run["note"], "to": run["to"]}
         raise ValueError(f"the {step} has not gone out yet: sign it first")
+
+    # --- ords: a Doginal, Pepinal, Bellinal or Luckinal from this account's own wallet (arcade/ord_inscribe.py) -------
+    #: Runs, kept on disk (ord-runs.json): a big file is hours of blocks, and a restart between two reveals must not
+    #: strand the coins locked for the rest -- the run says which transactions went out, the tab brings the file again.
+    _ord_lock = threading.Lock()
+    #: run id -> (the file's bytes, its plan): in memory only; a run whose file is gone asks the tab for it again.
+    _ord_held: dict[str, tuple[bytes, Any]] = {}
+    app.state.ord_held = _ord_held                     # a restart, as the tests make one: forget every file held
+    ORD_UNSTARTED_SECONDS = 1800
+
+    def _ord_path() -> Path:
+        return Path(state.home) / "ord-runs.json"
+
+    def _ord_runs() -> dict:
+        try:
+            return json.loads(_ord_path().read_text())
+        except (OSError, ValueError):
+            return {}
+
+    def _ord_save(runs: dict) -> None:
+        path = _ord_path()
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(runs, separators=(",", ":")))
+        tmp.replace(path)
+
+    def _ord_update(rid: str, change) -> dict:
+        with _ord_lock:
+            runs = _ord_runs()
+            run = runs.get(rid)
+            if run is None:
+                raise ValueError("that inscription is not one this arcade is holding")
+            change(run)
+            _ord_save(runs)
+            return run
+
+    def _ord_public(run: dict, rid: str) -> dict:
+        from .. import ord_inscribe as oi
+        total = int(run["reveals"]) + 1
+        return {"run": rid, "chain": run["chain"], "name": run.get("name", ""), "content_type": run["content_type"],
+                "size": run["size"], "sha256": run["sha256"], "sent": len(run["txids"]), "of": total,
+                "inscription": (run["txids"][1] + "i0") if len(run["txids"]) > 1 else "",
+                "done": len(run["txids"]) >= total, "at": run["at"], "label": oi.rules_of(run["chain"]).label,
+                "address": run["address"]}
+
+    def _ord_plan_of(rid: str, run: dict, content: bytes | None = None):
+        """(content, plan) of a run: held in memory, or worked out again from the file the tab sent (checked against
+        the run's sha256 and its own key and address: the plan is a function of them, so it comes out the same)."""
+        from .. import ord_inscribe as oi
+        held = _ord_held.get(rid)
+        if held is not None:
+            return held
+        if content is None:
+            return None
+        if hashlib.sha256(content).hexdigest() != run["sha256"]:
+            raise ValueError("that is not the same file this inscription started with")
+        chain = next(c for c in state.token_chains if c.network == run["chain"])
+        p = oi.plan(run["chain"], chain.params, run["content_type"], content, bytes.fromhex(run["coin_key"]),
+                    run["address"])
+        if p.commit_value != int(run["commit_value"]) or p.reveals != int(run["reveals"]):
+            raise ValueError("that file does not plan out the way this inscription did")
+        _ord_held[rid] = (content, p)
+        return _ord_held[rid]
+
+    @app.get("/account/ord/runs")
+    def account_ord_runs(request: Request):
+        """This account's ords: unfinished ones (with Finish: choose the same file again) and the ones made here."""
+        account = _signed_in_account(request)
+        now = time.time()
+        with _ord_lock:
+            runs = _ord_runs()
+            stale = [k for k, v in runs.items() if not v["txids"] and now - v["at"] > ORD_UNSTARTED_SECONDS]
+            for k in stale:
+                runs.pop(k, None)
+            if stale:
+                _ord_save(runs)
+        mine = [_ord_public(v, k) for k, v in runs.items() if v["pubkey"] == account.pubkey and v["txids"]]
+        mine.sort(key=lambda r: -r["at"])
+        return JSONResponse({"runs": mine}, headers={"Cache-Control": "no-store"})
+
+    @app.post("/account/ord/forget")
+    def account_ord_forget(request: Request, payload: Any = Body(None)):
+        """Take a finished ord off this account's list (the ord itself is on the chain and stays the account's)."""
+        account = _signed_in_account(request)
+        rid = str((payload or {}).get("run") or "")
+        with _ord_lock:
+            runs = _ord_runs()
+            run = runs.get(rid)
+            if run is None or run["pubkey"] != account.pubkey:
+                return JSONResponse({"detail": "that inscription is not on your list"}, status_code=404)
+            if run["txids"] and len(run["txids"]) < int(run["reveals"]) + 1:
+                return JSONResponse({"detail": "that one is not finished: its coins wait in its lock until it is"},
+                                    status_code=400)
+            runs.pop(rid, None)
+            _ord_save(runs)
+        _ord_held.pop(rid, None)
+        return JSONResponse({"ok": True})
+
+    #: A collection index part this page inscribes in one transaction (the account inscriber's single-transaction
+    #: size is a little under 7,500 bytes with its manifest).
+    ORD_INDEX_PART_BYTES = 5000
+
+    @app.post("/account/ord/collection")
+    def account_ord_collection(request: Request, payload: Any = Body(None)):
+        """A collection index for ords, in the format the Doginal Dogs, the Doginal Frogs and the Anti Doginal Dogs were
+        published in (arcade/collection_json.py; 2026-10-23: "Single ords with the same type of collection index
+        that we used for doginal dogs doginal frogs and the anti doginal dogs"). `{name, chain, description, cover,
+        items: [{id, number, traits: {trait: value}}]}` or `{..., dm: <a doggy.market trait file>}` -> the root (its
+        "parts" filled in by the page once each part is inscribed) and the parts, each small enough for one
+        transaction. Nothing is spent here: the page inscribes them as this account, parts first, then the root."""
+        from .. import collection_json as C
+        _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        try:
+            chain = str(said.get("chain") or "")
+            if said.get("dm") is not None:
+                rows = [r for r in list(said.get("dm") or []) if isinstance(r, dict)]
+                items, traits = (C.from_dm(rows) if rows and "inscriptionId" in rows[0] else C.from_ow(rows))
+            else:
+                items, seen = [], []
+                for row in said.get("items") or []:
+                    t = {str(k).strip(): str(v).strip() for k, v in dict(row.get("traits") or {}).items()
+                         if str(k).strip() and str(v).strip()}
+                    for k in t:
+                        if k not in seen:
+                            seen.append(k)
+                    items.append(C.Item(id=str(row.get("id") or "").strip().lower(), number=int(row.get("number") or 0),
+                                        traits=t))
+                traits = seen
+            if not items:
+                raise C.CollectionError("add at least one ord")
+            name = str(said.get("name") or "").strip()
+            if not name:
+                raise C.CollectionError("a collection needs a name")
+            per = C.PER_PART
+            while True:
+                root, parts = C.build(name[:80], chain, items, traits, description=str(said.get("description") or "")[:600],
+                                      cover=str(said.get("cover") or "").strip().lower(),
+                                      replaces=str(said.get("replaces") or "").strip().lower(), per_part=per)
+                sizes = [len(json.dumps(x, separators=(",", ":"), ensure_ascii=False).encode()) for x in parts]
+                if max(sizes) <= ORD_INDEX_PART_BYTES or per == 1:
+                    break
+                per = max(1, per * ORD_INDEX_PART_BYTES // max(sizes) - 1)
+            return JSONResponse({"root": root, "parts": parts, "content_type": C.CONTENT_TYPE,
+                                 "items": len(items), "traits": traits})
+        except (C.CollectionError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            return JSONResponse({"detail": str(exc) if not isinstance(exc, KeyError) else f"a row has no {exc}"},
+                                status_code=400)
+
+    @app.get("/account/ord/chains")
+    def account_ord_chains(request: Request):
+        """The chains an ord can be inscribed on from this arcade, with each one's rules as the page says them."""
+        from .. import ord_inscribe as oi
+        _signed_in_account(request)
+        out = []
+        for net in (*oi.CHAINS, "test"):
+            chain = next((c for c in state.token_chains if c.network == net), None)
+            if chain is None:
+                continue
+            r = oi.rules_of(net)
+            p = chain.params
+            out.append({"chain": net, "label": {"main": "Pepecoin", "test": "Pepecoin testnet"}.get(net, chain.label),
+                        "coin": p.coin, "ord": r.label, "indexer": r.indexer,
+                        "part": r.part, "empty_ok": r.empty_ok, "fee_per_kb": fees.rate_for(p, fees.MIN_FEE_PER_KB),
+                        "soft_dust": bool(getattr(p, "soft_dust", True)), "postage": oi.POSTAGE,
+                        "mainnet": bool(chain.is_mainnet), "max_bytes": oi.MAX_BYTES})
+        return JSONResponse({"chains": out}, headers={"Cache-Control": "no-store"})
+
+    @app.post("/account/ord/inscribe")
+    def account_ord_inscribe(request: Request, payload: Any = Body(None)):
+        """Inscribe an ord (2026-10-23), one offer at a time, each signed in the tab and broadcast by
+        /account/sign.
+
+        * `{chain, content (base64), content_type, name, pubkey}`: the plan (ord_inscribe.plan, this chain's rules,
+          read back through its indexer's) and the COMMIT, paid from this account's coins on that chain into the first
+          lock; the answer carries `run` and the costs.
+        * `{run}` after each broadcast: the next reveal (`step` i of `of`), `{wait}` while MAX_UNCONFIRMED of them
+          wait for a block, `{need_content}` when this arcade restarted and needs the file again (send `{run,
+          content}`), and `{done, inscription}` after the last."""
+        from .. import ord_inscribe as oi
+        account = _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        try:
+            content = None
+            if said.get("content") is not None:
+                try:
+                    content = base64.b64decode(str(said.get("content") or ""), validate=True)
+                except ValueError:
+                    raise ValueError("the file has to arrive in base64") from None
+            rid = str(said.get("run") or "")
+            if rid:
+                run = _ord_runs().get(rid)
+                if run is None or run["pubkey"] != account.pubkey:
+                    raise ValueError("that inscription is not one this arcade is holding")
+                return JSONResponse(_ord_next(account, rid, run, content))
+            chain = next((c for c in state.token_chains if c.network == str(said.get("chain") or "")
+                          and c.network in oi.RULES), None)
+            if chain is None:
+                raise ValueError("this arcade does not run that chain, or ords are not inscribed on it")
+            address = _account_address(account.pubkey, chain)
+            if not address:
+                raise ValueError(f"this account has no {chain.label} address yet")
+            try:
+                coin_key = bytes.fromhex(str(said.get("pubkey") or ""))
+            except ValueError:
+                coin_key = b""
+            if len(coin_key) != 33 or txbuild.p2pkh_script(address) != (b"\x76\xa9\x14" + hash160(coin_key)
+                                                                       + b"\x88\xac"):
+                raise ValueError("that is not the key of this account's address")
+            if content is None:
+                raise ValueError("choose a file to inscribe")
+            kind = media.standard_type(str(said.get("content_type") or ""), str(said.get("name") or "")) \
+                or "application/octet-stream"
+            p = oi.plan(chain.network, chain.params, kind, content, coin_key, address)
+            with contextlib.closing(state.token_index(chain).open()) as db:
+                unsigned = fundinglib.build(db, chain.params, address, [(p.commit_value, oi.p2sh(p.locks[0]))],
+                                            rate=fees.MIN_FEE_PER_KB,
+                                            what=f"inscribe {str(said.get('name') or kind)[:60]} as a "
+                                                 f"{oi.rules_of(chain.network).label} (1 of {p.reveals + 1})",
+                                            exclude=_flights.spent_by(account.pubkey, chain.network),
+                                            extra=_flights.change_for(account.pubkey, chain.network))
+            _quota(account, "send")
+            rid = secrets.token_urlsafe(12)
+            run = {"pubkey": account.pubkey, "chain": chain.network, "address": address, "coin_key": coin_key.hex(),
+                   "name": str(said.get("name") or "")[:120], "content_type": p.content_type, "size": p.size,
+                   "sha256": p.sha256, "reveals": p.reveals, "commit_value": p.commit_value,
+                   "lock0": oi.p2sh(p.locks[0]).hex(), "commit_vout": None, "txids": [], "at": time.time()}
+            with _ord_lock:
+                runs = _ord_runs()
+                runs[rid] = run
+                _ord_save(runs)
+            _ord_held[rid] = (content, p)
+            commit_vout = next(n for n, (_v, s) in enumerate(unsigned.outputs) if s == oi.p2sh(p.locks[0]))
+
+            def committed(txid, r=rid, v=commit_vout):
+                _ord_update(r, lambda run: (run.__setitem__("txids", [txid]), run.__setitem__("commit_vout", v)))
+            offer = _offers.add(account.pubkey, chain.network, unsigned, unsigned.what, done=committed)
+            c = oi.costs(p)
+            return JSONResponse({"run": rid, "step": 0, "of": p.reveals + 1, "offer": offer.id, "chain": chain.network,
+                                 "label": oi.rules_of(chain.network).label, "next_lock": p.locks[0].hex(),
+                                 "costs": {**c, "commit_fee": unsigned.fee}, **unsigned.as_json()})
+        except (fundinglib.FundingError, oi.OrdError, ValueError) as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        except Exception as exc:                          # noqa: BLE001 -- the node did not answer
+            log.warning("ord inscribe failed", exc_info=True)
+            return JSONResponse({"detail": str(exc)[:300]}, status_code=503)
+
+    def _ord_next(account, rid: str, run: dict, content: bytes | None) -> dict:
+        """The next reveal of an ord in progress, once the transaction before it went out."""
+        from .. import ord_inscribe as oi
+        txids = list(run["txids"])
+        total = int(run["reveals"]) + 1
+        if not txids:
+            raise ValueError("the first transaction has not gone out yet: sign it first")
+        if len(txids) >= total:
+            return {"done": True, **_ord_public(run, rid)}
+        held = _ord_plan_of(rid, run, content)
+        if held is None:
+            return {"need_content": True, **_ord_public(run, rid)}
+        _content, p = held
+        chain = next(c for c in state.token_chains if c.network == run["chain"])
+        i = len(txids) - 1                                  # reveal i spends lock i, made by txids[i]
+        if len(txids) >= oi.MAX_UNCONFIRMED:
+            with chain.rpc() as rpc:
+                far = rpc.call("getrawtransaction", txids[-oi.MAX_UNCONFIRMED], 1) or {}
+            if not int(far.get("confirmations") or 0):
+                return {"wait": True, **_ord_public(run, rid)}
+        vout = int(run["commit_vout"]) if i == 0 else 0
+        last = i + 1 == p.reveals
+        unsigned = oi.build_reveal(chain.params, p, i, {"txid": txids[i], "vout": vout},
+                                   what=f"inscribe {run.get('name') or run['content_type']} "
+                                        f"({i + 2} of {total}{': the ord lands in your wallet' if last else ''})")
+
+        def revealed(txid, r=rid, final=last):
+            _ord_update(r, lambda run: run["txids"].append(txid))
+            if final:
+                fundinglib.NOTE_COINS.add((txid, 0))
+        offer = _offers.add(account.pubkey, chain.network, unsigned, unsigned.what, done=revealed)
+        return {"step": i + 1, "offer": offer.id, "chain": chain.network, "prev": txids[i], "prev_vout": vout,
+                "next_lock": "" if last else p.locks[i + 1].hex(), "last": last, **_ord_public(run, rid),
+                **unsigned.as_json()}
 
     @app.get("/account/listed")
     def account_listed(request: Request):

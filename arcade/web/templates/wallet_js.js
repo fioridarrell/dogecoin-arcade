@@ -751,6 +751,88 @@ export async function startToken20(wallet, ask) {
 /** Then `sendToken20(keys, first, onStep)`: the commit, the note's reveal and the send, each checked here
  *  (coins.verifyOffer: the reveal only for this key's own note script) and broadcast before the next is asked for.
  *  The page's review listed the note and the fees, so each signature is `reviewed`. The three txids. */
+/** An ord, from this wallet (2026-10-23; arcade/ord_inscribe.py): `first` is /account/ord/inscribe's answer --
+ *  the commit, reviewed by the page with its costs -- then every reveal, one at a time, each checked here before it is
+ *  signed: one input, the coin the transaction before it made (this browser read its txid and value off what it
+ *  signed); one output, the next lock of THIS key (`next_lock`, coins.noteKey) or this key's own address for the ord;
+ *  and never more than the coin it spends. So whatever the node says, the coins only ever move between this key's own
+ *  scripts and into fees the page's review counted. `more(run)` gives the file again (base64) when the node asks for it
+ *  after a restart; `onStep(said)` hears every answer, waits included. Returns the inscription id. */
+async function ordPost(body) {
+  const r = await fetch("/account/ord/inscribe", {method: "POST", headers: {"Content-Type": "application/json"},
+                                                    body: JSON.stringify(body)});
+  const said = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(said.detail || `the node would not take it (HTTP ${r.status})`);
+  return said;
+}
+export async function startOrd(wallet, ask) {
+  const k = keysOn(wallet, ask.chain);
+  return ordPost({...ask, pubkey: coinsHex(k.pubkey)});
+}
+const SAME = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+async function ordCheck(keys, offer, prev) {
+  const tx = coins.parseTx(offer.raw);
+  if (tx.inputs.length !== 1 || tx.outputs.length !== 1) throw new Error("an ord's reveal is one coin in and one out. Nothing was signed.");
+  if (prev && (tx.inputs[0].txid !== prev.txid || tx.inputs[0].vout !== prev.vout)) {
+    throw new Error("that reveal does not spend the coin the last transaction made. Nothing was signed.");
+  }
+  const out = tx.outputs[0];
+  if (prev && out.value > prev.value) throw new Error("that reveal pays out more than its coin holds. Nothing was signed.");
+  const mine = coins.p2pkh(await coins.hash160(keys.pubkey));
+  if (offer.last) {
+    if (!SAME(out.script, mine)) throw new Error("the ord must land on your own address. Nothing was signed.");
+  } else {
+    const lock = unhex(String(offer.next_lock || ""));
+    const key = coins.noteKey(lock);
+    const want = new Uint8Array([0xa9, 0x14, ...await coins.hash160(lock), 0x87]);
+    if (!key || !SAME(key, keys.pubkey) || !SAME(out.script, want)) {
+      throw new Error("that reveal pays a lock that is not your own key's. Nothing was signed.");
+    }
+  }
+  return {value: out.value};
+}
+export async function inscribeOrd(wallet, first, more = null, onStep = null) {
+  const keys = keysOn(wallet, first.chain);
+  const rid = first.run;
+  let offer = first, prev = null;
+  // The commit: a send from this wallet, read like any (verifyOffer); its lock output is remembered as where reveal 1 starts.
+  if (offer.offer && Number(offer.step) === 0) {
+    const tx = coins.parseTx(offer.raw);
+    const lock = unhex(String(offer.next_lock || ""));
+    const key = coins.noteKey(lock);
+    const want = new Uint8Array([0xa9, 0x14, ...await coins.hash160(lock), 0x87]);
+    const at = tx.outputs.findIndex((o) => SAME(o.script, want));
+    if (!key || !SAME(key, keys.pubkey) || at < 0) throw new Error("that commit does not pay your own lock. Nothing was signed.");
+    if (onStep) onStep(offer);
+    const sent = await working(() => signOffer(wallet, offer, null, {reviewed: true}));
+    prev = {txid: sent.txid, vout: at, value: tx.outputs[at].value};
+  }
+  for (let tries = 0; ;) {
+    let said;
+    try { said = await ordPost({run: rid}); tries = 0; } catch (e) {
+      // A node restarting answers through its proxy: wait it out, the run is on its disk.
+      if (++tries > 40) throw e;
+      if (onStep) onStep({wait: true, restarting: true, ...offer});
+      await new Promise((r) => setTimeout(r, 15000));
+      continue;
+    }
+    if (said.need_content) {
+      if (!more) throw new Error("the arcade restarted and needs the file again: choose it and press Finish");
+      said = await ordPost({run: rid, content: await more(said)});
+    }
+    if (onStep) onStep(said);
+    if (said.done) return said.inscription;
+    if (said.wait) { await new Promise((r) => setTimeout(r, 20000)); continue; }
+    // Resumed (a new tab): the coin before this one is what the run says went out; its value is what this browser
+    // reads off the offer -- a node can only under-state it, and that is a fee the review already counted.
+    const from = prev || {txid: String(said.prev), vout: Number(said.prev_vout || 0),
+                          value: BigInt(String((said.inputs && said.inputs[0] && said.inputs[0].value) || 0))};
+    const got = await ordCheck(keys, said, from);
+    const sent = await working(() => signOffer(wallet, said, null, {reviewed: true}));
+    prev = {txid: sent.txid, vout: 0, value: got.value};
+    offer = said;
+  }
+}
 export async function sendToken20(keys, first, onStep = null) {
   let offer = first;
   const sid = first.send, txids = {};
