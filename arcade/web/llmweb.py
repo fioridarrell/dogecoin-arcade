@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 import logging
 import time
 from typing import Any, Callable, Iterator
@@ -76,8 +77,26 @@ def register(app, state, *, signed_in: Callable, account_address: Callable, acco
         return account_address(state.operator, account_chain()) if state.operator else ""
 
     def free(buyer: str) -> bool:
+        """This arcade's own operator, and the accounts it chose to share with free (words and pictures alike)."""
         own = operator_address()
-        return bool(buyer) and (buyer == own or buyer == getattr(state, "derived_address", None))
+        if not buyer:
+            return False
+        if buyer == own or buyer == getattr(state, "derived_address", None):
+            return True
+        return any(r.get("address") == buyer for r in llmlib.config(state).get("free_for") or [])
+
+    def tag_address(tag: str) -> str:
+        """Who holds @tag on the tag chain, or LlmError."""
+        name = str(tag or "").strip().lstrip("@").lower()
+        if not re.fullmatch(r"[a-z0-9_]{2,24}", name):
+            raise llmlib.LlmError(f"@{name} is not a name")
+        try:
+            address = state.token_index(account_chain()).address_of(name)
+        except Exception:                                           # noqa: BLE001
+            address = None
+        if not address:
+            raise llmlib.LlmError(f"nobody holds @{name}")
+        return address
 
     def about() -> dict:
         tag = state.operator_tag() if hasattr(state, "operator_tag") else ""
@@ -86,6 +105,14 @@ def register(app, state, *, signed_in: Callable, account_address: Callable, acco
 
     seller = llmlib.Seller(lambda: llmlib.config(state), books, pay_to, scale, verify, free, about)
     seller.node_id = me_id
+
+    def arcade_name() -> str:
+        try:
+            from . import brand as brandlib
+            return brandlib.current().name
+        except Exception:                                           # noqa: BLE001
+            return "DogecoinArcade"
+    seller.arcade_name = arcade_name
     from .. import imagegen
     pictures = imagegen.ImageSeller(lambda: imagegen.config(state), books, pay_to, scale, free)
     seller.images = pictures
@@ -164,8 +191,14 @@ def register(app, state, *, signed_in: Callable, account_address: Callable, acco
             sc = scale(row["leg"])
             earned.append({**row, "text": llmlib.fmt(int(row["units"] or 0), sc)})
         kinds = [c for c in pay_choices(request) if c.get("kind") in ("coin", "token")]
+        try:
+            peers = dict(getattr(getattr(mesh(), "operators", None), "peers", {}) or {})
+        except Exception:                                           # noqa: BLE001
+            peers = {}
+        operators = sorted({str(p.get("tag")) for p in peers.values() if isinstance(p, dict) and p.get("tag")})
         return JSONResponse({"config": {**{k: v for k, v in cfg.items() if k != "key"}, "has_key": bool(cfg.get("key"))},
                              "earned": earned, "kinds": kinds, "selling": bool(seller.offer()), "load": load_now(),
+                             "operators": operators,
                              "images": images_admin(request)},
                             headers={"Cache-Control": "no-store"})
 
@@ -347,6 +380,9 @@ def register(app, state, *, signed_in: Callable, account_address: Callable, acco
         try:
             said = await body_of(request)
             kept = llmlib.config(state)
+            if "free_for" in said:                                  # names, resolved here (never an address from the form)
+                said["free_for"] = [{"tag": str(t).strip().lstrip("@").lower(), "address": tag_address(str(t))}
+                                    for t in said.get("free_for") or [] if str(t).strip()]
             state.set_setting(llmlib.SETTING, llmlib.clean(said, kept))
         except (llmlib.LlmError, ValueError, TypeError) as exc:
             return refuse(exc)

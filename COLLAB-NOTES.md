@@ -88,6 +88,20 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-23 The Exchange chat knows DogecoinArcade's docs; models free for chosen operators (Claude)
+* The operator: "that model should include a system prompt that it is an expert on Dogecoin arcade and it should have access to
+  all of the Dogecoin arcade documentation" -- his choice: the relevant parts, not charged. **arcade/llmdocs.py**: the
+  public docs (guide.pages(private=False), minus hosting-plan.md) cut at headings into <=2,400-char sections, BM25 on
+  the person's last three messages, the best up to 24,000 chars under a DogecoinArcade-expert system prompt. The
+  SELLER adds it (`docs: true` on a chat; the Exchange tab sends it, API keys and apps do not), counts it with vLLM's
+  /tokenize (chars/4 when the server cannot), and charges `max(0, prompt_tokens - docs)`; the end event says
+  `docs_tokens`. Live on a test machine Qwen: a prize-pool question got 6,536 tokens of referee/prize-pool docs free and a
+  correct answer citing /docs/referee.md.
+* The operator: "share my model with Bigchiefenergy if I choose for free while simultaneously having it listed" -- his choice:
+  that operator's account only. Setting `llm.free_for` [{tag, address}]; Admin -> LLM "Free for other operators"
+  (names typed or picked from the linked operators, each resolved on the tag chain by the server -- never an address
+  from the form); `free(buyer)` covers words and pictures. Tests: test_llm.py (23).
+
 ### 2026-10-23 Finding ComfyUI's models when the voice model takes its slot (Claude)
 The operator: "ComfyUI 127.0.0.1:8188 pictures No model it can share." On a test machine only one of ComfyUI and the CSM voice
 model sits beside vLLM (~/bin/gpu-slot); a voice request 9 s after the wake stopped ComfyUI while it was being asked

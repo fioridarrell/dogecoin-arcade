@@ -555,6 +555,23 @@
   <p class="muted" id="img-said" style="margin:8px 0 0"></p>
 </section>
 
+{#- 2026-10-23: "you should be able to share your model with any other arcade operator. So I can share my model
+   with Bigchiefenergy if I choose for free while simultaneously having it listed on the LLM marketplace" -- that
+   operator's own account only (his choice). #}
+<section class="panel" id="ff-panel">
+  <h2 style="margin:0">Free for other operators</h2>
+  <p class="muted" style="margin:2px 0 10px">These accounts use your models free &mdash; words and pictures, in chat, apps and API keys &mdash;
+    while everyone else pays your prices on the marketplace.</p>
+  <div id="ff-list" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px">
+    <input id="ff-name" placeholder="@name" autocomplete="off" style="flex:1 1 200px;width:auto;max-width:280px" list="ff-ops">
+    <datalist id="ff-ops"></datalist>
+    <button type="button" class="small" id="ff-add" style="height:42px">Add</button>
+    <span class="muted" id="ff-said" style="font-size:.85rem"></span>
+  </div>
+  <div id="ff-suggest" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px"></div>
+</section>
+
 <section class="panel">
   <h2 style="margin:0">Earned in the last 30 days</h2>
   <p class="muted" style="margin:2px 0 10px">Top-ups land in your operator account's Wallet like any other payment.</p>
@@ -667,6 +684,7 @@
       $('llm-atonce').value = c.at_once || 2; $('llm-maxout').value = c.max_out || 4096;
       chosen = c.models || []; prices = (c.prices || []).map(function (p) { return Object.assign({}, p); });
       drawOn(); drawModels(); drawPrices(); drawLoad(j.load); imgFill(j.images);
+      ff = (c.free_for || []).map(function (r) { return r.tag; }).filter(Boolean); ffDraw(j.operators || []);
       if (c.url && !scanned) scan(false);
       var e = j.earned || [];
       $('llm-earned').innerHTML = e.length ? e.map(function (r) {
@@ -694,6 +712,39 @@
       .then(function (j) { if (j) drawLoad(j); }).catch(function () {});
   }
   setInterval(pollLoad, 5000);
+
+  // --- free for other operators ---
+  var ff = [];
+  function ffDraw(ops) {
+    $('ff-list').innerHTML = ff.length ? ff.map(function (t, i) {
+      return '<span class="pill" style="display:inline-flex;gap:6px;align-items:center;font-size:.9rem;padding:6px 6px 6px 12px;background:color-mix(in srgb,var(--ok) 14%,var(--panel));color:var(--ok)">@' +
+        esc(t) + '<button type="button" class="x" data-ff="' + i + '" aria-label="Stop sharing with @' + esc(t) + '" style="width:28px;height:28px">\u00d7</button></span>';
+    }).join('') : '<span class="muted">Nobody yet.</span>';
+    if (ops) {
+      $('ff-ops').innerHTML = ops.map(function (t) { return '<option value="@' + esc(t) + '">'; }).join('');
+      var left = ops.filter(function (t) { return ff.indexOf(t) < 0; });
+      $('ff-suggest').innerHTML = left.length ? '<span class="muted" style="font-size:.85rem;align-self:center">Operators linked to this arcade:</span>' +
+        left.map(function (t) { return '<button type="button" class="small ghost" data-ffadd="' + esc(t) + '" style="height:32px">+ @' + esc(t) + '</button>'; }).join('') : '';
+    }
+  }
+  function ffSave(list, done) {
+    $('ff-said').textContent = 'Saving\u2026';
+    post('/admin/api/llm', {free_for: list}).then(function () {
+      ff = list; $('ff-said').textContent = done || 'Saved.'; ffDraw(data && data.operators);
+    }).catch(function (e) { $('ff-said').textContent = e.message; });
+  }
+  function ffAdd(t) {
+    t = String(t || '').trim().replace(/^@/, '').toLowerCase(); if (!t) return;
+    if (ff.indexOf(t) >= 0) { $('ff-said').textContent = '@' + t + ' is already on the list.'; return; }
+    ffSave(ff.concat([t]), '@' + t + ' now uses your models free.'); $('ff-name').value = '';
+  }
+  $('ff-add').onclick = function () { ffAdd($('ff-name').value); };
+  $('ff-name').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); ffAdd($('ff-name').value); } });
+  $('ff-suggest').addEventListener('click', function (e) { var b = e.target.closest('[data-ffadd]'); if (b) ffAdd(b.dataset.ffadd); });
+  $('ff-list').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-ff]'); if (!b) return;
+    var t = ff[Number(b.dataset.ff)]; ffSave(ff.filter(function (x) { return x !== t; }), '@' + t + ' pays again from now on.');
+  });
 
   // --- finding the models on this computer ---
   var found = null;
