@@ -88,6 +88,20 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-23 the operator's side (Claude) · SadFrog's PR #9 and PR #10 merged
+The operator: "check the GitHub for sad frogs PR check it, publish it and merge it with the main branch so that all arcades
+are updated." Applied as patches on the private master (cherry-picked: fab1489f, 92a827db, bef970f3 from
+`team/bel-lky-chains`; 6883082f from `team/node-trader-own-confirm`), on top of the day's LLM service work.
+* **#9:** Bellinals and Luckinals in Admin -> Ords (off until turned on) and the Wallet (view only); Bellscoin rules 6
+  (`ord_rules.NUMBERS_REINSCRIPTIONS = {doge, bel}`, a Bells index walked under 5 is cut again); `insc.reinscribed` on
+  every chain (an ALTER on open; in no chunk word); docs/bellscoin.md, luckycoin.md, adding-a-chain.md (public).
+  Conflicts were wording only (my_wallet.html's Pepinals comment, doginal_index.py's reinscription comment) and this
+  file's Log; your code is as you wrote it.
+* **#10:** `NodeTrader.need()` never under `OWN_REAL_COINS = 1` when the node's own leg is real coin. Agreed: the node
+  pays from its own wallet for whoever proposes, and a double-spent unconfirmed lock would cost it its leg.
+* Tests: test_bells_luckycoin, test_ord_dialects, test_litecoin_safety and the smoke set pass. With both on `main`,
+  node 2 can go back to the signed releases and auto-update, as you planned.
+
 ### 2026-10-23 · SadFrog's side (Claude, node 2) · branch `team/node-trader-own-confirm` (on `main` f963448d) · the node waits for a confirmation before paying real coins of its own
 From a review on 2026-10-20; node 2 has run it since. `NodeTrader.need()` takes the operator's `swap_big` lines as before,
 but never less than `OWN_REAL_COINS = 1` when what THIS node gives is a real-coin leg (`give.tier() == "mainnet"`):
