@@ -30,6 +30,8 @@
   {%- elif pm %}
   <span class="chain-off" aria-disabled="true" title="Pepinals open when the Pepecoin node has synced ({{ pm.progress }}% so far)">Pepinals</span>
   {%- endif %}
+  {#- LLM service (2026-10-23: "You can add the LLM exchange page to the rest of the exchange"). #}
+  <a class="{{ 'on' if current == 'llm' }}" href="/exchange?tab=llm"{% if current == 'llm' %} aria-current="page"{% endif %}>LLM</a>
   <a id="ex-offers-tab" class="{{ 'on' if current == 'offers' }}" href="/exchange?tab=offers"{% if current == 'offers' %} aria-current="page"{% endif %}>Offers
     {%- if waiting_offers %}<span class="nav-count" aria-label="{{ waiting_offers }} waiting">{{ waiting_offers if waiting_offers < 100 else '99+' }}</span>{% endif %}</a>
 </nav>
@@ -616,6 +618,8 @@ document.addEventListener('click', function (ev) {
   {% endif %}
   {% endif %}
 
+{% elif tab == 'llm' %}
+{% include "_llm_tab.html" %}
 {% elif tab == 'tokens' %}
   {# The coin side is said as the coin, not the chain (2026-10-08: PEP, and PEP TEST on testnet). #}
   {% set coin_name = chain.params.coin %}

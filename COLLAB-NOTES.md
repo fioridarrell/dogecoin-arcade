@@ -88,6 +88,38 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-23 LLM service on the exchange: sell your own model per token, buy it from any arcade (Claude)
+The operator: "There should be a admin LLM tab, where I can enter my local LLM server and decide how much I want to charge per
+LLM token ... the bid would always be LLM service ... they could even accept Omni and PRC and DRC 20 tokens", then "A
+purchaser of model usage should be able to directly connect their local harness to the Dogecoin arcade LLM api". His
+choices: apps and players on every arcade buy (over the mesh); prepaid credit; an input and an output price per payment
+kind; one shared "LLM service" book the buyer picks from; top-ups paid straight to the selling operator, whose node keeps
+the balance. Mock-up approved before building. Branch claude/llm-exchange.
+* **arcade/llm.py**: setting `llm` {on, url, key, name, models, at_once, max_out, prices [{leg, label, in, out}]}; legs
+  are trade_orders' keys (`<net>-coin`, `<net>-token-<id>`). Prices are decimal text per token; balances integer units
+  (sats, or whole units for an indivisible token). `Books` = llm.sqlite (credit, topup once per txid, usage, the buyer
+  side's grants and API-key hashes). `Seller.chat` caps max_tokens to the operator's limit AND what the credit pays for,
+  streams the server's OpenAI chunks, charges from its `usage` after the reply (never below 0), `at_once` semaphore; the
+  operator's own account is free. Signatures are checked from the bytes (`recover_hash160`, key hash vs address, any
+  chain), no Core needed.
+* **Who a buyer is**: their tag-chain address. A remote seller serves it only with `grant_words(seller, address,
+  expires)` signed by that address's key (browser signs once a month per seller; the buyer's arcade keeps it).
+  **A top-up**: a normal wallet send to the seller's `payout_address`, then `topup_words(net, txid, seller, address)`
+  signed by the key that paid; the seller checks the payment (coins: getrawtransaction, signer's key among the inputs,
+  real coins need 1 conf; Omni: the token index's row, sender's key hash) and counts each txid once.
+  **DRC-20 / PRC-20 payments are not checked yet** (listed by the admin picker only as coins/Omni for now).
+* **mesh/llmshare.py**: kind "lm" -- offer {o}, q {id, what: chat|topup|balance} + zlib JSON, a {id, seq, end, err}
+  one event each. Wired in mesh/service.py for_state (`service.llmshare`).
+* **web/llmweb.py**: Admin -> LLM (`/admin/api/llm`, `/admin/api/llm/test`), the Exchange's LLM tab
+  (`/exchange?tab=llm`, `_llm_tab.html`; `/account/llm/{offers,balance,grant,topup,chat,keys,keys/new,keys/drop}`),
+  and an OpenAI-compatible `/v1/models` + `/v1/chat/completions` (stream or not, tool calls put back together) for
+  `sk-arcade-...` keys: one account, one seller, one payment kind; only the hash is kept. door.py lets them through.
+* **Apps**: `/r/llm.js` -> `arcade.llm.offers()`, `arcade.llm.chat({messages, onToken, seller?, leg?})`; the viewer
+  (_page_doors `llmDoor`) asks the player once per game, picks a seller and coin they hold credit with, streams pieces.
+* Tests: tests/test_llm.py (13). Live check against a test machine's vLLM: a /v1 call and a browser chat metered exactly.
+* **For SadFrog's side**: nothing to do; an operator turns it on in Admin -> LLM. Open: DRC-20/PRC-20 top-up checks,
+  a per-key spending cap, a seller track record on the book.
+
 ### 2026-10-23 The operator chooses which apps get the relay; a relay subscription fee is planned (Claude)
 The operator: "Can I decide what clients are allowed to use the relay? Or what apps on my arcade are allowed to use my
 relay?" -- chose "Apps I choose, any account". The viewer's /realtime/ice now names its app (?app=<page>); relay_for

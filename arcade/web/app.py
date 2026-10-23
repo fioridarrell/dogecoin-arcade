@@ -8165,6 +8165,14 @@ def create_app(state: AppState) -> FastAPI:
         return Response(body, media_type="application/javascript",
                         headers={**contentlib.CORS, "Cache-Control": "public, max-age=3600"})
 
+    @app.get("/r/llm.js")
+    def r_llm_js():
+        """The LLM shim an inscribed page loads: arcade.llm.offers() and arcade.llm.chat(), paid from the signed-in
+        player's prepaid credit with a seller (arcade/llm.py, 2026-10-23)."""
+        body = (TEMPLATE_DIR / "llm.js").read_text()
+        return Response(body, media_type="application/javascript",
+                        headers={**contentlib.CORS, "Cache-Control": "public, max-age=3600"})
+
     @app.get("/r/storage.js")
     def r_storage_js():
         """The storage shim an inscribed page loads (see pagestore.py).
@@ -27748,7 +27756,7 @@ def create_app(state: AppState) -> FastAPI:
 
     # --- the exchange ---------------------------------------------------------
 
-    EXCHANGE_TABS = ("offers", "mintpads", "tokens", "market", "doginals", "pepinals")
+    EXCHANGE_TABS = ("offers", "mintpads", "tokens", "market", "doginals", "pepinals", "llm")
 
     def _coins_each(price: Any, divisible: bool) -> float:
         """The book's price ratio as coins per whole token.
@@ -31765,6 +31773,11 @@ def create_app(state: AppState) -> FastAPI:
     realtimelib.register(app, state, account_view=_account_view, signed_in=signed_in,
                          account_address=_account_address, account_chain=_account_chain,
                          check_csrf=check_csrf)
+    # The LLM service (llmweb.py, 2026-10-23): Admin -> LLM, the Exchange's LLM tab, and /v1 for API keys.
+    from . import llmweb
+    llmweb.register(app, state, signed_in=signed_in, account_address=_account_address, account_chain=_account_chain,
+                    admin_check=_admin_check, name_of=_name_of,
+                    pay_choices=lambda request: _pair_choices(request, "nobody", everything=True))
     return app
 
 

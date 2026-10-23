@@ -153,6 +153,8 @@ PUBLIC_PAGES = frozenset({
 #: one is a promise about a whole subtree: nothing under these may ever
 #: learn to spend.
 PUBLIC_TREES = (
+    "/account/llm/",          # the Exchange's LLM tab: offers, the account's own balance, grant words and keys
+    "/v1/models",             # the LLM API's model list, for an API key
     "/signup/",               # is this name free
     "/signin/",               # somebody's encrypted wallet, by name
     "/vendor/",               # the two vendored crypto libraries
@@ -258,6 +260,10 @@ LINKED_FROM_PUBLIC = ("/content/", "/collections", "/feed", "/u/", "/docs",
 #: equally correct; it is named so that nobody reads that 405 as the door having
 #: opened something. (the door census, 2026-09-27)
 PUBLIC_POST = ("/auth/challenge", "/auth/login", "/auth/logout",
+               # the LLM service (llmweb.py, 2026-10-23): each acts only for the signed-in account, its own grants,
+               # top-ups and keys; /v1 answers only an API key the account made
+               "/account/llm/grant", "/account/llm/topup", "/account/llm/chat", "/account/llm/keys/new",
+               "/account/llm/keys/drop", "/v1/chat/completions",
                # which chains' wallets an account's Wallet tab shows (2026-10-18)
                "/account/wallets",
                # a tab's own lock-script trades (2026-10-13)

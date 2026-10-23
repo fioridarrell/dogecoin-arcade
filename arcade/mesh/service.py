@@ -220,6 +220,7 @@ class MeshService:
         self.named_url = named_url
         self.core = None                        # corelink.CoreBridge, when Core rides the mesh
         self.coreshare = None                   # coreshare.CoreShare: Cores shared with, and borrowed from, other arcades
+        self.llmshare = None                    # llmshare.LlmShare: the LLM service with other arcades
         self.indexcheck = None                  # indexcheck.IndexCheck: indexes compared with other arcades'
         self.stun = None                        # stun.StunShare: STUN addresses for the fast lane, this node's and others'
         self.stun_port: int | None = None       # this node's own STUN server (UDP), or None
@@ -850,6 +851,10 @@ def for_state(state, *, listen_host: str | None = None, listen_port: int | None 
         from .importshare import ImportShare, StateRecords
         service.importshare = ImportShare(StateRecords(state))
         service.node.add_extension(service.importshare)
+    # The LLM service between arcades (llmshare.py, arcade/llm.py; 2026-10-23).
+    from .llmshare import LlmShare
+    service.llmshare = LlmShare(lambda: getattr(state, "llm_seller", None))
+    service.node.add_extension(service.llmshare)
     from . import coreshare
     coreshare.CURRENT = service.coreshare
     # STUN for the WebRTC fast lane (stun.py): served here when asked for, proved by other nodes before it is

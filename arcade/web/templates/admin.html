@@ -6,7 +6,7 @@
   <span class="pill {{ 'ok' if local else 'warn' }}">{{ 'at the node machine' if local else 'remote' }}</span>
   {% if not local %}<button type="button" class="ghost small" id="adminout">Lock the panel</button>{% endif %}
 </div>
-<p class="sub" style="margin-top:4px">Everything this node's operator runs, in seven tabs.</p>
+<p class="sub" style="margin-top:4px">Everything this node's operator runs, tab by tab.</p>
 <p class="msg" id="said" hidden></p>
 
 <nav class="admintabs" role="tablist">
@@ -16,6 +16,7 @@
   <button type="button" role="tab" data-tab="safety">Safety</button>
   <button type="button" role="tab" data-tab="network">Network</button>
   <button type="button" role="tab" data-tab="ords">Ords</button>
+  <button type="button" role="tab" data-tab="llm">LLM</button>
   <button type="button" role="tab" data-tab="affiliates">Affiliates</button>
   <button type="button" role="tab" data-tab="people">People &amp; brand</button>
 </nav>
@@ -416,6 +417,177 @@
    checkmark to share on client side affiliate tab." Which URLs: "Arcade's names + ones I add". Then: "The second list
    should be a list of operators and their published URLs that they shared with the affiliates." arcade/affiliates.py;
    shared over the mesh in the operators "me" frame's `sites` (mesh/operators.py). #}
+{#- 2026-10-23: "There should be a admin LLM tab, where I can enter my local LLM server and decide how much I
+   want to charge per LLM token" (arcade/llm.py, web/llmweb.py; approved mock-up "LLM Exchange Mock-up"). #}
+<div class="admintab" data-tab="llm" aria-label="LLM">
+<style>
+.llmadm .lgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(280px,100%),1fr));gap:14px}
+.llmadm label.f{display:flex;flex-direction:column;gap:5px;font-size:.82rem;font-weight:650;min-width:0}
+.llmadm label.f input,.llmadm select,.llmadm .pr input{font:inherit;font-weight:400;width:100%;min-width:0;max-width:100%;box-sizing:border-box;height:42px;padding:0 11px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--fg)}
+.llmadm label.f span.h{font-weight:400;color:var(--muted)}
+.llmadm .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.llmadm .onoff{display:flex;gap:10px;align-items:center;font-weight:650;font-size:.9rem;padding:8px 14px;border-radius:999px;background:color-mix(in srgb,var(--ok) 14%,var(--panel));color:var(--ok)}
+.llmadm .onoff.off{background:var(--code);color:var(--muted)}
+.llmadm .model{display:flex;gap:12px;align-items:center;padding:10px 13px;border:1px solid var(--line);border-radius:12px;background:var(--code);margin-top:6px}
+.llmadm .pr{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr) minmax(0,1fr) minmax(0,.9fr) 42px;gap:12px;align-items:center;padding:10px 0;border-top:1px solid var(--line)}
+.llmadm .pr.h{border-top:0;font-size:.72rem;font-weight:650;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;padding:4px 0}
+.llmadm .badge{width:30px;height:30px;flex:none;border-radius:50%;background:var(--code);font-size:.75rem;font-weight:700;display:flex;align-items:center;justify-content:center}
+.llmadm .x{width:42px;height:42px;border:0;background:transparent;color:#a33;font-size:1.2rem;cursor:pointer}
+.llmadm .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+.llmadm .stat{border:1px solid var(--line);border-radius:12px;background:var(--code);padding:14px;display:flex;flex-direction:column;gap:2px}
+.llmadm .stat strong{font-size:1.4rem}
+.llmadm .pill{font-size:.78rem;font-weight:650;padding:3px 10px;border-radius:999px}
+@media (max-width:640px){.llmadm .pr{grid-template-columns:1fr 1fr}.llmadm .pr.h{display:none}}
+</style>
+<div class="llmadm">
+<section class="panel">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap">
+    <div style="min-width:0"><h2 style="margin:0">Sell your model</h2>
+      <p class="muted" style="margin:2px 0 0">Your own OpenAI-compatible server (vLLM, llama.cpp, Ollama), sold to players and apps on every arcade.
+        Buyers prepay credit to your address; each reply is charged from what your server says it used.</p></div>
+    <label class="onoff off" id="llm-onoff"><input type="checkbox" id="llm-on" style="width:20px;height:20px"> <span id="llm-onword">Not selling</span></label>
+  </div>
+  <div class="lgrid" style="margin-top:16px">
+    <label class="f">Server address <input class="mono" id="llm-url" placeholder="http://127.0.0.1:8000" autocomplete="off"></label>
+    <label class="f">API key <span class="h">(only if your server needs one)</span>
+      <input type="password" id="llm-key" autocomplete="new-password" placeholder="Stays on this machine"></label>
+    <label class="f">Name buyers see <input id="llm-name" maxlength="60" placeholder="e.g. a test machine &middot; Qwen" autocomplete="off"></label>
+    <div style="display:flex;flex-direction:column;gap:5px;min-width:0"><span style="font-size:.82rem;font-weight:650">Connection</span>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <button type="button" class="small" id="llm-test" style="height:42px">Test the server</button>
+        <span class="pill" id="llm-tested" hidden></span></div></div>
+  </div>
+  <div style="margin-top:16px"><span style="font-size:.82rem;font-weight:650">Models to sell</span>
+    <div id="llm-models"><p class="muted" style="margin:6px 0 0">Test the server to list its models.</p></div></div>
+  <div class="lgrid" style="margin-top:16px">
+    <label class="f">Replies at once <input type="number" min="1" max="32" id="llm-atonce" autocomplete="off">
+      <span class="h">Others wait in line, so your own use stays quick.</span></label>
+    <label class="f">Longest reply, in tokens <input type="number" min="16" max="65536" id="llm-maxout" autocomplete="off">
+      <span class="h">Shorter when a buyer's credit runs out first.</span></label>
+  </div>
+</section>
+
+<section class="panel">
+  <h2 style="margin:0">Your prices</h2>
+  <p class="muted" style="margin:2px 0 8px">Per LLM token, in any coin or token the exchange trades. Input (the prompt) is cheap for your GPU;
+    output (the reply) is the real work. Your own account always uses it free.</p>
+  <div class="pr h"><span>Paid in</span><span>Per input token</span><span>Per output token</span><span>1,000-word answer</span><span></span></div>
+  <div id="llm-prices"></div>
+  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between;margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;flex:1 1 340px;min-width:0">
+      <select id="llm-add" aria-label="Add a way to be paid" style="flex:1 1 240px;width:auto"></select>
+      <button type="button" class="small" id="llm-addbtn" style="height:42px">Add</button></div>
+    <button type="button" id="llm-save" style="height:42px;padding:0 24px">Save changes</button>
+  </div>
+  <p class="muted" id="llm-said" style="margin:8px 0 0"></p>
+</section>
+
+<section class="panel">
+  <h2 style="margin:0">Earned in the last 30 days</h2>
+  <p class="muted" style="margin:2px 0 10px">Top-ups land in your operator account's Wallet like any other payment.</p>
+  <div class="stats" id="llm-earned"></div>
+</section>
+</div>
+</div>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var data = null, prices = [], kinds = [], models = [], chosen = [];
+  function esc(t) { return String(t == null ? '' : t).replace(/[&<>"']/g, function (c) { return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]; }); }
+  function post(path, body) {
+    return fetch(path, {method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json', 'X-Arcade-Admin': '1'},
+      body: JSON.stringify(body || {})}).then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) {
+        if (r.status === 401) location.href = '/admin/login';
+        if (!r.ok) throw new Error(j.detail || ('refused (' + r.status + ')')); return j; }); });
+  }
+  function said(t, bad) { $('llm-said').textContent = t; $('llm-said').style.color = bad ? '#a33' : ''; }
+  function short(label) { return String(label || '').split(' · ')[0]; }
+  function answer(p) {                                 // a 1,000-word answer: about 1,330 output tokens and a short prompt
+    var n = 1330 * (Number(p.out) || 0) + 200 * (Number(p.in) || 0);
+    return n ? '≈ ' + n.toLocaleString(undefined, {maximumSignificantDigits: 4}) + ' ' + short(p.label) : 'free';
+  }
+  function drawOn() {
+    var on = $('llm-on').checked;
+    $('llm-onoff').className = 'onoff' + (on ? '' : ' off');
+    $('llm-onword').textContent = on ? (data && data.selling ? 'Selling on the exchange' : 'Selling (once saved)') : 'Not selling';
+  }
+  function drawModels() {
+    var all = models.length ? models : chosen.map(function (m) { return {id: m, ctx: 0}; });
+    $('llm-models').innerHTML = all.length ? all.map(function (m) {
+      return '<label class="model"><input type="checkbox" value="' + esc(m.id) + '"' + (chosen.indexOf(m.id) >= 0 ? ' checked' : '') +
+        ' style="width:20px;height:20px"><span style="display:flex;flex-direction:column;min-width:0"><b class="mono" style="overflow-wrap:anywhere">' +
+        esc(m.id) + '</b><span class="muted" style="font-size:.8rem">' + (m.ctx ? m.ctx.toLocaleString() + '-token context' : 'saved') + '</span></span></label>';
+    }).join('') : '<p class="muted" style="margin:6px 0 0">Test the server to list its models.</p>';
+  }
+  function drawPrices() {
+    $('llm-prices').innerHTML = prices.length ? prices.map(function (p, i) {
+      return '<div class="pr"><span style="display:flex;gap:10px;align-items:center;min-width:0"><span class="badge">' + esc(short(p.label).slice(0, 1)) +
+        '</span><b style="min-width:0;overflow-wrap:anywhere">' + esc(p.label) + '</b></span>' +
+        '<input autocomplete="off" data-i="' + i + '" data-f="in" value="' + esc(p.in) + '" inputmode="decimal" aria-label="' + esc(short(p.label)) + ' per input token">' +
+        '<input autocomplete="off" data-i="' + i + '" data-f="out" value="' + esc(p.out) + '" inputmode="decimal" aria-label="' + esc(short(p.label)) + ' per output token">' +
+        '<span class="muted" data-a="' + i + '">' + esc(answer(p)) + '</span>' +
+        '<button type="button" class="x" data-x="' + i + '" aria-label="Remove ' + esc(short(p.label)) + '">×</button></div>';
+    }).join('') : '<p class="muted" style="margin:10px 0">No prices yet: add a coin or token below.</p>';
+    var have = prices.map(function (p) { return p.leg; });
+    $('llm-add').innerHTML = '<option value="">Add a way to be paid…</option>' + kinds.filter(function (k) { return have.indexOf(k.key) < 0; })
+      .map(function (k) { return '<option value="' + esc(k.key) + '">' + esc(k.label) + '</option>'; }).join('');
+  }
+  $('llm-prices').addEventListener('input', function (e) {
+    var i = e.target.dataset.i; if (i == null) return;
+    prices[i][e.target.dataset.f] = e.target.value.trim();
+    var a = document.querySelector('#llm-prices [data-a="' + i + '"]'); if (a) a.textContent = answer(prices[i]);
+  });
+  $('llm-prices').addEventListener('click', function (e) {
+    var x = e.target.closest('[data-x]'); if (!x) return; prices.splice(Number(x.dataset.x), 1); drawPrices();
+  });
+  $('llm-addbtn').onclick = function () {
+    var k = kinds.find(function (k) { return k.key === $('llm-add').value; }); if (!k) return;
+    prices.push({leg: k.key, label: k.label, in: '0', out: '0'}); drawPrices();
+  };
+  $('llm-on').onchange = drawOn;
+  $('llm-test').onclick = function () {
+    var t = $('llm-tested'); t.hidden = false; t.textContent = 'Asking…'; t.style.cssText = 'background:var(--code)';
+    post('/admin/api/llm/test', {url: $('llm-url').value.trim(), key: $('llm-key').value.trim()}).then(function (j) {
+      models = j.models || [];
+      if (!chosen.length && models.length) chosen = [models[0].id];
+      t.textContent = 'Answered in ' + j.ms + ' ms · ' + models.length + ' model' + (models.length === 1 ? '' : 's');
+      t.style.cssText = 'background:color-mix(in srgb,var(--ok) 15%,var(--panel));color:var(--ok)'; drawModels();
+    }).catch(function (e) { t.textContent = e.message; t.style.cssText = 'background:color-mix(in srgb,#a33 12%,var(--panel));color:#a33'; });
+  };
+  $('llm-save').onclick = function () {
+    chosen = Array.prototype.map.call(document.querySelectorAll('#llm-models input:checked'), function (c) { return c.value; });
+    var body = {on: $('llm-on').checked, url: $('llm-url').value.trim(), name: $('llm-name').value.trim(), models: chosen,
+                at_once: Number($('llm-atonce').value) || 1, max_out: Number($('llm-maxout').value) || 4096, prices: prices};
+    if ($('llm-key').value.trim()) body.key = $('llm-key').value.trim();
+    said('Saving…');
+    post('/admin/api/llm', body).then(function (j) {
+      said(j.selling ? 'Saved. Your model is on the exchange.' : 'Saved. Not selling.'); $('llm-key').value = ''; load();
+    }).catch(function (e) { said(e.message, true); });
+  };
+  function load() {
+    fetch('/admin/api/llm', {credentials: 'same-origin', cache: 'no-store'}).then(function (r) {
+      if (r.status === 401) location.href = '/admin/login'; return r.json();
+    }).then(function (j) {
+      data = j; var c = j.config || {}; kinds = j.kinds || [];
+      $('llm-on').checked = !!c.on; $('llm-url').value = c.url || ''; $('llm-name').value = c.name || '';
+      $('llm-key').placeholder = c.has_key ? 'Saved (type to replace)' : 'Stays on this machine';
+      $('llm-atonce').value = c.at_once || 2; $('llm-maxout').value = c.max_out || 4096;
+      chosen = c.models || []; prices = (c.prices || []).map(function (p) { return Object.assign({}, p); });
+      drawOn(); drawModels(); drawPrices();
+      var e = j.earned || [];
+      $('llm-earned').innerHTML = e.length ? e.map(function (r) {
+        var k = prices.find(function (p) { return p.leg === r.leg; });
+        return '<div class="stat"><span class="muted" style="font-size:.8rem">' + esc(k ? short(k.label) : r.leg) + '</span><strong>' + esc(r.text) +
+          '</strong><span class="muted" style="font-size:.8rem">' + (r.replies || 0).toLocaleString() + ' replies · ' + (r.buyers || 0) + ' buyer' + (r.buyers === 1 ? '' : 's') +
+          ' · ' + ((r.tokens_in || 0) + (r.tokens_out || 0)).toLocaleString() + ' tokens</span></div>';
+      }).join('') : '<p class="muted" style="margin:0">Nothing sold yet.</p>';
+    }).catch(function (e) { said('Could not load: ' + e.message, true); });
+  }
+  document.querySelectorAll('.admintabs button[data-tab="llm"]').forEach(function (b) { b.addEventListener('click', load); });
+  if (location.hash === '#llm') load();
+})();
+</script>
+
 <div class="admintab" data-tab="affiliates" aria-label="Affiliates">
 <section class="panel" id="affmine">
   <h2>Your sites</h2>
