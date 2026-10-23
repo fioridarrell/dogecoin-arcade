@@ -88,6 +88,14 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-23 room.media: a playing picture always tells its game (Claude)
+The Cul-de-sac session's call test (three in a public room): a peer's picture played in the viewer and the game never
+heard 'media' for it -- a track arrived muted and its unmute was missed, and a player who had not started their own
+camera had no media state for the tiles at all. _page_doors works the 'media' / 'media-off' events out from the tracks
+again on each picture's loadeddata and resize and once a second while any remote media is live (mediaCheck), counts
+a video track with frames as sending whatever its muted flag says, and makes the media state on the first incoming
+track. ~/arcadecall tests/test_call_browser.py now passes every run (3 of 3; it failed every run before).
+
 ### 2026-10-23 The Games tab is the Apps tab (Claude)
 The operator: "Change the games tab to the apps tab" ... "Keeping the game agnostic" ... "So now it's application agnostic"
 (a video-call card is coming). Nav Apps at /apps; /games 301s there (query kept); /games/<id> and /games/<id>/access

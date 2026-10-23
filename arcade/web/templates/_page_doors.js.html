@@ -542,6 +542,8 @@
       pc.ontrack = function(ev){
         if (peer.pc !== pc) return;
         var stream = peer.remote || (peer.remote = new MediaStream());
+        mediaOf(h);
+        mediaWatch();
         if (stream.getTracks().indexOf(ev.track) < 0) stream.addTrack(ev.track);
         var said = function(){ mediaRemoteSaid(name, h, peer); };
         ev.track.onunmute = said;
@@ -552,16 +554,36 @@
       };
     }
     // What the game is told of a player's picture and sound: 'media' {video, audio} while they send, 'media-off'.
-    function mediaRemoteSaid(name, h, peer){
-      var tracks = peer.remote ? peer.remote.getTracks().filter(function(t){ return t.readyState === 'live' && !t.muted; }) : [];
+    // Worked out again from the tracks themselves, never only from their events (2026-10-23, the Cul-de-sac session:
+    // with three in a call a picture played in the viewer and its game never heard 'media' -- a track that arrived
+    // muted and whose unmute was missed). Also on every picture's loadeddata and resize, and once a second (mediaCheck).
+    function mediaRemoteSaid(name, h, peer, quiet){
+      var tile = h.media && h.media.tiles[peer.p.id];
+      var tracks = peer.remote ? peer.remote.getTracks().filter(function(t){
+        return t.readyState === 'live' && (!t.muted || (t.kind === 'video' && tile && tile.videoWidth > 0));
+      }) : [];
       var video = tracks.some(function(t){ return t.kind === 'video'; }), audio = tracks.some(function(t){ return t.kind === 'audio'; });
       var was = peer.said || '', now = video || audio ? (video ? 'v' : '') + (audio ? 'a' : '') : '';
-      if (was === now) { mediaDraw(h); return; }
+      if (was === now) { if (!quiet) mediaDraw(h); return; }
       peer.said = now;
       if (now) mediaEvent(name, h, {type: 'media', member: peer.p, video: video, audio: audio});
       else mediaEvent(name, h, {type: 'media-off', member: peer.p});
       mediaDraw(h);
     }
+    var mediaChecking = null;
+    function mediaCheck(){
+      var any = false;
+      for (var k in rt) {
+        var h = rt[k];
+        if (!h.fast || !h.media) continue;
+        for (var id in h.fast.peers) {
+          var pr = h.fast.peers[id];
+          if (pr.remote) { any = true; mediaRemoteSaid(k, h, pr, true); }
+        }
+      }
+      if (!any && mediaChecking) { clearInterval(mediaChecking); mediaChecking = null; }
+    }
+    function mediaWatch(){ if (!mediaChecking) mediaChecking = setInterval(mediaCheck, 1000); }
     // A pair connected (again, after a dropped link: a new connection): what this player shares with them goes on it.
     function mediaPeerUp(name, h, peer){
       var md = h.media;
@@ -737,6 +759,8 @@
         v.autoplay = true; v.playsInline = true; v.setAttribute('playsinline', '');
         v.dataset.media = key;
         v.style.cssText = 'position:absolute;background:#000;border-radius:6px;display:none';
+        v.addEventListener('loadeddata', mediaCheck);
+        v.addEventListener('resize', mediaCheck);
         mediaLayer().appendChild(v);
       }
       return v;
