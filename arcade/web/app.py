@@ -49,6 +49,7 @@ from ..ledger import COIN, AmountError, format_amount, parse_amount
 from ..config import NETWORKS, MainnetRefused, WrongChain, unpayable_versions
 from .. import inscribe as inscribelib
 from .. import games as gameslib
+from .. import ring as ringlib
 from .. import gamestate as gamestatelib
 from .. import bids as bidslib
 from .. import standing as standinglib
@@ -9943,6 +9944,26 @@ def create_app(state: AppState) -> FastAPI:
         rows = push.news(account.pubkey) if push is not None else []
         out = []
         for row in rows:
+            if str(row["txid"]).startswith("ring:"):
+                try:
+                    said = json.loads(row["sender"])
+                except ValueError:
+                    continue
+                tag, name = "", "an app"
+                try:
+                    tag = state.token_index(_account_chain()).tag_of(said.get("f") or "") or ""
+                except Exception:                                  # noqa: BLE001
+                    pass
+                found = _game_by_txid(str(said.get("app") or ""))
+                if not found:
+                    card = _game_of_page(str(said.get("app") or ""))
+                    name = card.get("name") or name
+                else:
+                    name = found["game"].get("name") or name
+                out.append({"kind": "ring", "at": row["at"], "app": name, "line": said.get("line") or "",
+                            "from": f"@{tag}" if tag else str(said.get("f") or "")[:10] + "\u2026",
+                            "url": f"/inscriptions/{said.get('app')}/full?ring={row['txid'][5:]}"})
+                continue
             if str(row["txid"]).startswith("fill:"):
                 pid = str(row["sender"]).split(":", 1)[-1]
                 try:
@@ -10002,6 +10023,173 @@ def create_app(state: AppState) -> FastAPI:
         _watcher["thread"] = threading.Thread(target=loop, name="arcade-push",
                                               daemon=True)
         _watcher["thread"].start()
+        _ring_loop()
+
+    # --- ringing a player whose app is closed (arcade/ring.py, 2026-10-23) ---------------------
+    #
+    # An app's card has a Notifications switch (per account, kept here); an app rings an address
+    # (arcade.realtime.ring); the RECIPIENT's node wakes their phone only for an app they switched on and a
+    # caller in their address book, proved by the caller's own certificate.
+
+    _rings = ringlib.Rings(lambda: getattr(state, "mesh", None))
+    _ring_thread: dict[str, Any] = {}
+
+    def _ring_setting(pubkey: str) -> dict:
+        said = state.setting(f"ring:{pubkey}") or {}
+        apps = [a for a in (said.get("apps") or []) if isinstance(a, str) and re.fullmatch(r"[0-9a-f]{64}", a)]
+        allow = [a for a in (said.get("allow") or []) if isinstance(a, str)]
+        return {"apps": apps, "allow": allow}
+
+    def _ring_deliver(to: str, said: dict, node: str) -> bool:
+        """A ring for an account on this node: woken only if every rule holds (arcade/ring.py)."""
+        push = state.push()
+        pubkey = _owners().get(to)
+        if push is None or pubkey is None or not isinstance(said, dict):
+            return False
+        caller, app_id = str(said.get("f") or "")[:64], str(said.get("app") or "")
+        if not re.fullmatch(r"[0-9a-f]{64}", app_id) or not caller or caller == to:
+            return False
+        rules = _ring_setting(pubkey)
+        if app_id not in rules["apps"] or caller not in rules["allow"]:
+            return False
+        if node and str(said.get("n") or "") != node:
+            return False                                       # the ring came through another node than it says
+        svc = getattr(state, "mesh", None)
+        cred = {"a": caller, "x": said.get("x"), "s": said.get("s")}
+        try:
+            if svc is None or not svc.check_cert_from(str(said.get("n") or ""), caller, cred):
+                return False
+        except Exception:                                      # noqa: BLE001 -- unproven is refused
+            return False
+        if not _rings.may_ring(caller, to):
+            return False
+        ring = {"id": ringlib.new_id(), "from": caller, "to": to, "app": app_id, "at": time.time(),
+                "line": ringlib.clean_line(said.get("line"), ringlib.RING_LINE),
+                "link": str(said.get("link") or "")[:ringlib.RING_LINK]}
+        _rings.keep(ring)
+        push.tell(pubkey, "ring:" + ring["id"], json.dumps({"f": caller, "app": app_id, "line": ring["line"]}))
+        return True
+
+    def _ring_loop() -> None:
+        """Hold the ring rooms of this node's accounts that have a phone and an app switched on; wake them."""
+        push = state.push()
+        if push is None or _ring_thread.get("thread") is not None:
+            return
+
+        def loop():
+            while not getattr(state, "shutting_down", False):
+                try:
+                    phones = push.subscribed()
+                    hold = set()
+                    for address, pubkey in _owners().items():
+                        if pubkey in phones and _ring_setting(pubkey)["apps"]:
+                            hold.add(address)
+                    _rings.hold(hold)
+                    for to, said, node in _rings.heard_now():
+                        _ring_deliver(to, said, node)
+                    _rings.expire()
+                except Exception as exc:                       # noqa: BLE001 -- keep listening
+                    log.info("ring loop: %s", exc)
+                time.sleep(2)
+
+        _ring_thread["thread"] = threading.Thread(target=loop, name="arcade-ring", daemon=True)
+        _ring_thread["thread"].start()
+
+    def _ring_owner(request: Request):
+        account = _signed_in_account(request)
+        return account, account.pubkey
+
+    @app.get("/account/ring/apps")
+    def ring_apps(request: Request):
+        """The apps this account switched Notifications on for, and whether this arcade can push at all."""
+        _, pubkey = _ring_owner(request)
+        push = state.push()
+        rules = _ring_setting(pubkey)
+        return JSONResponse({"apps": rules["apps"], "allowed": len(rules["allow"]), "push": push is not None,
+                             "devices": len(push.devices(pubkey)) if push is not None else 0},
+                            headers={"Cache-Control": "no-store"})
+
+    @app.post("/account/ring/apps")
+    def ring_apps_set(request: Request, payload: Any = Body(None)):
+        _, pubkey = _ring_owner(request)
+        said = payload if isinstance(payload, dict) else {}
+        app_id = str(said.get("app") or "").lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", app_id):
+            return JSONResponse({"detail": "that is not an app"}, status_code=400)
+        rules = state.setting(f"ring:{pubkey}") or {}
+        apps = [a for a in _ring_setting(pubkey)["apps"] if a != app_id]
+        if said.get("on", True):
+            if len(apps) >= ringlib.APPS_MAX:
+                return JSONResponse({"detail": f"{ringlib.APPS_MAX} apps is the most"}, status_code=400)
+            apps.append(app_id)
+        state.set_setting(f"ring:{pubkey}", {**rules, "apps": apps})
+        _watch_for_mail()
+        return JSONResponse({"ok": True, "apps": apps})
+
+    @app.post("/account/ring/allow")
+    def ring_allow_set(request: Request, payload: Any = Body(None)):
+        """Who may ring this account: the addresses in its address book, handed over by its browser (the book
+        lives there; 2026-10-23: "My contacts only")."""
+        _, pubkey = _ring_owner(request)
+        said = payload if isinstance(payload, dict) else {}
+        allow = said.get("allow")
+        if not isinstance(allow, list) or len(allow) > ringlib.ALLOW_MAX:
+            return JSONResponse({"detail": f"a list of at most {ringlib.ALLOW_MAX} addresses"}, status_code=400)
+        allow = sorted({str(a) for a in allow if isinstance(a, str) and re.fullmatch(r"[1-9A-HJ-NP-Za-km-z]{25,64}|[a-z0-9]{8,90}", str(a))})
+        rules = state.setting(f"ring:{pubkey}") or {}
+        state.set_setting(f"ring:{pubkey}", {**rules, "allow": allow})
+        return JSONResponse({"ok": True, "allowed": len(allow)})
+
+    @app.post("/account/ring")
+    def ring_send(request: Request, payload: Any = Body(None)):
+        """Ring an address from this account, for the app the viewer says (its own frame's page)."""
+        account = _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        me = _account_address(account.pubkey, _account_chain())
+        to, app_id = str(said.get("to") or "").strip()[:64], str(said.get("app") or "").lower()
+        if not me:
+            return JSONResponse({"ok": False, "error": "this account has no address here"}, status_code=400)
+        if not re.fullmatch(r"[0-9a-f]{64}", app_id) or not to or to == me:
+            return JSONResponse({"ok": False, "error": "ring whom, from which app?"}, status_code=400)
+        svc = getattr(state, "mesh", None)
+        if svc is None or getattr(svc, "loop", None) is None:
+            return JSONResponse({"ok": True, "rung": False, "why": "this arcade is not on the mesh"})
+        cred = {"a": me, "x": said.get("expires"), "s": str(said.get("sig") or "")}
+        try:
+            cred["x"] = int(cred["x"] or 0)
+            proved = svc.check_cert(me, cred)
+        except Exception:                                      # noqa: BLE001
+            proved = False
+        if not proved:
+            return JSONResponse({"ok": False, "error": "unlock your wallet: a ring says who you are"}, status_code=400)
+        if not _rings.may_send(me):
+            return JSONResponse({"ok": False, "error": "too many rings: wait a minute"}, status_code=429)
+        ring = {"t": "ring", "f": me, "x": cred["x"], "s": cred["s"], "n": svc.node_id, "to": to, "app": app_id,
+                "line": ringlib.clean_line(said.get("line"), ringlib.RING_LINE),
+                "link": str(said.get("link") or "")[:ringlib.RING_LINK]}
+        if to in _owners():
+            return JSONResponse({"ok": True, "rung": _ring_deliver(to, ring, svc.node_id)})
+        if not _rings.live(to):
+            return JSONResponse({"ok": True, "rung": False,
+                                 "why": "they have no phone to wake for this app, or their arcade is away"})
+        threading.Thread(target=_rings.say, args=(to, ring), daemon=True).start()
+        return JSONResponse({"ok": True, "rung": True})
+
+    @app.get("/account/ring/{ring_id}")
+    def ring_get(request: Request, ring_id: str):
+        """The ring a tapped notification opened, for its app: who, and the app's own link."""
+        account = _signed_in_account(request)
+        ring = _rings.get(ring_id)
+        me = _account_address(account.pubkey, _account_chain())
+        if ring is None or ring["to"] != me:
+            return JSONResponse({"ok": False}, headers={"Cache-Control": "no-store"})
+        tag = ""
+        try:
+            tag = state.token_index(_account_chain()).tag_of(ring["from"]) or ""
+        except Exception:                                      # noqa: BLE001
+            pass
+        return JSONResponse({"ok": True, "from": ring["from"], "tag": tag, "app": ring["app"], "link": ring["link"],
+                             "line": ring["line"], "at": ring["at"]}, headers={"Cache-Control": "no-store"})
 
     # --- notifications (2026-09-25) ------------------------------------
     #

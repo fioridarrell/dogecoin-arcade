@@ -96,6 +96,7 @@ PUBLIC_PAGES = frozenset({
     "/offline",
     "/push/key",              # the key a browser subscribes to this node's pushes with
     "/account/push/news",     # what woke the phone: who wrote, never what (signed in)
+    "/account/ring/apps",     # the apps an account lets ring it (arcade/ring.py, signed in)
     "/admin/login",           # the remote admin password page (rate-limited)
     "/signin.js", "/base.css",
     "/coins.js",
@@ -190,6 +191,7 @@ PUBLIC_TREES = (
 #: Nothing is disclosed on the page itself: `inscription_view` reads this
 #: node's wallet only when it is the operator's own copy of the page.
 PUBLIC_SHAPES = (
+    re.compile(r"^/account/ring/[0-9a-f]{16}$"),       # the ring a tapped notification opened (signed in)
     # Every chain's coin icon (2026-10-18: Litecoin's two joined PEP's and DOGE's); the route serves only files there.
     re.compile(r"^/coin-[a-z0-9-]{2,24}\.png$"),
     # One game's discussion: read-only, like the launch thread it is.
@@ -441,6 +443,8 @@ PUBLIC_POST = ("/auth/challenge", "/auth/login", "/auth/logout",
                # testnet's (D-010).
                "/account/talk",
                "/account/push/subscribe", "/account/push/unsubscribe",
+               # ringing a player whose app is closed (arcade/ring.py): ring, which apps may, who may
+               "/account/ring", "/account/ring/apps", "/account/ring/allow",
                "/account/token/send", "/account/token/create",
                "/account/token/manage",
                "/account/sign",

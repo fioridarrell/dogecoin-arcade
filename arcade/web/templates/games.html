@@ -99,6 +99,15 @@
              data-media="{{ g.opens or it.txid }}" data-game="{{ g.name }}"{% if not g.media %} hidden{% endif %}
              data-publisher="{{ ('@' ~ name_of(it.creator)) if name_of(it.creator) else '' }}"
              data-address="{{ it.creator }}"><input type="checkbox" style="margin:0;width:auto"> Camera &amp; microphone</label>
+      {# Notifications, per app (arcade/ring.py, 2026-10-23): people in your address book can ring you in it
+         while it is closed. Per account, kept on its node; shown on a card that says "notify": true, or once on. #}
+      {% if viewer == 'account' and mine_tag %}
+      <label class="gamenotify" title="Let the people in your address book ring you in this app while it is closed"
+             style="display:inline-flex;align-items:center;gap:5px;margin:0;font-size:.85rem;cursor:pointer;white-space:nowrap"
+             data-notify="{{ g.opens or it.txid }}" data-game="{{ g.name }}"{% if not g.notify %} hidden{% endif %}
+             data-publisher="{{ ('@' ~ name_of(it.creator)) if name_of(it.creator) else '' }}"
+             data-address="{{ it.creator }}"><input type="checkbox" style="margin:0;width:auto"> Notifications</label>
+      {% endif %}
       {% if acts %}
       <form method="post" action="/feed/{{ it.txid }}/{{ 'unlike' if it.liked else 'like' }}" style="display:inline">
         <input type="hidden" name="csrf_token" value="{{ csrf }}">
@@ -238,6 +247,41 @@
   });
   document.addEventListener('arcade:access', draw);
   document.addEventListener('arcade:media', draw);
+  // Notifications: the account's switches, from its node.
+  var ringApps = [];
+  function drawRing() {
+    document.querySelectorAll('.gamenotify').forEach(function (l) {
+      var on = ringApps.indexOf(l.dataset.notify) >= 0;
+      l.querySelector('input').checked = on;
+      if (on) l.hidden = false;
+    });
+  }
+  if (document.querySelector('.gamenotify')) {
+    fetch('/account/ring/apps', {cache: 'no-store', credentials: 'same-origin'})
+      .then(function (r) { return r.ok ? r.json() : {apps: []}; })
+      .then(function (j) { ringApps = j.apps || []; drawRing(); }).catch(function () {});
+  }
+  document.addEventListener('change', function (e) {
+    var l = e.target.closest && e.target.closest('.gamenotify'); if (!l) return;
+    var box = e.target, id = l.dataset.notify;
+    var card = l.closest('.gamecard') || document, say = card.querySelector('.gamenotify-say');
+    function tell(text) {
+      if (!say && text) {
+        say = document.createElement('p'); say.className = 'msg gamenotify-say'; say.style.margin = '8px 0 0';
+        l.closest('.lacts').after(say);
+      }
+      if (say) { say.textContent = text; say.hidden = !text; }
+    }
+    if (!box.checked) {
+      arcadeRingOff(id).then(function () { ringApps = ringApps.filter(function (a) { return a !== id; }); drawRing(); tell(''); });
+      return;
+    }
+    box.checked = false;
+    arcadeRingAsk(id, l.dataset.game, l.dataset.publisher, l.dataset.address).then(function (why) {
+      if (!why) { ringApps.push(id); drawRing(); tell('Your contacts can ring you in it now, on this device and your other ones with notifications on.'); }
+      else if (why !== 'no') tell(why);
+    });
+  });
   document.addEventListener('arcade:unlocked', lock);
   // After the page has parsed: base.html's arcadeGameAllowed and arcadeWalletOpen are defined below this script, so
   // drawing at once threw and every box came back unticked on each visit (2026-10-20: a ticked box "should

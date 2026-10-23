@@ -88,6 +88,24 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-23 Ringing a player whose app is closed: a Notifications switch per app (Claude)
+The operator: call "at any time, even if the application is not open through push notifications as long as we have push
+notifications enabled for the app just like the Wallet access and camera and microphone access switches", "Keeping
+the game agnostic"; who may ring: "My contacts only". arcade/ring.py + routes in app.py: a card that says "notify":
+true shows a **Notifications** switch (account view; per ACCOUNT on its node, `ring:<pubkey>` apps, so every phone of
+the account rings). Turning it on asks (publisher named), turns this device's push on (the Messenger's VAPID push) and
+hands the node the addresses in this browser's address book (`allow`; the book lives in the browser; handed over again
+on signed-in pages when it changed). An app calls `arcade.realtime.ring(address, {line, link})`; the viewer adds the
+player's certificate and the TRUE app (its frame's page) and POSTs /account/ring. The callee's node holds a room
+`arcade!ring/<address>` for each account with a phone and an app on (`!` is no game name, so no page can join); the
+caller's node joins it as a guest and says the ring (a local callee is rung directly). The callee's node wakes the
+phone only if: the app is switched on, the caller is in the book, the caller's certificate checks against the node it
+came through, and not too often (15 s a pair, 30 an hour; 20 sends a minute a caller). The push is still empty; the
+worker shows "@caller · App" with the line, staying until answered, a long buzz on Android (iPhone: its one sound --
+no web page can ring like a phone while closed). Tapping opens /inscriptions/<app>/full?ring=<id>; the app reads it
+with `arcade.realtime.ringed()` ({from, tag, link, line}, for that app only). door.py lets the routes through. Tests:
+tests/test_ring.py, test_media_browser.py::test_ring_and_ringed_answer_in_the_viewer.
+
 ### 2026-10-23 room.media: a playing picture always tells its game (Claude)
 The Cul-de-sac session's call test (three in a public room): a peer's picture played in the viewer and the game never
 heard 'media' for it -- a track arrived muted and its unmute was missed, and a player who had not started their own

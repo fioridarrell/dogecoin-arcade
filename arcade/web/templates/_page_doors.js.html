@@ -845,6 +845,37 @@
     window.addEventListener('storage', function(e){
       if (mediaNoteEl && e.key && e.key.indexOf(ARCADE_MEDIA) === 0 && e.newValue === 'yes') { mediaNoteEl.remove(); mediaNoteEl = null; }
     });
+    // RINGING (arcade/ring.py): the app asks to ring an address; the viewer adds who is ringing (the player's own
+    // certificate, as a realtime join proves it) and WHICH app -- this frame's page, never what the page says -- and
+    // the node passes it on. Whether it wakes anybody is the recipient's node's to decide (their switch, their book).
+    function ringDoor(m, answer){
+      if (viewer !== 'account') { answer({ok: false, error: 'sign in to ring anybody'}); return; }
+      var to = String(m.to || '').trim();
+      if (!to) { answer({ok: false, error: 'ring whom?'}); return; }
+      fetch('/realtime/hello', {cache: 'no-store'}).then(function(r){ return r.json(); })
+        .then(function(hello){ return realtimeProof(hello, ''); })
+        .then(function(proof){
+          if (!proof) throw new Error('unlock your wallet: a ring says who you are');
+          return fetch('/account/ring', {method: 'POST', headers: {'Content-Type': 'application/json'},
+            credentials: 'same-origin', body: JSON.stringify({to: to, app: here, line: String(m.line || ''),
+              link: String(m.link || ''), sig: proof.sig, expires: proof.expires})});
+        })
+        .then(function(r){ return r.json(); })
+        .then(function(j){ answer(j.ok ? {ok: true, rung: !!j.rung, why: j.why || ''} : {ok: false, error: j.error || 'refused'}); })
+        .catch(function(err){ answer({ok: false, error: String((err && err.message) || err || 'refused')}); });
+    }
+    // The ring a tapped notification opened this page with (?ring=), for this app only.
+    function ringedDoor(answer){
+      var id = '';
+      try { id = new URLSearchParams(location.search).get('ring') || ''; } catch (err) {}
+      if (!/^[0-9a-f]{16}$/.test(id) || viewer !== 'account') { answer({ok: true, ring: null}); return; }
+      fetch('/account/ring/' + id, {cache: 'no-store', credentials: 'same-origin'})
+        .then(function(r){ return r.json(); })
+        .then(function(j){
+          answer({ok: true, ring: j.ok && j.app === here
+            ? {from: j.from, tag: j.tag || '', link: j.link || '', line: j.line || '', at: j.at} : null});
+        }).catch(function(){ answer({ok: true, ring: null}); });
+    }
     function realtimeDoor(m, answer, frame){
       var name = String(m.room || '');
       if (m.op === 'join') {
@@ -859,6 +890,8 @@
         });
         return;
       }
+      if (m.op === 'ring') { ringDoor(m, answer); return; }
+      if (m.op === 'ringed') { ringedDoor(answer); return; }
       var held = rt[name];
       if (m.op === 'fast') { if (held) fastSend(held, m); return; }   // many a second: never answered
       if (!held) { answer({ok: false, error: 'join the room first'}); return; }

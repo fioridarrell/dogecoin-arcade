@@ -289,3 +289,22 @@ def test_voice_only_then_the_camera_joins_mid_call(tmp_path, no_nodes):
     finally:
         server.stop()
         state.mesh.stop()
+
+
+def test_ring_and_ringed_answer_in_the_viewer(tmp_path, no_nodes):
+    """arcade.realtime.ring / ringed (arcade/ring.py) reach the viewer and come back: a page opened without a
+    notification's ring has none, and a guest cannot ring anybody."""
+    state, server, base = _server(tmp_path)
+    try:
+        with sync_api.sync_playwright() as pw:
+            chrome = _launch(pw)
+            pa, _, _ = _player(chrome, base)
+            ga = _game(pa)
+            _until(ga, "window.arcade && window.arcade.realtime && window.arcade.realtime.ringed", "loaded")
+            assert ga.evaluate("arcade.realtime.ringed()") is None
+            said = ga.evaluate("arcade.realtime.ring('nSomebody', {line: 'hi'})")
+            assert said["ok"] is False and "sign in" in said["error"], said
+            chrome.close()
+    finally:
+        server.stop()
+        state.mesh.stop()

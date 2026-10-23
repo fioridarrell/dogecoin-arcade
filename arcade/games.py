@@ -87,6 +87,8 @@ def parse(json_text: Any) -> dict | None:
     # A game that uses the camera or microphone (a video call, 2026-10-22) says so: its card shows the
     # Camera & microphone switch from the start (base.html, CAMERA & MICROPHONE, PER GAME).
     out["media"] = game.get("media") is True
+    # An app that rings players while it is closed (a call) says so: its card shows the Notifications switch.
+    out["notify"] = game.get("notify") is True
     family = game.get("family")
     out["family"] = family if isinstance(family, str) and _FAMILY.match(family) else ""
     cover = str(game.get("cover") or "").lower()

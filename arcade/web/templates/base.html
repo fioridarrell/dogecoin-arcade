@@ -1549,6 +1549,82 @@ function arcadeMediaAsk(id, game, publisher, address){
 // Ticked on its card (the box is kept under the page Play opens, as Wallet access is).
 function arcadeMediaOn(page, g){ return arcadeMediaAllowed(page) || !!(g && g.opens && arcadeMediaAllowed(g.opens)); }
 
+// NOTIFICATIONS, PER APP (arcade/ring.py; 2026-10-23: call "at any time, even if the application is not open
+// through push notifications ... just like the Wallet access and camera and microphone access switches"; who may
+// ring: "My contacts only"). Kept per ACCOUNT on its node (every phone of the account rings), not in this browser.
+// Turning one on wakes this device's push (the Messenger's), and hands the node the addresses in this browser's
+// address book: only they can ring. The book is handed over again whenever it may have changed (arcadeRingBook).
+var ARCADE_RING_ON = 'arcade.ring.on', ARCADE_RING_BOOK = 'arcade.ring.book';
+function _arcadeB64(s){
+  var pad = '='.repeat((4 - s.length % 4) % 4), raw = atob((s + pad).replace(/-/g, '+').replace(/_/g, '/'));
+  var out = new Uint8Array(raw.length);
+  for (var i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+function _arcadeJson(path, body){
+  return fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, credentials: 'same-origin',
+                      body: JSON.stringify(body)}).then(function(r){ return r.json().then(function(j){ j._ok = r.ok; return j; }); });
+}
+// This device can be woken: asks the browser, subscribes, tells the node. Resolves '' or why not.
+function arcadePushOn(){
+  if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
+    var ios = /iPhone|iPad|iPod/.test(navigator.userAgent);
+    return Promise.resolve(ios ? 'On an iPhone: Share \u2192 Add to Home Screen, open the arcade from there, then turn this on.'
+                               : 'This browser cannot show notifications.');
+  }
+  return fetch('/push/key', {cache: 'no-store'}).then(function(r){ return r.json(); }).then(function(info){
+    if (!info.enabled) return 'This arcade does not send notifications.';
+    return Notification.requestPermission().then(function(answer){
+      if (answer !== 'granted') return 'Notifications are blocked for this site in the browser\u2019s settings.';
+      return navigator.serviceWorker.ready.then(function(reg){
+        return reg.pushManager.getSubscription().then(function(sub){
+          return sub || reg.pushManager.subscribe({userVisibleOnly: true, applicationServerKey: _arcadeB64(info.key)});
+        });
+      }).then(function(sub){ return _arcadeJson('/account/push/subscribe', sub.toJSON()); })
+        .then(function(j){ return j._ok ? '' : (j.detail || 'Could not turn notifications on here.'); });
+    });
+  }).catch(function(){ return 'Could not turn notifications on here.'; });
+}
+// Hand the node who may ring: the addresses in this browser's address book, when they changed.
+function arcadeRingBook(force){
+  try { if (!force && localStorage.getItem(ARCADE_RING_ON) !== 'yes') return Promise.resolve(); } catch (e) { return Promise.resolve(); }
+  return import('/messaging.js').then(function(mail){ return mail.book(); }).then(function(all){
+    var allow = (all || []).map(function(c){ return c && c.address; }).filter(Boolean).sort();
+    var said = allow.join(',');
+    try { if (!force && localStorage.getItem(ARCADE_RING_BOOK) === said) return; } catch (e) {}
+    return _arcadeJson('/account/ring/allow', {allow: allow}).then(function(j){
+      if (j._ok) try { localStorage.setItem(ARCADE_RING_BOOK, said); } catch (e) {}
+    });
+  }).catch(function(){});
+}
+function arcadeRingWords(game, publisher, address){
+  return '“' + (game || 'This app') + '” is published by ' + (publisher || 'an account with no @name')
+    + (address ? ' (' + address + ')' : '') + '. With this on, the people in your address book can ring you in it '
+    + 'when it is closed: your phone shows a notification. Nobody else can. Check that this is the app’s real '
+    + 'publisher first. You can turn it off again on the app’s card.';
+}
+// The card's switch, turned on: asked, then this device woken and the book handed over. Resolves '' or why not.
+function arcadeRingAsk(id, game, publisher, address){
+  return arcadeAsk('Let this app ring you?', arcadeRingWords(game, publisher, address), 'Allow notifications')
+    .then(function(yes){
+      if (!yes) return 'no';
+      return arcadePushOn().then(function(why){
+        if (why) return why;
+        return _arcadeJson('/account/ring/apps', {app: id, on: true}).then(function(j){
+          if (!j._ok) return j.detail || 'Could not turn it on.';
+          try { localStorage.setItem(ARCADE_RING_ON, 'yes'); } catch (e) {}
+          return arcadeRingBook(true).then(function(){ return ''; });
+        });
+      });
+    });
+}
+function arcadeRingOff(id){ return _arcadeJson('/account/ring/apps', {app: id, on: false}); }
+// The book may have changed since it was last handed over (the Address book, a game's arcade.contacts.add): once
+// a page has settled, and only where an app was switched on in this browser.
+document.addEventListener('DOMContentLoaded', function(){
+  setTimeout(function(){ if (typeof ARCADE_ME === 'string' && ARCADE_ME) arcadeRingBook(false); }, 4000);
+});
+
 // Whether the wallet is open in this browser now (the card shows it beside the switch).
 function arcadeWalletOpen(){
   return import('/wallet.js').then(function(w){ return w.opened(ARCADE_CHAIN); }).then(function(k){ return !!k; }).catch(function(){ return false; });

@@ -567,6 +567,11 @@ class MeshService:
         message = cert_message(self.network, origin, address, expires)
         return bool(await asyncio.to_thread(self.verify, address, sig, message))
 
+    def check_cert_from(self, origin: str, member: str, cred: dict) -> bool:
+        """Is this certificate good for `member` playing through the node `origin`? (A ring that came through
+        another node, arcade/ring.py: the caller proved who they are to THAT node.)"""
+        return bool(self._call(self._vouch(str(origin or ""), member, cred), timeout=15))
+
     def check_cert(self, member: str, cred: dict) -> bool:
         """Is this certificate good for `member` on THIS node? (Asked by the web
         layer before it lets its own player in under that name.)"""
