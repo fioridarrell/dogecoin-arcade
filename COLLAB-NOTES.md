@@ -111,6 +111,8 @@ a two-way upload and download"). Branch claude/llm-images (on claude/llm-stats).
 * Live check on a test machine with the real ComfyUI (woken by `systemctl --user start comfyui`): a 1024x768 picture in
   62 s for 1 credit, an edit (party hat) in 51 s for 2 credits; the browser made one in 32 s.
 * Tests: test_llm.py (19), with a fake ComfyUI.
+* Exchange: the tab is "LLMs" and comes first (the operator: "I want LLM to be the first option"); /exchange still opens on
+  Tokens.
 
 ### 2026-10-23 LLM service: models found by themselves, how busy each is, a usage analytics page (Claude)
 The operator: "It should automatically scan the LLM service for the models that are available and then the admin should be
