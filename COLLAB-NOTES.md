@@ -88,6 +88,11 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-23 No page zooms when a field is tapped (Claude)
+The operator: "when I'm on my iPhone PWA and I click into a text input field it zoomed in. I don't like that." Every page's
+viewport says `maximum-scale=1` now (base.html, and game_door, tokenpad, mintpad, offline), not only the full-screen
+game page; `viewport-fit=cover` stays the full-screen page's. iOS still allows pinch zoom. test_public updated.
+
 ### 2026-10-23 LLM credit shown as credits and spent in any coin; delete a cached picture; the upload's thumbnail (Claude)
 The operator: "it should be listing the credits as credits with the listed conversion rate"; "you shouldn't have to select the
 coin that you used to buy the credits it should just automatically deduct your credit"; "User should be able to delete
