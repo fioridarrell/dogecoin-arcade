@@ -162,17 +162,29 @@
       msgs.pop(); keep();
     } finally { busy = false; }
   });
-  // Shown only when a model is shared with this arcade's operator; asked once a minute at most per tab.
-  function show(ok, label) { bot.style.display = ok ? 'flex' : 'none'; if (label) document.getElementById('arc-bot-who').textContent = label; }
+  // Shown only while a model is shared with this arcade's operator, and asked again every RECHECK seconds while the page
+  // is open (2026-10-23: "the robot [should] become visible as soon as a shared model comes online"): it appears
+  // within moments of one coming online, and goes when the last one does (unless its chat is open).
+  var RECHECK = 20000, STATE = 'arcade.helper.state';
+  function show(ok, label) {
+    if (!ok && box.style.display === 'flex') return;
+    bot.style.display = ok ? 'flex' : 'none';
+    if (label) document.getElementById('arc-bot-who').textContent = label;
+  }
+  function check() {
+    if (document.hidden) return;
+    fetch('/account/llm/helper', {credentials: 'same-origin', cache: 'no-store'}).then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (!j) return;
+        var label = j.available ? 'Knows the docs \u00b7 ' + j.model + (j.seller && j.seller !== 'This arcade' ? ' from ' + j.seller : '') : '';
+        try { sessionStorage.setItem(STATE, JSON.stringify({available: j.available, label: label, at: Date.now()})); } catch (e) {}
+        show(j.available, label);
+      }).catch(function () {});
+  }
   var cached = null;
-  try { cached = JSON.parse(sessionStorage.getItem('arcade.helper.state') || 'null'); } catch (e) {}
-  if (cached && Date.now() - cached.at < 60000) show(cached.available, cached.label);
-  else fetch('/account/llm/helper', {credentials: 'same-origin', cache: 'no-store'}).then(function (r) { return r.ok ? r.json() : null; })
-    .then(function (j) {
-      if (!j) return;
-      var label = j.available ? 'Knows the docs · ' + j.model + (j.seller && j.seller !== 'This arcade' ? ' from ' + j.seller : '') : '';
-      try { sessionStorage.setItem('arcade.helper.state', JSON.stringify({available: j.available, label: label, at: Date.now()})); } catch (e) {}
-      show(j.available, label);
-    }).catch(function () {});
+  try { cached = JSON.parse(sessionStorage.getItem(STATE) || 'null'); } catch (e) {}
+  if (cached && Date.now() - cached.at < RECHECK) show(cached.available, cached.label); else check();
+  setInterval(check, RECHECK);
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) check(); });
 })();
 </script>

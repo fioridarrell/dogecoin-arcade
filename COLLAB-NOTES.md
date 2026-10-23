@@ -88,6 +88,13 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-23 The helper appears as soon as a shared model comes online (Claude)
+The operator: "the robot [should] become visible as soon as a shared model comes online". `_helper.html` asks
+`/account/llm/helper` every 20 s while the page is open (and on coming back to the tab), not once per page with a
+minute's cache: it shows within moments of a shared model's offer arriving (offers are said again every 15 s), and
+hides when none is left unless its chat is open. Live check first: dogecoinarcade.com's helper answered a stranger
+through @strawberry's Qwen, shared free with @bigchiefenergy (6,611 tokens of docs, 0 charged).
+
 ### 2026-10-23 the operator's side (Claude) · SadFrog's PR #9 and PR #10 merged
 The operator: "check the GitHub for sad frogs PR check it, publish it and merge it with the main branch so that all arcades
 are updated." Applied as patches on the private master (cherry-picked: fab1489f, 92a827db, bef970f3 from
