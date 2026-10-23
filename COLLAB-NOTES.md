@@ -88,6 +88,12 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-23 Camera pictures keep their own shape (Claude)
+The operator: "landscape should be cropped to fit into the portrait view ... portrait view on a PC should have extra black on
+the sides and no cropping. All should maintain their aspect ratios." The camera is asked for at most 1280 px each way
+and no shape (it asked for 640x480 before, which could turn a phone's portrait camera landscape); a tile is
+object-fit cover (centre-cropped) or contain (black bars), centred, never stretched -- the card chooses per layout.
+
 ### 2026-10-23 Camera & microphone per game card, and room.media (Claude, with the Cul-de-sac session)
 The operator: "Our user can allow an app camera and microphone in the same way that they allow an app Wallet access on the
 game card" (a video-call card, built by the Cul-de-sac session on this API), "fast track the camera access", "And

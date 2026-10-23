@@ -638,7 +638,9 @@
         mediaAllowed().then(function(yes){
           if (!yes) { answer({ok: false, error: 'off', why: 'Camera & microphone is off on this game’s card'}); return; }
           return navigator.mediaDevices.getUserMedia({
-            video: want.video ? {width: {ideal: 640}, height: {ideal: 480}} : false, audio: want.audio
+            // No shape forced: a phone's camera stays portrait, a PC's landscape (2026-10-23: "All should
+            // maintain their aspect ratios"); only capped, for a call of up to 20.
+            video: want.video ? {width: {max: 1280}, height: {max: 1280}} : false, audio: want.audio
           }).then(function(stream){
             if (rt[name] !== h) { stream.getTracks().forEach(function(t){ t.stop(); }); throw new Error('left the room'); }
             var old = md.stream;                            // a second start: the new tracks replace the old
@@ -763,7 +765,8 @@
           v.style.display = 'block';
           v.style.left = at.x + 'px'; v.style.top = at.y + 'px';
           v.style.width = at.w + 'px'; v.style.height = at.h + 'px';
-          v.style.objectFit = at.fit;
+          v.style.objectFit = at.fit;                 // cover: centre-cropped; contain: black bars; never stretched
+          v.style.objectPosition = 'center';
           v.style.transform = at.mirror ? 'scaleX(-1)' : '';
         } else v.style.display = 'none';
       });
