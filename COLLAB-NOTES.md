@@ -95,6 +95,15 @@ status after a restart held every Ords request behind it (the stall watch showed
 _counts). doginal_index._counts now works a walking index's totals out on a thread of its own ("ord-counts", one at a
 time) and answers with the last ones, or "counting" (the panel says so) until the first arrive; "found" (a block sum,
 0.7 s) stays as it was. Test: test_the_totals_never_hold_up_the_status.
+### 2026-10-22 Compression, step 2: borrowed Core answers cross the mesh zlib-compressed (Claude)
+mesh/coreshare.py: a borrower's "q" now says `z: 1`; a sharer that reads it compresses its JSON answer (zlib 6) and marks
+each "a" part `z: 1` -- raw blocks and transactions ride in it as hex, twice their size, so a block's answer comes out
+under 0.7 of the raw answer in the test (a real Dogecoin block). The borrower unpacks (`_inflate`, never past
+MAX_ANSWER; not zlib or too large fails the call, tried at the next sharer) before reading the JSON. An older sharer
+ignores `z` and answers raw; an older borrower never asks. Tests (tests/test_coreshare.py, two real MeshNodes over
+local links): a borrowed block crosses compressed and reads the same; an older sharer's raw answer still reads; a bomb
+and a non-zlib answer fail the call. The existing borrowing tests run the compressed path end to end too.
+
 ### 2026-10-22 Compression, step 1: index copies cross the mesh zlib-compressed (Claude)
 The operator: "start with the compression plan", "Make sure you test everything thoroughly". mesh/doginalshare.py: every
 "g" (a snapshot's manifest or piece) now says `z: 1`; an arcade that reads it compresses its answer (zlib 6) and marks
