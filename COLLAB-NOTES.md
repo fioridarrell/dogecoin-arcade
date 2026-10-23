@@ -88,6 +88,22 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-22 Plan (no code yet): compressing what arcades send each other (Claude)
+The operator, after SadFrog's game-bundle note (minify, one gzipped bundle, DecompressionStream): "Can we do something similar
+to this to our indexes?" Measured on a 64 MB sample of @strawberry's Pepecoin copy: zlib-6 0.62 of the size, zstd-10
+0.59, one 1 MB piece zlib-6 0.60 in 26 ms -- an index is mostly txids and hashes, which barely compress. Agreed, in order:
+1. **Whole-index copy pieces** (ord_snapshot): each 1 MB piece compressed on the wire, checked against the manifest's
+   hash of the RAW piece as now. About 40% less (the 3.1 GB copy ~1.9 GB) for far-behind arcades on slow links.
+2. **Borrowed Core reads** (mesh/coreshare): raw blocks and transactions go as HEX in the JSON header today (twice
+   their size); send them as raw bytes in the frame's blob (and compressed), about half the traffic of a borrowing
+   arcade -- how Bells would run on .25 without its own Core.
+3. **Arcade-to-arcade web replies** (imported-coin lists, /signin/... JSON): gzip.
+Each only once both ends say they read it (a flag in the "hi" / the request), so an updated arcade answers an older one
+the old way. Already compressed: chunk notes (ord_notes, zlib) and the shared order book (book_relay, zlib). Not worth
+it: index answers, hellos, leases (small). Keeping the local index compressed was weighed and left: SQLite has no
+built-in compression (sqlite_zstd_vfs / ZIPVFS would be a dependency in every arcade and slow the walker's writes);
+disk is not tight; where it ever is, filesystem compression (btrfs / ZFS with zstd) needs no code.
+
 ### 2026-10-22 Two regressions of today's, caught by a full run (Claude)
 Running the whole suite (route-scoped gates had passed) found two of today's changes breaking older tests:
 * `funding.choose` skipped every in-flight coin at or under 0.01 where a guard runs (to keep a fresh DRC-20 / PRC-20
