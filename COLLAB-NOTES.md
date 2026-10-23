@@ -123,7 +123,9 @@ to this to our indexes?" Measured on a 64 MB sample of @strawberry's Pepecoin co
 2. **Borrowed Core reads** (mesh/coreshare): raw blocks and transactions go as HEX in the JSON header today (twice
    their size); send them as raw bytes in the frame's blob (and compressed), about half the traffic of a borrowing
    arcade -- how Bells would run on .25 without its own Core.
-3. **Arcade-to-arcade web replies** (imported-coin lists, /signin/... JSON): gzip.
+3. **Arcade-to-arcade web replies** (imported-coin lists, /signin/... JSON): gzip. **Already so, no code:**
+   `_ask_arcade` / `_post_arcade` use `requests`, which asks for gzip and unpacks it, and every arcade's public host
+   is behind Cloudflare, which compresses them (checked: /signin/apple answers `content-encoding: gzip` to it).
 Each only once both ends say they read it (a flag in the "hi" / the request), so an updated arcade answers an older one
 the old way. Already compressed: chunk notes (ord_notes, zlib) and the shared order book (book_relay, zlib). Not worth
 it: index answers, hellos, leases (small). Keeping the local index compressed was weighed and left: SQLite has no
