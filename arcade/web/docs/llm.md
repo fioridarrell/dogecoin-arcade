@@ -30,7 +30,8 @@ You pay a seller by **prepaid credit**:
 3. The payment goes **straight to the seller's address**. Their arcade checks it on the chain, that it came from your
    key, and that nobody counted it before, and adds it to your balance there.
 
-Real coins (DOGE, PEP, LTC mainnet) count once the payment is in a block -- about a minute. Test coins count at once.
+A coin payment counts as soon as the seller's node sees it -- usually within seconds of sending, no block needed.
+An Omni token payment counts once the token index has read its block.
 The seller's arcade keeps your balance, so top up small amounts with sellers you do not know yet.
 
 Each reply is charged after it is written, from the number of tokens the model server reports, and never takes your

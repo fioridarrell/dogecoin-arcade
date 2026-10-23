@@ -88,6 +88,14 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-23 Top-ups count at broadcast; a paid picture model is no longer shown "Free" (Claude)
+Live, @apple on Strawberry's pictures: the card said "Free, your own model" (the arcade's LLM was free, and the pictures
+card read that flag), and 1 DOGE of credit waited for its block. The operator: "The credit should be available as soon as the
+transaction is broadcast." `llm.REAL_CONFIRMATIONS = 0`: a coin top-up counts once the seller's Core has it, mempool or
+block (an Omni token still once its index read it). `Seller.balance` says `own` (the buyer uses everything here free:
+operator or free_for), `free` (words free for everyone) and `images_free`; the tab reads each where it belongs.
+Tests: test_llm.py (26).
+
 ### 2026-10-23 The arcade helper: a pixel robot in every page's corner (Claude)
 The operator: "a pixel art robot head ... in the lower right hand corner that persists across all tabs and pages. When you
 click on it. It should open a chat dialog box with that same Dogecoin arcade chat harness as From the LLM marketplace

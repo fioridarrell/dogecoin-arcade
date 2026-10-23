@@ -98,7 +98,7 @@
     <label>Amount <input id="llm-amount" inputmode="decimal" autocomplete="off" placeholder="e.g. 10"></label>
     <div class="llm-note" id="llm-buys">Enter an amount to see what it buys.</div>
     <button type="button" class="llm-btn go" id="llm-send-pay" style="height:46px">Send</button>
-    <p class="sub" id="llm-topup-said">Your wallet shows the fee and asks before it signs. Real coins count once the payment is in a block.</p>
+    <p class="sub" id="llm-topup-said">Your wallet shows the fee and asks before it signs. It counts as credit as soon as the seller's node sees the payment, usually within seconds.</p>
   </section>
 
   <section class="llm-panel llm-chat" id="llm-chat" hidden>
@@ -198,7 +198,7 @@ function creditText(o) {
   const c = credit[o.seller];
   if (!book.signed_in) return {big: "Sign in", small: "to buy"};
   if (o.free) return {big: "Free", small: "for everyone"};
-  if (c && c.free) return {big: "Free", small: "your own model"};
+  if (c && c.own) return {big: "Free", small: o.here ? "your own model" : "shared with you"};
   if (!c) return {big: o.here || o.granted ? "…" : "—", small: o.here || o.granted ? "" : "sign once to see"};
   const rows = o.prices.map((p) => c.credit && c.credit[p.leg] ? `${c.credit[p.leg].text} ${short(p.label)}` : "").filter(Boolean);
   return rows.length ? {big: rows[0], small: rows.slice(1).join(" · ")} : {big: "None yet", small: ""};
@@ -277,7 +277,7 @@ function picCredit(o) {
   const c = credit[o.seller], im = o.images;
   if (!book.signed_in) return {big: "Sign in", small: "to buy"};
   if (im.free) return {big: "Free", small: "for everyone"};
-  if (c && c.free) return {big: "Free", small: "your own model"};
+  if (c && c.own) return {big: "Free", small: o.here ? "your own model" : "shared with you"};
   if (!c) return {big: o.here || o.granted ? "\u2026" : "\u2014", small: o.here || o.granted ? "" : "sign once to see"};
   const rows = im.prices.map((p) => c.credit && c.credit[p.leg] ? `${c.credit[p.leg].text} ${short(p.label)}` : "").filter(Boolean);
   return rows.length ? {big: rows[0], small: rows.slice(1).join(" \u00b7 ")} : {big: "None yet", small: ""};
@@ -326,7 +326,7 @@ function openPicture(o) {
 function picLeft() {
   if (!picPicked) return;
   const im = picPicked.images, c = credit[picPicked.seller], leg = $("pic-leg").value, p = im.prices.find((x) => x.leg === leg);
-  $("pic-left").textContent = im.free || (c && c.free) ? "Free" : c && c.credit && c.credit[leg] ? `${c.credit[leg].text} ${short(p && p.label)} left` : "No credit";
+  $("pic-left").textContent = im.free || (c && c.images_free) ? "Free" : c && c.credit && c.credit[leg] ? `${c.credit[leg].text} ${short(p && p.label)} left` : "No credit";
 }
 $("pic-leg").addEventListener("change", picLeft);
 $("pic-file").addEventListener("change", () => {
@@ -410,7 +410,7 @@ $("llm-send-pay").addEventListener("click", async () => {
     const coins = await import("/coins.js");
     const sig = await coins.signMessage(keys.on[net].key, words.message, words.magic);
     keepPending([...pending(), {seller: o.seller, leg, txid: done.txid, sig, at: Date.now()}]);
-    $("llm-topup-said").textContent = "Sent. Counting it as credit as soon as the seller sees it…";
+    $("llm-topup-said").textContent = "Sent. It counts as soon as the seller's node sees it, usually within seconds…";
     claimPending();
   } catch (err) { toast(err.message || String(err)); }
   finally { btn.disabled = false; }

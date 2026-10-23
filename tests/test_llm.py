@@ -134,8 +134,8 @@ def test_a_coin_payment_must_come_from_the_signer_and_reach_the_seller():
             return tx
     txid = "cd" * 32
     assert llm.check_coin_payment(Rpc(), txid, pay_to, llm.hash160(PUB), real_coins=False) == 150_000_000
-    with pytest.raises(llm.LlmError, match="in a block"):
-        llm.check_coin_payment(Rpc(), txid, pay_to, llm.hash160(PUB), real_coins=True)
+    assert llm.check_coin_payment(Rpc(), txid, pay_to, llm.hash160(PUB), real_coins=True) == 150_000_000, \
+        "the operator: real coins count as soon as the payment is broadcast (in the seller's mempool), no block"
     with pytest.raises(llm.LlmError, match="not sent from"):
         llm.check_coin_payment(Rpc(), txid, pay_to, b"\x02" * 20, real_coins=False)
     with pytest.raises(llm.LlmError, match="sends nothing"):
@@ -680,3 +680,15 @@ def test_the_helper_never_runs_up_a_bill_and_is_limited_per_person(arcade, monke
         r = client.post("/account/llm/helper", json={"messages": [{"role": "user", "content": "hi"}]})
         ok += r.status_code == 200
     assert ok == 40, "40 an hour for a signed-in person"
+
+
+def test_a_paid_picture_model_is_not_called_free_because_the_words_are(pictures):
+    """Live 2026-10-23: @apple saw "Free, your own model" on Strawberry's PAID pictures because its LLM was free."""
+    client, state, pubkey, jobs, url = pictures
+    h = {"X-Arcade-Admin": "1"}
+    client.post("/admin/api/llm", headers=h, json={"prices": []})                 # words free for everyone
+    client.post("/admin/api/llm/images", headers=h, json={
+        "on": True, "url": url, "models": ["qwen_image_2.1_int8_convrot.safetensors"],
+        "prices": [{"leg": "main-coin", "label": "PEP", "per": "0.5"}]})
+    b = client.get("/account/llm/balance?seller=here").json()
+    assert b["free"] is True and b["own"] is False and b["images_free"] is False

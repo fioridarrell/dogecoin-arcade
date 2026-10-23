@@ -47,8 +47,9 @@ LEG = re.compile(r"^([a-z0-9]{2,16})-(coin|token-(\d{1,10}))$")
 AT_ONCE_MOST = 32
 MAX_OUT_MOST = 65536
 REQUEST_SECONDS = 600
-#: Real-coin payments count once in a block; test coins at once (mempool).
-REAL_CONFIRMATIONS = 1
+#: How many blocks a coin top-up waits for: none (2026-10-23: "The credit should be available as soon as the
+#: transaction is broadcast") -- it counts once the seller's own Core has it, in its mempool or a block.
+REAL_CONFIRMATIONS = 0
 
 
 class LlmError(ValueError):
@@ -576,7 +577,7 @@ def check_coin_payment(rpc: Any, txid: str, pay_to: str, signer_hash: bytes, rea
         tx = rpc.call("getrawtransaction", txid, 1)
     except Exception:                                           # noqa: BLE001
         raise LlmError("that payment is not on the chain yet; try again in a moment") from None
-    if real_coins and int(tx.get("confirmations") or 0) < REAL_CONFIRMATIONS:
+    if REAL_CONFIRMATIONS and real_coins and int(tx.get("confirmations") or 0) < REAL_CONFIRMATIONS:
         raise LlmError("real coins count once the payment is in a block; try again after the next block")
     if signer_hash not in _input_hashes(tx):
         raise LlmError("that payment was not sent from the key that signed for it")
@@ -748,7 +749,14 @@ class Seller:
 
     def balance(self, buyer: str) -> dict:
         legs = self.books.balances(buyer)
-        return {"free": bool(self.free(buyer)) or is_free(self.config()),
+        # Three answers kept apart (2026-10-23: a free LLM said a PAID picture model was "Free, your own model"):
+        # `own` -- this buyer uses everything here free (the operator, or a name in free_for); `free` -- the words are
+        # free for everyone; `images_free` -- pictures are free for this buyer.
+        own = bool(self.free(buyer))
+        icfg = self.images.config() if self.images is not None else {}
+        from .imagegen import is_free as pictures_free
+        return {"free": own or is_free(self.config()), "own": own,
+                "images_free": own or bool(icfg.get("on") and pictures_free(icfg)),
                 "credit": {leg: {"units": u, "text": fmt(u, self.scale(leg))} for leg, u in legs.items()}}
 
     def topup(self, buyer: str, leg: str, txid: str, sig: str) -> dict:
