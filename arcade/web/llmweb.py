@@ -10,8 +10,12 @@ account, one seller and one payment kind; only its hash is kept.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import re
+import secrets
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 import logging
 import time
 from typing import Any, Callable, Iterator
@@ -367,6 +371,13 @@ def register(app, state, *, signed_in: Callable, account_address: Callable, acco
                             headers={"Cache-Control": "no-store"})
 
     if render is not None:
+        @app.get("/exchange/llm/model")
+        def llm_model_page(request: Request, seller: str = HERE, kind: str = "text", model: str = ""):
+            """One model's own page (2026-10-23: "whenever you click on one of the models, you should go to that
+            specific models page to interact with it"): its card, prices, top-up, chat or pictures, and API keys."""
+            focus = {"seller": seller[:100], "kind": "image" if kind == "image" else "text", "model": model[:200]}
+            return render(request, "llm_model.html", focus=focus)
+
         @app.get("/admin/llm/usage")
         def admin_llm_usage_page(request: Request):
             from fastapi.responses import RedirectResponse
@@ -534,18 +545,94 @@ def register(app, state, *, signed_in: Callable, account_address: Callable, acco
             return refuse(exc)
         return stream(gen, openai=False)
 
+    # Every picture an account gets is kept here 24 hours (2026-10-23: "if a person starts an image generation
+    # and they accidentally shut down arcade. That image should be stored in a temporary cache for 24 hours where that
+    # user can access it and download it"). The job runs in its own thread and keeps the picture whether or not the
+    # page that asked is still there to receive it.
+    PICS = Path(state.home) / "llm-pictures"
+    PICS_KEEP = 24 * 3600
+    jobs = ThreadPoolExecutor(max_workers=4, thread_name_prefix="llm-picture")
+
+    def pics_dir(account) -> Path:
+        d = PICS / hashlib.sha256(account.pubkey.encode()).hexdigest()[:32]
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def pics_tidy(d: Path) -> None:
+        cut = time.time() - PICS_KEEP
+        for f in d.glob("*"):
+            try:
+                if f.stat().st_mtime < cut:
+                    f.unlink()
+            except OSError:
+                pass
+
+    def keep_picture(account, got: dict, said: dict, sid: str) -> str:
+        import base64 as _b64
+        d = pics_dir(account)
+        pics_tidy(d)
+        pid = f"{int(time.time())}-{secrets.token_hex(4)}"
+        (d / f"{pid}.png").write_bytes(_b64.b64decode(got.get("png") or ""))
+        a = got.get("arcade") or {}
+        (d / f"{pid}.json").write_text(json.dumps({
+            "id": pid, "at": time.time(), "prompt": str(said.get("prompt") or "")[:500], "model": got.get("model", ""),
+            "seller": sid, "edit": bool(got.get("edit")), "seed": got.get("seed"), "credits": got.get("credits"),
+            "cost": a.get("cost_text", ""), "leg": a.get("leg", ""), "free": bool(a.get("free"))}))
+        return pid
+
     @app.post("/account/llm/image")
     async def llm_image(request: Request):
-        """One picture, made or edited by a seller's image model and paid per image (imagegen.py)."""
+        """One picture, made or edited by a seller's image model, charged in credits by its size (imagegen.py)."""
+        import asyncio
         try:
             account, address = need_account(request)
             said = await body_of(request)
             sid, leg = str(said.pop("seller", HERE) or HERE), str(said.pop("leg", "") or "")
-            import asyncio
-            got = await asyncio.to_thread(lambda: next(ask(account, address, sid, "image", leg, said), {}))
+
+            def job():
+                got = next(ask(account, address, sid, "image", leg, said), {})
+                if got.get("png"):
+                    got["kept"] = keep_picture(account, got, said, sid)
+                return got
+            got = await asyncio.wrap_future(jobs.submit(job))
         except llmlib.LlmError as exc:
             return refuse(exc)
         return JSONResponse(got)
+
+    @app.get("/account/llm/pictures")
+    def llm_pictures(request: Request):
+        """The account's pictures of the last 24 hours, newest first."""
+        try:
+            account, _ = need_account(request)
+        except llmlib.LlmError as exc:
+            return refuse(exc)
+        d = pics_dir(account)
+        pics_tidy(d)
+        out = []
+        for f in sorted(d.glob("*.json"), reverse=True)[:60]:
+            try:
+                meta = json.loads(f.read_text())
+            except (OSError, ValueError):
+                continue
+            if (d / f"{meta['id']}.png").exists():
+                out.append({**meta, "url": f"/account/llm/pictures/{meta['id']}.png",
+                            "until": meta["at"] + PICS_KEEP})
+        return JSONResponse({"pictures": out}, headers={"Cache-Control": "no-store"})
+
+    @app.get("/account/llm/pictures/{pid}.png")
+    def llm_picture_file(request: Request, pid: str):
+        from fastapi.responses import FileResponse
+        try:
+            account, _ = need_account(request)
+        except llmlib.LlmError as exc:
+            return refuse(exc, 403)
+        if not re.fullmatch(r"\d{6,12}-[0-9a-f]{8}", pid):
+            return refuse("no such picture", 404)
+        f = pics_dir(account) / f"{pid}.png"
+        if not f.exists():
+            return refuse("that picture is gone (pictures are kept 24 hours)", 404)
+        return FileResponse(f, media_type="image/png", filename=f"arcade-{pid}.png",
+                            headers={"Cache-Control": "private, max-age=3600"})
 
     # ---------------------------------------------------------------- the arcade helper (the robot in every page's corner)
     # 2026-10-23: "a pixel art robot head ... in the lower right hand corner that persists across all tabs and

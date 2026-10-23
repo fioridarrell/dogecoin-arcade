@@ -517,8 +517,8 @@
 <section class="panel" id="img-panel">
   <div style="display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap">
     <div style="min-width:0"><h2 style="margin:0">Share your image model <span class="pill" id="img-word" style="vertical-align:middle"></span></h2>
-      <p class="muted" style="margin:2px 0 0">ComfyUI, sold in credits: a picture made from words costs 1 credit, an edit of a picture the
-        buyer brings costs 2 (it goes up and comes back down). Paid from the same balance as the LLM; no asks means free.</p></div>
+      <p class="muted" style="margin:2px 0 0">ComfyUI, sold in credits by size: 1 credit for every 250 pixels of a picture's longest side; an
+        edit counts the buyer's picture going up and the new one coming down. A failed picture costs nothing. Paid from the same balance as the LLM; no asks means free.</p></div>
     <label class="onoff off" id="img-onoff"><input type="checkbox" id="img-on" style="width:20px;height:20px"> <span id="img-onword">Tick to share on the exchange</span></label>
   </div>
   <div class="lgrid" style="margin-top:16px">
@@ -543,8 +543,8 @@
       <span class="h">Others wait in line.</span></label>
   </div>
   <h3 style="margin:18px 0 6px;font-size:1rem">Price per credit</h3>
-  <p class="muted" style="margin:0 0 6px;font-size:.85rem">1 credit = one picture from words; 2 credits = one edit.</p>
-  <div class="pr h" style="grid-template-columns:minmax(0,1.6fr) minmax(0,1fr) minmax(0,.9fr) 42px"><span>Paid in</span><span>Per credit</span><span>Picture &middot; edit</span><span></span></div>
+  <p class="muted" style="margin:0 0 6px;font-size:.85rem">250&times;250 = 1 credit, 500&times;500 = 2, 1000&times;750 = 4; an edit adds its upload's credits.</p>
+  <div class="pr h" style="grid-template-columns:minmax(0,1.6fr) minmax(0,1fr) minmax(0,.9fr) 42px"><span>Paid in</span><span>Per credit</span><span>A 500&times;500 picture</span><span></span></div>
   <div id="img-prices"></div>
   <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between;margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;flex:1 1 340px;min-width:0">
@@ -885,7 +885,7 @@
   function picCost(p) {
     var n = Number(p.per) || 0; if (!n) return 'free';
     var f = function (x) { return x.toLocaleString(undefined, {maximumSignificantDigits: 8}); };
-    return f(n) + ' \u00b7 ' + f(2 * n) + ' ' + esc(short(p.label));
+    return f(2 * n) + ' ' + esc(short(p.label)) + ' (2 credits)';
   }
   $('img-prices').addEventListener('input', function (e) {
     var i = e.target.dataset.i; if (i == null) return;

@@ -154,6 +154,7 @@ PUBLIC_PAGES = frozenset({
 #: learn to spend.
 PUBLIC_TREES = (
     "/account/llm/",          # the Exchange's LLM tab: offers, the account's own balance, grant words and keys
+    "/exchange/llm/",         # one model's own page on the model exchange (2026-10-23)
     "/v1/models",             # the LLM API's model list, for an API key
     "/signup/",               # is this name free
     "/signin/",               # somebody's encrypted wallet, by name

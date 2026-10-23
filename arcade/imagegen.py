@@ -29,18 +29,21 @@ import requests
 from . import llm as llmlib
 
 SETTING = "llm_images"
-DEFAULTS = {"on": False, "url": "", "wake": "", "models": [], "max_side": 1024, "steps": 20, "at_once": 1,
+DEFAULTS = {"on": False, "url": "", "wake": "", "models": [], "max_side": 1000, "steps": 20, "at_once": 1,
             "prices": [], "name": ""}
 SIDE_MOST = 1536
-SIDE_LEAST = 256
+SIDE_LEAST = 128
+#: A picture's credits: its longest side over CREDIT_SIDE, rounded up (2026-10-23: "250 pixels by 250 pixels ...
+#: Every increase in 250 pixel squared should use one more credit. If it's 251 ... two credits. If it's 500 ... two
+#: credits if it's 501 ... three credits"; "the longest side" for portrait and landscape). An edit is its upload's
+#: credits plus its result's ("Same thing with image editing, per upload and download").
+CREDIT_SIDE = 250
 MAKE_SECONDS = 600
 WAKE_SECONDS = 300
+WAKE_AGAIN = 20.0
 MAX_UPLOAD = 12 * 1024 * 1024
-#: Pictures are priced in credits (2026-10-23: "it should be credits ... an edit should cost two credits and a
-#: plain picture should stay at one credit"): the operator asks a price per credit; an edit is two (the buyer's
-#: picture goes up and the new one comes down).
-PLAIN_CREDITS = 1
-EDIT_COUNTS = 2
+#: Pictures are priced in credits (2026-10-23: "it should be credits"): the operator asks a price per credit;
+#: how many a picture takes is CREDIT_SIDE's rule below.
 
 
 def config(state: Any) -> dict:
@@ -80,7 +83,7 @@ def clean(said: dict, kept: dict, local: bool) -> dict:
     if "models" in said:
         out["models"] = list(dict.fromkeys(str(m).strip()[:200] for m in said.get("models") or [] if str(m).strip()))[:10]
     if "max_side" in said:
-        out["max_side"] = max(SIDE_LEAST, min(SIDE_MOST, int(said.get("max_side") or 1024))) // 16 * 16
+        out["max_side"] = max(256, min(SIDE_MOST, int(said.get("max_side") or 1000)))
     if "steps" in said:
         out["steps"] = max(4, min(50, int(said.get("steps") or 20)))
     if "at_once" in said:
@@ -125,12 +128,18 @@ class ComfyServer:
         with self._waking:
             if self.up():
                 return
-            try:
-                subprocess.run(shlex.split(self.wake), capture_output=True, timeout=WAKE_SECONDS)
-            except Exception as exc:                            # noqa: BLE001
-                raise llmlib.LlmError(f"the image model would not start: {exc}"[:200]) from None
+            # Woken again every WAKE_AGAIN seconds while it does not answer: a ComfyUI that starts just as another model
+            # lets go of the GPU can die at once ("CUDA error: out of memory", live on a test machine 2026-10-23) and only
+            # comes up on a later try, once that memory is back.
             end = time.time() + WAKE_SECONDS
+            woke = 0.0
             while time.time() < end:
+                if time.time() - woke >= WAKE_AGAIN:
+                    woke = time.time()
+                    try:
+                        subprocess.run(shlex.split(self.wake), capture_output=True, timeout=60)
+                    except Exception as exc:                    # noqa: BLE001
+                        raise llmlib.LlmError(f"the image model would not start: {exc}"[:200]) from None
                 if self.up():
                     return
                 time.sleep(3)
@@ -221,7 +230,7 @@ def qwen_text(m: dict, prompt: str, width: int, height: int, steps: int, seed: i
     }
 
 
-def qwen_edit(m: dict, image_name: str, prompt: str, steps: int, seed: int) -> dict:
+def qwen_edit(m: dict, image_name: str, prompt: str, steps: int, seed: int, resolution: int = 1024) -> dict:
     """Qwen-Image edit: the picture goes in through the encoder under the FLAT key "images.image_1" (a nested dict is
     silently dropped -- comfy_mcp.py 2026-09-25), and the latent to sample from is the encoder's third output."""
     return {
@@ -232,7 +241,7 @@ def qwen_edit(m: dict, image_name: str, prompt: str, steps: int, seed: int) -> d
         "4": {"class_type": "TextEncodeQwenImage21",
               "inputs": {"clip": ["2", 0], "vae": ["3", 0], "prompt": prompt,
                          "negative_prompt": "different subject, changed face, blurry, distorted, extra limbs",
-                         "resolution": 1024, "images.image_1": ["10", 0]}},
+                         "resolution": int(resolution), "images.image_1": ["10", 0]}},
         "7": {"class_type": "KSampler",
               "inputs": {"seed": seed, "steps": steps, "cfg": 2.5, "sampler_name": "euler", "scheduler": "simple",
                          "denoise": 1.0, "model": ["1", 0], "positive": ["4", 0], "negative": ["4", 1],
@@ -250,17 +259,37 @@ def label_of(name: str) -> str:
     return name.rsplit(".", 1)[0]
 
 
+def credits_for(w: int, h: int) -> int:
+    """1 for up to 250 on the longest side, 2 up to 500, 3 up to 750, ..."""
+    return max(1, -(-max(int(w), int(h)) // CREDIT_SIDE))
+
+
 def size_of(text: Any, most: int) -> tuple[int, int]:
-    """"1024x768" (or width/height) cut to the operator's largest side, in steps of 16."""
+    """"1000x750" (WIDTHxHEIGHT) cut to the operator's largest side: the size a buyer pays for."""
     try:
-        w, h = (int(x) for x in str(text or f"{most}x{most}").lower().split("x", 1))
+        w, h = (int(x) for x in str(text or f"{min(most, 500)}x{min(most, 500)}").lower().split("x", 1))
     except ValueError:
-        raise llmlib.LlmError("a size is WIDTHxHEIGHT, e.g. 1024x1024") from None
+        raise llmlib.LlmError("a size is WIDTHxHEIGHT, e.g. 500x500") from None
     if w <= 0 or h <= 0:
-        raise llmlib.LlmError("a size is WIDTHxHEIGHT, e.g. 1024x1024")
+        raise llmlib.LlmError("a size is WIDTHxHEIGHT, e.g. 500x500")
     k = min(1.0, most / max(w, h))
-    w, h = max(SIDE_LEAST, int(w * k)) // 16 * 16, max(SIDE_LEAST, int(h * k)) // 16 * 16
-    return w, h
+    return max(SIDE_LEAST, int(w * k)), max(SIDE_LEAST, int(h * k))
+
+
+def drawn(w: int, h: int) -> tuple[int, int]:
+    """The size the model draws for a paid size: down to a multiple of 16, so never past what was paid for."""
+    return max(SIDE_LEAST, w // 16 * 16), max(SIDE_LEAST, h // 16 * 16)
+
+
+def png_size(png: bytes) -> tuple[int, int] | None:
+    """A PNG's width and height from its header, or None."""
+    if len(png) >= 24 and png[:8] == b"\x89PNG\r\n\x1a\n":
+        return int.from_bytes(png[16:20], "big"), int.from_bytes(png[20:24], "big")
+    try:
+        from PIL import Image                                   # type: ignore
+        return Image.open(io.BytesIO(png)).size
+    except Exception:                                           # noqa: BLE001
+        return None
 
 
 def png_of(data: Any) -> bytes:
@@ -356,7 +385,7 @@ class ImageSeller:
                 return None
         return {"models": [{"id": m, "label": (self._known.get(m) or {}).get("label") or label_of(m)} for m in cfg["models"]],
                 "free": free, "prices": prices, "max_side": int(cfg.get("max_side") or 1024), "edits": True,
-                "edit_counts": EDIT_COUNTS, "plain_counts": PLAIN_CREDITS,
+                "credit_side": CREDIT_SIDE,
                 "name": cfg.get("name") or "", "load": self.load()}
 
     def make(self, buyer: str, leg: str, body: dict, via: str = "") -> dict:
@@ -382,12 +411,19 @@ class ImageSeller:
                                       "this seller charges for its pictures now; top up and use one of its coins")
         sc = self.scale(leg) if not free else llmlib.COIN
         edit = body.get("image")
-        # An edit costs two pictures (2026-10-23: "Because it's a two-way upload and download").
-        times = EDIT_COUNTS if edit else PLAIN_CREDITS
-        cost = 0 if free else int(math.ceil(llmlib.price(price["per"]) * sc * times))
+        most = int(cfg.get("max_side") or 1000)
+        if edit:
+            upload = png_of(edit)
+            uw, uh = png_size(upload) or (most, most)
+            side = max(SIDE_LEAST, min(most, max(uw, uh)))          # the result: no bigger than the upload, nor the cap
+            credits = credits_for(uw, uh) + credits_for(side, side)
+        else:
+            w, h = size_of(body.get("size"), most)
+            credits = credits_for(w, h)
+        per = llmlib.price(price["per"])
+        cost = 0 if free else int(math.ceil(per * sc * credits))
         if not free and self.books.balance(buyer, leg) < cost:
-            raise llmlib.LlmError(f"not enough credit: an edit costs {EDIT_COUNTS} credits; top up first" if edit
-                                  else "not enough credit: a picture costs 1 credit; top up first")
+            raise llmlib.LlmError(f"not enough credit: this costs {credits} credit{'' if credits == 1 else 's'}; top up first")
         steps = int(cfg.get("steps") or 20)
         seed = int(body.get("seed") or 0) or uuid.uuid4().int % (2 ** 32)
         slot = self._slot()
@@ -409,10 +445,13 @@ class ImageSeller:
             srv.ensure_up()
             m = self.model(name)
             if edit:
-                png = srv.run(qwen_edit(m, srv.upload(png_of(edit)), prompt, steps, seed))
+                png = srv.run(qwen_edit(m, srv.upload(upload), prompt, steps, seed, resolution=side // 16 * 16))
+                got_size = png_size(png)
+                if got_size and not free:                           # what came back, never more than was shown
+                    credits = min(credits, credits_for(uw, uh) + credits_for(*got_size))
+                    cost = int(math.ceil(per * sc * credits))
             else:
-                w, h = size_of(body.get("size"), int(cfg.get("max_side") or 1024))
-                png = srv.run(qwen_text(m, prompt, w, h, steps, seed))
+                png = srv.run(qwen_text(m, prompt, *drawn(w, h), steps, seed))
             ok = True
         finally:
             slot.release()
@@ -421,6 +460,6 @@ class ImageSeller:
             ms = int((time.monotonic() - t0) * 1000)
             left = self.books.charge(buyer, leg if not free else "free", "image:" + name, 0, 0,
                                      cost if ok else 0, via, ms=ms, first_ms=ms, ok=ok, images=1 if ok else 0)
-        return {"png": base64.b64encode(png).decode(), "seed": seed, "model": name, "edit": bool(edit),
+        return {"png": base64.b64encode(png).decode(), "seed": seed, "model": name, "edit": bool(edit), "credits": credits,
                 "arcade": {"cost": cost, "cost_text": llmlib.fmt(cost, sc), "left": left,
                            "left_text": llmlib.fmt(left, sc), "free": free, "leg": leg, "ms": ms}}

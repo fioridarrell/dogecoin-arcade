@@ -494,17 +494,30 @@ def pictures(arcade):
         comfy.close()
 
 
-def test_an_image_model_is_found_shared_and_sold_per_picture(pictures):
-    """2026-10-23: "I would like to also be able to share my image generation model" -- per picture, make and
-    edit, from the same credit."""
+def _png_of(w: int, h: int) -> bytes:
+    import struct
+    import zlib as _z
+
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", _z.crc32(kind + data) & 0xFFFFFFFF)
+    rows = b"".join(b"\x00" + b"\x10\x20\x30" * w for _ in range(h))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", _z.compress(rows)) + chunk(b"IEND", b""))
+
+
+def test_an_image_model_is_found_shared_and_sold_in_credits_by_size(pictures):
+    """2026-10-23: share the image model; credits by size -- "250 pixels by 250 ... 251 ... two credits ... 500
+    ... two credits ... 501 ... three credits", the longest side; an edit "per upload and download"; pictures kept 24 h."""
     import base64
     from arcade import imagegen
     client, state, pubkey, jobs, url = pictures
+    assert [imagegen.credits_for(*s) for s in ((250, 250), (251, 251), (500, 500), (501, 501), (500, 375), (250, 188))] \
+        == [1, 2, 2, 3, 2, 1]
     h = {"X-Arcade-Admin": "1"}
     found = client.post("/admin/api/llm/images/scan", headers=h, json={"url": url}).json()
     assert [m["id"] for m in found["models"]] == ["qwen_image_2.1_int8_convrot.safetensors"], "only a family it can draw"
     saved = client.post("/admin/api/llm/images", headers=h, json={
-        "on": True, "url": url, "models": ["qwen_image_2.1_int8_convrot.safetensors"], "max_side": 1024,
+        "on": True, "url": url, "models": ["qwen_image_2.1_int8_convrot.safetensors"], "max_side": 1000,
         "prices": [{"leg": "main-coin", "label": "PEP", "per": "0.5"}]})
     assert saved.status_code == 200 and saved.json()["sharing"], saved.text
     (o,) = client.get("/account/llm/offers").json()["offers"]
@@ -512,36 +525,38 @@ def test_an_image_model_is_found_shared_and_sold_per_picture(pictures):
 
     said = client.post("/account/llm/image", json={"seller": "here", "leg": "main-coin", "prompt": "a dragon"})
     assert said.status_code == 400 and "credit" in said.json()["detail"]
-    state.llm_seller.books.credit("56" * 32, "main-coin", ADDR, llm.COIN)
+    state.llm_seller.books.credit("56" * 32, "main-coin", ADDR, llm.COIN)        # 2 credits at 0.5
     got = client.post("/account/llm/image", json={"seller": "here", "leg": "main-coin", "prompt": "a dragon",
-                                                  "size": "2048x1024"}).json()
-    assert base64.b64decode(got["png"]) == PNG and got["arcade"]["cost"] == llm.COIN // 2
-    assert jobs[-1]["5"]["inputs"]["width"] == 512 and jobs[-1]["5"]["inputs"]["height"] == 256, \
-        "cut to the largest side (1024x512), halved for the latent"
-    pic = "data:image/png;base64," + base64.b64encode(PNG).decode()
+                                                  "size": "500x375"}).json()
+    assert base64.b64decode(got["png"]) == PNG and got["credits"] == 2 and got["arcade"]["cost"] == llm.COIN
+    assert jobs[-1]["5"]["inputs"]["width"] == 496 // 2 and jobs[-1]["5"]["inputs"]["height"] == 368 // 2, \
+        "drawn at a multiple of 16 no bigger than what was paid for"
+    big = client.post("/account/llm/image", json={"seller": "here", "leg": "main-coin", "prompt": "x", "size": "4000x100"})
+    assert big.status_code == 400 and "4 credits" in big.json()["detail"], "cut to the 1000 cap: 4 credits"
+
+    up = _png_of(400, 300)                                      # 2 credits up; comes back at most 400: 2 more down
+    state.llm_seller.books.credit("58" * 32, "main-coin", ADDR, 2 * llm.COIN)
     edit = client.post("/account/llm/image", json={"seller": "here", "leg": "main-coin", "prompt": "add a hat",
-                                                   "image": pic})
-    assert edit.status_code == 400 and "2 credits" in edit.json()["detail"], \
-        "the operator: an edit costs two credits, a plain picture one; half a coin left pays for one"
-    state.llm_seller.books.credit("58" * 32, "main-coin", ADDR, llm.COIN // 2)
-    edit = client.post("/account/llm/image", json={"seller": "here", "leg": "main-coin", "prompt": "add a hat",
-                                                   "image": pic})
-    assert edit.status_code == 200 and "images.image_1" in jobs[-1]["4"]["inputs"], "an edit hands the picture over"
-    assert edit.json()["arcade"]["cost"] == llm.COIN, "two credits"
-    assert client.post("/account/llm/image", json={"seller": "here", "leg": "main-coin",
-                                                   "prompt": "again"}).status_code == 400, "credit spent: 0 left"
+                                                   "image": "data:image/png;base64," + base64.b64encode(up).decode()})
+    assert edit.status_code == 200, edit.text
+    assert "images.image_1" in jobs[-1]["4"]["inputs"] and jobs[-1]["4"]["inputs"]["resolution"] == 400
+    assert edit.json()["credits"] <= 4, "upload credits plus what came back"
+
+    pics = client.get("/account/llm/pictures").json()["pictures"]
+    assert len(pics) == 2 and pics[0]["prompt"] == "add a hat" and pics[1]["credits"] == 2, "kept 24 hours"
+    assert client.get(pics[1]["url"]).content == PNG
 
     key = client.post("/account/llm/keys/new", json={"seller": "here", "leg": "main-coin"}).json()["key"]
     state.llm_seller.books.credit("57" * 32, "main-coin", ADDR, llm.COIN)
     v1 = client.post("/v1/images/generations", headers={"Authorization": f"Bearer {key}"},
-                     json={"prompt": "a fox", "size": "1024x1024"})
+                     json={"prompt": "a fox", "size": "250x250"})
     assert v1.status_code == 200 and base64.b64decode(v1.json()["data"][0]["b64_json"]) == PNG
-    state.llm_seller.books.credit("59" * 32, "main-coin", ADDR, llm.COIN)
+    state.llm_seller.books.credit("59" * 32, "main-coin", ADDR, 5 * llm.COIN)
     ed = client.post("/v1/images/edits", headers={"Authorization": f"Bearer {key}"},
-                     files={"image": ("x.png", PNG, "image/png")}, data={"prompt": "add a hat"})
+                     files={"image": ("x.png", up, "image/png")}, data={"prompt": "add a hat"})
     assert ed.status_code == 200, ed.text
     usage = client.get("/admin/api/llm/usage?days=1").json()
-    assert usage["total"]["images"] == 4, "pictures made (an edit is one picture, at two credits)"
+    assert usage["total"]["images"] == 4
 
 
 def test_the_wake_command_is_set_at_the_node_machine_only():
@@ -551,7 +566,7 @@ def test_the_wake_command_is_set_at_the_node_machine_only():
     with pytest.raises(llm.LlmError, match="node machine"):
         imagegen.clean({"wake": "rm -rf /"}, kept, local=False)
     assert imagegen.clean({"wake": "", "steps": 30}, kept, local=False)["steps"] == 30, "left as it was: no refusal"
-    assert imagegen.size_of("4000x1000", 1024) == (1024, 256)
+    assert imagegen.size_of("4000x1000", 1000) == (1000, 250)
     assert imagegen.is_free({"prices": [{"leg": "main-coin", "per": "0"}]})
 
 
@@ -692,3 +707,34 @@ def test_a_paid_picture_model_is_not_called_free_because_the_words_are(pictures)
         "prices": [{"leg": "main-coin", "label": "PEP", "per": "0.5"}]})
     b = client.get("/account/llm/balance?seller=here").json()
     assert b["free"] is True and b["own"] is False and b["images_free"] is False
+
+
+def test_comfyui_is_woken_again_when_it_dies_starting(monkeypatch):
+    """Live 2026-10-23: ComfyUI started as the voice model let go of the GPU died ("CUDA error: out of memory"); a
+    second start, seconds later, came up. The wake is run again while it does not answer."""
+    from arcade import imagegen
+    runs, ups = [], iter([False, False, False, False, True])
+    monkeypatch.setattr(imagegen.ComfyServer, "up", lambda self: next(ups))
+    monkeypatch.setattr(imagegen.subprocess, "run", lambda *a, **k: runs.append(a))
+    monkeypatch.setattr(imagegen, "WAKE_AGAIN", 0.0)
+    monkeypatch.setattr(imagegen.time, "sleep", lambda s: None)
+    imagegen.ComfyServer("http://127.0.0.1:9", "true").ensure_up()
+    assert len(runs) >= 2, "woken again, not only once"
+
+
+def test_a_reply_that_breaks_off_with_an_error_costs_nothing(tmp_path, monkeypatch):
+    """2026-10-23: "If there is an error, they should be refunded their credit"."""
+    books = llm.Books(tmp_path)
+    books.credit("70" * 32, "main-coin", "b", llm.COIN)
+    cfg = {**llm.DEFAULTS, "on": True, "url": "http://x", "models": ["m"],
+           "prices": [{"leg": "main-coin", "label": "PEP", "in": "0.001", "out": "0.01"}]}
+
+    def broken(self, body):
+        yield {"choices": [{"delta": {"content": "half a rep"}}]}
+        raise llm.LlmError("the model server said: out of memory")
+    monkeypatch.setattr(llm.Server, "chat", broken)
+    seller = llm.Seller(lambda: cfg, books, lambda leg: "P", lambda leg: llm.COIN, None, lambda b: False)
+    with pytest.raises(llm.LlmError):
+        list(seller.chat("b", "main-coin", {"messages": [{"role": "user", "content": "hi"}]}))
+    assert books.balance("b", "main-coin") == llm.COIN, "nothing taken"
+    assert books.analytics(0)["total"]["failed"] == 1

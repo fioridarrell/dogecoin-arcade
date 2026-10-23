@@ -88,6 +88,31 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-23 The model exchange: a card per model and a page per model; pictures by size; 24-hour picture cache; refunds (Claude)
+* The operator: "The model exchange should just have cards for each of the models listed and the user credits available and
+  the cost and the tokens per second and other relevant data ... whenever you click on one of the models, you should go to
+  that specific models page"; "favorite stars on the model exchange and the sort features from the token exchange".
+  `_llm_tab.html` list mode: one `a.llm-card` per model (words or pictures) -- price, speed (tok/s or s a picture), use
+  in the last hour, longest reply / largest side, busy pill, your credit, a star (arcadeFavs; the key is the model page
+  URL, `/exchange[/?]...` as /account/favorites allows). ★ Favorites / All models / Words / Pictures, a search through
+  every model, Sort (most used, cheapest, fastest, least busy, name; kept in this browser), coin chips, Suggested when on
+  Favorites; opens on Favorites when there are any. **`/exchange/llm/model?seller&kind&model`** (llm_model.html):
+  the card, prices, Top up, Chat or Make a picture, API keys preset to it (curl for /v1/images on a picture model).
+* The operator: credits by size -- "250 pixels by 250 ... 251 ... two credits ... 500 ... two ... 501 ... three", the longest
+  side (his choice); "Same thing with image editing, per upload and download"; "The pixel ratio should be user defined".
+  `imagegen.credits_for(w, h) = ceil(max(w, h) / 250)`; a picture's credits from its requested size cut to max_side
+  (drawn at the multiple of 16 below it); an edit = its upload's credits + its result's (result no bigger than the
+  upload or max_side; charged on what came back, never past what was shown). Width and height boxes with presets and the
+  exact credits on the button. `max_side` defaults to 1000.
+* The operator: a picture whose page was closed "should be stored in a temporary cache for 24 hours where that user can
+  access it and download it": `/account/llm/image` runs the job in its own thread pool and keeps every result in
+  <home>/llm-pictures/<account hash>/ (24 h); `/account/llm/pictures` + `/account/llm/pictures/<id>.png`; the model
+  page shows "Your pictures".
+* The operator: "If there is an error, they should be refunded their credit": a chat reply that breaks off with an error is
+  not charged (logged ok=0); a reply the buyer stopped reading counts what was written; failed pictures never cost.
+* Also: top-ups count at broadcast, the paid-pictures "Free" label (entry below), ComfyUI woken again when it dies
+  starting (CUDA out of memory as the voice model lets go). docs/llm.md says all of it. Tests: test_llm.py (28).
+
 ### 2026-10-23 Top-ups count at broadcast; a paid picture model is no longer shown "Free" (Claude)
 Live, @apple on Strawberry's pictures: the card said "Free, your own model" (the arcade's LLM was free, and the pictures
 card read that flag), and 1 DOGE of credit waited for its block. The operator: "The credit should be available as soon as the

@@ -843,7 +843,7 @@ class Seller:
         first_ms = 0
         used_in = used_out = 0
         chars = 0
-        heard = False
+        heard = failed = False
         cost = left = 0
         try:
             for chunk in Server(cfg["url"], cfg.get("key") or "").chat(out):
@@ -859,12 +859,18 @@ class Seller:
                     chars += len(d.get("content") or "") + len(d.get("reasoning_content") or "")
                     chars += len(json.dumps(d["tool_calls"])) if d.get("tool_calls") else 0
                 yield chunk
+        except GeneratorExit:
+            raise                                               # the buyer stopped reading: what was written counts
+        except Exception:
+            failed = True                                       # the model failed: nothing of it is charged
+            raise
         finally:
             slot.release()
             with self._lock:
                 self.active -= 1
             ms = int((time.monotonic() - t0) * 1000)
-            if heard:                                           # a server that never answered costs nothing
+            if heard and not failed:     # a server that never answered, or broke off with an error, costs nothing
+                # (2026-10-23: "If there is an error, they should be refunded their credit")
                 if not used_in:
                     used_in = guess_in
                 if not used_out and chars:

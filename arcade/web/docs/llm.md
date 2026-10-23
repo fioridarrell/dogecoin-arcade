@@ -45,9 +45,13 @@ own words and the reply. Under each reply you see the tokens in and out and what
 
 ### Pictures
 
-Arcades can also share a **picture model** (on ComfyUI). Pictures are priced in **credits**: a picture made from your
-words costs **1 credit**, an edit of a picture you bring (an upload and a download) costs **2 credits**. Press **Make a
-picture**, describe it, choose a size, optionally add a picture of yours to change, and **Download** the result.
+Arcades can also share a **picture model** (on ComfyUI). Pictures are priced in **credits**, by size: **1 credit for
+every 250 pixels of the picture's longest side**, rounded up -- 250x250 is 1 credit, 251x251 is 2, 500x375 is 2,
+1000x750 is 4. An edit of a picture you bring counts both ways: the credits of your picture going up plus those of the
+new one coming down. Open the model, describe the picture, set any width and height (or pick a preset), optionally add
+a picture of yours to change, and the button shows the exact credits before you press it. A picture that fails costs
+nothing. Every picture you make is kept on your own arcade for **24 hours** -- even if you closed the page before it was
+done -- under **Your pictures** on the model's page, to view and download.
 The same balance with a seller pays for words and pictures.
 
 ### Using a model from your own programs (API keys)
