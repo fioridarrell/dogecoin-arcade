@@ -88,6 +88,16 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-23 The relay's usage meter, and a stop at the monthly limit (Claude)
+The operator (calls work through the relay now): "I need some sort of usage meter on my node so that I don't go over the
+limit." Cloudflare bills TURN by egress and reports it only through its GraphQL analytics (callsTurnUsageAdaptiveGroups,
+filter keyId + date range), which takes an Account Analytics token, not the TURN key's. Admin -> Network -> Call relay
+-> Usage this month: account id + Analytics token (tried before kept) + a monthly limit (default 1000 GB, the free
+allowance); a bar and "X GB of Y GB since <1st>". The node asks Cloudflare at most every 10 minutes (relay_meter);
+at the limit /realtime/ice stops handing the relay out (direct links only) until the month turns -- logins already
+handed out (up to 6 h) still work, so it can run a little over. Direct-capable pairs never use the relay: its candidates
+rank last. Tests: test_stun.py (the query and its parse, an error says why, the stop at the limit).
+
 ### 2026-10-23 Stars on app cards; reactions carry across an app's versions (Claude)
 The operator: "a star on app cards that bring the game app to the top of your favorites list. The star should persist across
 version changes so should hearts comments tips and dislikes." Each card has the exchange's star (_exui.fav_button,

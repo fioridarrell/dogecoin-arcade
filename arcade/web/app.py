@@ -26139,7 +26139,10 @@ def create_app(state: AppState) -> FastAPI:
                        "real_coins": bool(state.setting("faucet_real_coins", False))},
             # The call relay (web/realtime.py, THE RELAY): the key's id, never its token.
             "turn": {"key_id": (state.setting("turn") or {}).get("key_id") or "",
-                     "has_token": bool((state.setting("turn") or {}).get("token"))},
+                     "has_token": bool((state.setting("turn") or {}).get("token")),
+                     "account_id": (state.setting("turn") or {}).get("account_id") or "",
+                     "has_analytics": bool((state.setting("turn") or {}).get("analytics")),
+                     "meter": (state.relay_meter() if hasattr(state, "relay_meter") else {})},
             # Never the access token itself: only that there is one.
             "moderation": {k: v for k, v in (state.setting("moderation") or {}).items()
                            if k != "key"}
@@ -26632,7 +26635,33 @@ def create_app(state: AppState) -> FastAPI:
                         turn_servers(key_id, token, ttl=60)
                     except Exception as exc:                    # noqa: BLE001
                         raise ValueError(f"Cloudflare did not take that key: {exc}") from None
-                    state.set_setting("turn", {"key_id": key_id, "token": token})
+                    state.set_setting("turn", {**kept, "key_id": key_id, "token": token})
+            if isinstance(said.get("turn_meter"), dict):
+                # The relay's meter (2026-10-23: "so that I don't go over the limit"): an Account Analytics
+                # token and the account's id, tried with Cloudflare before they are kept, and the month's limit.
+                t, kept = said["turn_meter"], state.setting("turn") or {}
+                if not kept.get("key_id"):
+                    raise ValueError("save the relay's TURN key first")
+                limit = float(t.get("limit_gb") or kept.get("limit_gb") or 1000)
+                if not 0 < limit <= 1_000_000:
+                    raise ValueError("a monthly limit is a number of GB")
+                if t.get("clear"):
+                    kept = {k: v for k, v in kept.items() if k not in ("account_id", "analytics")}
+                else:
+                    account = str(t.get("account_id") or kept.get("account_id") or "").strip()
+                    analytics = str(t.get("analytics") or "").strip() or str(kept.get("analytics") or "")
+                    if account or analytics:
+                        if not re.fullmatch(r"[0-9a-fA-F]{32}", account) or not analytics:
+                            raise ValueError("the meter needs the account's 32-character id and an Account Analytics token")
+                        from .realtime import turn_usage
+                        try:
+                            turn_usage(account, analytics, str(kept["key_id"]))
+                        except Exception as exc:                # noqa: BLE001
+                            raise ValueError(str(exc)) from None
+                        kept = {**kept, "account_id": account, "analytics": analytics}
+                state.set_setting("turn", {**kept, "limit_gb": limit})
+                if hasattr(state, "relay_meter"):
+                    state.relay_meter(fresh=True)
             # Moved here from Overview (2026-10-19, the operator: "the overview page needs to be re-organized"): extra
             # room for sale (the /settings/quotas form's boost fields) and this node's cut of trades (/settings/cut).
             if isinstance(said.get("boost"), dict):

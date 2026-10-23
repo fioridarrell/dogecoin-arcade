@@ -175,3 +175,59 @@ def test_the_relay_goes_to_players_who_are_somebody_and_not_to_guests(tmp_path, 
     monkeypatch.setattr(realtime, "turn_servers", fake)
     said = public.get("/realtime/ice", headers={"Host": "app.example.com", "X-Forwarded-For": "203.0.113.9"}).json()
     assert said.get("relay") is not True
+
+
+def test_the_meter_reads_this_months_egress_for_the_key():
+    """THE METER (2026-10-23: "a usage meter on my node so that I don't go over the limit"): Cloudflare's
+    GraphQL, this calendar month, this key; billed by egress."""
+    import datetime
+
+    import pytest
+
+    from arcade.mesh.node import MeshError
+    from arcade.web.realtime import turn_usage
+    asked = []
+    body = {"data": {"viewer": {"accounts": [{"callsTurnUsageAdaptiveGroups": [
+        {"sum": {"egressBytes": 2_500_000_000, "ingressBytes": 100}}, {"sum": {"egressBytes": 500_000_000}}]}]}}}
+
+    def post(url, **kw):
+        asked.append(kw)
+        return _Answer(200, body)
+    got = turn_usage("cd" * 16, "an", "ab" * 16, today=datetime.date(2026, 10, 23), post=post)
+    assert got == {"egress": 3_000_000_000, "ingress": 100, "from": "2026-10-01", "to": "2026-10-23"}
+    v = asked[0]["json"]["variables"]
+    assert v == {"account": "cd" * 16, "key": "ab" * 16, "from": "2026-10-01", "to": "2026-10-23"}
+    assert asked[0]["headers"]["Authorization"] == "Bearer an"
+    with pytest.raises(MeshError, match="not authorized"):
+        turn_usage("cd" * 16, "bad", "ab" * 16, post=lambda url, **kw: _Answer(200, {"errors": [{"message": "not authorized"}]}))
+
+
+def test_at_the_limit_the_relay_is_no_longer_handed_out(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from arcade.web import realtime
+    from arcade.web.app import create_app
+    sys.path.insert(0, str(pathlib.Path(__file__).parent))
+    from test_realtime_web import make_state
+
+    state = make_state(tmp_path, "node")
+
+    class _Mesh:
+        node_id = "n"
+        loop = object()
+    _Mesh.stun = stun.StunShare(None)
+    state.mesh = _Mesh()
+    monkeypatch.setattr(type(state), "derived_address", "nOperator" + "a" * 25, raising=False)
+    monkeypatch.setattr(realtime, "turn_servers", lambda *a, **k: [{"urls": ["turn:x"], "username": "u", "credential": "c"}])
+    used = {"egress": 0}
+    monkeypatch.setattr(realtime, "turn_usage", lambda *a, **k: {"egress": used["egress"], "ingress": 0,
+                                                                  "from": "2026-10-01", "to": "2026-10-23"})
+    state.set_setting("turn", {"key_id": "ab" * 16, "token": "t", "account_id": "cd" * 16, "analytics": "an",
+                               "limit_gb": 10})
+    client = TestClient(create_app(state))
+    assert client.get("/realtime/ice").json()["relay"] is True
+    meter = state.relay_meter(fresh=True)
+    assert meter["metered"] and meter["used_gb"] == 0 and not meter["over"]
+    used["egress"] = 10_500_000_000
+    assert state.relay_meter(fresh=True)["over"] is True
+    assert client.get("/realtime/ice").json()["relay"] is False, "over the month's limit: direct links only"

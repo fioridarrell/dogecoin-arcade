@@ -66,7 +66,20 @@ PUBLIC_STUN = "stun:stun.cloudflare.com:3478"
 # link through; chose "Cloudflare TURN"). The operator's TURN key (Admin, Network: setting `turn`); signed-in players
 # get short-lived logins to it, so a stranger's browser cannot spend the arcade's relay.
 TURN_API = "https://rtc.live.cloudflare.com/v1/turn/keys/{key}/credentials/generate-ice-servers"
-TURN_TTL = 6 * 3600   # after the nodes' own, unless the operator says not (realtime_ice)
+TURN_TTL = 6 * 3600
+# THE METER (2026-10-23: "some sort of usage meter on my node so that I don't go over the limit"). Cloudflare
+# bills the relay by its egress (relay -> player), read from its GraphQL analytics with an Account Analytics token;
+# at the operator's monthly limit the relay is no longer handed out (direct links only) until the month turns.
+TURN_GRAPHQL = "https://api.cloudflare.com/client/v4/graphql"
+TURN_LIMIT_GB = 1000            # Cloudflare's free relay allowance a month; the operator can set another
+METER_EVERY = 600               # seconds between two asks of Cloudflare
+TURN_USAGE_QUERY = """query($account: String!, $key: String!, $from: Date!, $to: Date!) {
+  viewer { accounts(filter: {accountTag: $account}) {
+    callsTurnUsageAdaptiveGroups(limit: 10000, filter: {keyId: $key, date_geq: $from, date_leq: $to}) {
+      sum { egressBytes ingressBytes }
+    }
+  } }
+}"""   # after the nodes' own, unless the operator says not (realtime_ice)
 MAX_ICE_NODES = 4                               # more STUN servers only slow a browser's gathering
 
 
@@ -92,6 +105,34 @@ def turn_servers(key_id: str, token: str, ttl: int = TURN_TTL, post=None) -> lis
     if not out:
         raise MeshError("Cloudflare gave no relay")
     return out
+
+
+def turn_usage(account_id: str, token: str, key_id: str, today=None, post=None) -> dict:
+    """This calendar month's relay traffic for one TURN key, in bytes: {"egress", "ingress", "from", "to"}."""
+    import datetime
+
+    import requests
+    post = post or requests.post
+    today = today or datetime.datetime.now(datetime.timezone.utc).date()
+    start = today.replace(day=1)
+    answer = post(TURN_GRAPHQL, timeout=20, headers={"Authorization": f"Bearer {token}",
+                                                      "Content-Type": "application/json"},
+                  json={"query": TURN_USAGE_QUERY, "variables": {"account": account_id, "key": key_id,
+                                                                 "from": start.isoformat(), "to": today.isoformat()}})
+    try:
+        said = answer.json() or {}
+    except Exception:                                # noqa: BLE001
+        said = {}
+    if not 200 <= answer.status_code < 300 or said.get("errors"):
+        why = "; ".join(str(e.get("message", e)) for e in (said.get("errors") or [])[:2]) or str(answer.status_code)
+        raise MeshError(f"Cloudflare analytics: {why}"[:300])
+    accounts = ((said.get("data") or {}).get("viewer") or {}).get("accounts") or []
+    if not accounts:
+        raise MeshError("Cloudflare analytics: that account id is not this token's")
+    groups = accounts[0].get("callsTurnUsageAdaptiveGroups") or []
+    egress = sum(int((g.get("sum") or {}).get("egressBytes") or 0) for g in groups)
+    ingress = sum(int((g.get("sum") or {}).get("ingressBytes") or 0) for g in groups)
+    return {"egress": egress, "ingress": ingress, "from": start.isoformat(), "to": today.isoformat()}
 
 
 def room_key(game: Any, room: Any) -> str:
@@ -338,6 +379,28 @@ def register(app, state, *, account_view: Callable, signed_in: Callable,
         return JSONResponse({"ok": True, "self": svc.node_id, "nodes": out})
 
     relay_kept: dict[str, tuple[float, list]] = {}
+    meter: dict[str, Any] = {}
+
+    def relay_meter(fresh: bool = False) -> dict:
+        """This month's relay use against the operator's limit, asked of Cloudflare at most every METER_EVERY s."""
+        turn = state.settings().get("turn") or {}
+        limit_gb = float(turn.get("limit_gb") or TURN_LIMIT_GB) if isinstance(turn, dict) else TURN_LIMIT_GB
+        out = {"limit_gb": limit_gb, "metered": False}
+        if not (isinstance(turn, dict) and turn.get("key_id") and turn.get("account_id") and turn.get("analytics")):
+            return out
+        kept = meter.get("said")
+        if kept and not fresh and time.time() - meter.get("at", 0) < METER_EVERY:
+            return {**kept, "limit_gb": limit_gb, "over": kept["used_gb"] >= limit_gb}
+        try:
+            got = turn_usage(str(turn["account_id"]), str(turn["analytics"]), str(turn["key_id"]))
+            said = {"metered": True, "used_gb": round(got["egress"] / 1e9, 3), "in_gb": round(got["ingress"] / 1e9, 3),
+                    "since": got["from"], "asked": int(time.time())}
+        except Exception as exc:                     # noqa: BLE001 -- the last reading stands, and says so
+            said = {**(kept or {"metered": False, "used_gb": 0.0}), "error": str(exc)[:200], "asked": int(time.time())}
+        meter.update(said=said, at=time.time())
+        return {**said, "limit_gb": limit_gb, "over": bool(said.get("metered")) and said["used_gb"] >= limit_gb}
+
+    state.relay_meter = relay_meter                  # Admin's Call relay panel reads it
 
     def relay_for(request: Request) -> list[dict]:
         """The operator's TURN relay, for a signed-in player (or the operator) only; kept half its life per player."""
@@ -347,6 +410,8 @@ def register(app, state, *, account_view: Callable, signed_in: Callable,
         kind, address = identity(request)
         if kind == "guest" or not address:
             return []
+        if relay_meter().get("over"):
+            return []                                # the month's limit is reached: direct links only
         kept = relay_kept.get(address)
         if kept and time.time() - kept[0] < TURN_TTL / 2:
             return kept[1]
