@@ -71,6 +71,7 @@ class LlmShare:
         self._waiting: dict[int, queue.Queue] = {}   # request id -> where its answer's events go
         self._asked: dict[tuple[str, int], list] = {}
         self._busy: dict[str, int] = {}
+        self._pieces: dict[int, bytearray] = {}      # request id -> an event arriving in pieces
 
     # ---------------------------------------------------------------- hooks
     def _offer_now(self) -> dict | None:
@@ -179,6 +180,11 @@ class LlmShare:
                 elif what == "topup":
                     loop.call_soon_threadsafe(events.put_nowait, ("ev", seller.topup(
                         address, str(body.get("leg") or ""), str(body.get("txid") or ""), str(body.get("sig") or ""))))
+                elif what == "image":
+                    if getattr(seller, "images", None) is None:
+                        raise llmlib.LlmError("this arcade shares no pictures")
+                    loop.call_soon_threadsafe(events.put_nowait, ("ev", seller.images.make(
+                        address, str(asked.get("leg") or ""), body, via=peer)))
                 elif what == "balance":
                     loop.call_soon_threadsafe(events.put_nowait, ("ev", seller.balance(address)))
                 else:
@@ -211,13 +217,27 @@ class LlmShare:
                       end: bool = True) -> None:
         head = {"op": "a", "id": rid, "seq": seq, "end": end, **({"err": err[:300]} if err else {})}
         blob = json.dumps(ev, separators=(",", ":")).encode() if ev is not None else b""
+        # A picture is far more than a frame holds: its event goes in pieces, each but the last marked `more`.
+        while len(blob) > CHUNK:
+            await self._send(link, {"op": "a", "id": rid, "seq": seq, "end": False, "more": True}, blob[:CHUNK])
+            blob = blob[CHUNK:]
         await self._send(link, head, blob)
 
     # ---------------------------------------------------------------- the buyer's side
     def _on_answer(self, header: dict, blob: bytes) -> None:
-        q = self._waiting.get(header.get("id"))
+        rid = header.get("id")
+        q = self._waiting.get(rid)
         if q is None:
             return
+        if header.get("more"):
+            part = self._pieces.setdefault(rid, bytearray())
+            part += blob
+            if len(part) > MAX_ASKED * 4:
+                self._pieces.pop(rid, None)
+                q.put(("err", "that answer is too large"))
+            return
+        if rid in self._pieces:
+            blob = bytes(self._pieces.pop(rid)) + blob
         if blob:
             try:
                 q.put(("ev", json.loads(blob.decode())))
@@ -259,6 +279,7 @@ class LlmShare:
                 yield ev
         finally:
             self._waiting.pop(rid, None)
+            self._pieces.pop(rid, None)
 
     # ---------------------------------------------------------------- sending
     async def _send(self, link, frame: dict, blob: bytes = b"") -> None:
@@ -295,7 +316,46 @@ def _clean_offer(o: dict) -> dict:
         pass
     if load.get("word") in ("idle", "steady", "busy", "full"):
         keep["word"] = load["word"]
-    return {"name": str(o.get("name") or "")[:60], "models": models, "prices": prices, "free": o.get("free") is True,
+    pics = _clean_images(o.get("images")) if isinstance(o.get("images"), dict) else None
+    return {**({"images": pics} if pics else {}),
+            "name": str(o.get("name") or "")[:60], "models": models, "prices": prices, "free": o.get("free") is True,
             "load": keep,
             "max_out": int(o.get("max_out") or 0) if str(o.get("max_out") or "0").isdigit() else 0,
             "tag": str(o.get("tag") or "")[:24], "host": str(o.get("host") or "")[:100]}
+
+
+def _clean_images(p: dict) -> dict | None:
+    """The pictures part of another arcade's offer, kept to the shape the book draws."""
+    prices = []
+    for x in (p.get("prices") or [])[:40]:
+        if not isinstance(x, dict):
+            continue
+        try:
+            llmlib.leg_parts(str(x.get("leg") or ""))
+            prices.append({"leg": str(x["leg"]), "label": str(x.get("label") or x["leg"])[:80],
+                           "per": format(llmlib.price(x.get("per", 0)), "f"), "to": str(x.get("to") or "")[:100]})
+        except (llmlib.LlmError, KeyError):
+            continue
+    models = [{"id": str(m.get("id"))[:200], "label": str(m.get("label") or m.get("id"))[:80]}
+              for m in (p.get("models") or [])[:10] if isinstance(m, dict) and m.get("id")]
+    if not models:
+        return None
+    load = p.get("load") if isinstance(p.get("load"), dict) else {}
+    keep = {}
+    for k in ("active", "waiting", "at_once", "last_15m", "last_hour", "failed_hour"):
+        try:
+            keep[k] = max(0, int(load.get(k) or 0))
+        except (TypeError, ValueError):
+            pass
+    try:
+        keep["avg_s"] = max(0.0, float(load.get("avg_s") or 0))
+    except (TypeError, ValueError):
+        pass
+    if load.get("word") in ("idle", "steady", "busy", "full"):
+        keep["word"] = load["word"]
+    try:
+        side = max(256, min(1536, int(p.get("max_side") or 1024)))
+    except (TypeError, ValueError):
+        side = 1024
+    return {"models": models, "prices": prices, "free": p.get("free") is True, "max_side": side,
+            "edits": p.get("edits") is True, "load": keep}

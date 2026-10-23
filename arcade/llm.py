@@ -360,7 +360,7 @@ class Books:
             # and the load the book shows). Added to a usage table from before them.
             have = {r[1] for r in db.execute("PRAGMA table_info(usage)")}
             for col, kind in (("ms", "INTEGER NOT NULL DEFAULT 0"), ("first_ms", "INTEGER NOT NULL DEFAULT 0"),
-                              ("ok", "INTEGER NOT NULL DEFAULT 1")):
+                              ("ok", "INTEGER NOT NULL DEFAULT 1"), ("images", "INTEGER NOT NULL DEFAULT 0")):
                 if col not in have:
                     db.execute(f"ALTER TABLE usage ADD COLUMN {col} {kind}")
 
@@ -402,13 +402,13 @@ class Books:
         return True
 
     def charge(self, buyer: str, leg: str, model: str, tokens_in: int, tokens_out: int, units: int,
-               via: str = "", ms: int = 0, first_ms: int = 0, ok: bool = True) -> int:
+               via: str = "", ms: int = 0, first_ms: int = 0, ok: bool = True, images: int = 0) -> int:
         """Take a reply's cost (never below zero) and log it; the balance left."""
         with self._lock, self._db() as db:
-            db.execute("INSERT INTO usage (at, buyer, model, leg, tokens_in, tokens_out, units, via, ms, first_ms, ok) "
-                       "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            db.execute("INSERT INTO usage (at, buyer, model, leg, tokens_in, tokens_out, units, via, ms, first_ms, ok, "
+                       "images) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                        (time.time(), buyer, model, leg, int(tokens_in), int(tokens_out), int(units), via, int(ms),
-                        int(first_ms), 1 if ok else 0))
+                        int(first_ms), 1 if ok else 0, int(images)))
             db.execute("INSERT INTO credit VALUES (?,?,0) ON CONFLICT(buyer, leg) DO "
                        "UPDATE SET units=MAX(0, units-?)", (buyer, leg, int(units)))
             row = db.execute("SELECT units FROM credit WHERE buyer=? AND leg=?", (buyer, leg)).fetchone()
@@ -421,11 +421,12 @@ class Books:
                 "SELECT leg, COUNT(*) AS replies, SUM(tokens_in) AS tokens_in, SUM(tokens_out) AS tokens_out, "
                 "SUM(units) AS units, COUNT(DISTINCT buyer) AS buyers FROM usage WHERE at>=? GROUP BY leg", (since,))]
 
-    def recently(self, since: float) -> dict:
-        """Replies, failures, output tokens and time spent writing since `since` (the load the book shows)."""
+    def recently(self, since: float, kind: str = "text") -> dict:
+        """Replies (or pictures), failures, output tokens and time spent since `since` (the load the book shows)."""
+        which = "model LIKE 'image:%'" if kind == "image" else "model NOT LIKE 'image:%'"
         with self._db() as db:
             r = db.execute("SELECT COUNT(*) AS n, SUM(1-ok) AS bad, SUM(tokens_out) AS out, SUM(ms) AS ms, "
-                           "SUM(first_ms) AS first FROM usage WHERE at>=?", (since,)).fetchone()
+                           f"SUM(first_ms) AS first FROM usage WHERE at>=? AND {which}", (since,)).fetchone()
         return {k: int(r[k] or 0) for k in ("n", "bad", "out", "ms", "first")}
 
     def analytics(self, since: float, bucket: int = 3600) -> dict:
@@ -434,7 +435,8 @@ class Books:
         q = ("SELECT COUNT(*) AS replies, SUM(1-ok) AS failed, SUM(tokens_in) AS tokens_in, SUM(tokens_out) AS "
              "tokens_out, SUM(units) AS units, AVG(CASE WHEN ok=1 AND ms>0 THEN ms END) AS avg_ms, "
              "AVG(CASE WHEN ok=1 AND first_ms>0 THEN first_ms END) AS avg_first_ms, "
-             "SUM(CASE WHEN ok=1 THEN ms END) AS ms_sum, COUNT(DISTINCT buyer) AS buyers")
+             "SUM(CASE WHEN ok=1 AND images=0 THEN ms END) AS ms_sum, COUNT(DISTINCT buyer) AS buyers, "
+             "SUM(images) AS images")
         with self._db() as db:
             total = dict(db.execute(q + " FROM usage WHERE at>=?", (since,)).fetchone())
             series = [dict(r) for r in db.execute(
@@ -671,24 +673,46 @@ class Seller:
         """What this arcade says on the LLM book, or None when it sells nothing."""
         cfg = self.config()
         free = is_free(cfg)
-        if not (cfg.get("on") and cfg.get("url") and cfg.get("models")):
+        pictures = self.images.part() if self.images is not None else None
+        text = bool(cfg.get("on") and cfg.get("url") and cfg.get("models"))
+        if not text and not pictures:
             return None
         prices = []
-        for p in ([] if free else cfg["prices"]):
+        for p in ([] if (free or not text) else cfg["prices"]):
             try:
                 to = self.pay_to(p["leg"])
             except Exception:                                   # noqa: BLE001 -- a chain away: not offered now
                 to = ""
             if to:
                 prices.append({**p, "to": to})
-        if not prices and not free:
-            return None
+        if text and not prices and not free:
+            text = False                                        # its coins' chains are away just now
+            if not pictures:
+                return None
         about = self.about() or {}
         load = self.load()
         load["word"] = self.word(load)
-        return {"name": cfg.get("name") or "", "models": [{"id": m} for m in cfg["models"]], "free": free, "load": load,
-                "max_out": int(cfg.get("max_out") or 0), "prices": prices,
-                "tag": str(about.get("tag") or ""), "host": str(about.get("host") or "")}
+        out = {"name": cfg.get("name") or (pictures or {}).get("name") or "",
+               "models": [{"id": m} for m in cfg["models"]] if text else [], "free": free and text,
+               "load": load if text else {}, "max_out": int(cfg.get("max_out") or 0) if text else 0,
+               "prices": prices, "tag": str(about.get("tag") or ""), "host": str(about.get("host") or "")}
+        if pictures:
+            out["images"] = pictures
+        return out
+
+    images = None                                               # the arcade's imagegen.ImageSeller, set by the web layer
+
+    def paid_legs(self) -> set[str]:
+        """The payment kinds a top-up may be in: the model's asks and the pictures' (each only while not free)."""
+        legs = set()
+        if not is_free(self.config()):
+            legs |= {p["leg"] for p in self.config().get("prices") or []}
+        if self.images is not None:
+            from .imagegen import is_free as pictures_free
+            icfg = self.images.config()
+            if icfg.get("on") and not pictures_free(icfg):
+                legs |= {p["leg"] for p in icfg.get("prices") or []}
+        return legs
 
     def _price(self, leg: str) -> dict:
         if is_free(self.config()):
@@ -706,9 +730,11 @@ class Seller:
                 "credit": {leg: {"units": u, "text": fmt(u, self.scale(leg))} for leg, u in legs.items()}}
 
     def topup(self, buyer: str, leg: str, txid: str, sig: str) -> dict:
-        if is_free(self.config()):
+        legs = self.paid_legs()
+        if not legs:
             raise LlmError("this arcade's model is free: no top-up needed")
-        self._price(leg)
+        if leg not in legs:
+            raise LlmError("this arcade does not take that coin or token")
         txid = (txid or "").strip().lower()
         network = leg_parts(leg)[0]
         signer = recover_hash160(sig, topup_words(network, txid, self.node_id(), buyer))

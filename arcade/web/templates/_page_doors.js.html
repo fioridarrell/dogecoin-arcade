@@ -1411,7 +1411,7 @@
         }).catch(function(err){ answer({ok: false, error: String(err.message || err)}); });
         return;
       }
-      if (op !== 'chat') { answer({ok: false, error: 'llm: op is offers or chat'}); return; }
+      if (op !== 'chat' && op !== 'image') { answer({ok: false, error: 'llm: op is offers, chat or image'}); return; }
       if (viewer !== 'account' || (typeof ARCADE_SIGNED !== 'undefined' && !ARCADE_SIGNED)) {
         answer({ok: false, error: 'sign in first: the model is paid from your credit'}); return;
       }
@@ -1424,9 +1424,25 @@
       asked.then(function(yes){
         if (!yes) throw new Error('declined');
         return llmJSON('/account/llm/offers');
-      }).then(function(book){ return llmPick(book, req); }).then(function(got){
+      }).then(function(book){
+        if (op !== 'image') return llmPick(book, req);
+        // A picture: the first seller with pictures this player can pay for (free first, then any with credit).
+        var named = (book.offers || []).filter(function(o){ return o.images && (!req.seller || o.seller === req.seller); });
+        if (!named.length) throw new Error('no arcade shares pictures right now');
+        var o = named.find(function(x){ return x.images.free; }) || named[0];
+        return {o: o, leg: req.leg || (o.images.free ? 'free' : o.images.prices[0].leg)};
+      }).then(function(got){
         return llmGrant(got.o).then(function(){ return got; });
       }).then(function(got){
+        if (op === 'image') {
+          var pic = {seller: got.o.seller, leg: got.leg, prompt: req.prompt || '', size: req.size || '', image: req.image || '',
+                     model: req.model || (got.o.images.models[0] || {}).id};
+          return llmJSON('/account/llm/image', pic).then(function(r){
+            var a = r.arcade || {}, p = (got.o.images.prices || []).find(function(x){ return x.leg === a.leg; }) || {}, coin = String(p.label || '').split(' \u00b7 ')[0];
+            answer({ok: true, png: r.png, seed: r.seed, seller: got.o.seller, leg: a.leg,
+                    cost: a.free ? 'free' : a.cost_text + ' ' + coin, left: a.free ? '' : a.left_text + ' ' + coin});
+          });
+        }
         var body = {};
         Object.keys(req).forEach(function(k){ if (k !== 'seller' && k !== 'leg' && k !== 'stream') body[k] = req[k]; });
         body.seller = got.o.seller; body.leg = got.leg;

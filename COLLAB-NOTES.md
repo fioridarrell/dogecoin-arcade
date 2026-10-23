@@ -88,6 +88,30 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-23 Pictures on the LLM tab: share a ComfyUI image model, priced in credits (Claude)
+The operator: "I would like to also be able to share my image generation model" -- per image (his choice), make AND edit;
+then "it should be credits ... an edit should cost two credits and a plain picture should stay at one credit" ("it's
+a two-way upload and download"). Branch claude/llm-images (on claude/llm-stats).
+* **arcade/imagegen.py**: setting `llm_images` {on, url, wake, name, models, max_side, steps, at_once, prices [{leg,
+  label, per}]}; `per` is the price of one credit; a picture is `PLAIN_CREDITS` (1), an edit `EDIT_COUNTS` (2); no
+  asks (or only 0) = free. `ComfyServer`: models found from /object_info (UNETLoader + a Qwen CLIPLoader + VAELoader;
+  only the Qwen-Image family has workflows so far), /upload/image, /prompt, /history, /view. Workflows ported from
+  ~/qwen-tools/comfy_mcp.py (text: the encoder's square latent resized; edit: the FLAT "images.image_1" key).
+  `wake` is a command run when ComfyUI does not answer (on-demand ComfyUI); **set only from the node machine**
+  (clean(..., local)), never through the remote admin password. `ImageSeller.make` charges after the picture exists;
+  a failure costs nothing and is logged ok=0.
+* Same credit as the LLM (llm.Books), usage gains `images`; `Seller.paid_legs` lets a top-up be in any coin either
+  side asks for. The offer carries `images` {models, prices, free, max_side, edits, edit_counts, load}; an arcade
+  sharing only pictures says an offer with no text models. llmshare: what=image, and an event bigger than a frame
+  goes in `more` pieces (CHUNK) put back together by the buyer.
+* Web: Admin -> LLM "Share your image model" (scan, wake, sizes, steps, price per credit); Exchange -> LLM
+  "Pictures" (cards with load, Make a picture: words, size, optional picture to edit, download);
+  `/account/llm/image`; OpenAI `/v1/images/generations` (b64_json) and `/v1/images/edits` (multipart) for API keys;
+  `arcade.llm.image({prompt, size, image})` for apps. door.py lets the three POSTs through.
+* Live check on a test machine with the real ComfyUI (woken by `systemctl --user start comfyui`): a 1024x768 picture in
+  62 s for 1 credit, an edit (party hat) in 51 s for 2 credits; the browser made one in 32 s.
+* Tests: test_llm.py (19), with a fake ComfyUI.
+
 ### 2026-10-23 LLM service: models found by themselves, how busy each is, a usage analytics page (Claude)
 The operator: "It should automatically scan the LLM service for the models that are available and then the admin should be
 able to just select which model they want to share"; "Users also need a way to know if one of the models is congested

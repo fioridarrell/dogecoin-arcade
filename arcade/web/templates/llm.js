@@ -14,6 +14,8 @@
 // chat() takes OpenAI's chat fields (messages, max_tokens, temperature, tools ...) plus `seller` and `leg` (which
 // seller and which coin pays; left out, the viewer picks one the player has credit with). It resolves {content,
 // reasoning, usage: {tokens_in, tokens_out}, cost, left}.
+//
+//   arcade.llm.image({prompt: 'a red dragon', size: '1024x1024'}).then(function (r) { img.src = r.url; });
 (function () {
   var seq = 0, waiting = {};
 
@@ -52,6 +54,17 @@
     });
   }
 
+  // image({prompt, size: '1024x1024', image: dataURL to edit, seller, leg}) -> {png: base64, seed, cost, left}: a picture
+  // from a seller's image model, paid per picture (2026-10-23).
+  function image(req) {
+    var body = {op: 'image', request: {}};
+    Object.keys(req || {}).forEach(function (k) { body.request[k] = req[k]; });
+    return ask(body).then(function (m) {
+      return {png: m.png || '', url: m.png ? 'data:image/png;base64,' + m.png : '', seed: m.seed, cost: m.cost || '',
+              left: m.left || '', seller: m.seller, leg: m.leg};
+    });
+  }
+
   window.arcade = window.arcade || {};
-  window.arcade.llm = {offers: offers, chat: chat};
+  window.arcade.llm = {offers: offers, chat: chat, image: image};
 })();

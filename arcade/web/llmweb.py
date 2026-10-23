@@ -86,6 +86,9 @@ def register(app, state, *, signed_in: Callable, account_address: Callable, acco
 
     seller = llmlib.Seller(lambda: llmlib.config(state), books, pay_to, scale, verify, free, about)
     seller.node_id = me_id
+    from .. import imagegen
+    pictures = imagegen.ImageSeller(lambda: imagegen.config(state), books, pay_to, scale, free)
+    seller.images = pictures
     state.llm_seller = seller                       # mesh/llmshare.py serves through it
 
     # ---------------------------------------------------------------- reaching a seller
@@ -102,6 +105,8 @@ def register(app, state, *, signed_in: Callable, account_address: Callable, acco
         if is_here(sid):
             if what == "chat":
                 yield from seller.chat(address, leg, body, via=via)
+            elif what == "image":
+                yield pictures.make(address, leg, body, via=via)
             elif what == "topup":
                 yield seller.topup(address, body.get("leg", ""), body.get("txid", ""), body.get("sig", ""))
             else:
@@ -160,8 +165,56 @@ def register(app, state, *, signed_in: Callable, account_address: Callable, acco
             earned.append({**row, "text": llmlib.fmt(int(row["units"] or 0), sc)})
         kinds = [c for c in pay_choices(request) if c.get("kind") in ("coin", "token")]
         return JSONResponse({"config": {**{k: v for k, v in cfg.items() if k != "key"}, "has_key": bool(cfg.get("key"))},
-                             "earned": earned, "kinds": kinds, "selling": bool(seller.offer()), "load": load_now()},
+                             "earned": earned, "kinds": kinds, "selling": bool(seller.offer()), "load": load_now(),
+                             "images": images_admin(request)},
                             headers={"Cache-Control": "no-store"})
+
+    def images_admin(request: Request) -> dict:
+        who = admin_check(request)
+        icfg = imagegen.config(state)
+        return {"config": {**icfg, "wake": icfg.get("wake") if who.get("local") else ("set" if icfg.get("wake") else "")},
+                "local": bool(who.get("local")), "load": pictures.load(), "sharing": bool(pictures.part())}
+
+    @app.post("/admin/api/llm/images")
+    async def admin_images_save(request: Request):
+        """Admin -> LLM -> Share your image model (2026-10-23: per image; make and edit)."""
+        who = admin_check(request, write=True)
+        try:
+            said = await body_of(request)
+            state.set_setting(imagegen.SETTING, imagegen.clean(said, imagegen.config(state), bool(who.get("local"))))
+        except (llmlib.LlmError, ValueError, TypeError) as exc:
+            return refuse(exc)
+        s = share()
+        if s is not None:
+            s.say_again()
+        return JSONResponse({"ok": True, "sharing": bool(pictures.part())})
+
+    @app.post("/admin/api/llm/images/scan")
+    async def admin_images_scan(request: Request):
+        """The picture models ComfyUI holds, found by themselves (woken first when it sleeps and a wake is set)."""
+        admin_check(request, write=True)
+        import asyncio
+        try:
+            said = await body_of(request)
+            url = str(said.get("url") or "").strip().rstrip("/") or imagegen.config(state).get("url") or ""
+            if not url:
+                raise llmlib.LlmError("name ComfyUI's address first")
+            srv = imagegen.ComfyServer(url, imagegen.config(state).get("wake") or "")
+            t = time.monotonic()
+            up = await asyncio.to_thread(srv.up)
+            if not up and said.get("wake_now") and srv.wake:
+                await asyncio.to_thread(srv.ensure_up)
+                up = True
+            if not up:
+                return JSONResponse({"ok": False, "asleep": True,
+                                     "detail": "ComfyUI is not running" + ("; it is woken when a picture is asked for"
+                                                                           if srv.wake else "")})
+            models = await asyncio.to_thread(srv.models)
+            return JSONResponse({"ok": True, "models": models, "ms": round((time.monotonic() - t) * 1000)})
+        except llmlib.LlmError as exc:
+            return refuse(exc)
+        except Exception as exc:                                    # noqa: BLE001
+            return refuse(f"ComfyUI did not answer: {exc}"[:300])
 
     def load_now() -> dict:
         got = seller.load(fresh=True)
@@ -401,6 +454,19 @@ def register(app, state, *, signed_in: Callable, account_address: Callable, acco
             return refuse(exc)
         return stream(gen, openai=False)
 
+    @app.post("/account/llm/image")
+    async def llm_image(request: Request):
+        """One picture, made or edited by a seller's image model and paid per image (imagegen.py)."""
+        try:
+            account, address = need_account(request)
+            said = await body_of(request)
+            sid, leg = str(said.pop("seller", HERE) or HERE), str(said.pop("leg", "") or "")
+            import asyncio
+            got = await asyncio.to_thread(lambda: next(ask(account, address, sid, "image", leg, said), {}))
+        except llmlib.LlmError as exc:
+            return refuse(exc)
+        return JSONResponse(got)
+
     @app.get("/account/llm/keys")
     def llm_keys(request: Request):
         try:
@@ -459,6 +525,59 @@ def register(app, state, *, signed_in: Callable, account_address: Callable, acco
         models = [m["id"] for m in (o or {}).get("models", [])]
         return JSONResponse({"object": "list", "data": [{"id": m, "object": "model", "owned_by": "arcade"}
                                                         for m in models]})
+
+    async def v1_picture(request: Request, body: dict):
+        try:
+            row = by_key(request)
+        except llmlib.LlmError as exc:
+            return oai_error(str(exc), 401)
+
+        class _Acct:
+            pubkey = row["account"]
+        import asyncio
+        n = int(body.pop("n", 1) or 1)
+        if n != 1:
+            return oai_error("one picture per request (n=1)", 400)
+        body.pop("response_format", None)
+        try:
+            got = await asyncio.to_thread(lambda: next(ask(_Acct, row["address"], row["seller"], "image", row["leg"],
+                                                           body, via="api"), {}))
+        except llmlib.LlmError as exc:
+            msg = str(exc)
+            return oai_error(msg, 402 if "credit" in msg else 429 if "busy" in msg else 400)
+        return JSONResponse({"created": int(time.time()), "data": [{"b64_json": got.get("png", "")}],
+                             "model": got.get("model", ""), "seed": got.get("seed")})
+
+    @app.post("/v1/images/generations")
+    async def v1_images(request: Request):
+        """OpenAI's images API: {prompt, size, model}; the picture comes back as b64_json."""
+        try:
+            body = await request.json()
+        except ValueError:
+            return oai_error("send JSON", 400)
+        if not isinstance(body, dict):
+            return oai_error("send a JSON object", 400)
+        body.pop("image", None)
+        return await v1_picture(request, body)
+
+    @app.post("/v1/images/edits")
+    async def v1_image_edits(request: Request):
+        """OpenAI's image edits: a multipart form with `image` (a file) and `prompt`."""
+        import base64 as _b64
+        try:
+            form = await request.form()
+        except Exception:                                           # noqa: BLE001
+            return oai_error("send a multipart form with image and prompt", 400)
+        f = form.get("image") or form.get("image[]")
+        if f is None or not hasattr(f, "read"):
+            return oai_error("bring the picture as the form field image", 400)
+        try:
+            raw = await f.read()
+            body = {"prompt": str(form.get("prompt") or ""), "model": str(form.get("model") or ""),
+                    "image": _b64.b64encode(raw).decode()}
+        finally:
+            await form.close()                                      # the upload's temporary file, at once
+        return await v1_picture(request, body)
 
     @app.post("/v1/chat/completions")
     async def v1_chat(request: Request):

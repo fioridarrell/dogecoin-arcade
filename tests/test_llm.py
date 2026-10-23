@@ -422,3 +422,157 @@ def test_an_old_usage_table_gains_the_new_columns(tmp_path):
     books = llm.Books(tmp_path)
     books.charge("b", "main-coin", "m", 1, 1, 0, "web", ms=500, first_ms=100)
     assert books.analytics(0)["total"]["replies"] == 2
+
+
+# ------------------------------------------------------------------------------------------------ pictures
+
+def _png() -> bytes:
+    import struct
+    import zlib as _z
+
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", _z.crc32(kind + data) & 0xFFFFFFFF)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 2, 2, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", _z.compress(b"\x00" + b"\xff\x00\x00" * 2 + b"\x00" + b"\x00\xff\x00" * 2))
+            + chunk(b"IEND", b""))
+
+
+PNG = _png()
+
+
+def fake_comfy_app(jobs: list):
+    from fastapi import FastAPI, Request, UploadFile
+    from fastapi.responses import Response
+    app = FastAPI()
+    done: dict = {}
+
+    @app.get("/system_stats")
+    def stats():
+        return {"system": {}}
+
+    @app.get("/object_info/{node}")
+    def info(node: str):
+        names = {"UNETLoader": ("unet_name", ["qwen_image_2.1_int8_convrot.safetensors", "other.safetensors"]),
+                 "CLIPLoader": ("clip_name", ["qwen3vl_8b_w4a8.safetensors"]),
+                 "VAELoader": ("vae_name", ["qwen_image_2.1_vae_bf16.safetensors"])}[node]
+        return {node: {"input": {"required": {names[0]: [names[1]]}}}}
+
+    @app.post("/upload/image")
+    async def upload(image: UploadFile):
+        await image.read()
+        await image.close()
+        return {"name": image.filename}
+
+    @app.post("/prompt")
+    async def prompt(request: Request):
+        body = await request.json()
+        jobs.append(body["prompt"])
+        pid = f"p{len(jobs)}"
+        done[pid] = {"status": {"status_str": "success"},
+                     "outputs": {"8": {"images": [{"filename": "x.png", "subfolder": "", "type": "output"}]}}}
+        return {"prompt_id": pid}
+
+    @app.get("/history/{pid}")
+    def history(pid: str):
+        return {pid: done[pid]}
+
+    @app.get("/view")
+    def view():
+        return Response(PNG, media_type="image/png")
+    return app
+
+
+@pytest.fixture
+def pictures(arcade):
+    from test_realtime_web import Served
+    client, state, pubkey, seen = arcade
+    jobs: list = []
+    comfy = Served(fake_comfy_app(jobs))
+    try:
+        yield client, state, pubkey, jobs, str(comfy.client.base_url).rstrip("/")
+    finally:
+        comfy.close()
+
+
+def test_an_image_model_is_found_shared_and_sold_per_picture(pictures):
+    """2026-10-23: "I would like to also be able to share my image generation model" -- per picture, make and
+    edit, from the same credit."""
+    import base64
+    from arcade import imagegen
+    client, state, pubkey, jobs, url = pictures
+    h = {"X-Arcade-Admin": "1"}
+    found = client.post("/admin/api/llm/images/scan", headers=h, json={"url": url}).json()
+    assert [m["id"] for m in found["models"]] == ["qwen_image_2.1_int8_convrot.safetensors"], "only a family it can draw"
+    saved = client.post("/admin/api/llm/images", headers=h, json={
+        "on": True, "url": url, "models": ["qwen_image_2.1_int8_convrot.safetensors"], "max_side": 1024,
+        "prices": [{"leg": "main-coin", "label": "PEP", "per": "0.5"}]})
+    assert saved.status_code == 200 and saved.json()["sharing"], saved.text
+    (o,) = client.get("/account/llm/offers").json()["offers"]
+    assert o["images"]["prices"][0]["per"] == "0.5" and o["images"]["prices"][0]["to"] == "PAYTO-main"
+
+    said = client.post("/account/llm/image", json={"seller": "here", "leg": "main-coin", "prompt": "a dragon"})
+    assert said.status_code == 400 and "credit" in said.json()["detail"]
+    state.llm_seller.books.credit("56" * 32, "main-coin", ADDR, llm.COIN)
+    got = client.post("/account/llm/image", json={"seller": "here", "leg": "main-coin", "prompt": "a dragon",
+                                                  "size": "2048x1024"}).json()
+    assert base64.b64decode(got["png"]) == PNG and got["arcade"]["cost"] == llm.COIN // 2
+    assert jobs[-1]["5"]["inputs"]["width"] == 512 and jobs[-1]["5"]["inputs"]["height"] == 256, \
+        "cut to the largest side (1024x512), halved for the latent"
+    pic = "data:image/png;base64," + base64.b64encode(PNG).decode()
+    edit = client.post("/account/llm/image", json={"seller": "here", "leg": "main-coin", "prompt": "add a hat",
+                                                   "image": pic})
+    assert edit.status_code == 400 and "2 credits" in edit.json()["detail"], \
+        "the operator: an edit costs two credits, a plain picture one; half a coin left pays for one"
+    state.llm_seller.books.credit("58" * 32, "main-coin", ADDR, llm.COIN // 2)
+    edit = client.post("/account/llm/image", json={"seller": "here", "leg": "main-coin", "prompt": "add a hat",
+                                                   "image": pic})
+    assert edit.status_code == 200 and "images.image_1" in jobs[-1]["4"]["inputs"], "an edit hands the picture over"
+    assert edit.json()["arcade"]["cost"] == llm.COIN, "two credits"
+    assert client.post("/account/llm/image", json={"seller": "here", "leg": "main-coin",
+                                                   "prompt": "again"}).status_code == 400, "credit spent: 0 left"
+
+    key = client.post("/account/llm/keys/new", json={"seller": "here", "leg": "main-coin"}).json()["key"]
+    state.llm_seller.books.credit("57" * 32, "main-coin", ADDR, llm.COIN)
+    v1 = client.post("/v1/images/generations", headers={"Authorization": f"Bearer {key}"},
+                     json={"prompt": "a fox", "size": "1024x1024"})
+    assert v1.status_code == 200 and base64.b64decode(v1.json()["data"][0]["b64_json"]) == PNG
+    state.llm_seller.books.credit("59" * 32, "main-coin", ADDR, llm.COIN)
+    ed = client.post("/v1/images/edits", headers={"Authorization": f"Bearer {key}"},
+                     files={"image": ("x.png", PNG, "image/png")}, data={"prompt": "add a hat"})
+    assert ed.status_code == 200, ed.text
+    usage = client.get("/admin/api/llm/usage?days=1").json()
+    assert usage["total"]["images"] == 4, "pictures made (an edit is one picture, at two credits)"
+
+
+def test_the_wake_command_is_set_at_the_node_machine_only():
+    from arcade import imagegen
+    kept = dict(imagegen.DEFAULTS)
+    assert imagegen.clean({"wake": "systemctl --user start comfyui"}, kept, local=True)["wake"].startswith("systemctl")
+    with pytest.raises(llm.LlmError, match="node machine"):
+        imagegen.clean({"wake": "rm -rf /"}, kept, local=False)
+    assert imagegen.clean({"wake": "", "steps": 30}, kept, local=False)["steps"] == 30, "left as it was: no refusal"
+    assert imagegen.size_of("4000x1000", 1024) == (1024, 256)
+    assert imagegen.is_free({"prices": [{"leg": "main-coin", "per": "0"}]})
+
+
+def test_a_big_answer_crosses_the_mesh_in_pieces():
+    """A picture is more than a frame holds: llmshare sends it in `more` pieces and the buyer puts it back."""
+    from arcade.mesh.llmshare import CHUNK, LlmShare
+    import queue
+    sent = []
+
+    class Link:
+        peer_id = "B"
+
+        async def send(self, header, blob=b""):
+            sent.append((header, blob))
+    a, b = LlmShare(lambda: None), LlmShare(lambda: None)
+    big = {"png": "x" * (CHUNK * 3 + 10)}
+    asyncio.run(b._answer(Link(), 7, big, end=False))
+    assert len(sent) == 4 and all(h.get("more") for h, _ in sent[:3])
+    q = queue.Queue()
+    a._waiting[7] = q
+    for h, blob in sent:
+        a._on_answer(h, blob)
+    kind, ev = q.get_nowait()
+    assert kind == "ev" and ev == big
