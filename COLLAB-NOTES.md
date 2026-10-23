@@ -88,6 +88,23 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-23 Camera & microphone per game card, and room.media (Claude, with the Cul-de-sac session)
+The operator: "Our user can allow an app camera and microphone in the same way that they allow an app Wallet access on the
+game card" (a video-call card, built by the Cul-de-sac session on this API), "fast track the camera access", "And
+microphone access". A card may say `"media": true`: it then shows a **Camera & microphone** switch (games.html,
+base.html CAMERA & MICROPHONE, PER GAME; `arcade.media.allow:<page>` in localStorage, the same lookalike warning). A
+sandboxed frame cannot call getUserMedia whatever its allow= says (the Cul-de-sac session tested it in Chromium), so
+the VIEWER (_page_doors) opens the camera, adds its tracks to the fast lane's connections and draws every picture in
+a layer over the game's frame. room.media (realtime.js): start({video, audio}) / stop() / share(id, true|false|{video,
+audio}) / hear(id, on) / place(id|'me', rect|null, {fit, mirror}) / mute({video, audio}); events media, media-off,
+state ('on', 'off' -- also the viewer's own Stop --, 'denied'). Nothing is sent until the game shares with a player
+and nobody's sound plays until the game hears them (room names can be guessed). A pair renegotiates over its own
+negotiated channel (id 2, whole descriptions) once direct; media never goes through the room. A second start swaps
+tracks in place (voice-only, then the camera, no gap). The viewer always shows "Camera on · Stop" top-right. Off on
+its card: the game is told `off` and the viewer says where to turn it on; a page that is no game is asked once.
+FAST_PEERS 15 -> 19 (the operator: "up to 20 people in a room"). Tests: tests/test_media_browser.py (two Chromiums with
+fake cameras, and Chromium <-> Firefox both ways). Docs: games.md "Camera and microphone".
+
 ### 2026-10-22 Ords panel never waits for the index's totals (Claude)
 The operator: "strawberries admin, ORD's panel is not loading". @strawberry's Dogecoin index reached 52.8 million inscriptions
 (12 GB); `SELECT COUNT(*), COUNT(burned) FROM insc` took 42 s, the holders count 5 s, redone every 2 min, and the first

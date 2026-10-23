@@ -1520,6 +1520,35 @@ function arcadeGameGate(page){
     return false;
   });
 }
+// CAMERA & MICROPHONE, PER GAME (2026-10-22: "Our user can allow an app camera and microphone in the same way
+// that they allow an app Wallet access on the game card", for a video-call card). A sandboxed game cannot open the
+// camera itself (no origin, so getUserMedia refuses it): this page, the viewer, opens it, sends it to the players the
+// game names and draws the video over the game's frame (_page_doors, room.media). Only while the card's switch is
+// on; off, the game is told 'off' and the viewer says, over the frame, where to turn it on. Kept in this browser,
+// per game page, like Wallet access.
+var ARCADE_MEDIA = 'arcade.media.allow:', ARCADE_MEDIA_USES = 'arcade.media.uses:';
+function arcadeMediaAllowed(id){ try { return localStorage.getItem(ARCADE_MEDIA + id) === 'yes'; } catch (e) { return false; } }
+function arcadeMediaAllow(id, on){
+  try { if (on) localStorage.setItem(ARCADE_MEDIA + id, 'yes'); else localStorage.removeItem(ARCADE_MEDIA + id); } catch (e) {}
+  document.dispatchEvent(new CustomEvent('arcade:media', {detail: {id: id, on: !!on}}));
+}
+function arcadeMediaUses(id){ try { return localStorage.getItem(ARCADE_MEDIA_USES + id) === 'yes'; } catch (e) { return false; } }
+function arcadeMediaUsed(id){ try { localStorage.setItem(ARCADE_MEDIA_USES + id, 'yes'); } catch (e) {} }
+function arcadeMediaWords(game, publisher, address){
+  return '“' + (game || 'This game') + '” is published by ' + (publisher || 'an account with no @name')
+    + (address ? ' (' + address + ')' : '') + '. Check that this is the game’s real publisher before you allow it: '
+    + 'anybody can publish a copy of a game under a lookalike name, and a game with camera and microphone access can '
+    + 'send your picture and sound to the players it chooses. The arcade always shows when they are on, with a Stop '
+    + 'button. You can turn it off again on the game’s card.';
+}
+function arcadeMediaAsk(id, game, publisher, address){
+  return arcadeAsk('Allow this game to use your camera and microphone?', arcadeMediaWords(game, publisher, address),
+                   'Allow camera & microphone')
+    .then(function(yes){ if (yes) arcadeMediaAllow(id, true); return !!yes; });
+}
+// Ticked on its card (the box is kept under the page Play opens, as Wallet access is).
+function arcadeMediaOn(page, g){ return arcadeMediaAllowed(page) || !!(g && g.opens && arcadeMediaAllowed(g.opens)); }
+
 // Whether the wallet is open in this browser now (the card shows it beside the switch).
 function arcadeWalletOpen(){
   return import('/wallet.js').then(function(w){ return w.opened(ARCADE_CHAIN); }).then(function(k){ return !!k; }).catch(function(){ return false; });

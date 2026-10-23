@@ -32,6 +32,7 @@
     "players": "1-8",
     "multiplayer": true,
     "wallet": true,
+    "media": true,
     "family": "my-game",
     "cover": "&lt;txid of a picture you inscribed&gt;",
     "genre": "puzzle"
@@ -42,6 +43,8 @@
     A game that trades, pays, sends, mints or signs with the player's wallet says
     <code>"wallet": true</code>: Play then waits until the player ticks Wallet access on its
     card. A game that uses the wallet without saying so is stopped the first time it asks.
+    A game that uses the camera or microphone (a video call) says <code>"media": true</code>: its
+    card shows a Camera &amp; microphone switch, off until the player turns it on.
     The full guide is in the <a href="/docs">docs</a>.</p>
 </div>
 
@@ -89,6 +92,13 @@
       <span class="pill gameuses" data-uses="{{ g.opens or it.txid }}"{% if not g.wallet %} hidden{% endif %}
             title="This game uses your wallet: tick Wallet access to play it">uses your wallet</span>
       <span class="pill walletlock" data-walletlock>&#128274; wallet locked</span>
+      {# Camera & microphone, per game (2026-10-22: "in the same way that they allow an app Wallet access on the
+         game card"): shown on a card that says "media": true, or once this browser saw the game ask. #}
+      <label class="gamemedia" title="Let this game use your camera and microphone"
+             style="display:inline-flex;align-items:center;gap:5px;margin:0;font-size:.85rem;cursor:pointer;white-space:nowrap"
+             data-media="{{ g.opens or it.txid }}" data-game="{{ g.name }}"{% if not g.media %} hidden{% endif %}
+             data-publisher="{{ ('@' ~ name_of(it.creator)) if name_of(it.creator) else '' }}"
+             data-address="{{ it.creator }}"><input type="checkbox" style="margin:0;width:auto"> Camera &amp; microphone</label>
       {% if acts %}
       <form method="post" action="/feed/{{ it.txid }}/{{ 'unlike' if it.liked else 'like' }}" style="display:inline">
         <input type="hidden" name="csrf_token" value="{{ csrf }}">
@@ -174,6 +184,11 @@
     document.querySelectorAll('[data-uses]').forEach(function (p) {
       if (arcadeGameUses(p.dataset.uses)) p.hidden = false;
     });
+    document.querySelectorAll('.gamemedia').forEach(function (l) {
+      var on = arcadeMediaAllowed(l.dataset.media);
+      l.querySelector('input').checked = on;
+      if (on || arcadeMediaUses(l.dataset.media)) l.hidden = false;
+    });
   }
   // Play holds a game that uses the wallet until its box is ticked (base.html, THE GATE): it says so on the card
   // ("wallet": true) or this browser saw it ask.
@@ -214,7 +229,15 @@
       draw();
     });
   });
+  document.addEventListener('change', function (e) {
+    var l = e.target.closest && e.target.closest('.gamemedia'); if (!l) return;
+    var box = e.target;
+    if (!box.checked) { arcadeMediaAllow(l.dataset.media, false); return; }
+    box.checked = false;
+    arcadeMediaAsk(l.dataset.media, l.dataset.game, l.dataset.publisher, l.dataset.address).then(draw);
+  });
   document.addEventListener('arcade:access', draw);
+  document.addEventListener('arcade:media', draw);
   document.addEventListener('arcade:unlocked', lock);
   // After the page has parsed: base.html's arcadeGameAllowed and arcadeWalletOpen are defined below this script, so
   // drawing at once threw and every box came back unticked on each visit (2026-10-20: a ticked box "should

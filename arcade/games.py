@@ -79,6 +79,9 @@ def parse(json_text: Any) -> dict | None:
     # Said by the maker, so it only ever adds a gate: a game that uses the wallet without saying so is stopped the
     # first time it asks (base.html, arcadeGameGate), and from then on, in that browser, before it starts.
     out["wallet"] = game.get("wallet") is True
+    # A game that uses the camera or microphone (a video call, 2026-10-22) says so: its card shows the
+    # Camera & microphone switch from the start (base.html, CAMERA & MICROPHONE, PER GAME).
+    out["media"] = game.get("media") is True
     family = game.get("family")
     out["family"] = family if isinstance(family, str) and _FAMILY.match(family) else ""
     cover = str(game.get("cover") or "").lower()

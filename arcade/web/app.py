@@ -23976,6 +23976,7 @@ def create_app(state: AppState) -> FastAPI:
                 tag = _name_of(creator)
                 said = {"game": True, "card": card["txid"], "name": card["game"]["name"],
                         "wallet": bool(card["game"].get("wallet")),
+                        "media": bool(card["game"].get("media")),
                         "opens": _game_opens(ix, creator, card["txid"], card["game"]),
                         "publisher": f"@{tag}" if tag else "", "address": creator}
             break
