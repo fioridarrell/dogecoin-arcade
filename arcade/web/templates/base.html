@@ -1546,6 +1546,27 @@ function arcadeMediaAsk(id, game, publisher, address){
                    'Allow camera & microphone')
     .then(function(yes){ if (yes) arcadeMediaAllow(id, true); return !!yes; });
 }
+// CONTACTS, PER APP (2026-10-23: "Allow access to Contacts should be another box on the card"). The same key
+// the one-time ask kept ('yes' / 'no', arcade.contacts.allow:<page>), so a player who said yes stays allowed; a 'no'
+// is now only the switch being off, turned on again on the card.
+var ARCADE_CONTACTS = 'arcade.contacts.allow:', ARCADE_CONTACTS_USES = 'arcade.contacts.uses:';
+function arcadeContactsAllowed(id){ try { return localStorage.getItem(ARCADE_CONTACTS + id) === 'yes'; } catch (e) { return false; } }
+function arcadeContactsAllow(id, on){
+  try { if (on) localStorage.setItem(ARCADE_CONTACTS + id, 'yes'); else localStorage.removeItem(ARCADE_CONTACTS + id); } catch (e) {}
+  document.dispatchEvent(new CustomEvent('arcade:contacts', {detail: {id: id, on: !!on}}));
+}
+function arcadeContactsUses(id){ try { return localStorage.getItem(ARCADE_CONTACTS_USES + id) === 'yes'; } catch (e) { return false; } }
+function arcadeContactsUsed(id){ try { localStorage.setItem(ARCADE_CONTACTS_USES + id, 'yes'); } catch (e) {} }
+function arcadeContactsOn(page, g){ return arcadeContactsAllowed(page) || !!(g && g.opens && arcadeContactsAllowed(g.opens)); }
+function arcadeContactsAsk(id, game, publisher, address){
+  return arcadeAsk('Let this app see your contacts?',
+    '“' + (game || 'This app') + '” is published by ' + (publisher || 'an account with no @name')
+    + (address ? ' (' + address + ')' : '') + '. It will get the names and addresses in your address book, and '
+    + 'nothing else of it. An app can send what it gets to its own server: only allow an app you trust, after '
+    + 'checking its publisher. You can turn it off again on the app’s card.', 'Allow contacts')
+    .then(function(yes){ if (yes) arcadeContactsAllow(id, true); return !!yes; });
+}
+
 // Ticked on its card (the box is kept under the page Play opens, as Wallet access is).
 function arcadeMediaOn(page, g){ return arcadeMediaAllowed(page) || !!(g && g.opens && arcadeMediaAllowed(g.opens)); }
 
@@ -1622,7 +1643,7 @@ function arcadeRingOff(id){ return _arcadeJson('/account/ring/apps', {app: id, o
 // The book may have changed since it was last handed over (the Address book, a game's arcade.contacts.add): once
 // a page has settled, and only where an app was switched on in this browser.
 document.addEventListener('DOMContentLoaded', function(){
-  setTimeout(function(){ if (typeof ARCADE_ME === 'string' && ARCADE_ME) arcadeRingBook(false); }, 4000);
+  setTimeout(function(){ if (typeof ARCADE_SIGNED !== 'undefined' && ARCADE_SIGNED) arcadeRingBook(false); }, 4000);
 });
 
 // Whether the wallet is open in this browser now (the card shows it beside the switch).

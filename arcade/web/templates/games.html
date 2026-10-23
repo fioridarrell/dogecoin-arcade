@@ -84,6 +84,10 @@
          data-play="{{ g.opens or it.txid }}"{% if g.wallet %} data-wallet="1"{% endif %}>Open</a>
       {# Wallet access, per game (2026-10-18; base.html WALLET ACCESS, PER GAME): off until the player turns it
          on after checking the publisher, beside whether the wallet is open in this browser now. #}
+      {# Each switch shows on a card that says it uses that thing, or once this browser saw the app ask, or while it is
+         on (the Cul-de-sac session 2026-10-23: Video Call showed Wallet access though it never touches the wallet). #}
+      <span class="walletbits" data-walletbits="{{ g.opens or it.txid }}"
+            style="display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap"{% if not g.wallet %} hidden{% endif %}>
       <label class="gameaccess" title="Let this app ask your wallet to trade, pay and sign"
              style="display:inline-flex;align-items:center;gap:5px;margin:0;font-size:.85rem;cursor:pointer;white-space:nowrap"
              data-access="{{ g.opens or it.txid }}" data-game="{{ g.name }}"
@@ -92,6 +96,13 @@
       <span class="pill gameuses" data-uses="{{ g.opens or it.txid }}"{% if not g.wallet %} hidden{% endif %}
             title="This app uses your wallet: tick Wallet access to open it">uses your wallet</span>
       <span class="pill walletlock" data-walletlock>&#128274; wallet locked</span>
+      </span>
+      {# Contacts, per app (2026-10-23: "Allow access to Contacts should be another box on the card"). #}
+      <label class="gamecontacts" title="Let this app read the names and addresses in your address book"
+             style="display:inline-flex;align-items:center;gap:5px;margin:0;font-size:.85rem;cursor:pointer;white-space:nowrap"
+             data-contacts="{{ g.opens or it.txid }}" data-game="{{ g.name }}"{% if not g.contacts %} hidden{% endif %}
+             data-publisher="{{ ('@' ~ name_of(it.creator)) if name_of(it.creator) else '' }}"
+             data-address="{{ it.creator }}"><input type="checkbox" style="margin:0;width:auto"> Contacts</label>
       {# Camera & microphone, per game (2026-10-22: "in the same way that they allow an app Wallet access on the
          game card"): shown on a card that says "media": true, or once this browser saw the game ask. #}
       <label class="gamemedia" title="Let this app use your camera and microphone"
@@ -193,6 +204,15 @@
     document.querySelectorAll('[data-uses]').forEach(function (p) {
       if (arcadeGameUses(p.dataset.uses)) p.hidden = false;
     });
+    document.querySelectorAll('[data-walletbits]').forEach(function (b) {
+      var id = b.dataset.walletbits;
+      if (arcadeGameAllowed(id) || arcadeGameUses(id)) b.hidden = false;
+    });
+    document.querySelectorAll('.gamecontacts').forEach(function (l) {
+      var on = arcadeContactsAllowed(l.dataset.contacts);
+      l.querySelector('input').checked = on;
+      if (on || arcadeContactsUses(l.dataset.contacts)) l.hidden = false;
+    });
     document.querySelectorAll('.gamemedia').forEach(function (l) {
       var on = arcadeMediaAllowed(l.dataset.media);
       l.querySelector('input').checked = on;
@@ -247,6 +267,14 @@
   });
   document.addEventListener('arcade:access', draw);
   document.addEventListener('arcade:media', draw);
+  document.addEventListener('arcade:contacts', draw);
+  document.addEventListener('change', function (e) {
+    var l = e.target.closest && e.target.closest('.gamecontacts'); if (!l) return;
+    var box = e.target;
+    if (!box.checked) { arcadeContactsAllow(l.dataset.contacts, false); return; }
+    box.checked = false;
+    arcadeContactsAsk(l.dataset.contacts, l.dataset.game, l.dataset.publisher, l.dataset.address).then(draw);
+  });
   // Notifications: the account's switches, from its node.
   var ringApps = [];
   function drawRing() {

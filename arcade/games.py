@@ -89,6 +89,8 @@ def parse(json_text: Any) -> dict | None:
     out["media"] = game.get("media") is True
     # An app that rings players while it is closed (a call) says so: its card shows the Notifications switch.
     out["notify"] = game.get("notify") is True
+    # An app that reads the player's address book (arcade.contacts.list) says so: its card shows the Contacts switch.
+    out["contacts"] = game.get("contacts") is True
     family = game.get("family")
     out["family"] = family if isinstance(family, str) and _FAMILY.match(family) else ""
     cover = str(game.get("cover") or "").lower()

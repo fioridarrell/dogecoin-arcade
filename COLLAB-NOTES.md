@@ -88,6 +88,16 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-23 A Contacts switch on the card; each switch shows only where it applies (Claude)
+The operator: "Allow access to Contacts should be another box on the card" (Video Call's book came up empty: a one-time
+"no" had been kept forever). Cards may say "contacts": true; the **Contacts** switch keeps the old answers' key
+(arcade.contacts.allow:<page>), so a yes stays a yes and a no is only the switch off. An app with a card is never asked
+in the page any more: off, `arcade.contacts.list()` gives [] with `.why` = 'off' (and the card shows the switch from
+then on); also 'guest', 'operator', 'no' (a page with no card, which is still asked, each visit), 'viewer'. And from
+the Cul-de-sac session: Wallet access (with its wallet-locked pill), Contacts and Camera & microphone show on a card
+only when it says it uses them, this browser saw it ask, or the switch is on -- Video Call no longer shows a Wallet
+box it never uses. Tests: test_contacts_add_browser.py::test_an_apps_contacts_switch_decides_and_an_empty_list_says_why.
+
 ### 2026-10-23 The call relay: Cloudflare TURN for signed-in players (Claude)
 The operator, live test from two homes: "We can't hear or see each other. I can see myself." Gathering here was quick and
 complete, but this home's IPv4 is Starlink's shared one (129.222.x, carrier NAT): no direct link to another home gets

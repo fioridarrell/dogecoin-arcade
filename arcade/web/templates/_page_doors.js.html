@@ -1329,17 +1329,26 @@
       var op = m.op || 'list';
       if (op === 'add' || op === 'remove') { contactsChange(op, m, answer); return; }
       if (op !== 'list') { answer({ok: false, error: 'contacts: op is list, add or remove'}); return; }
-      if (viewer !== 'account') { answer({ok: true, contacts: []}); return; }
-      var slot = 'arcade.contacts.allow:' + here, said = null;
-      try { said = localStorage.getItem(slot); } catch (err) {}
-      var asked = said === 'yes' ? Promise.resolve(true) : said === 'no' ? Promise.resolve(false)
-        : (contactsCards++, arcadeAsk('Let this game see your contacts?',
-            'It will get the names and addresses in your address book, and nothing else of it. '
-            + 'A game can send what it gets to its own server: only say yes to a game you trust. '
-            + 'This browser remembers your answer for this game.', 'Allow'))
-          .then(function(yes){ contactsCards--; try { localStorage.setItem(slot, yes ? 'yes' : 'no'); } catch (err) {} return !!yes; });
+      // Empty, and why (the Cul-de-sac session 2026-10-23): 'operator' (the node's own wallet view has no book),
+      // 'guest' (not signed in), 'off' (the app's Contacts switch is off), 'no' (a page with no card, told no).
+      if (viewer !== 'account') { answer({ok: true, contacts: [], why: viewer === 'wallet' ? 'operator' : 'guest'}); return; }
+      if (typeof ARCADE_SIGNED !== 'undefined' && !ARCADE_SIGNED) { answer({ok: true, contacts: [], why: 'guest'}); return; }
+      var asked = arcadeContactsAllowed(here) ? Promise.resolve(true) : arcadeGameOf(here).then(function(g){
+        // An app with a card: its Contacts switch decides, and nothing is asked here (2026-10-23: "Allow
+        // access to Contacts should be another box on the card"). Off: the card shows the switch from now on.
+        if (g.game) {
+          if (arcadeContactsOn(here, g)) return true;
+          arcadeContactsUsed(here);
+          if (g.opens) arcadeContactsUsed(g.opens);
+          return 'off';
+        }
+        // A page with no card to tick asks, once a visit (a 'no' is not kept: it can say yes next time).
+        contactsCards++;
+        return arcadeContactsAsk(here, gameName, makerName, maker)
+          .then(function(yes){ contactsCards--; return yes || 'no'; });
+      });
       asked.then(function(yes){
-        if (!yes) { answer({ok: true, contacts: []}); return; }
+        if (yes !== true) { answer({ok: true, contacts: [], why: yes}); return; }
         return import('/messaging.js').then(function(mail){ return mail.book(); }).then(function(all){
           answer({ok: true, contacts: (all || []).filter(function(c){ return c && c.address; })
                   .map(function(c){ return {address: c.address, tag: c.tag || ''}; })});
