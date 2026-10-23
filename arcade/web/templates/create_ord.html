@@ -40,18 +40,18 @@
     its traits, and every arcade shows the collection on the Exchange. The first index to name an ord owns it; only
     you can replace yours.</p>
   <div class="ord-grid">
-    <label>Name <input id="ix-name" maxlength="80" placeholder="My collection"></label>
+    <label>Name <input autocomplete="off" id="ix-name" maxlength="80" placeholder="My collection"></label>
     <label>Items live on <select id="ix-chain"></select></label>
   </div>
-  <label style="display:block;margin-top:8px">Description <input id="ix-desc" maxlength="600"></label>
+  <label style="display:block;margin-top:8px">Description <input autocomplete="off" id="ix-desc" maxlength="600"></label>
   <table class="ix-table" id="ix-table"><thead><tr><th>Ord</th><th>Number</th><th>Traits <small class="muted">(Trait=Value, &hellip;)</small></th><th></th></tr></thead>
     <tbody id="ix-rows"></tbody></table>
   <div class="row" style="margin-top:6px;gap:8px;flex-wrap:wrap">
-    <input id="ix-add" placeholder="Add an inscription id (txid i0)" style="flex:1 1 320px;margin:0">
+    <input autocomplete="off" id="ix-add" placeholder="Add an inscription id (txid i0)" style="flex:1 1 320px;margin:0">
     <button type="button" class="ghost" id="ix-add-go">Add</button>
   </div>
   <details style="margin-top:8px"><summary class="muted">Or a trait file (doggy.market or OW JSON)</summary>
-    <textarea id="ix-file" rows="5" placeholder='[{"inscriptionId": "...i0", "name": "My #1", "attributes": {"Eyes": "Red"}}]'
+    <textarea autocomplete="off" id="ix-file" rows="5" placeholder='[{"inscriptionId": "...i0", "name": "My #1", "attributes": {"Eyes": "Red"}}]'
       style="width:100%;margin-top:6px"></textarea></details>
   <label style="display:flex;gap:8px;align-items:center;justify-content:flex-start;margin-top:8px;font-size:.9rem">
     <input type="checkbox" id="ix-cover-first" checked style="width:auto;flex:none;margin:0"> <span>Use number 1 as the cover</span></label>
@@ -220,8 +220,8 @@ function drawRows() {
   const shown = rows.filter((r) => r.chain === net);
   $("ix-rows").innerHTML = shown.length ? shown.map((r) => `<tr data-id="${esc(r.id)}">
       <td class="id"><code>${esc(r.id)}</code>${r.name ? `<br><small class="muted">${esc(r.name)}</small>` : ""}</td>
-      <td class="n"><input type="number" min="1" value="${esc(r.number)}" data-k="number" aria-label="Number"></td>
-      <td><input value="${esc(r.traits)}" data-k="traits" placeholder="Background=Blue, Eyes=Red" aria-label="Traits"></td>
+      <td class="n"><input autocomplete="off" type="number" min="1" value="${esc(r.number)}" data-k="number" aria-label="Number"></td>
+      <td><input autocomplete="off" value="${esc(r.traits)}" data-k="traits" placeholder="Background=Blue, Eyes=Red" aria-label="Traits"></td>
       <td><button type="button" class="ghost" data-drop="1" aria-label="Remove">&times;</button></td></tr>`).join("")
     : `<tr><td colspan="4" class="muted">Ords you inscribe here on this chain appear here; add others by id.</td></tr>`;
   $("ix-rows").querySelectorAll("tr[data-id]").forEach((tr) => {
