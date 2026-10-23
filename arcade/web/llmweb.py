@@ -204,9 +204,13 @@ def register(app, state, *, signed_in: Callable, account_address: Callable, acco
                              "earned": earned, "kinds": kinds, "selling": bool(seller.offer()), "load": load_now(),
                              "operators": operators,
                              "helper": [{"seller": x["o"]["seller"], "here": x["o"]["here"], "tag": x["o"].get("tag", ""),
-                                         "model": x["o"]["models"][0]["id"], "ready": x["ready"],
+                                         "host": x["o"].get("host", ""), "model": x["m"], "ready": x["ready"],
+                                         "approved": x["approved"], "key": f"{x['o']['seller']}|{x['m']}",
+                                         "load": (x["o"].get("load") or {}).get("word", ""),
                                          "needs_grant": x.get("needs_grant", False) and helper_identity()[0] != "node"}
                                         for x in helper_sources()],
+                             "helper_now": (lambda h: {"seller": h["seller"], "model": h["models"][0]["id"]} if h else None)(
+                                 helper_pick()),
                              "images": images_admin(request)},
                             headers={"Cache-Control": "no-store"})
 
@@ -681,28 +685,34 @@ def register(app, state, *, signed_in: Callable, account_address: Callable, acco
         books.keep_grant("node", sid, address, expires, sig)
 
     def helper_sources() -> list[dict]:
+        """Every model the helper could speak through, each `approved` or not: this arcade's own (approved unless the
+        operator switched it off), and each model another arcade shares with this operator free -- used only once this
+        arcade's operator approved it (Admin -> LLM -> Arcade helper)."""
         op_tag = (state.operator_tag() if hasattr(state, "operator_tag") else "") or ""
         ident, address = helper_identity()
+        cfg = llmlib.config(state)
+        ok = set(cfg.get("helper_ok") or [])
         out = []
         if not address:
             return out
         for o in offers():
-            if not o.get("models"):
-                continue
-            if o["here"]:
-                out.append({"o": o, "ready": True})
-            elif op_tag and op_tag in (o.get("free_tags") or []):
-                ready = ident == "node" or books.grant(ident, o["seller"]) is not None
-                out.append({"o": o, "ready": ready, "needs_grant": books.grant(ident, o["seller"]) is None})
+            for m in o.get("models") or []:
+                if o["here"]:
+                    out.append({"o": o, "m": m["id"], "ready": True, "approved": not cfg.get("helper_off_own")})
+                elif op_tag and op_tag in (o.get("free_tags") or []):
+                    granted = books.grant(ident, o["seller"]) is not None
+                    out.append({"o": o, "m": m["id"], "ready": ident == "node" or granted,
+                                "needs_grant": not granted, "approved": f"{o['seller']}|{m['id']}" in ok})
         return out
 
     def helper_pick() -> dict | None:
-        ready = [x for x in helper_sources() if x["ready"]]
+        """The approved source the helper uses now: this arcade's own first, then the least busy; None when none."""
+        ready = [x for x in helper_sources() if x["ready"] and x["approved"]]
         if not ready:
             return None
         rank = {"idle": 0, "steady": 1, "busy": 2, "full": 3}
         ready.sort(key=lambda x: (0 if x["o"]["here"] else 1, rank.get((x["o"].get("load") or {}).get("word"), 1)))
-        return ready[0]["o"]
+        return {**ready[0]["o"], "models": [{"id": ready[0]["m"]}]}
 
     @app.get("/account/llm/helper")
     def llm_helper_state(request: Request):

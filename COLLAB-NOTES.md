@@ -88,6 +88,15 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-23 The helper uses a shared model only once this arcade approves it (Claude)
+The operator: "I want to be able to choose, which shared models my arcade uses. Because [@yourfirstname] is sharing a 9B model
+which cannot keep the context ... If one arcade shares their model to another, the other arcade will need to approve the
+use of that model." `llm.helper_ok` ["<seller mesh id>|<model>"] and `llm.helper_off_own`; `helper_sources` lists one
+row per model (own: approved unless switched off; another arcade's free share: approved only when in helper_ok);
+`helper_pick` takes approved ones only, own first, then least busy. Admin -> LLM -> Arcade helper: a switch per model,
+"In use now" on the one the robot uses. On .25 Strawberry's qwen3.8-flash-next was approved by hand at release (the
+robot had been using it); @yourfirstname's qwen3.5-9b is not. Test: test_a_shared_model_is_used_by_the_helper_only_once_approved.
+
 ### 2026-10-23 The helper robot can be dragged anywhere on a desktop (Claude)
 The operator: "When you click and drag the robot head in desktop mode, you should be able to move the robot head and text bubble
 to anywhere on the screen." `_helper.html`: a mouse drag (pointer events, 6 px before it counts, so a click stays a

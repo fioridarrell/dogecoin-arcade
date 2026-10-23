@@ -776,3 +776,30 @@ def test_the_chat_can_leave_the_arcade_docs_out(arcade):
                                                   "messages": [{"role": "user", "content": "how do prize pools work?"}]})
     assert said.status_code == 200 and _events(said.text)[-1]["arcade"]["docs_tokens"] == 0
     assert seen[-1]["messages"] == [{"role": "user", "content": "how do prize pools work?"}], "nothing of ours added"
+
+
+def test_a_shared_model_is_used_by_the_helper_only_once_approved(arcade, monkeypatch):
+    """2026-10-23: "I want to be able to choose, which shared models my arcade uses ... the other arcade will need
+    to approve the use of that model" (a 9B model shared with him could not keep the context)."""
+    client, state, pubkey, seen = arcade
+    monkeypatch.setattr(type(state), "derived_address", b58check_encode(0x37, b"\x09" * 20), raising=False)
+    monkeypatch.setattr(type(state), "operator_tag", lambda self: "boss", raising=False)
+
+    class Share:
+        offers = {"peer9": {"models": [{"id": "small-9b"}], "prices": [], "free": False, "free_tags": ["boss"],
+                            "tag": "other", "host": "other.example", "load": {"word": "idle"}}}
+
+        def say_again(self):
+            pass
+    state.mesh = type("M", (), {"node_id": "me", "llmshare": Share(), "operators": None})()
+    h = {"X-Arcade-Admin": "1"}
+    assert client.get("/account/llm/helper").json()["model"] == "tiny", "this arcade's own model first"
+    client.post("/admin/api/llm", headers=h, json={"helper_off_own": True})
+    assert client.get("/account/llm/helper").json()["available"] is False, "the share is not used before it is approved"
+    rows = client.get("/admin/api/llm").json()["helper"]
+    assert {r["key"]: r["approved"] for r in rows} == {"here|tiny": False, "peer9|small-9b": False}
+    client.post("/admin/api/llm", headers=h, json={"helper_ok": ["peer9|small-9b"]})
+    got = client.get("/account/llm/helper").json()
+    assert got["available"] and got["model"] == "small-9b" and got["seller"] == "@other"
+    client.post("/admin/api/llm", headers=h, json={"helper_off_own": False})
+    assert client.get("/account/llm/helper").json()["model"] == "tiny", "own model back on: first again"

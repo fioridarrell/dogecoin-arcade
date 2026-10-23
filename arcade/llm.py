@@ -216,7 +216,7 @@ def fmt(units: int, scale: int) -> str:
 # ------------------------------------------------------------------------------------------------ the operator's offer
 
 DEFAULTS = {"on": False, "url": "", "key": "", "models": [], "at_once": 2, "max_out": 4096, "prices": [],
-            "name": "", "free_for": []}
+            "name": "", "free_for": [], "helper_ok": None, "helper_off_own": False}
 
 
 def is_free(cfg: dict) -> bool:
@@ -262,6 +262,13 @@ def clean(said: dict, kept: dict) -> dict:
                 seen.add(row["address"])
                 rows.append({"tag": str(row.get("tag") or "")[:24], "address": str(row["address"])[:100]})
         out["free_for"] = rows[:100]
+    if "helper_ok" in said:
+        # The shared models this arcade's helper may use (2026-10-23: "I want to be able to choose, which shared
+        # models my arcade uses ... If one arcade shares their model to another, the other arcade will need to approve
+        # the use of that model"): "<seller mesh id>|<model>" each.
+        out["helper_ok"] = sorted({str(k)[:300] for k in said.get("helper_ok") or [] if "|" in str(k)})[:100]
+    if "helper_off_own" in said:
+        out["helper_off_own"] = bool(said["helper_off_own"])
     if said.get("clear_key"):
         out["key"] = ""
     if "name" in said:

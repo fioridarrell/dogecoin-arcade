@@ -575,8 +575,9 @@
 {#- The robot in every page's corner (_helper.html): what it can use. #}
 <section class="panel" id="helper-panel">
   <h2 style="margin:0">Arcade helper</h2>
-  <p class="muted" style="margin:2px 0 10px">The robot in the corner of every page answers your players' questions with the docs. It uses your own
-    model, or one another operator shares with you free &mdash; never a paid one &mdash; and each player may ask 40 times an hour (guests 15).</p>
+  <p class="muted" style="margin:2px 0 10px">The robot in the corner of every page answers your players' questions with the docs. Tick the models
+    it may use: your own, and any another operator shares with you free (each needs your approval) &mdash; never a paid one. It uses your own
+    first, then the least busy. Each player may ask 40 times an hour (guests 15).</p>
   <div id="helper-list"></div>
 </section>
 
@@ -693,7 +694,7 @@
       chosen = c.models || []; prices = (c.prices || []).map(function (p) { return Object.assign({}, p); });
       drawOn(); drawModels(); drawPrices(); drawLoad(j.load); imgFill(j.images);
       ff = (c.free_for || []).map(function (r) { return r.tag; }).filter(Boolean); ffDraw(j.operators || []);
-      helperDraw(j.helper || []);
+      helperDraw(j.helper || [], j.helper_now);
       if (c.url && !scanned) scan(false);
       var e = j.earned || [];
       $('llm-earned').innerHTML = e.length ? e.map(function (r) {
@@ -722,15 +723,33 @@
   }
   setInterval(pollLoad, 5000);
 
-  // --- the arcade helper's sources ---
-  function helperDraw(list) {
-    $('helper-list').innerHTML = list.length ? list.map(function (h) {
-      return '<div class="model" style="justify-content:space-between;flex-wrap:wrap"><span><b class="mono">' + esc(h.model) + '</b> <span class="muted">' +
-        (h.here ? 'your own model' : 'shared free by @' + esc(h.tag || '?')) + '</span></span>' +
-        (h.ready ? '<span class="pill" style="color:var(--ok);background:color-mix(in srgb,var(--ok) 14%,var(--panel))">In use by the helper</span>'
-          : '<button type="button" class="small" data-hsign="' + esc(h.seller) + '" style="height:36px">Sign once to use it</button>') + '</div>';
-    }).join('') : '<p class="muted" style="margin:0">Nothing yet: share your own model above, or ask another operator to add you to their "Free for other operators". The robot appears once one is there.</p>';
+  // --- the arcade helper's sources: approved one by one (2026-10-23: "I want to be able to choose, which shared
+  // models my arcade uses ... the other arcade will need to approve the use of that model") ---
+  var helperRows = [];
+  function helperDraw(list, now) {
+    helperRows = list;
+    $('helper-list').innerHTML = list.length ? list.map(function (h, i) {
+      var inUse = now && now.seller === h.seller && now.model === h.model;
+      var who = h.here ? 'your own model' : 'shared with you free by @' + esc(h.tag || '?') + (h.host ? ' \u00b7 ' + esc(h.host) : '');
+      return '<label class="model" style="justify-content:space-between;flex-wrap:wrap;cursor:pointer">' +
+        '<span style="display:flex;gap:12px;align-items:center;min-width:0"><input type="checkbox" data-hok="' + i + '"' + (h.approved ? ' checked' : '') +
+        ' style="width:20px;height:20px"><span style="display:flex;flex-direction:column;min-width:0"><b class="mono" style="overflow-wrap:anywhere">' + esc(h.model) +
+        '</b><span class="muted" style="font-size:.8rem">' + who + (h.load ? ' \u00b7 ' + esc(h.load) : '') + '</span></span></span>' +
+        (inUse ? '<span class="pill" style="color:var(--ok);background:color-mix(in srgb,var(--ok) 14%,var(--panel))">In use now</span>'
+          : h.approved && !h.ready ? '<button type="button" class="small" data-hsign="' + esc(h.seller) + '" style="height:36px">Sign once to use it</button>'
+          : h.approved ? '<span class="pill" style="background:var(--code)">Approved</span>'
+          : '<span class="muted" style="font-size:.8rem">' + (h.here ? 'switched off' : 'needs your approval') + '</span>') + '</label>';
+    }).join('') : '<p class="muted" style="margin:0">Nothing yet: share your own model above, or ask another operator to add you to their "Free for other operators". It shows here for you to approve.</p>';
   }
+  $('helper-list').addEventListener('change', function (e) {
+    var c = e.target.closest('[data-hok]'); if (!c) return;
+    helperRows[Number(c.dataset.hok)].approved = c.checked;
+    var ok = helperRows.filter(function (h) { return !h.here && h.approved; }).map(function (h) { return h.key; });
+    var own = helperRows.filter(function (h) { return h.here; });
+    var body = {helper_ok: ok};
+    if (own.length) body.helper_off_own = !own.some(function (h) { return h.approved; });
+    post('/admin/api/llm', body).then(function () { load(); }).catch(function (err) { $('llm-said').textContent = err.message; });
+  });
   $('helper-list').addEventListener('click', async function (e) {
     var b = e.target.closest('[data-hsign]'); if (!b) return;
     try {
