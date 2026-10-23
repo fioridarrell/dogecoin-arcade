@@ -97,6 +97,34 @@ Running the whole suite (route-scoped gates had passed) found two of today's cha
 * The exchange's pick box waited for /exchange/token20/search before answering a keystroke, so an earlier answer stood
   meanwhile (test_trade_tab_lists: "zzqqxx" showed 4 rows). It now answers from what the page has at once, and adds
   the node's ticks when they come, only if the box still holds the words they were asked for.
+### 2026-10-22 · the operator's side (Claude) · the day in short, for the team (each item has its own entry below)
+* **Ord indexes:** Pepecoin complete on @strawberry; the walk now goes to 2 blocks under the tip (WALK_SETTLE; chunks
+  stay 12 under). Whole-index copies resume after a restart (pieces kept on disk), a far-behind arcade walks from its own
+  Core while it fetches, a stalled fetch is retried instead of dropped, and a holder never remakes a copy while someone
+  fetches it. Admin -> Ords shows each arcade's copy download. Pepecoin numbering matches nintondo to #8.57M.
+* **Doginals:** the old backwards trace is off where an ord index exists; small coins stay protected until a copy of
+  the index has walked past their block, then fill in live (GET /account/doginal-index). Text / JSON / JS
+  inscriptions are left out of the NFT cards.
+* **DRC-20 / PRC-20:** balances on the Tokens tab from the most complete index; one-press Send (commit, note reveal,
+  send -- the way pepeblocks and nintondo count it); a sent amount is held off the balance until the index reads it;
+  in the swap book as kind `token20` (whole orders, cross-chain; the token locked as a second transfer note landing
+  on the lock, funded by a first note sent to it -- arcade/token20_swap.py); exchange search "tick · PRC-20" looked
+  up as typed (GET /exchange/token20/search).
+* **Listings hold what they list:** DRC-20 / PRC-20 and Doginal swap orders and Doginals-tab listings are held off
+  sends and further listings (coins, Omni tokens and NFTs already move to the order's own address); a book that lists
+  more than is free has those orders taken off (/account/orders/post).
+* **Imported wallets:** the rescan is never sent twice; the wallet shows the Core's own rescan % from its debug.log;
+  imported balances show what can be sent, with Doginals and unchecked coins beside it; coins brought from another
+  arcade are checked in batches (no 5,000 cap); no new import on a chain with fewer than two Cores on the network
+  (Litecoin today); each address type is its own entry in the Wallet drop-down ("Wallet 1 · Native SegWit").
+* **Admin:** Core read times in exact ms; ord rings without @tags.
+* **Speed:** the imported wallet's balance line reads its coins in one query (1.45 s -> 0.03 s on .25, several times
+  an unlock); the exchange page carries only the reader's own tokens (1.9 MB -> 282 KB).
+* **SadFrog's PR #8 (Bellscoin / Luckycoin): merged** on the operator's yes, on top of all of the above (conflicts only in
+  comment wording); its 12 tests and ours pass. To its questions: (1) generalising over `state.addons` is the way;
+  (2) `swap_big:bel` / `swap_big:lky` stay at your low 200 BEL / 20 LKY until the operator sets them; (3) same floors and
+  STARTS, merged as you wrote them.
+* **Two regressions of the day's own** (found by a full run): fixed, entry below.
 
 ### 2026-10-22 · SadFrog's side (Claude, node 2) · branch `team/bel-lky-chains` (on `main` 6d07f63) · Bellscoin and Luckycoin as add-on chains
 SadFrog: integrate Bellscoin (BEL) and Luckycoin (LKY) "as fully as Dogecoin is". Both are **Params alone** (your
