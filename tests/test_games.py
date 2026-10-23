@@ -265,3 +265,23 @@ def test_the_tab_is_apps_and_an_app_card_lists_like_a_game_card(client):
     assert "<h1" in page and ">Apps</h1>" in page
     assert "Old Game" in page and "Video Call" in page
     assert app.get(f"/games/{new}/access").json()["media"] is True
+
+
+def test_a_card_only_inscription_takes_over_a_page_that_carries_its_own_card(client):
+    """The Cul-de-sac session 2026-10-23: Video Call's launcher carries its first card; a newer card by the same maker
+    naming it in `play` replaces that card everywhere -- on the tab and for the viewer's switches -- while the page,
+    which every switch is keyed on, stays. An older card-only inscription does not."""
+    app, state = client
+    launcher, card, old = "d1" * 32, "d2" * 32, "d0" * 32
+    _inscribe(state, old, 40, MAKER, {"app": {"name": "Video Call", "play": launcher}}, height=90)
+    _inscribe(state, launcher, 41, MAKER, {"app": {"name": "Video Call", "media": True}}, height=100)
+    said = app.get(f"/games/{launcher}/access").json()
+    assert said["card"] == launcher and said["opens"] == launcher, "the older card-only one does not take over"
+    state.__dict__.pop("_game_pages", None)
+    _inscribe(state, card, 42, MAKER, {"app": {"name": "Video Call", "play": launcher, "media": True,
+                                               "contacts": True, "notify": True}}, height=110)
+    said = app.get(f"/games/{launcher}/access").json()
+    assert said["card"] == card and said["opens"] == launcher and said["contacts"] is True, said
+    page = app.get("/apps").text
+    assert f'data-media="{launcher}"' in page and f'data-contacts="{launcher}"' in page, "switches keyed on the page"
+    assert page.count('data-contacts="') == 1, "one card for the app"

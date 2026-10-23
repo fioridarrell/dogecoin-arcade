@@ -24151,21 +24151,30 @@ def create_app(state: AppState) -> FastAPI:
             card, own = None, gameslib.parse(row.get("json"))
             if own:
                 card = {"txid": row["txid"], "game": own}
-            else:
-                # A card by the same maker whose Play opens this page (_game_opens' rule).
-                try:
-                    with contextlib.closing(ix.open()) as db:
-                        rows = db.conn.execute(
-                            "SELECT txid, json FROM inscription WHERE creator=? AND content_type LIKE 'text/html%' "
-                            "AND json LIKE ? ORDER BY block_height DESC, position DESC LIMIT 20",
-                            (row["creator"], f"%{page}%")).fetchall()
-                except Exception:
-                    rows = []
-                for r in rows:
-                    g = gameslib.parse(r["json"])
-                    if g and g.get("play") == page:
-                        card = {"txid": r["txid"], "game": g}
-                        break
+            # A card by the same maker whose Play opens this page (_game_opens' rule) -- and, for a page with a card of
+            # its own, a newer card-only inscription replaces it, as on the Apps tab (newest_per_game; the Cul-de-sac
+            # session 2026-10-23: Video Call's launcher carries its first card, and a new card naming it in `play`
+            # keeps the page, so every switch, keyed on the page, stays).
+            try:
+                with contextlib.closing(ix.open()) as db:
+                    rows = db.conn.execute(
+                        "SELECT txid, json, block_height, position FROM inscription WHERE creator=? "
+                        "AND content_type LIKE 'text/html%' AND json LIKE ? "
+                        "ORDER BY block_height DESC, position DESC LIMIT 20",
+                        (row["creator"], f"%{page}%")).fetchall()
+            except Exception:
+                rows = []
+            def at(h, pos):                                    # not in a block yet: the newest
+                return (10 ** 9 if h is None else h, pos or 0)
+            here_at = at(row.get("block_height"), row.get("position"))
+            for r in rows:
+                g = gameslib.parse(r["json"])
+                if not g or g.get("play") != page or r["txid"] == page:
+                    continue
+                if own and at(r["block_height"], r["position"]) <= here_at:
+                    break                                      # older than the page's own card: that one stands
+                card = {"txid": r["txid"], "game": g}
+                break
             if card:
                 creator = row["creator"]
                 tag = _name_of(creator)

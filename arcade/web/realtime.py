@@ -78,7 +78,13 @@ def turn_servers(key_id: str, token: str, ttl: int = TURN_TTL, post=None) -> lis
     answer = post(TURN_API.format(key=key_id), timeout=10, json={"ttl": int(ttl)},
                   headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
     if not 200 <= answer.status_code < 300:
-        raise MeshError(f"Cloudflare answered {answer.status_code}")
+        try:
+            why = str((answer.json() or {}).get("error") or "")[:120]
+        except Exception:                            # noqa: BLE001 -- not JSON
+            why = ""
+        # 404 "cannot find specified key": the id is not a TURN key's (2026-10-23: an Account or App id pasted).
+        raise MeshError(f"Cloudflare answered {answer.status_code}" + (f": {why}" if why else "")
+                        + (" -- use the TURN key's own id (Realtime -> TURN Server)" if answer.status_code == 404 else ""))
     said = answer.json().get("iceServers")
     servers = said if isinstance(said, list) else [said] if isinstance(said, dict) else []
     out = [{k: v for k, v in s.items() if k in ("urls", "username", "credential")}

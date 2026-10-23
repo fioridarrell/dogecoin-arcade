@@ -88,6 +88,14 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-23 A card-only inscription takes over a page that carries its own card; relay errors say why (Claude)
+The Cul-de-sac session: Video Call's launcher (a7ba0bc5...) carries its first card, and a new launcher would be a new
+page and reset every switch. A newer card by the same maker naming the page in `play` now replaces the page's own card
+for the viewer too (_game_of_page; the Apps tab already kept the newest per maker and name); an older one does not; an
+unconfirmed one counts as newest. Switches stay keyed on the page. And the operator's first relay key was refused with a bare
+"404": Cloudflare's words come through now ("cannot find specified key -- use the TURN key's own id"). Tests:
+test_games.py::test_a_card_only_inscription_takes_over_a_page_that_carries_its_own_card, test_stun.py.
+
 ### 2026-10-23 A Contacts switch on the card; each switch shows only where it applies (Claude)
 The operator: "Allow access to Contacts should be another box on the card" (Video Call's book came up empty: a one-time
 "no" had been kept forever). Cards may say "contacts": true; the **Contacts** switch keeps the old answers' key

@@ -137,6 +137,8 @@ def test_cloudflare_relay_logins_in_either_shape():
     assert turn_servers("ab" * 16, "tok", post=lambda url, **kw: _Answer(201, one))[0]["username"] == "u2"
     with pytest.raises(MeshError):
         turn_servers("ab" * 16, "bad", post=lambda url, **kw: _Answer(401, {}))
+    with pytest.raises(MeshError, match="cannot find specified key.*TURN key's own id"):
+        turn_servers("ab" * 16, "tok", post=lambda url, **kw: _Answer(404, {"error": "cannot find specified key"}))
 
 
 def test_the_relay_goes_to_players_who_are_somebody_and_not_to_guests(tmp_path, monkeypatch):
