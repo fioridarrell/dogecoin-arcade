@@ -82,7 +82,7 @@ def test_the_admin_form_is_checked_and_keeps_the_key():
         llm.clean({"prices": [{"leg": "not a leg"}]}, kept)
     with pytest.raises(llm.LlmError, match="each coin"):
         llm.clean({"prices": [{"leg": "main-coin"}, {"leg": "main-coin"}]}, kept)
-    with pytest.raises(llm.LlmError, match="to sell"):
+    with pytest.raises(llm.LlmError, match="to offer"):
         llm.clean({"on": True}, {**llm.DEFAULTS})
 
 
@@ -358,3 +358,34 @@ async def _with_loop(fn):
         await fn()
     finally:
         llmshare.LlmShare.ask = orig
+
+
+def test_a_model_can_be_offered_free_for_everyone(arcade):
+    """2026-10-23: no asks = free for everyone, with everything a paid model has; adding an ask makes it paid."""
+    client, state, pubkey, seen = arcade
+    url = llm.config(state)["url"]
+    h = {"X-Arcade-Admin": "1"}
+    saved = client.post("/admin/api/llm", headers=h, json={"on": True, "url": url, "models": ["tiny"], "prices": []})
+    assert saved.status_code == 200 and saved.json()["selling"] is True, saved.text
+    (o,) = client.get("/account/llm/offers").json()["offers"]
+    assert o["free"] is True and o["prices"] == []
+    said = client.post("/account/llm/chat", json={"seller": "here", "leg": "free",
+                                                  "messages": [{"role": "user", "content": "hi"}]})
+    assert said.status_code == 200, said.text
+    end = _events(said.text)[-1]["arcade"]
+    assert end["free"] is True and end["cost"] == 0
+    assert client.get("/account/llm/balance?seller=here").json()["free"] is True
+    key = client.post("/account/llm/keys/new", json={"seller": "here", "leg": "free"}).json()["key"]
+    got = client.post("/v1/chat/completions", headers={"Authorization": f"Bearer {key}"},
+                      json={"messages": [{"role": "user", "content": "hi"}]})
+    assert got.status_code == 200 and got.json()["choices"][0]["message"]["content"] == "Hello there"
+    with pytest.raises(llm.LlmError, match="free"):
+        state.llm_seller.topup(ADDR, "main-coin", "ab" * 32, "x")
+    # An ask added: paid from then on, the same key now needs a coin's credit.
+    client.post("/admin/api/llm", headers=h, json={"prices": [{"leg": "main-coin", "in": "0.001", "out": "0.01"}]})
+    assert client.get("/account/llm/offers").json()["offers"][0]["free"] is False
+    late = client.post("/v1/chat/completions", headers={"Authorization": f"Bearer {key}"},
+                       json={"messages": [{"role": "user", "content": "hi"}]})
+    assert late.status_code == 400 and "charges" in late.json()["error"]["message"]
+    client.post("/admin/api/llm", headers=h, json={"prices": [{"leg": "main-coin", "in": "0", "out": "0"}]})
+    assert client.get("/account/llm/offers").json()["offers"][0]["free"] is True, "an ask of 0 and 0 is free too"

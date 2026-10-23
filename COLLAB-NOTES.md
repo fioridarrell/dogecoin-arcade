@@ -88,6 +88,16 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-23 LLM service: no asks = free for everyone (Claude)
+The operator: "Should be able to offer my model for free" and "if I offer my model for free, it should have all the same
+capabilities as a paid model. But I should be able to change it from free to pay at any time by adding an ask to my
+admin LLM page". `llm.is_free(cfg)`: no asks, or only asks of 0 in / 0 out. A free offer says `free: true` with no
+prices on the book; chat, API keys (leg `free`), arcade.llm and the mesh all work with no credit; a top-up is refused.
+Selling needs only the server and a model now. Adding an ask makes it paid at once (a `free` key then gets "this seller
+charges for its model now"); removing every ask makes it free again. Tab: a "Free" chip, a "Free for everyone" card
+with Chat only; Admin -> LLM shows "Free for everyone" while no ask is listed. Test:
+test_llm.py::test_a_model_can_be_offered_free_for_everyone. Branch claude/llm-exchange.
+
 ### 2026-10-23 LLM service on the exchange: sell your own model per token, buy it from any arcade (Claude)
 The operator: "There should be a admin LLM tab, where I can enter my local LLM server and decide how much I want to charge per
 LLM token ... the bid would always be LLM service ... they could even accept Omni and PRC and DRC 20 tokens", then "A

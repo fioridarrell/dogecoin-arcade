@@ -471,8 +471,10 @@
   <h2 style="margin:0">Your prices</h2>
   <p class="muted" style="margin:2px 0 8px">Per LLM token, in any coin or token the exchange trades. Input (the prompt) is cheap for your GPU;
     output (the reply) is the real work. Your own account always uses it free.</p>
+  <div id="llm-paid">
   <div class="pr h"><span>Paid in</span><span>Per input token</span><span>Per output token</span><span>1,000-word answer</span><span></span></div>
   <div id="llm-prices"></div>
+  </div>
   <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between;margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;flex:1 1 340px;min-width:0">
       <select id="llm-add" aria-label="Add a way to be paid" style="flex:1 1 240px;width:auto"></select>
@@ -527,7 +529,9 @@
         '<input autocomplete="off" data-i="' + i + '" data-f="out" value="' + esc(p.out) + '" inputmode="decimal" aria-label="' + esc(short(p.label)) + ' per output token">' +
         '<span class="muted" data-a="' + i + '">' + esc(answer(p)) + '</span>' +
         '<button type="button" class="x" data-x="' + i + '" aria-label="Remove ' + esc(short(p.label)) + '">×</button></div>';
-    }).join('') : '<p class="muted" style="margin:10px 0">No prices yet: add a coin or token below.</p>';
+    }).join('') : '<div class="model" style="margin:10px 0"><span style="display:flex;flex-direction:column"><b>Free for everyone</b>' +
+      '<span class="muted" style="font-size:.85rem">No asks, so any signed-in player, app or API key uses it free, with everything a paid model has. ' +
+      'Add an ask below to charge for it; remove every ask to make it free again.</span></span></div>';
     var have = prices.map(function (p) { return p.leg; });
     $('llm-add').innerHTML = '<option value="">Add a way to be paid…</option>' + kinds.filter(function (k) { return have.indexOf(k.key) < 0; })
       .map(function (k) { return '<option value="' + esc(k.key) + '">' + esc(k.label) + '</option>'; }).join('');
@@ -545,6 +549,7 @@
     prices.push({leg: k.key, label: k.label, in: '0', out: '0'}); drawPrices();
   };
   $('llm-on').onchange = drawOn;
+
   $('llm-test').onclick = function () {
     var t = $('llm-tested'); t.hidden = false; t.textContent = 'Asking…'; t.style.cssText = 'background:var(--code)';
     post('/admin/api/llm/test', {url: $('llm-url').value.trim(), key: $('llm-key').value.trim()}).then(function (j) {

@@ -330,7 +330,8 @@ def register(app, state, *, signed_in: Callable, account_address: Callable, acco
             account, address = need_account(request)
             said = await body_of(request)
             sid, leg = str(said.get("seller") or HERE), str(said.get("leg") or "")
-            llmlib.leg_parts(leg)
+            if leg != "free":
+                llmlib.leg_parts(leg)
             if not is_here(sid):
                 grant_for(account, sid)
             key = books.new_key(account.pubkey, address, HERE if is_here(sid) else sid, leg,

@@ -269,6 +269,6 @@ def _clean_offer(o: dict) -> dict:
         except (llmlib.LlmError, KeyError):
             continue
     models = [{"id": str(m.get("id"))[:200]} for m in o.get("models")[:20] if isinstance(m, dict) and m.get("id")]
-    return {"name": str(o.get("name") or "")[:60], "models": models, "prices": prices,
+    return {"name": str(o.get("name") or "")[:60], "models": models, "prices": prices, "free": o.get("free") is True,
             "max_out": int(o.get("max_out") or 0) if str(o.get("max_out") or "0").isdigit() else 0,
             "tag": str(o.get("tag") or "")[:24], "host": str(o.get("host") or "")[:100]}

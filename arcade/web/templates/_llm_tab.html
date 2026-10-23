@@ -135,11 +135,13 @@ function price(p) {                  // the dearest part shown plainly: no expon
   const n = Number(p); if (!n) return "free";
   return n.toLocaleString(undefined, {maximumSignificantDigits: 8, maximumFractionDigits: 12});
 }
-function cheapness(o) { return Math.min(...o.prices.map((p) => Number(p.out) || 0)); }
+function cheapness(o) { return o.free || !o.prices.length ? 0 : Math.min(...o.prices.map((p) => Number(p.out) || 0)); }
+const legsOf = (o) => o.free ? [{leg: "free", label: "Free", in: "0", out: "0"}] : o.prices;
 function sellerName(o) { return o.here ? (o.tag ? "@" + o.tag : "This arcade") : (o.tag ? "@" + o.tag : o.seller.slice(0, 10) + "…"); }
 
 function drawChips() {
   const kinds = new Map([["all", "Any coin"]]);
+  if (book.offers.some((o) => o.free)) kinds.set("free", "Free");
   book.offers.forEach((o) => o.prices.forEach((p) => kinds.set(legIsToken(p.leg) ? "tokens" : p.leg, legIsToken(p.leg) ? "Tokens" : short(p.label))));
   $("llm-chips").innerHTML = [...kinds].map(([k, v]) => `<button type="button" data-k="${esc(k)}" class="${k === filter ? "on" : ""}">${esc(v)}</button>`).join("");
 }
@@ -148,6 +150,7 @@ $("llm-chips").addEventListener("click", (e) => { const b = e.target.closest("bu
 function creditText(o) {
   const c = credit[o.seller];
   if (!book.signed_in) return {big: "Sign in", small: "to buy"};
+  if (o.free) return {big: "Free", small: "for everyone"};
   if (c && c.free) return {big: "Free", small: "your own model"};
   if (!c) return {big: o.here || o.granted ? "…" : "—", small: o.here || o.granted ? "" : "sign once to see"};
   const rows = o.prices.map((p) => c.credit && c.credit[p.leg] ? `${c.credit[p.leg].text} ${short(p.label)}` : "").filter(Boolean);
@@ -156,7 +159,7 @@ function creditText(o) {
 
 function draw() {
   drawChips();
-  const shown = book.offers.filter((o) => filter === "all" || o.prices.some((p) => filter === "tokens" ? legIsToken(p.leg) : p.leg === filter))
+  const shown = book.offers.filter((o) => filter === "all" || (filter === "free" ? o.free : o.prices.some((p) => filter === "tokens" ? legIsToken(p.leg) : p.leg === filter)))
     .sort((a, b) => (b.here - a.here) || cheapness(a) - cheapness(b));
   if (!shown.length) {
     $("llm-offers").innerHTML = `<div class="llm-empty">No arcade sells a model ${filter === "all" ? "right now" : "for that coin"}. Operators turn it on in Admin &rarr; LLM.</div>`;
@@ -167,10 +170,10 @@ function draw() {
         <div class="who"><div style="min-width:0"><strong>${esc(sellerName(o))}</strong><small>${esc(o.name || "")}${o.host ? " · " + esc(o.host) : ""}</small></div>
           <span class="llm-pill">${o.here ? "This arcade" : "Online"}</span></div>
         ${o.models.map((m) => `<div class="llm-model"><code>${esc(m.id)}</code><span style="color:var(--muted)">up to ${(o.max_out || 0).toLocaleString()} out</span></div>`).join("")}
-        <div class="llm-prices"><span class="h">Coin</span><span class="h">In</span><span class="h">Out</span>
-          ${o.prices.map((p) => `<span><b>${esc(short(p.label))}</b></span><span>${price(p.in)}</span><span>${price(p.out)}</span>`).join("")}</div>
+        ${o.free ? `<div class="llm-note"><b>Free for everyone.</b> Sign in and chat, or make an API key; nothing to pay.</div>` : `<div class="llm-prices"><span class="h">Coin</span><span class="h">In</span><span class="h">Out</span>
+          ${o.prices.map((p) => `<span><b>${esc(short(p.label))}</b></span><span>${price(p.in)}</span><span>${price(p.out)}</span>`).join("")}</div>`}
         <div class="llm-foot"><div style="min-width:0"><small>Your credit</small><strong>${esc(c.big)}</strong>${c.small ? `<small>${esc(c.small)}</small>` : ""}</div>
-          <div style="display:flex;gap:8px">${book.signed_in ? `<button type="button" class="llm-btn" data-do="topup">Top up</button><button type="button" class="llm-btn go" data-do="chat">Chat</button>` : `<a class="llm-btn go" href="/signin" style="display:inline-flex;align-items:center;text-decoration:none">Sign in</a>`}</div></div>
+          <div style="display:flex;gap:8px">${book.signed_in ? `${o.free ? "" : `<button type="button" class="llm-btn" data-do="topup">Top up</button>`}<button type="button" class="llm-btn go" data-do="chat">Chat</button>` : `<a class="llm-btn go" href="/signin" style="display:inline-flex;align-items:center;text-decoration:none">Sign in</a>`}</div></div>
       </article>`;
     }).join("");
   }
@@ -298,7 +301,8 @@ function openChat(o) {
   $("llm-chat").hidden = false;
   $("llm-chat-who").textContent = `${o.models[0] ? o.models[0].id : ""} · ${sellerName(o)}`;
   const c = credit[o.seller];
-  $("llm-chat-leg").innerHTML = o.prices.map((p) => `<option value="${esc(p.leg)}">${esc(short(p.label))}</option>`).join("");
+  $("llm-chat-leg").hidden = !!o.free;
+  $("llm-chat-leg").innerHTML = legsOf(o).map((p) => `<option value="${esc(p.leg)}">${esc(short(p.label))}</option>`).join("");
   const has = o.prices.find((p) => c && c.credit && c.credit[p.leg] && c.credit[p.leg].units > 0);
   if (has) $("llm-chat-leg").value = has.leg;
   drawLeft();
@@ -308,7 +312,7 @@ function openChat(o) {
 function drawLeft() {
   if (!picked) return;
   const c = credit[picked.seller], leg = $("llm-chat-leg").value, p = picked.prices.find((x) => x.leg === leg);
-  $("llm-left").textContent = c && c.free ? "Free" : c && c.credit && c.credit[leg] ? `${c.credit[leg].text} ${short(p && p.label)} left` : "No credit";
+  $("llm-left").textContent = picked.free || (c && c.free) ? "Free" : c && c.credit && c.credit[leg] ? `${c.credit[leg].text} ${short(p && p.label)} left` : "No credit";
 }
 $("llm-chat-leg").addEventListener("change", drawLeft);
 $("llm-new-chat").addEventListener("click", () => { history = []; $("llm-msgs").innerHTML = ""; });
@@ -371,7 +375,7 @@ function drawKeys() {
   $("llm-base").textContent = book.api_base;
   $("llm-api").hidden = !book.signed_in;
   const on = [];
-  book.offers.forEach((o) => o.prices.forEach((p) => on.push(`<option value="${esc(o.seller)}|${esc(p.leg)}">${esc(sellerName(o))} · ${esc(short(p.label))}</option>`)));
+  book.offers.forEach((o) => legsOf(o).forEach((p) => on.push(`<option value="${esc(o.seller)}|${esc(p.leg)}">${esc(sellerName(o))} · ${esc(short(p.label))}</option>`)));
   const keep = $("llm-key-on").value; $("llm-key-on").innerHTML = on.join(""); if (keep) $("llm-key-on").value = keep;
   const name = (sid) => { const o = book.offers.find((x) => x.seller === sid); return o ? sellerName(o) : sid.slice(0, 10) + "…"; };
   $("llm-keys").innerHTML = keys.length ? `<span class="h">Key</span><span class="h">Name</span><span class="h">Spends</span><span class="h">Last used</span><span></span>` +

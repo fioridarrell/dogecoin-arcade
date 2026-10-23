@@ -218,6 +218,18 @@ DEFAULTS = {"on": False, "url": "", "key": "", "models": [], "at_once": 2, "max_
             "name": ""}
 
 
+def is_free(cfg: dict) -> bool:
+    """No asks: free for everyone (2026-10-23: "if I offer my model for free, it should have all the same
+    capabilities as a paid model. But I should be able to change it from free to pay at any time by adding an ask")."""
+    for p in cfg.get("prices") or []:
+        try:
+            if price(p.get("in", 0)) > 0 or price(p.get("out", 0)) > 0:
+                return False
+        except LlmError:
+            return False
+    return True                                         # no asks, or only asks of 0 in and 0 out
+
+
 def config(state: Any) -> dict:
     got = state.setting(SETTING) or {}
     out = dict(DEFAULTS)
@@ -265,8 +277,9 @@ def clean(said: dict, kept: dict) -> dict:
             rows.append({"leg": leg, "label": str(row.get("label") or leg)[:80],
                          "in": format(p_in, "f"), "out": format(p_out, "f")})
         out["prices"] = rows[:40]
-    if out.get("on") and not (out.get("url") and out.get("models") and out.get("prices")):
-        raise LlmError("to sell, name the server, at least one model and at least one price")
+    out.pop("free", None)
+    if out.get("on") and not (out.get("url") and out.get("models")):
+        raise LlmError("to offer it, name the server and at least one model")
     return out
 
 
@@ -589,24 +602,29 @@ class Seller:
     def offer(self) -> dict | None:
         """What this arcade says on the LLM book, or None when it sells nothing."""
         cfg = self.config()
-        if not (cfg.get("on") and cfg.get("url") and cfg.get("models") and cfg.get("prices")):
+        free = is_free(cfg)
+        if not (cfg.get("on") and cfg.get("url") and cfg.get("models")):
             return None
         prices = []
-        for p in cfg["prices"]:
+        for p in ([] if free else cfg["prices"]):
             try:
                 to = self.pay_to(p["leg"])
             except Exception:                                   # noqa: BLE001 -- a chain away: not offered now
                 to = ""
             if to:
                 prices.append({**p, "to": to})
-        if not prices:
+        if not prices and not free:
             return None
         about = self.about() or {}
-        return {"name": cfg.get("name") or "", "models": [{"id": m} for m in cfg["models"]],
+        return {"name": cfg.get("name") or "", "models": [{"id": m} for m in cfg["models"]], "free": free,
                 "max_out": int(cfg.get("max_out") or 0), "prices": prices,
                 "tag": str(about.get("tag") or ""), "host": str(about.get("host") or "")}
 
     def _price(self, leg: str) -> dict:
+        if is_free(self.config()):
+            return {"leg": leg, "in": "0", "out": "0"}
+        if leg == "free":
+            raise LlmError("this seller charges for its model now; top up and use one of the coins it takes")
         for p in self.config().get("prices") or []:
             if p.get("leg") == leg:
                 return p
@@ -614,10 +632,12 @@ class Seller:
 
     def balance(self, buyer: str) -> dict:
         legs = self.books.balances(buyer)
-        return {"free": bool(self.free(buyer)),
+        return {"free": bool(self.free(buyer)) or is_free(self.config()),
                 "credit": {leg: {"units": u, "text": fmt(u, self.scale(leg))} for leg, u in legs.items()}}
 
     def topup(self, buyer: str, leg: str, txid: str, sig: str) -> dict:
+        if is_free(self.config()):
+            raise LlmError("this arcade's model is free: no top-up needed")
         self._price(leg)
         txid = (txid or "").strip().lower()
         network = leg_parts(leg)[0]
@@ -650,7 +670,7 @@ class Seller:
             raise LlmError("a chat needs messages")
         if len(json.dumps(body)) > MAX_BODY:
             raise LlmError("that request is too large")
-        free = bool(self.free(buyer))
+        free = bool(self.free(buyer)) or is_free(cfg)
         prices = {"in": 0, "out": 0} if free else self._price(leg)
         scale = self.scale(leg) if not free else COIN
         balance = 0 if free else self.books.balance(buyer, leg)

@@ -1388,12 +1388,13 @@
       var named = offers.filter(function(o){ return !req.seller || o.seller === req.seller || (req.seller === 'here' && o.here); });
       if (!named.length) return Promise.reject(new Error(offers.length ? 'that seller sells no model now' : 'no arcade sells a model right now'));
       // The seller and coin the player has credit with, this arcade's own first; else the first named.
-      var tries = named.filter(function(o){ return o.here || o.granted; });
+      var tries = named.filter(function(o){ return o.here || o.granted || o.free; });
       function next(i){
-        if (i >= tries.length) return Promise.resolve({o: named[0], leg: req.leg || named[0].prices[0].leg});
+        if (i >= tries.length) return Promise.resolve({o: named[0], leg: req.leg || (named[0].free ? 'free' : named[0].prices[0].leg)});
         var o = tries[i];
+        if (o.free) return Promise.resolve({o: o, leg: 'free'});
         return llmJSON('/account/llm/balance?seller=' + encodeURIComponent(o.seller)).then(function(b){
-          if (b.free) return {o: o, leg: req.leg || o.prices[0].leg};
+          if (b.free) return {o: o, leg: req.leg || (o.prices[0] ? o.prices[0].leg : 'free')};
           var leg = req.leg || (o.prices.find(function(p){ return b.credit && b.credit[p.leg] && b.credit[p.leg].units > 0; }) || {}).leg;
           return leg ? {o: o, leg: leg} : next(i + 1);
         }, function(){ return next(i + 1); });
@@ -1405,7 +1406,7 @@
       if (op === 'offers') {
         llmJSON('/account/llm/offers').then(function(b){
           answer({ok: true, offers: (b.offers || []).map(function(o){
-            return {seller: o.seller, here: o.here, name: o.name, tag: o.tag, models: o.models, prices: o.prices.map(function(p){
+            return {seller: o.seller, here: o.here, free: !!o.free, name: o.name, tag: o.tag, models: o.models, prices: o.prices.map(function(p){
               return {leg: p.leg, label: p.label, in: p.in, out: p.out}; }), max_out: o.max_out}; })});
         }).catch(function(err){ answer({ok: false, error: String(err.message || err)}); });
         return;
