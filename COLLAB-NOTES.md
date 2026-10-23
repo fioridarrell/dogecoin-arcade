@@ -88,6 +88,14 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-23 Finding ComfyUI's models when the voice model takes its slot (Claude)
+The operator: "ComfyUI 127.0.0.1:8188 pictures No model it can share." On a test machine only one of ComfyUI and the CSM voice
+model sits beside vLLM (~/bin/gpu-slot); a voice request 9 s after the wake stopped ComfyUI while it was being asked
+for its loaders, and the list came back empty with no reason. `probe` now asks twice and says why
+(`why`: stopped while asked / holds no Qwen-Image model); "Wake it and look" wakes once more when ComfyUI is gone
+again before it was asked; the images scan retries a wake when the model list fails. A picture in progress is never
+cut off (gpu-slot waits for ComfyUI's queue); an idle ComfyUI is unloaded for voice and woken again by the next order.
+
 ### 2026-10-23 Admin -> LLM: "Find models on this computer" (Claude)
 The operator: "Can the operator just have a button that they can click to scan for all models and then it will just give
 them a list of models that is on their computer and then they can just pick from the models?" -- `POST

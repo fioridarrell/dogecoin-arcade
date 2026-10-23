@@ -214,7 +214,13 @@ def register(app, state, *, signed_in: Callable, account_address: Callable, acco
                 return JSONResponse({"ok": False, "asleep": True,
                                      "detail": "ComfyUI is not running" + ("; press Scan again to wake it" if srv.wake
                                                                            else "; start it, or give a wake command")})
-            models = await asyncio.to_thread(srv.models)
+            try:
+                models = await asyncio.to_thread(srv.models)
+            except Exception:                                       # noqa: BLE001 -- stopped while asked: once more
+                if not srv.wake:
+                    raise
+                await asyncio.to_thread(srv.ensure_up)
+                models = await asyncio.to_thread(srv.models)
             return JSONResponse({"ok": True, "models": models, "ms": round((time.monotonic() - t) * 1000)})
         except llmlib.LlmError as exc:
             return refuse(exc)
@@ -239,6 +245,14 @@ def register(app, state, *, signed_in: Callable, account_address: Callable, acco
             except llmlib.LlmError as exc:
                 return refuse(exc)
         found = await asyncio.to_thread(discover, own)
+        if said.get("wake") and who.get("local") and not found["images"]:
+            # woken, then stopped again before it was asked (the voice model took the slot): wake it once more
+            try:
+                await asyncio.to_thread(imagegen.ComfyServer(str(said.get("url") or "http://127.0.0.1:8188"),
+                                                            str(said["wake"])[:300]).ensure_up)
+                found = await asyncio.to_thread(discover, own)
+            except llmlib.LlmError:
+                pass
         found["local"] = bool(who.get("local"))
         return JSONResponse(found, headers={"Cache-Control": "no-store"})
 
@@ -691,11 +705,17 @@ def probe(port: int) -> dict | None:
         r = rq.get(f"{base}/system_stats", timeout=1.5)
         if r.status_code == 200 and isinstance(r.json(), dict) and "system" in r.json():
             from .. import imagegen
-            try:
-                models = imagegen.ComfyServer(base).models()
-            except Exception:                                       # noqa: BLE001
-                models = []
-            return {"kind": "image", "url": base, "server": "ComfyUI", "port": port,
+            models, why = [], ""
+            for _ in range(2):                  # it can be stopped while asked (another model taking the GPU's slot)
+                try:
+                    models = imagegen.ComfyServer(base).models()
+                    why = "" if models else "it holds no Qwen-Image model (the one family that can be shared now)"
+                    break
+                except Exception as exc:                            # noqa: BLE001
+                    why = f"it stopped answering while asked ({type(exc).__name__}); look again"
+                    import time as _t
+                    _t.sleep(2)
+            return {"kind": "image", "url": base, "server": "ComfyUI", "port": port, **({"why": why} if why else {}),
                     "models": [{"id": m["id"], "label": m["label"]} for m in models]}
     except Exception:                                               # noqa: BLE001
         pass

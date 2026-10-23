@@ -711,7 +711,7 @@
           return '<label style="display:flex;gap:10px;align-items:center;cursor:pointer"><input type="checkbox" data-kind="' + kind + '" data-url="' + esc(g.url) +
             '" value="' + esc(m.id) + '"' + (on ? ' checked' : '') + ' style="width:20px;height:20px"><span style="min-width:0"><b class="mono" style="overflow-wrap:anywhere">' +
             esc(m.label || m.id) + '</b>' + (m.ctx ? ' <span class="muted" style="font-size:.8rem">' + m.ctx.toLocaleString() + '-token context</span>' : '') + '</span></label>';
-        }).join('') : '<span class="muted">No model it can share.</span>') + '</div>';
+        }).join('') : '<span class="muted">No model it can share' + (g.why ? ': ' + esc(g.why) : '') + '.</span>') + '</div>';
     }
     f.text.forEach(function (g) { out.push(server(g, 'text')); });
     f.images.forEach(function (g) { out.push(server(g, 'image')); });
