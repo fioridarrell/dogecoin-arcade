@@ -1449,13 +1449,13 @@ function arcadeGameAllow(id, on){
   document.dispatchEvent(new CustomEvent('arcade:access', {detail: {id: id, on: !!on}}));
 }
 function arcadeAccessWords(game, publisher, address){
-  return '“' + (game || 'This game') + '” is published by ' + (publisher || 'an account with no @name')
-    + (address ? ' (' + address + ')' : '') + '. Check that this is the game’s real publisher before you allow it: '
-    + 'anybody can publish a copy of a game under a lookalike name, and a game with wallet access can ask your wallet '
-    + 'to trade, pay and sign. You can turn it off again on the game’s card.';
+  return '“' + (game || 'This app') + '” is published by ' + (publisher || 'an account with no @name')
+    + (address ? ' (' + address + ')' : '') + '. Check that this is the app’s real publisher before you allow it: '
+    + 'anybody can publish a copy of an app under a lookalike name, and an app with wallet access can ask your wallet '
+    + 'to trade, pay and sign. You can turn it off again on the app’s card.';
 }
 function arcadeAccessAsk(id, game, publisher, address){
-  return arcadeAsk('Allow this game to use your wallet?', arcadeAccessWords(game, publisher, address), 'Allow wallet access')
+  return arcadeAsk('Allow this app to use your wallet?', arcadeAccessWords(game, publisher, address), 'Allow wallet access')
     .then(function(yes){ if (yes) arcadeGameAllow(id, true); return !!yes; });
 }
 // THE GATE (2026-10-20: a player "can't play a game that uses Wallet controls unless they check the wallet
@@ -1467,7 +1467,7 @@ function arcadeAccessAsk(id, game, publisher, address){
 // box is ticked (as they do from the start for a card that says "wallet": true). A page that is not a game -- a
 // shop, a mintpad -- has no card to tick and keeps the ask (arcadeAccessAsk).
 var ARCADE_USES = 'arcade.wallet.uses:';
-var ARCADE_GATE_SAYS = 'This game uses your wallet. Turn on Wallet access on its game card to play it.';
+var ARCADE_GATE_SAYS = 'This app uses your wallet. Turn on Wallet access on its card to open it.';
 var ARCADE_GAMES = '/games', _arcadeGames = {};
 function arcadeGameOf(page){
   if (!page) return Promise.resolve({game: false});
@@ -1498,12 +1498,12 @@ function arcadeGameStop(page, g){
     box.setAttribute('role', 'alert');
     box.style.cssText = 'max-width:560px;margin:24px auto;padding:18px;text-align:center';
     var h = document.createElement('h3'); h.style.marginTop = '0';
-    h.textContent = '\u{1F512} ' + ((g && g.name) || 'This game') + ' uses your wallet';
+    h.textContent = '\u{1F512} ' + ((g && g.name) || 'This app') + ' uses your wallet';
     var p = document.createElement('p');
-    p.textContent = 'To play it, turn on Wallet access on its game card. '
+    p.textContent = 'To open it, turn on Wallet access on its card. '
       + arcadeAccessWords(g && g.name, g && g.publisher, g && g.address);
     var a = document.createElement('a'); a.className = 'btn';
-    a.href = '/games#game-' + ((g && g.card) || page); a.textContent = 'Open its game card';
+    a.href = '/apps#game-' + ((g && g.card) || page); a.textContent = 'Open its card';
     box.append(h, p, a);
     f.after(box);
   });
@@ -1535,14 +1535,14 @@ function arcadeMediaAllow(id, on){
 function arcadeMediaUses(id){ try { return localStorage.getItem(ARCADE_MEDIA_USES + id) === 'yes'; } catch (e) { return false; } }
 function arcadeMediaUsed(id){ try { localStorage.setItem(ARCADE_MEDIA_USES + id, 'yes'); } catch (e) {} }
 function arcadeMediaWords(game, publisher, address){
-  return '“' + (game || 'This game') + '” is published by ' + (publisher || 'an account with no @name')
-    + (address ? ' (' + address + ')' : '') + '. Check that this is the game’s real publisher before you allow it: '
-    + 'anybody can publish a copy of a game under a lookalike name, and a game with camera and microphone access can '
+  return '“' + (game || 'This app') + '” is published by ' + (publisher || 'an account with no @name')
+    + (address ? ' (' + address + ')' : '') + '. Check that this is the app’s real publisher before you allow it: '
+    + 'anybody can publish a copy of an app under a lookalike name, and an app with camera and microphone access can '
     + 'send your picture and sound to the players it chooses. The arcade always shows when they are on, with a Stop '
-    + 'button. You can turn it off again on the game’s card.';
+    + 'button. You can turn it off again on the app’s card.';
 }
 function arcadeMediaAsk(id, game, publisher, address){
-  return arcadeAsk('Allow this game to use your camera and microphone?', arcadeMediaWords(game, publisher, address),
+  return arcadeAsk('Allow this app to use your camera and microphone?', arcadeMediaWords(game, publisher, address),
                    'Allow camera & microphone')
     .then(function(yes){ if (yes) arcadeMediaAllow(id, true); return !!yes; });
 }

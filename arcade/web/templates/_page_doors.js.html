@@ -636,7 +636,7 @@
         var want = {video: !!m.video, audio: !!m.audio};
         if (!want.video && !want.audio) { answer({ok: false, error: 'ask for video, audio or both'}); return; }
         mediaAllowed().then(function(yes){
-          if (!yes) { answer({ok: false, error: 'off', why: 'Camera & microphone is off on this game’s card'}); return; }
+          if (!yes) { answer({ok: false, error: 'off', why: 'Camera & microphone is off on this app’s card'}); return; }
           return navigator.mediaDevices.getUserMedia({
             // No shape forced: a phone's camera stays portrait, a PC's landscape (2026-10-23: "All should
             // maintain their aspect ratios"); only capped, for a call of up to 20.
@@ -806,11 +806,11 @@
       el.style.cssText = 'position:absolute;left:50%;top:16px;transform:translateX(-50%);max-width:min(520px,90%);'
         + 'pointer-events:auto;padding:12px 14px;text-align:center;z-index:3';
       var p = document.createElement('p'); p.style.margin = '0 0 8px';
-      p.textContent = '\u{1F3A5} ' + ((g && g.name) || 'This game') + ' wants your camera and microphone. '
-        + 'Turn on Camera & microphone on its game card to allow it.';
+      p.textContent = '\u{1F3A5} ' + ((g && g.name) || 'This app') + ' wants your camera and microphone. '
+        + 'Turn on Camera & microphone on its card to allow it.';
       var a = document.createElement('a'); a.className = 'btn small';
-      a.href = '/games#game-' + ((g && g.card) || here); a.target = '_blank'; a.rel = 'noopener';
-      a.textContent = 'Open its game card';
+      a.href = '/apps#game-' + ((g && g.card) || here); a.target = '_blank'; a.rel = 'noopener';
+      a.textContent = 'Open its card';
       var x = document.createElement('button'); x.type = 'button'; x.className = 'btn small'; x.textContent = 'Not now';
       x.style.marginLeft = '6px';
       x.onclick = function(){ el.remove(); mediaNoteEl = null; };

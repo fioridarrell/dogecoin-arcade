@@ -163,7 +163,7 @@ def test_a_game_not_allowed_is_told_off_and_nothing_opens(tmp_path, no_nodes):
             _until(ga, "window.room && window.room.media && window.room.me", "in")
             ga.evaluate("window.said = null; window.room.media.start({video: true, audio: true})"
                         ".then(function (r) { window.said = r; }); 0")
-            pa.wait_for_selector("text=Allow this game to use your camera and microphone?", timeout=10000)
+            pa.wait_for_selector("text=Allow this app to use your camera and microphone?", timeout=10000)
             pa.get_by_role("button", name="Cancel").click()
             _until(ga, "window.said", "the answer")
             assert ga.evaluate("window.said") == {"ok": False, "error": "off"}
@@ -173,7 +173,7 @@ def test_a_game_not_allowed_is_told_off_and_nothing_opens(tmp_path, no_nodes):
             # Said yes: allowed from then on, and it opens.
             ga.evaluate("window.said = null; window.room.media.start({video: true, audio: true})"
                         ".then(function (r) { window.said = r; }); 0")
-            pa.wait_for_selector("text=Allow this game to use your camera and microphone?", timeout=10000)
+            pa.wait_for_selector("text=Allow this app to use your camera and microphone?", timeout=10000)
             pa.get_by_role("button", name="Allow camera & microphone").click()
             _until(ga, "window.said", "the answer")
             assert ga.evaluate("window.said")["ok"] is True

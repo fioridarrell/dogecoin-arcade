@@ -88,6 +88,14 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-23 The Games tab is the Apps tab (Claude)
+The operator: "Change the games tab to the apps tab" ... "Keeping the game agnostic" ... "So now it's application agnostic"
+(a video-call card is coming). Nav Apps at /apps; /games 301s there (query kept); /games/<id> and /games/<id>/access
+stay as they are (the gate's own URL). A card may say {"app": {...}} -- games.MARKS, and the tab's query looks for
+either -- and every {"game": ...} card inscribed still lists. Words on the tab, the cards (Play -> Open) and the
+Wallet access / Camera & microphone asks and stops say "app" now. door.py lets /apps through. Tests:
+test_the_tab_is_apps_and_an_app_card_lists_like_a_game_card, and the quoted words in the door/games tests.
+
 ### 2026-10-23 Camera pictures keep their own shape (Claude)
 The operator: "landscape should be cropped to fit into the portrait view ... portrait view on a PC should have extra black on
 the sides and no cropping. All should maintain their aspect ratios." The camera is asked for at most 1280 px each way

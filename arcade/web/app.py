@@ -435,7 +435,7 @@ MINING_CALLS = frozenset({"getblocktemplate", "submitblock", "getbestblockhash",
 NAV = [
     ("/",             "Overview",     None,        True),
     # Every inscribed game (arcade/games.py), where an account's sits.
-    ("/games",        "Games",        "mainnet",   True),
+    ("/apps",         "Apps",         "mainnet",   True),
     ("/messages",     "Messages",     "testnet",   True),
     # Likes, replies, sales and swaps to the node's own address, as an account has (2026-10-19).
     ("/notifications", "Notifications", None,     True),
@@ -467,7 +467,7 @@ ACCOUNT_NAV = [
     ("/me",              "Your arcade",  None,        True),
     # Every inscribed game (arcade/games.py), right after the account's own
     # page (2026-10-01: "between your arcade and Messages").
-    ("/games",           "Games",        "mainnet",   True),
+    ("/apps",            "Apps",         "mainnet",   True),
     ("/me/messages",     "Messages",     "testnet",   True),
     # 2026-09-25: Messages, Notifications, Feed, then the address book.
     ("/me/notifications", "Notifications", None,      True),
@@ -23730,7 +23730,7 @@ def create_app(state: AppState) -> FastAPI:
                     "SELECT i.txid, i.number, i.creator, i.json, i.block_height, "
                     "COALESCE(b.time, 0) AS time FROM inscription i "
                     "LEFT JOIN block b ON b.height = i.block_height "
-                    "WHERE i.content_type LIKE 'text/html%' AND i.json LIKE '%\"game\"%' "
+                    "WHERE i.content_type LIKE 'text/html%' AND (i.json LIKE '%\"game\"%' OR i.json LIKE '%\"app\"%') "
                     "ORDER BY i.block_height DESC, i.position DESC LIMIT ?",
                     (int(limit),)).fetchall()
         except Exception:
@@ -23914,9 +23914,16 @@ def create_app(state: AppState) -> FastAPI:
             item["mine"] = bool(me) and me in makers.get(item["creator"], {item["creator"]})
         return launchlist.rank(items, sort, int(time.time()))
 
-    @app.get("/games", response_class=HTMLResponse)
+    @app.get("/games")
+    def games_moved(request: Request):
+        """The Games tab is the Apps tab (2026-10-23); old links still land on it."""
+        q = request.url.query
+        return RedirectResponse("/apps" + (f"?{q}" if q else ""), status_code=301)
+
+    @app.get("/apps", response_class=HTMLResponse)
     def games_page(request: Request, sort: str = "popular"):
-        """Every game on the chain, Popular or Latest, with the feed's buttons."""
+        """Every app (a game, a video call, any page with a card) on the chain, Popular or Latest, with the feed's
+        buttons."""
         chain, _index = _token_chain()
         sort = "new" if sort == "new" else "popular"
         games = _games_ranked(request, sort)

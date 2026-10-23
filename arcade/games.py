@@ -49,6 +49,9 @@ import re
 from typing import Any
 
 MARK = "game"
+# The tab is Apps since 2026-10-23 (the operator: "Change the games tab to the apps tab", "application agnostic"): a card
+# may say {"app": {...}} instead; every card inscribed as {"game": ...} stays one.
+MARKS = (MARK, "app")
 _TXID = re.compile(r"^[0-9a-f]{64}$")
 _FAMILY = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
 LIMITS = {"name": 60, "description": 280, "version": 20, "players": 20, "genre": 24}
@@ -69,9 +72,11 @@ def parse(json_text: Any) -> dict | None:
         said = json.loads(json_text) if isinstance(json_text, str) else json_text
     except ValueError:
         return None
-    if not isinstance(said, dict) or not isinstance(said.get(MARK), dict):
+    if not isinstance(said, dict):
         return None
-    game = said[MARK]
+    game = next((said[k] for k in MARKS if isinstance(said.get(k), dict)), None)
+    if game is None:
+        return None
     out = {key: _text(game.get(key), limit) for key, limit in LIMITS.items()}
     if not out["name"]:
         return None

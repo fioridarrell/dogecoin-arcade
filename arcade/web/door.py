@@ -67,7 +67,8 @@ PUBLIC_PAGES = frozenset({
     "/exchange",
     "/exchange/token20/search",       # DRC-20 / PRC-20 ticks as they are typed into the exchange's search boxes
     "/exchange/pairs",            # the "open a pair" box: two token ids to a token/token pair's page
-    "/games",                 # every inscribed game (arcade/games.py)
+    "/apps",                  # every inscribed app (arcade/games.py; the Apps tab since 2026-10-23)
+    "/games",                 # the old name: redirects to /apps
     "/account/escrows",       # an account's own escrows (needs a session)
     "/account/doginals",      # this account's own Doginals on Dogecoin, to list (needs a session)
     "/account/segwit/balance",  # the account's registered segwit address (native or P2SH), test chains (needs a session)
