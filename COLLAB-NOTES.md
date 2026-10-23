@@ -88,6 +88,13 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-23 A model page's chat: an "Arcade docs" switch, and the conversation kept in the browser (Claude)
+The operator: "You should be able to disable the arcade context for the in page LLM chat for the models in the LLM exchange.
+Also have the models store their context window in the browser, the same way as the helper [bot] does." `_llm_tab.html`:
+an Arcade docs checkbox (on by default, kept as `arcade.llm.docs`) sends `docs: true|false`; the chat lives in
+localStorage `arcade.llm.chat:<me>:<seller>:<model>` (last 80, last 40 sent), drawn again on opening the page, cleared by
+New chat. Test: test_llm.py::test_the_chat_can_leave_the_arcade_docs_out.
+
 ### 2026-10-23 A listing no longer "fails" over an old order the node took off; tabs forget cancelled orders (Claude)
 Live, @apple listing 100,000 PEP test for PEP main: "that lists more frgy than this wallet has free ... that order is off
 the book". The tab posts its whole own book with every listing, and its localStorage still held two frgy orders that

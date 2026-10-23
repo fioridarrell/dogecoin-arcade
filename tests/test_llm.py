@@ -766,3 +766,13 @@ def test_credit_pays_in_whatever_coin_it_was_bought_in_and_pictures_can_be_delet
     assert client.post("/account/llm/pictures/delete", json={"id": pics[0]["id"]}).json()["ok"]
     assert client.get("/account/llm/pictures").json()["pictures"] == []
     assert client.get(pics[0]["url"]).status_code == 404
+
+
+def test_the_chat_can_leave_the_arcade_docs_out(arcade):
+    """2026-10-23: "You should be able to disable the arcade context for the in page LLM chat"."""
+    client, state, pubkey, seen = arcade
+    state.llm_seller.books.credit("90" * 32, "main-coin", ADDR, llm.COIN)
+    said = client.post("/account/llm/chat", json={"seller": "here", "leg": "auto", "docs": False,
+                                                  "messages": [{"role": "user", "content": "how do prize pools work?"}]})
+    assert said.status_code == 200 and _events(said.text)[-1]["arcade"]["docs_tokens"] == 0
+    assert seen[-1]["messages"] == [{"role": "user", "content": "how do prize pools work?"}], "nothing of ours added"

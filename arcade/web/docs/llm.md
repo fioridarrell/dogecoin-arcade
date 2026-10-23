@@ -52,7 +52,9 @@ balance below zero: a reply is cut short to what your credit still pays for.
 
 Open a words model: its page is a chat. The chat knows DogecoinArcade's own documentation: the seller's arcade adds
 the parts of the docs that bear on your question, and those added words are **not charged** -- you pay only for your
-own words and the reply. Under each reply you see the tokens in and out and what it cost.
+own words and the reply. Under each reply you see the tokens in and out and what it cost. Untick **Arcade docs** to talk to
+the model with nothing of the arcade's added. The conversation is kept in your browser, per model, until you press
+**New chat**.
 
 ### Pictures
 

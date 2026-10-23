@@ -155,6 +155,9 @@ a.llm-card:hover{transform:translateY(-2px);box-shadow:0 2px 4px rgba(0,0,0,.05)
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <select id="llm-chat-leg" aria-label="Pay with" style="width:auto;height:34px;padding:0 8px;border-radius:999px;border:1px solid var(--line);background:var(--panel);color:var(--fg)"></select>
         <span class="llm-pill" id="llm-left" style="background:color-mix(in srgb,var(--accent) 14%,var(--panel));color:var(--accent)"></span>
+        {#- 2026-10-23: "You should be able to disable the arcade context for the in page LLM chat". #}
+        <label style="display:flex;gap:6px;align-items:center;font-size:.8rem;font-weight:650;color:var(--muted);flex-direction:row" title="Add what DogecoinArcade's docs say about your question (free)">
+          <input type="checkbox" id="llm-docs" checked style="width:18px;height:18px;margin:0"> Arcade docs</label>
         <button type="button" class="llm-btn" id="llm-new-chat" style="height:34px;padding:0 12px">New chat</button>
       </div>
     </div>
@@ -665,8 +668,30 @@ async function claimPending() {
 }
 
 // --- chat ----------------------------------------------------------------------------------------------------
+// The conversation kept in this browser, per account and model, the way the helper keeps its own (2026-10-23:
+// "have the models store their context window in the browser, the same way as the helper [bot] does").
+const CHAT_KEEP = 80;
+const chatKey = (o) => `arcade.llm.chat:${book.me || "guest"}:${o.seller}:${(o.models[0] || {}).id || ""}`;
+function keepChat() {
+  if (!picked) return;
+  try { localStorage.setItem(chatKey(picked), JSON.stringify(history.slice(-CHAT_KEEP))); } catch (e) {}
+}
+function drawChat() {
+  $("llm-msgs").innerHTML = "";
+  history.forEach((m) => {
+    if (m.role === "user") bubble("me", m.content);
+    else { const it = bubble("it"); const out = it.querySelector("div");
+           if (window.arcadeMd) out.innerHTML = arcadeMd(m.content); else out.textContent = m.content; }
+  });
+}
+function docsWord() { $("llm-input").placeholder = $("llm-docs").checked ? "Ask anything \u2014 it knows DogecoinArcade's docs\u2026" : "Ask anything\u2026"; }
+try { $("llm-docs").checked = localStorage.getItem("arcade.llm.docs") !== "off"; } catch (e) {}
+docsWord();
+$("llm-docs").addEventListener("change", () => { try { localStorage.setItem("arcade.llm.docs", $("llm-docs").checked ? "on" : "off"); } catch (e) {} docsWord(); });
 function openChat(o) {
   $("llm-chat").hidden = false;
+  try { history = JSON.parse(localStorage.getItem(chatKey(o)) || "[]") || []; } catch (e) { history = []; }
+  drawChat();
   $("llm-chat-who").textContent = `${o.models[0] ? o.models[0].id : ""} · ${sellerName(o)}`;
   const c = credit[o.seller];
   $("llm-chat-leg").hidden = !!o.free;
@@ -684,7 +709,7 @@ function drawLeft() {
   $("llm-left").textContent = l.big === "No credits yet" ? "No credit" : l.big + (l.big.startsWith("\u2248") ? " left" : "");
 }
 $("llm-chat-leg").addEventListener("change", drawLeft);
-$("llm-new-chat").addEventListener("click", () => { history = []; $("llm-msgs").innerHTML = ""; });
+$("llm-new-chat").addEventListener("click", () => { history = []; $("llm-msgs").innerHTML = ""; keepChat(); });
 
 function bubble(cls, text) {
   const el = document.createElement("div");
@@ -697,13 +722,13 @@ async function sendChat() {
   if (!text || busy || !picked) return;
   try { await ensureGrant(picked); } catch (err) { toast(err.message); return; }
   busy = true; $("llm-go").disabled = true; $("llm-input").value = "";
-  history.push({role: "user", content: text}); bubble("me", text);
+  history.push({role: "user", content: text}); bubble("me", text); keepChat();
   const it = bubble("it"), out = it.querySelector("div"), think = it.querySelector("details"), small = it.querySelector("small");
   let said = "", thought = "";
   try {
     const r = await fetch("/account/llm/chat", {method: "POST", credentials: "same-origin", headers: {"Content-Type": "application/json"},
       // docs: the seller adds what DogecoinArcade's documentation says about the question, free (llmdocs.py).
-      body: JSON.stringify({seller: picked.seller, leg: "auto", model: picked.models[0] && picked.models[0].id, messages: history, docs: true})});
+      body: JSON.stringify({seller: picked.seller, leg: "auto", model: picked.models[0] && picked.models[0].id, messages: history.slice(-40), docs: $("llm-docs").checked})});
     if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.detail || `HTTP ${r.status}`); }
     const reader = r.body.getReader(), dec = new TextDecoder(); let buf = "";
     for (;;) {
@@ -733,10 +758,10 @@ async function sendChat() {
         $("llm-msgs").scrollTop = 1e9;
       }
     }
-    history.push({role: "assistant", content: said});
+    history.push({role: "assistant", content: said.replace(/^\s+/, "")}); keepChat();
   } catch (err) {
     out.textContent = said || "—"; small.textContent = String(err.message || err);
-    history.pop();
+    history.pop(); keepChat();
   } finally { busy = false; $("llm-go").disabled = false; draw(); }
 }
 $("llm-go").addEventListener("click", sendChat);
