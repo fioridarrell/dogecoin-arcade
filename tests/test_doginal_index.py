@@ -1186,3 +1186,24 @@ def test_a_copy_being_fetched_is_never_made_again_under_a_new_id(tmp_path, monke
     assert not snaps.want_made(), "a piece was served a moment ago: kept"
     snaps.served_at -= ord_snapshot.SNAP_SERVING + 1
     assert snaps.want_made(), "nobody fetching it any more, and old: made again"
+
+
+def test_the_totals_never_hold_up_the_status(tmp_path, monkeypatch):
+    """2026-10-22: @strawberry's Ords panel stopped loading -- counting its 52.8 million Dogecoin inscriptions took 42 s,
+    and every status waited for it. The status answers at once ("counting"), the totals arrive from their own thread."""
+    import threading
+    chain = _story_chain()
+    index = dx.DoginalIndex(tmp_path / "w.sqlite", lambda: chain, lambda: "walk", cores=lambda: 1)
+    index.walker.step(chain, dx.BASE + 11, budget=60)
+    gate, real = threading.Event(), index._count
+    monkeypatch.setattr(index, "_count", lambda walking: (gate.wait(10), real(walking))[1])
+    walk = index._status()["walk"]
+    assert walk["counting"] and walk["inscriptions"] == 0, "answered without waiting for the count"
+    assert index._status()["walk"]["counting"], "one count at a time, still nobody waits"
+    gate.set()
+    for _ in range(100):
+        if not index._counts_lock.locked():
+            break
+        threading.Event().wait(0.05)
+    walk = index._status()["walk"]
+    assert not walk["counting"] and walk["inscriptions"] > 0, walk

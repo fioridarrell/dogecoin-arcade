@@ -1280,7 +1280,8 @@ section.panel h2{margin-top:0}
     // Everything the old table said, kept for when it matters.
     var w = r.walk, bits = [];
     bits.push('Starts at block ' + num(r.base) + (r.source ? ' (' + r.source + ')' : ''));
-    if (w) bits.push(num(w.inscriptions) + ' inscriptions, ' + num(w.tokens) + ' tokens with ' + num(w.holders)
+    if (w && w.counting) bits.push('Counting the inscriptions, tokens and holders…');
+    else if (w) bits.push(num(w.inscriptions) + ' inscriptions, ' + num(w.tokens) + ' tokens with ' + num(w.holders)
       + ' holders, ' + num((w.names || {}).spec) + ' names');
     if (r.found) bits.push(num(r.found) + ' births in the chunks read here');
     if (r.agreed_births) bits.push(num(r.agreed_births) + ' inscriptions agreed by two or more arcades');

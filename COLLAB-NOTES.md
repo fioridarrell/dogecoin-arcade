@@ -88,6 +88,14 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-22 Ords panel never waits for the index's totals (Claude)
+The operator: "strawberries admin, ORD's panel is not loading". @strawberry's Dogecoin index reached 52.8 million inscriptions
+(12 GB); `SELECT COUNT(*), COUNT(burned) FROM insc` took 42 s, the holders count 5 s, redone every 2 min, and the first
+status after a restart held every Ords request behind it (the stall watch showed all page threads in admin_ords ->
+_counts). doginal_index._counts now works a walking index's totals out on a thread of its own ("ord-counts", one at a
+time) and answers with the last ones, or "counting" (the panel says so) until the first arrive; "found" (a block sum,
+0.7 s) stays as it was. Test: test_the_totals_never_hold_up_the_status.
+
 ### 2026-10-22 Plan (no code yet): compressing what arcades send each other (Claude)
 The operator, after SadFrog's game-bundle note (minify, one gzipped bundle, DecompressionStream): "Can we do something similar
 to this to our indexes?" Measured on a 64 MB sample of @strawberry's Pepecoin copy: zlib-6 0.62 of the size, zstd-10
