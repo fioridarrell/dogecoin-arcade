@@ -23,7 +23,7 @@
 #arc-bot-msgs .it{align-self:flex-start;max-width:90%;background:var(--bg);border:1px solid var(--line);border-radius:14px 14px 14px 4px;padding:8px 11px;white-space:pre-wrap;overflow-wrap:anywhere}
 #arc-bot-msgs .note{color:var(--muted);font-size:.78rem;text-align:center}
 #arc-bot-box form{display:flex;gap:8px;padding:10px;border-top:1px solid var(--line)}
-#arc-bot-box textarea{flex:1 1 auto;min-width:0;font:inherit;font-size:.9rem;height:44px !important;min-height:44px !important;max-height:120px;resize:none;margin:0;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--fg)}
+#arc-bot-box textarea{flex:1 1 auto;min-width:0;font:inherit;font-size:16px;height:44px !important;min-height:44px !important;max-height:120px;resize:none;margin:0;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--fg)}
 #arc-bot-box form button{font:inherit;font-weight:650;border:0;border-radius:10px;padding:0 14px;height:44px;align-self:flex-end;background:var(--accent);color:var(--accent-fg);cursor:pointer}
 @media (max-width:520px){ #arc-bot-box{right:8px;left:8px;width:auto;bottom:74px}}
 </style>
@@ -44,21 +44,36 @@
   <rect x="2" y="14" width="12" height="1" fill="#2b2f3a"/><rect x="5" y="15" width="6" height="1" fill="#8a93a3"/>
 </svg>
 {%- endmacro %}
-<button type="button" id="arc-bot" aria-label="Ask the arcade helper" title="Ask the arcade helper">{{ robot() }}</button>
-<div id="arc-bot-box" role="dialog" aria-label="Arcade helper">
-  <header>{{ robot() }}<div style="flex:1;min-width:0"><b>Arcade helper</b><small id="arc-bot-who">Knows {{ brand.name }}'s docs</small></div>
-    <button type="button" id="arc-bot-new" title="Start over">New</button>
-    <button type="button" id="arc-bot-x" aria-label="Close">&times;</button></header>
-  <div id="arc-bot-msgs" aria-live="polite"></div>
-  <form id="arc-bot-form"><textarea id="arc-bot-in" rows="1" autocomplete="off" aria-label="Ask the helper" placeholder="Ask about anything here&hellip;"></textarea>
-    <button type="submit">Ask</button></form>
-</div>
+<template id="arc-bot-face">{{ robot() }}</template>
 <script>
 (function () {
-  // Not over a game in full screen, and not when the person turned it off (Your arcade).
+  // Not over a game in full screen, not where a password or recovery words are typed (a chat box there is a box a phrase
+  // could be pasted into), and not when the person turned it off on their own page.
   if (/^\/inscriptions\/[^/]+\/full/.test(location.pathname)) return;
-  var OFF = 'arcade.helper.off', bot = document.getElementById('arc-bot'), box = document.getElementById('arc-bot-box');
+  if (/^\/(signin|join|backup|restore|recover|signup|admin\/login)\b/.test(location.pathname) || location.pathname === '/') return;
+  if (document.querySelector('input[type=password], #backup-file, #open-file')) return;
+  var OFF = 'arcade.helper.off';
   try { if (localStorage.getItem(OFF) === '1') return; } catch (e) {}
+  // Built here, not in the page: a page's own HTML carries no box and no form of the helper's.
+  function make(tag, attrs, kids) {
+    var el = document.createElement(tag);
+    Object.keys(attrs || {}).forEach(function (k) { if (k === 'text') el.textContent = attrs[k]; else el.setAttribute(k, attrs[k]); });
+    (kids || []).forEach(function (c) { el.appendChild(c); });
+    return el;
+  }
+  var face = function () { return document.getElementById('arc-bot-face').content.cloneNode(true); };
+  var bot = make('button', {type: 'button', id: 'arc-bot', 'aria-label': 'Ask the arcade helper', title: 'Ask the arcade helper'});
+  bot.appendChild(face());
+  var head = make('header', {}, []);
+  head.appendChild(face());
+  head.appendChild(make('div', {style: 'flex:1;min-width:0'}, [make('b', {text: 'Arcade helper'}), make('small', {id: 'arc-bot-who', text: 'Knows the docs'})]));
+  head.appendChild(make('button', {type: 'button', id: 'arc-bot-new', title: 'Start over', text: 'New'}));
+  head.appendChild(make('button', {type: 'button', id: 'arc-bot-x', 'aria-label': 'Close', text: '\u00d7'}));
+  var box = make('div', {id: 'arc-bot-box', role: 'dialog', 'aria-label': 'Arcade helper'}, [head,
+    make('div', {id: 'arc-bot-msgs', 'aria-live': 'polite'}),
+    make('form', {id: 'arc-bot-form'}, [make('textarea', {id: 'arc-bot-in', rows: '1', autocomplete: 'off', 'aria-label': 'Ask the helper',
+      placeholder: 'Ask about anything here\u2026'}), make('button', {type: 'submit', text: 'Ask'})])]);
+  document.body.appendChild(bot); document.body.appendChild(box);
   var who = (typeof ARCADE_ME === 'string' && ARCADE_ME) ? ARCADE_ME : 'guest';
   // The conversation lives in this browser's storage for this arcade, per account (the operator: "stored in the users arcade
   // local storage"), so it follows the person from page to page and visit to visit.

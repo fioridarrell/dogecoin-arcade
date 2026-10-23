@@ -206,13 +206,13 @@ def test_the_exchange_opens_on_llms(client):
     """2026-10-23: "I want the exchange tab to open directly to the LLM's market" (it opened on Tokens from
     2026-10-11, on the mintpads before). A tab nobody has heard of lands there too; Tokens is one tap away."""
     app, _ = client
-    for where in ("/exchange", "/exchange?tab=nonsense"):
+    body = app.get("/exchange").text
+    assert 'href="/exchange?tab=llm" aria-current="page"' in body
+    assert body.count('aria-current="page"') == 1
+    for where in ("/exchange?tab=tokens", "/exchange?tab=nonsense"):       # an old link's tab still lands on Tokens
         body = app.get(where).text
-        assert 'href="/exchange?tab=llm" aria-current="page"' in body, where
-        assert body.count('aria-current="page"') == 1, where
-    body = app.get("/exchange?tab=tokens").text
-    assert 'href="/exchange?tab=tokens" aria-current="page"' in body
-    assert "/exchange/swap/regtest-coin/main-coin" in body
+        assert 'href="/exchange?tab=tokens" aria-current="page"' in body, where
+        assert "/exchange/swap/regtest-coin/main-coin" in body, where
 
 
 # --- address book -------------------------------------------------------------

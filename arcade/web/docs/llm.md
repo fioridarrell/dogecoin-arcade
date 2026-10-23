@@ -7,16 +7,24 @@ of the Exchange.
 
 ## For players: using a model
 
-### The LLMs tab
+### The model exchange
 
-**Exchange → LLMs** lists every arcade that shares a model, cheapest first. Each card shows:
+**Exchange → LLMs** is the model exchange: one card for every model an arcade shares, words (language models) and
+pictures alike. Each card shows:
 
-- the seller (the operator's @name and their arcade's address),
-- the model's name and how long a reply it allows,
-- its prices, per token, in each coin or token it takes -- **in** is what you send, **out** is what it writes,
-- how busy it is right now: **Idle**, **In use**, **Busy** (every slot taken) or **Full** (people waiting), with how
-  many replies are running, how many were written in the last hour and how fast it writes (tokens per second),
+- the model's name, whether it makes **words** or **pictures**, and the seller (the operator's @name and their arcade),
+- its **price** -- per token for words (**in** is what you send, **out** is what it writes), per credit for pictures,
+- its **speed** (tokens a second, or seconds a picture), how much it was **used** in the last hour, and the longest reply
+  or largest picture side it allows,
+- how busy it is right now: **Idle**, **In use**, **Busy** (every slot taken) or **Full** (people waiting),
 - **your credit** with that seller.
+
+Tap **☆** to keep a model in **★ Favorites** -- the model exchange opens on your favorites when you have any. Choose
+**All models**, **Words** or **Pictures**, search (the search always looks through every model), pick a coin, and
+**Sort** by most used, cheapest, fastest, least busy or name.
+
+**Tap a card to open that model's own page**: its card and prices, **Top up**, the chat (words) or **Make a picture**
+(pictures), and API keys for it.
 
 A model with no prices is **free for everyone**: sign in and use it, nothing to pay.
 
@@ -24,7 +32,7 @@ A model with no prices is **free for everyone**: sign in and use it, nothing to 
 
 You pay a seller by **prepaid credit**:
 
-1. Press **Top up** on the seller's card, pick a coin or token you hold, and enter an amount. The page says roughly how
+1. Open the model and press **Top up**, pick a coin or token you hold, and enter an amount. The page says roughly how
    much it buys.
 2. Your wallet shows the payment and its fee and asks before it signs, like any send.
 3. The payment goes **straight to the seller's address**. Their arcade checks it on the chain, that it came from your
@@ -39,7 +47,7 @@ balance below zero: a reply is cut short to what your credit still pays for.
 
 ### Chat
 
-Press **Chat** on a card. The chat on the Exchange knows DogecoinArcade's own documentation: the seller's arcade adds
+Open a words model: its page is a chat. The chat knows DogecoinArcade's own documentation: the seller's arcade adds
 the parts of the docs that bear on your question, and those added words are **not charged** -- you pay only for your
 own words and the reply. Under each reply you see the tokens in and out and what it cost.
 
@@ -56,7 +64,7 @@ The same balance with a seller pays for words and pictures.
 
 ### Using a model from your own programs (API keys)
 
-The LLMs tab's **Use it from your own apps** gives an **OpenAI-compatible API** on your own arcade:
+A model's page has **Use it from your own apps**, which gives an **OpenAI-compatible API** on your own arcade:
 
 - Base URL: `https://<your arcade>/v1`
 - API key: press **Make a key** (name it, pick which seller and coin it spends). The key starts with `sk-arcade-` and

@@ -679,7 +679,9 @@ def test_the_arcade_helper_answers_with_the_page_it_was_asked_on(arcade, monkeyp
     assert seen[-1]["max_tokens"] <= 1200
     assert state.llm_seller.books.analytics(0)["by"]["via"][0]["key"] == "helper"
     # the page carries the robot; a person may turn it off on Your arcade (kept in their browser)
-    assert 'id="arc-bot"' in client.get("/exchange?tab=llm").text
+    page = client.get("/exchange?tab=llm").text
+    assert 'id="arc-bot-face"' in page and "<textarea" not in page.split('id="arc-bot-face"')[1], \
+        "the robot is on the page, its chat built by script (no box in the page's own HTML)"
     assert 'id="helper-on"' in client.get("/me").text
 
 

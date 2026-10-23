@@ -31375,7 +31375,7 @@ def create_app(state: AppState) -> FastAPI:
         # it should open to tokens instead of launchpads"; it opened on the
         # mintpads from 2026-09-28), and anything unknown lands there too.
         # LLMs first since 2026-10-23 (the operator: "I want the exchange tab to open directly to the LLM's market").
-        tab = tab if tab in EXCHANGE_TABS else "llm"
+        tab = tab if tab in EXCHANGE_TABS else "tokens"    # an old link's tab (?tab=swaps ...) still lands on Tokens
         chain, index = _token_chain()
         # Each tab reads only what it draws (2026-10-13: "Make sure each tab only
         # loads what it needs to load and does lazy loading"). The node's status was read

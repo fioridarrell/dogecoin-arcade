@@ -110,6 +110,10 @@ coding agent, so it is written for agents first and people second.
   page shows "Your pictures".
 * The operator: "If there is an error, they should be refunded their credit": a chat reply that breaks off with an error is
   not charged (logged ok=0); a reply the buyer stopped reading counts what was written; failed pictures never cost.
+* The helper's chat box is built by script (no <textarea>/<form> in any page's HTML: the front door's "no box for a
+  phrase", the listings page's "nothing to press"), its box is 16px (no iOS zoom), and it is not shown on /, sign-in,
+  join, backup, restore or any page with a password field. A bare /exchange opens on LLMs; an unknown tab (old links,
+  ?tab=swaps) still lands on Tokens.
 * Also: top-ups count at broadcast, the paid-pictures "Free" label (entry below), ComfyUI woken again when it dies
   starting (CUDA out of memory as the voice model lets go). docs/llm.md says all of it. Tests: test_llm.py (28).
 
