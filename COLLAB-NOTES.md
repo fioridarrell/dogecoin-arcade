@@ -88,6 +88,12 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-23 "Inscribe now" on a picture from the LLM tab (Claude)
+The operator: "underneath each image in the [cache], add an inscribe now Button that brings them to the [inscriber] with the
+image that they just generated picked as the file that they want to inscribe". "Your pictures" has Inscribe now ->
+`/nfts?pick=llm:<id>#inscribing`; `_account_inscribe.html` fetches that picture from the account's own 24-hour cache
+(/account/llm/pictures/<id>.png), puts it in the file box (DataTransfer) and quotes it (arcadePick) as if chosen.
+
 ### 2026-10-23 No page zooms when a field is tapped (Claude)
 The operator: "when I'm on my iPhone PWA and I click into a text input field it zoomed in. I don't like that." Every page's
 viewport says `maximum-scale=1` now (base.html, and game_door, tokenpad, mintpad, offline), not only the full-screen

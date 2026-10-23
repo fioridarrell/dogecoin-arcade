@@ -493,7 +493,8 @@ async function loadGallery() {
       <a href="${esc(p.url)}" target="_blank" rel="noopener"><img src="${esc(p.url)}" alt="${esc(p.prompt)}" loading="lazy" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px;border:1px solid var(--line)"></a>
       <figcaption style="font-size:.75rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.prompt)}">${esc(p.prompt || "picture")}</figcaption>
       <span style="display:flex;justify-content:space-between;gap:6px;font-size:.72rem;color:var(--muted)"><span>${left} h left</span>
-        <span style="display:flex;gap:8px"><a href="${esc(p.url)}" download="arcade-${esc(p.id)}.png">Download</a>
+        <span style="display:flex;gap:8px;flex-wrap:wrap"><a href="/nfts?pick=llm:${encodeURIComponent(p.id)}#inscribing" style="font-weight:650">Inscribe now</a>
+        <a href="${esc(p.url)}" download="arcade-${esc(p.id)}.png">Download</a>
         <a href="#" data-del="${esc(p.id)}" style="color:#a33">Delete</a></span></span></figure>`;
   }).join("");
 }
