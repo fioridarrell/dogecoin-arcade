@@ -88,6 +88,16 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-22 Two regressions of today's, caught by a full run (Claude)
+Running the whole suite (route-scoped gates had passed) found two of today's changes breaking older tests:
+* `funding.choose` skipped every in-flight coin at or under 0.01 where a guard runs (to keep a fresh DRC-20 / PRC-20
+  note from paying a fee) -- which also kept back the small coins a shopkeeper's take answer needs
+  (test_account_take: no answer made). Now only the notes themselves are skipped: `funding.NOTE_COINS`, the outpoint
+  of each note reveal the token20 routes broadcast (their done hooks add it).
+* The exchange's pick box waited for /exchange/token20/search before answering a keystroke, so an earlier answer stood
+  meanwhile (test_trade_tab_lists: "zzqqxx" showed 4 rows). It now answers from what the page has at once, and adds
+  the node's ticks when they come, only if the box still holds the words they were asked for.
+
 ### 2026-10-22 Token orders past what is free come off the book on every post (Claude)
 The operator: "My listing amount was only 1000 FRGY. I didn't have that much to list so how could I have listed that much
 anyways listing should be limited to what you have available" (and: "Probably because it's a divisible coin and you're
