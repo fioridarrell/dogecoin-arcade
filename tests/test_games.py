@@ -285,3 +285,34 @@ def test_a_card_only_inscription_takes_over_a_page_that_carries_its_own_card(cli
     page = app.get("/apps").text
     assert f'data-media="{launcher}"' in page and f'data-contacts="{launcher}"' in page, "switches keyed on the page"
     assert page.count('data-contacts="') == 1, "one card for the app"
+
+
+def test_a_star_puts_an_app_first_and_stays_across_its_versions(client):
+    """2026-10-23: "a star on app cards that bring the game app to the top of your favorites list. The star
+    should persist across version changes so should hearts comments tips and dislikes." """
+    app, state = client
+    a1, a2, b = "e1" * 32, "e2" * 32, "e3" * 32
+    _inscribe(state, b, 50, MAKER, {"app": {"name": "Big App"}}, height=120)
+    _inscribe(state, a1, 51, MAKER, {"app": {"name": "Little App", "version": "1"}}, height=100)
+    key = gameslib.app_key(MAKER, "Little App")
+    assert key == f"app:{MAKER}:little-app"
+    assert app.post("/account/favorites", json={"key": key, "on": True}).json()["saved"]
+    page = app.get("/apps?sort=new").text
+    assert page.index(f'id="game-{a1}"') < page.index(f'id="game-{b}"'), "the starred app first, though older"
+    assert f'data-fav="{key}"' in page
+    # A new version: the same star, and the first version's heart and comment count for it.
+    _inscribe(state, a2, 52, MAKER, {"app": {"name": "Little App", "version": "2"}}, height=130)
+    from arcade.messaging import feed as feedlib
+    with state.store() as store:
+        store.add_feed_act(state.messaging.network, "f1" * 32, feedlib.LIKE, a1, "nSomebody" + "a" * 25,
+                           height=101, block_time=1)
+        store.add_feed_act(state.messaging.network, "f2" * 32, feedlib.REPLY, a1, "nSomebody" + "a" * 25,
+                           height=102, block_time=2)
+    page = app.get("/apps?sort=new").text
+    assert f'id="game-{a2}"' in page and f'id="game-{a1}"' not in page, "the newest version is the card"
+    assert page.index(f'id="game-{a2}"') < page.index(f'id="game-{b}"'), "and it is still starred"
+    card = page[page.index(f'id="game-{a2}"'):page.index(f'id="game-{b}"')]
+    assert 'data-count="1"' in card or "&#9829; 1" in card, "v1's heart is v2's"
+    assert "&#128172; 1" in card, "and its comment"
+    thread = app.get(f"/games/{a2}").text
+    assert thread.count("nSomebody") >= 1, "the discussion holds what was said to v1"

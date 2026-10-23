@@ -117,6 +117,11 @@ def newest_per_game(rows: list[dict]) -> list[dict]:
     return out
 
 
+def app_key(creator: str, name: Any) -> str:
+    """What a star on an app's card is kept under: its maker and name, the same for every version of it."""
+    return f"app:{creator}:{slug(name)[:80] or 'app'}"
+
+
 def slug(name: Any) -> str:
     """A game's name as it is typed in a link: "Ghost Fleet" -> "ghost-fleet"."""
     return re.sub(r"[^a-z0-9]+", "-", str(name or "").casefold()).strip("-")

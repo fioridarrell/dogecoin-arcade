@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "_tip.html" as tipui with context %}
+{% import "_exui.html" as exui %}
 {% block title %}Apps · {{ brand.name }}{% endblock %}
 {% block body %}
 {# Every inscribed game on the chain (arcade/games.py): a page whose JSON says
@@ -56,9 +57,11 @@
     <code>game</code> in its JSON.</p></div>
 {% endif %}
 
+{{ exui.fav_script() }}
+<div id="gamelist">
 {% for it in games %}
 {% set g = it.game %}
-<div class="panel gamecard" id="game-{{ it.txid }}">
+<div class="panel gamecard" id="game-{{ it.txid }}" data-star="{{ it.star_key }}">
   <a class="gamecover" target="_blank" rel="noopener" href="/inscriptions/{{ g.opens or it.txid }}/full" title="Play {{ g.name }}"
      data-play="{{ g.opens or it.txid }}"{% if g.wallet %} data-wallet="1"{% endif %}>
     {% if g.cover %}
@@ -68,7 +71,9 @@
     {% endif %}
   </a>
   <div class="gamebody">
-    <div style="margin:0 0 4px"><strong style="font-size:1.05rem">{{ wall(g.name, 'name') }}</strong>
+    {# A star (2026-10-23): starred apps come first; kept under the app's maker and name, so it stays on
+       across its versions (gameslib.app_key). #}
+    <div style="margin:0 0 4px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">{{ exui.fav_button(it.star_key, small=true, what='app') }}<strong style="font-size:1.05rem">{{ wall(g.name, 'name') }}</strong>
       {% if g.multiplayer %}<span class="pill">multiplayer</span>{% endif %}
       {% if g.genre %}<span class="pill">{{ g.genre }}</span>{% endif %}
       {% if it.net %}{{ net_badge(it.net) }}{% endif %}</div>
@@ -179,6 +184,20 @@
   </div>
 </div>
 {% endfor %}
+</div>
+<script>
+/* Starred apps first, as soon as a star changes (and for a visitor whose stars live in this browser). */
+(function () {
+  var list = document.getElementById('gamelist');
+  if (!list || !window.arcadeFavs) return;
+  var order = Array.prototype.slice.call(list.querySelectorAll(':scope > .gamecard'));
+  arcadeFavs.onChange(function (set) {
+    order.filter(function (c) { return set.indexOf(c.dataset.star) >= 0; })
+      .concat(order.filter(function (c) { return set.indexOf(c.dataset.star) < 0; }))
+      .forEach(function (c) { list.appendChild(c); });
+  });
+})();
+</script>
 
 <style>
   .gamecard{display:flex;gap:14px;margin:0 0 14px;min-width:0;align-items:flex-start}

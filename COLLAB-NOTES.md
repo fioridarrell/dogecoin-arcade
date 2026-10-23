@@ -88,6 +88,17 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-23 Stars on app cards; reactions carry across an app's versions (Claude)
+The operator: "a star on app cards that bring the game app to the top of your favorites list. The star should persist across
+version changes so should hearts comments tips and dislikes." Each card has the exchange's star (_exui.fav_button,
+/account/favorites, which now also takes `app:<creator>:<name slug>` -- gameslib.app_key, the same for every version);
+starred apps come first on /apps (server-side for a signed-in account or the operator, and in the page at once).
+Versions are the tab's own rule (same maker and name, newest_per_game): _games_ranked counts every version's acts for
+the card shown (likes/dislikes by each person's last word across versions, comments, tips), and the discussion page
+(launch_thread) gathers every version's replies under the newest card (_app_versions). Tests:
+test_games.py::test_a_star_puts_an_app_first_and_stays_across_its_versions; checked in Chromium (star, reorder,
+kept after a reload).
+
 ### 2026-10-23 A card-only inscription takes over a page that carries its own card; relay errors say why (Claude)
 The Cul-de-sac session: Video Call's launcher (a7ba0bc5...) carries its first card, and a new launcher would be a new
 page and reset every switch. A newer card by the same maker naming the page in `play` now replaces the page's own card

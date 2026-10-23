@@ -9048,7 +9048,9 @@ def create_app(state: AppState) -> FastAPI:
         waiting = _pending_feed(state.messaging.network)
         pool = [dict(a, height=a.get("height") or 0) for a in (waiting.acts or [])]
         acts: list[dict] = []
-        level, seen = [txid], set()
+        # An app's discussion is every version's (2026-10-23): what was said to an older card is said here.
+        versions = _app_versions(txid) if launch.get("kind") == "game" else [txid]
+        level, seen = list(dict.fromkeys([txid] + versions)), set()
         for _depth in range(6):                    # six deep is deep enough
             if not level:
                 break
@@ -9062,6 +9064,8 @@ def create_app(state: AppState) -> FastAPI:
             acts += [a for a in got if a["txid"] not in seen]
             seen |= {a["txid"] for a in got}
             level = [a["txid"] for a in got if a["kind"] == feedlib.REPLY]
+        olders = set(versions) - {txid}
+        acts = [dict(a, target=txid) if a.get("target") in olders else a for a in acts]
         replies = [a for a in acts if a["kind"] == feedlib.REPLY]
         likes: dict[str, set] = {}
         for a in acts:
@@ -9900,7 +9904,10 @@ def create_app(state: AppState) -> FastAPI:
             raise HTTPException(403, "sign in first")
         said = payload if isinstance(payload, dict) else {}
         key = str(said.get("key", "")).strip()
-        if not re.fullmatch(r"/exchange[/?][A-Za-z0-9/_.@?=&%+-]{1,200}", key):     # a collection name is %-encoded; a tab
+        # An app is starred by its maker and name, so the star stays across its versions (2026-10-23):
+        # "app:<creator>:<name slug>" (gameslib.app_key).
+        if not (re.fullmatch(r"/exchange[/?][A-Za-z0-9/_.@?=&%+-]{1,200}", key)
+                or re.fullmatch(r"app:[A-Za-z0-9]{20,90}:[a-z0-9-]{1,80}", key)):     # a collection name is %-encoded; a tab
             return JSONResponse({"detail": "that is not a market"}, status_code=400)
         now = [k for k in _favorites(owner) if k != key]
         if said.get("on", True):
@@ -23930,6 +23937,18 @@ def create_app(state: AppState) -> FastAPI:
                 found.append({**dict(r), "game": game})
         return gameslib.newest_per_game(found) if newest else found
 
+    def _app_versions(txid: str) -> list[str]:
+        """Every card of the same app on its chain -- the same maker and name, the rule the Apps tab keeps the newest
+        by (gameslib.newest_per_game) -- newest first; [txid] when it is no card. Hearts, dislikes, comments and tips
+        aimed at any version count for the app (2026-10-23: they "should persist across version changes")."""
+        for _, ix in [_token_chain()] + _other_indexes():
+            rows = _game_rows(ix, newest=False)
+            me = next((r for r in rows if r["txid"] == txid), None)
+            if me is not None:
+                key = (me["creator"], me["game"]["name"].casefold())
+                return [r["txid"] for r in rows if (r["creator"], r["game"]["name"].casefold()) == key]
+        return [txid]
+
     # A game's maker can take its card off the tab the way a post's author takes
     # a post off the feed (2026-10-01): the feed's own DELETE, aimed at the card's
     # txid, counted only when it comes from whoever inscribed the card -- at
@@ -24081,6 +24100,13 @@ def create_app(state: AppState) -> FastAPI:
             rows += [r for r in gameslib.newest_per_game([x for x in every if id(x["_chain"]) == c]) if not r["removed"]]
         for r in rows:
             r["game"]["opens"] = _game_opens(r["_ix"], r["creator"], r["txid"], r["game"])
+        # Every version's reactions count for the card shown (2026-10-23: hearts, comments, tips and dislikes
+        # "should persist across version changes"): aimed at an older card of the same app, they are this one's. A
+        # person's last word across versions is what counts (an unlike on the new card undoes a like on the old).
+        shown = {(id(r["_chain"]), r["creator"], r["game"]["name"].casefold()): r["txid"] for r in rows}
+        version_of = {r["txid"]: shown.get((id(r["_chain"]), r["creator"], r["game"]["name"].casefold()))
+                      for r in every}
+        acts = [dict(a, target=version_of.get(a["target"]) or a["target"]) for a in acts]
         items = [{"txid": r["txid"], "number": r["number"], "creator": r["creator"],
                   "name": r["game"]["name"], "game": r["game"],
                   "time": int(r["time"] or 0), "height": r["block_height"],
@@ -24115,6 +24141,14 @@ def create_app(state: AppState) -> FastAPI:
         chain, _index = _token_chain()
         sort = "new" if sort == "new" else "popular"
         games = _games_ranked(request, sort)
+        # Starred apps first, in the order they were ranked (2026-10-23: "a star on app cards that bring the
+        # game app to the top of your favorites list"); the star is the account's (or the operator's), kept on this node.
+        owner = _favorites_owner(request)
+        starred = set(_favorites(owner)) if owner else set()
+        for g in games:
+            g["star_key"] = gameslib.app_key(g["creator"], g["name"])
+            g["starred"] = g["star_key"] in starred
+        games = [g for g in games if g["starred"]] + [g for g in games if not g["starred"]]
         mine = _tag_of_whoever_is_asking(request) or {}
         return render(request, "games.html", chain=chain, games=games, sort=sort,
                       kinds=feedlib.BY_NAME,
