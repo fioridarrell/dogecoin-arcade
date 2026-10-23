@@ -592,3 +592,17 @@ def test_a_scan_wakes_comfyui_with_the_wake_typed_at_the_node_machine(arcade, mo
     got = client.post("/admin/api/llm/images/scan", headers=h,
                       json={"url": "http://127.0.0.1:9", "wake_now": True, "wake": "true"}).json()
     assert woke == ["true"] and got["models"][0]["id"] == "qwen_image_x"
+
+
+def test_find_models_lists_every_model_server_on_this_computer(pictures, monkeypatch):
+    """2026-10-23: "a button that they can click to scan for all models and then it will just give them a list
+    of models that is on their computer" -- each local port asked whether it is an OpenAI server or ComfyUI."""
+    from arcade.web import llmweb
+    client, state, pubkey, jobs, comfy_url = pictures
+    text_url = llm.config(state)["url"]
+    ports = {int(text_url.rsplit(":", 1)[1]), int(comfy_url.rsplit(":", 1)[1]), 9}
+    monkeypatch.setattr(llmweb, "listening_ports", lambda: ports)
+    got = client.post("/admin/api/llm/discover", headers={"X-Arcade-Admin": "1"}, json={}).json()
+    assert [(g["url"], [m["id"] for m in g["models"]]) for g in got["text"]] == [(text_url, ["tiny"])]
+    assert got["images"][0]["url"] == comfy_url and got["images"][0]["models"][0]["label"] == "Qwen-Image 2.1"
+    assert got["asleep"] == [], "a ComfyUI that answers is not offered a wake"
