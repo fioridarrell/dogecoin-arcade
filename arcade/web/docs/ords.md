@@ -64,3 +64,28 @@ Doginal Frogs and the Anti Doginal Dogs are published in.
   Every arcade then shows the collection on the Exchange.
 
 The first index to name an ord owns it, and only the account that published an index can replace it.
+
+### The trait file
+
+The trait file is a JSON list with one entry per ord, in doggy.market's layout. The number comes from the end of
+`name` (`#12`):
+
+```json
+[
+  {"inscriptionId": "<txid>i0", "name": "My Frogs #1", "attributes": {"Background": "Blue", "Eyes": "Red"}},
+  {"inscriptionId": "<txid>i0", "name": "My Frogs #2", "attributes": {"Background": "Green", "Eyes": "Laser"}}
+]
+```
+
+Each `inscriptionId` is the ord's inscription id on the chain its items live on: a txid of 64 hex characters followed by
+`i0` (or `i1`, ...). Every id and every number may appear only once.
+
+### Making the trait file with the arcade helper
+
+The robot in the corner of every page can write the trait file for you. Collect each ord's inscription id, name and
+traits from wherever the collection is listed, then paste them to the helper in batches of about 50 and ask, for
+example: "Turn these into a trait file for the collection index: inscriptionId, name and attributes." Put the batches
+together into one list (one `[` at the start and one `]` at the end), check the count, and paste it under **Or a
+trait file** in **Make a collection index**. Choose where the items live (for example **Pepecoin** for Pepinals),
+give the collection its name and press **Inscribe the index**.
+
