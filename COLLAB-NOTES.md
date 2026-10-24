@@ -88,6 +88,28 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-24 LoRa (Meshtastic) gateway in every arcade; Admin -> Meshtastic with a T-Deck web flasher; LoRa badge (Claude)
+The operator (via the LoRa/T-Deck session): "Add a Meshtastic admin panel and a Web flasher for our new firmware to the admin
+panel. And the admin overview table add a Lora badge for nodes with a Lora gateway" ... "Incorporated as a option for all
+arcades". Branch `claude/lora-gateway`.
+- `arcade/lora/`: the gateway, copied unchanged from github.com/dogecoinarcade/arcade-lora (b896345, `SOURCE.md`
+  says how to take a newer one); its Python tests as `tests/test_lora_{frames,gateway,keys,txcheck}.py`.
+- `arcade/web/lora.py` LoraService: off by default (setting `lora`: enabled, port, name, chains, beacon -- beacon off,
+  T-Decks find gateways by asking). Started in `__main__` by the worker holding the run lock (one gateway per home;
+  a reload hands the port over, sessions kept in `<home>/lora-gateway.sqlite`, taken over once from
+  `~/.arcade-lora-gateway.sqlite`); stopped in the lifespan. A thread runs poll/tick/beacon; the MeshLink is rebuilt on
+  the same Gateway when the port vanishes or "meshtastic.connection.lost" fires.
+- `arcade/web/loraweb.py`: `/admin/api/lora` (GET status, POST settings), `/admin/api/lora/install` (pip the `[lora]`
+  extra -- meshtastic, coincurve -- node machine only), `/admin/api/lora/firmware` and `/firmware/{factory,app}.bin`
+  (dogecoinarcade/firmware releases/latest, sha256-checked, kept under `<home>/lora-firmware`). Admin-only
+  (`_admin_check`); the door already lets only the operator reach /admin from outside.
+- Admin -> Meshtastic tab (admin.html): switch, port picker, name, chains, beacon, radio facts and link stats, T-Decks,
+  and the flasher (`vendor/esptool.js` = esptool-js 0.5.4, pinned in test_vendor, PROVENANCE.md).
+- Mesh "me" frame carries `"lora": true` (mesh/service.py operator_about, operators.py); `/admin/api/arcades` rows and
+  `_arcades_panel.html` show a LoRa badge. `pyproject`: `arcade.lora` package, `lora` extra. Docs: `docs/lora.md`.
+- Tests: test_lora_admin (7: off by default, one gateway, a lost radio reopened on the same Gateway, takeover, firmware
+  sha check, routes, badge frame) + the gateway's own 26.
+
 ### 2026-10-24 "Pepecoin main" / "Pepecoin test" everywhere; the Wallet's sweep-back card is gone (Claude)
 The operator: Pepecoin is never just "mainnet" / "testnet" -- it is "Pepecoin main" and "Pepecoin test", as the rest of the app
 names chains (e.g. the testnet mining text); and "remove the sweep back card from the bottom of the wallet. Since sweep

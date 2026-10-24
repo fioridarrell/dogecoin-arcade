@@ -929,6 +929,11 @@ def create_app(state: AppState) -> FastAPI:
         except Exception as exc:              # noqa: BLE001 -- never block startup
             log.info("push not started: %s", exc)
         yield
+        # The LoRa gateway lets its serial port go before the next worker takes the run lock (web/lora.py).
+        lora = getattr(state, "lora", None)
+        if lora is not None:
+            import asyncio as _asyncio
+            await _asyncio.to_thread(lora.shutdown)
         if not state.begin_shutdown():
             print("arcade-web: a send was still running at shutdown. What is "
                   "already broadcast cannot be taken back; the interface will "
@@ -27479,6 +27484,7 @@ def create_app(state: AppState) -> FastAPI:
                         {**coin(chain.network), "role": mode, "pct": None, "helped": helped})
         rows = [{"me": True, "node": me[:12], "tag": state.operator_tag(),
                  "host": (list(state.public_hosts) or [""])[0], "cores": mine_cores,
+                 "lora": bool(getattr(getattr(state, "lora", None), "running", False)),
                  "ords": ords.get(me or "this arcade", []), "link": {"state": "me"}}]
         order = {n: i for i, n in enumerate(NETWORKS)}      # the chains in the order the arcade lists them
         others = []
@@ -27490,7 +27496,7 @@ def create_app(state: AppState) -> FastAPI:
             else:
                 link = {"state": "none"}
             others.append({"me": False, "node": peer[:12], "tag": heard.get("tag") or "",
-                           "host": (heard.get("hosts") or [""])[0],
+                           "host": (heard.get("hosts") or [""])[0], "lora": bool(heard.get("lora")),
                            "cores": [{**coin(n), "shared": True}
                                      for n in sorted(offers.get(peer) or {}, key=lambda n: (order.get(n, 99), n))
                                      if peer in links],
@@ -32116,6 +32122,9 @@ def create_app(state: AppState) -> FastAPI:
     realtimelib.register(app, state, account_view=_account_view, signed_in=signed_in,
                          account_address=_account_address, account_chain=_account_chain,
                          check_csrf=check_csrf)
+    # The LoRa gateway (lora.py, loraweb.py, 2026-10-24): Admin -> Meshtastic and the T-Deck web flasher.
+    from . import loraweb
+    loraweb.register(app, state, admin_check=_admin_check)
     # The LLM service (llmweb.py, 2026-10-23): Admin -> LLM, the Exchange's LLM tab, and /v1 for API keys.
     from . import llmweb
     llmweb.register(app, state, signed_in=signed_in, account_address=_account_address, account_chain=_account_chain,

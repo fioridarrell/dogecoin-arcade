@@ -11,6 +11,7 @@
 #arcades .arcrow.me{background:color-mix(in srgb,var(--accent) 6%,transparent);border-radius:8px}
 #arcades .who b{font-weight:700;overflow-wrap:anywhere}
 #arcades .who .pill{margin-left:6px;white-space:nowrap}
+#arcades .pill.lora{background:color-mix(in srgb,#2f7dd1 16%,var(--panel));color:#2f7dd1;border:1px solid color-mix(in srgb,#2f7dd1 40%,transparent);margin-left:6px}
 #arcades .who .arctip{display:inline-flex;align-items:center;margin-top:6px;min-height:32px;padding:0 14px}
 #arcades .who .arcsub{font-size:.76rem;color:var(--muted);overflow-wrap:anywhere;margin:2px 0 0}
 #arcades .coins>.muted{font-size:.82rem}
@@ -114,6 +115,8 @@
       var who = text('div', '', 'who'), name = text('b', row.tag ? '@' + row.tag : (row.node || 'this arcade'), row.tag ? '' : 'mono');
       who.appendChild(name);
       if (row.me) who.appendChild(text('span', 'this arcade', 'pill ok'));
+      // A LoRa (Meshtastic) gateway runs at that arcade (2026-10-24): T-Decks reach it over the radio.
+      if (row.lora) { var lb = text('span', 'LoRa', 'pill lora'); lb.title = 'Runs a LoRa (Meshtastic) gateway: T-Decks reach this arcade over the radio'; who.appendChild(lb); }
       var sub = row.host || (row.tag && row.node ? row.node : '');
       if (sub) who.appendChild(text('div', sub, 'arcsub' + (row.host ? '' : ' mono')));
       if (row.tag && !row.me) {

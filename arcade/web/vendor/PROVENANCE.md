@@ -158,3 +158,19 @@ byte-identical; the npm registry's `dist.integrity`
 (`sha512-dxLob7q65Xg2DvstYkRpkYtmKm2sPJ9oFhrhmudT1dZvNFFTlroai3AWSpLey/w5vMcLBXRgOJsbXpdN9HzU/A==`)
 matches the tarball's sha512, computed here; and `dist/jsQR.js` inside the tarball is
 byte-identical to both. Untouched.
+
+## esptool-js 0.5.4 → `esptool.js`
+
+    sha256  2a896d5e520ea9b6ea9900223c2460df797c3b2287f441daa4e50168a50b17e6
+    178,644 bytes, Apache-2.0, Espressif Systems, https://github.com/espressif/esptool-js
+
+The web flasher on Admin → Meshtastic (2026-10-24): it writes the arcade's T-Deck firmware to an ESP32-S3 over Web
+Serial (Chrome or Edge). The package's `bundle.js`, an ES module with its stub flashers inside (pako included), no
+imports of its own. It talks only to the serial port the operator picks; the firmware it writes is served by this
+arcade, checked against the release's sha256 first (web/loraweb.py).
+
+Checked on 2026-10-24 the same three ways: fetched from **jsdelivr** and from **unpkg**, byte-identical; the npm
+registry's `dist.integrity`
+(`sha512-B+XcbbPBjfmnMHVGktGlNI85BbEIQs02y4hoYuqM25q6yVPqLE3bxce/KWtKXH4IGruWTkEujqdKxNeWEV2BDg==`)
+matches the tarball's sha512, computed here; and `bundle.js` inside the tarball is byte-identical to both. Untouched.
+

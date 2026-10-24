@@ -302,6 +302,15 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:                  # noqa: BLE001 -- games play solo instead
             print(f"  mesh not started: {exc}")
 
+    # The LoRa gateway (web/lora.py, 2026-10-24), when the operator turned it on in Admin -> Meshtastic: started
+    # here, by the worker holding the run lock, so one gateway holds the radio's serial port.
+    try:
+        from .lora import LoraService
+        state.lora = LoraService(state)
+        threading.Thread(target=state.lora.apply, name="arcade-lora-start", daemon=True).start()
+    except Exception as exc:                      # noqa: BLE001 -- the arcade runs without it
+        print(f"  LoRa gateway not started: {exc}")
+
     if state.public:
         # Said at startup, every time. An operator who does not know which
         # of the two things they are running is an operator who will one

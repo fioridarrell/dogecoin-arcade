@@ -80,6 +80,7 @@ class OperatorsShare:
             "tag": said_tag(header.get("tag")), "name": str(header.get("name") or "")[:60],
             "version": str(header.get("version") or "")[:40],
             "hosts": [h for h in hosts[:4] if isinstance(h, str) and _HOST.match(h)],
+            "lora": header.get("lora") is True,
             "at": time.time()}
         if "sites" in header and self.heard is not None:
             from ..affiliates import clean_sites

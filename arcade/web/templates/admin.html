@@ -17,6 +17,7 @@
   <button type="button" role="tab" data-tab="network">Network</button>
   <button type="button" role="tab" data-tab="ords">Ords</button>
   <button type="button" role="tab" data-tab="llm">LLM</button>
+  <button type="button" role="tab" data-tab="meshtastic">Meshtastic</button>
   <button type="button" role="tab" data-tab="affiliates">Affiliates</button>
   <button type="button" role="tab" data-tab="people">People &amp; brand</button>
 </nav>
@@ -964,6 +965,253 @@
   document.querySelectorAll('.admintabs button[data-tab="llm"]').forEach(function (b) { b.addEventListener('click', load); });
   if (location.hash === '#llm') load();
 })();
+</script>
+
+{#- 2026-10-24: "Add a Meshtastic admin panel and a Web flasher for our new firmware to the admin panel" and
+   "Incorporated as a option for all arcades": the LoRa gateway (web/lora.py, arcade/lora) and the T-Deck flasher
+   (web/loraweb.py, vendor/esptool.js). #}
+<div class="admintab" data-tab="meshtastic" aria-label="Meshtastic">
+<style>
+.lora .lgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(260px,100%),1fr));gap:14px}
+.lora label.f{display:flex;flex-direction:column;gap:5px;font-size:.82rem;font-weight:650;min-width:0}
+.lora label.f input,.lora label.f select{font:inherit;font-weight:400;width:100%;box-sizing:border-box;height:42px;padding:0 11px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--fg)}
+.lora .h{font-weight:400;color:var(--muted);font-size:.8rem}
+.lora .onoff{display:inline-flex;gap:8px;align-items:center;font-weight:650;font-size:.85rem;padding:5px 12px;border-radius:999px;background:var(--code);color:var(--muted)}
+.lora .onoff.on{background:color-mix(in srgb,var(--ok) 14%,var(--panel));color:var(--ok)}
+.lora .onoff.bad{background:color-mix(in srgb,var(--bad) 12%,var(--panel));color:var(--bad)}
+.lora .chips{display:flex;flex-wrap:wrap;gap:8px}
+.lora .chips label{display:inline-flex;gap:6px;align-items:center;border:1px solid var(--line);border-radius:999px;padding:5px 11px;font-size:.84rem;cursor:pointer}
+.lora .chips input{width:auto;height:auto;margin:0}
+.lora .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.lora .stat{border:1px solid var(--line);border-radius:12px;background:var(--code);padding:12px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.lora .stat small{color:var(--muted);font-size:.74rem;text-transform:uppercase;letter-spacing:.04em}
+.lora .stat b{font-size:1.15rem;overflow-wrap:anywhere}
+.lora table{width:100%;border-collapse:collapse;font-size:.88rem}
+.lora th{text-align:left;color:var(--muted);font-weight:600;font-size:.76rem;text-transform:uppercase;letter-spacing:.04em;padding:6px}
+.lora td{padding:8px 6px;border-top:1px solid var(--line)}
+.lora .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.lora .bar{height:10px;border-radius:6px;background:var(--line);overflow:hidden;margin-top:10px}
+.lora .bar span{display:block;height:100%;width:0;background:var(--accent);transition:width .2s}
+.lora pre.log{max-height:180px;overflow:auto;background:var(--code);border-radius:10px;padding:10px;font-size:.76rem;white-space:pre-wrap;margin:10px 0 0}
+.lora ol{margin:6px 0 0 18px;padding:0}
+.lora ol li{margin:3px 0}
+</style>
+<section class="panel lora" id="lora-gw">
+  <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap">
+    <h2 style="margin:0">LoRa gateway</h2>
+    <span class="onoff" id="lora-on">Off</span>
+  </div>
+  <p class="muted" style="margin:6px 0 12px">A Meshtastic radio plugged into this machine lets arcade T-Decks reach this arcade over LoRa: sign
+    in, see their coins, send, and read and write sealed messages, with no internet on the T-Deck. The gateway talks
+    to this arcade like a browser does, over this machine's own loopback. Off until you turn it on.</p>
+  <div id="lora-install" hidden class="msg info" style="margin:0 0 12px">
+    <p style="margin:0 0 8px" id="lora-install-said"></p>
+    <button type="button" class="small" id="lora-install-go">Install the radio support</button>
+    <pre class="log" id="lora-install-log" hidden></pre>
+  </div>
+  <p class="msg err" id="lora-err" hidden style="margin:0 0 12px"></p>
+  <div class="lgrid">
+    <label class="f">Radio's serial port
+      <select id="lora-port"></select>
+      <span class="h">A Heltec or any Meshtastic radio on USB. <a href="#" id="lora-rescan">Look again</a></span></label>
+    <label class="f">Gateway name
+      <input id="lora-name" autocomplete="off" maxlength="40" placeholder="arcade gateway">
+      <span class="h">What a T-Deck shows when it finds this gateway.</span></label>
+  </div>
+  <div style="margin-top:12px">
+    <div style="font-size:.82rem;font-weight:650;margin-bottom:6px">Coins the T-Decks see</div>
+    <div class="chips" id="lora-chains"></div>
+  </div>
+  <label style="display:flex;gap:8px;align-items:center;margin-top:12px;font-size:.88rem">
+    <input type="checkbox" id="lora-beacon" style="width:auto;margin:0"> <span>Beacon every 15 minutes
+    <span class="h">(off: T-Decks find gateways by asking; a beacon only adds airtime on a busy channel)</span></span></label>
+  <div class="row" style="gap:10px;margin-top:14px;flex-wrap:wrap">
+    <button type="button" id="lora-start">Run the gateway</button>
+    <button type="button" class="ghost" id="lora-stop">Stop it</button>
+    <button type="button" class="ghost" id="lora-save">Save changes</button>
+  </div>
+</section>
+
+<section class="panel lora" id="lora-radio">
+  <h2 style="margin:0 0 10px">Radio</h2>
+  <div class="stats" id="lora-radio-stats"><div class="muted">The radio shows here while the gateway runs.</div></div>
+</section>
+
+<section class="panel lora" id="lora-decks">
+  <h2 style="margin:0 0 10px">T-Decks</h2>
+  <div id="lora-decks-body" class="muted">None yet.</div>
+</section>
+
+<section class="panel lora" id="lora-flash">
+  <h2 style="margin:0 0 6px">Flash a T-Deck</h2>
+  <p class="muted" style="margin:0 0 10px">The arcade firmware for the LilyGO T-Deck and T-Deck Plus, written from this page over USB
+    (Chrome or Edge on a computer: they have Web Serial). This arcade fetches the release and checks it against its
+    sha256 before your browser writes it.</p>
+  <div class="stats" id="lora-fw"><div class="muted">Reading the release&hellip;</div></div>
+  <details style="margin-top:12px" open>
+    <summary style="cursor:pointer;font-weight:650">The first flash (a T-Deck still on stock Meshtastic)</summary>
+    <ol>
+      <li>Switch the T-Deck on.</li>
+      <li>Hold the trackball down, plug in the USB cable, and let go after 2 seconds. It is now in flash mode (the screen stays dark).</li>
+      <li>Press <b>Install the firmware</b> and pick the T-Deck's port (usually <span class="mono">USB JTAG/serial debug unit</span>).</li>
+      <li>When it says done, unplug and plug it in again, or press its reset.</li>
+    </ol>
+    <p class="muted" style="font-size:.85rem;margin:8px 0 0">Once the arcade firmware is on, a T-Deck goes into flash mode by itself: plug it in and press either button.</p>
+  </details>
+  <div class="row" style="gap:10px;margin-top:12px;flex-wrap:wrap">
+    <button type="button" id="lora-flash-full">Install the firmware</button>
+    <button type="button" class="ghost" id="lora-flash-app">Update only (faster)</button>
+  </div>
+  <p class="muted" id="lora-flash-said" style="margin:8px 0 0"></p>
+  <div class="bar" id="lora-flash-bar" hidden><span></span></div>
+  <pre class="log" id="lora-flash-log" hidden></pre>
+  <p class="muted" style="font-size:.82rem;margin:12px 0 0" id="lora-fw-src"></p>
+</section>
+</div>
+<script type="module">
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const ago = (s) => s == null ? "never" : s < 60 ? `${s} s ago` : s < 3600 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`;
+async function call(path, body) {
+  const r = await fetch(path, body === undefined ? {credentials: "same-origin", cache: "no-store"}
+    : {method: "POST", credentials: "same-origin", headers: {"Content-Type": "application/json", "X-Arcade-Admin": "1"}, body: JSON.stringify(body)});
+  const said = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(said.detail || `HTTP ${r.status}`);
+  return said;
+}
+let got = null, timer = null, drawnCfg = false;
+
+function drawConfig(c, ports, chains) {
+  const sel = $("lora-port"), want = sel.value || c.port;
+  sel.innerHTML = (ports.length ? "" : `<option value="">No serial port found</option>`)
+    + ports.map((p) => `<option value="${esc(p.port)}">${esc(p.port)}${p.name ? " · " + esc(p.name) : ""}</option>`).join("")
+    + (c.port && !ports.some((p) => p.port === c.port) ? `<option value="${esc(c.port)}">${esc(c.port)} (not plugged in)</option>` : "");
+  if (want) sel.value = want;
+  if (drawnCfg) return;
+  drawnCfg = true;
+  $("lora-name").value = c.name || "";
+  $("lora-beacon").checked = !!c.beacon;
+  const on = c.chains == null ? null : new Set(c.chains);
+  $("lora-chains").innerHTML = chains.map((x) => `<label><input type="checkbox" value="${esc(x.net)}"${on == null || on.has(x.net) ? " checked" : ""}> ${esc(x.label)}</label>`).join("");
+}
+function drawStatus(s, local, packages) {
+  const pill = $("lora-on");
+  pill.textContent = s.running ? "Running" : s.enabled ? "Starting…" : "Off";
+  pill.className = "onoff" + (s.running ? " on" : s.enabled && s.error ? " bad" : "");
+  $("lora-err").hidden = !s.error; $("lora-err").textContent = s.error || "";
+  const need = (s.missing || []).filter((m) => m !== "nacl" && m !== "httpx").length || (s.missing || []).length;
+  $("lora-install").hidden = !need && s.install.state !== "running" && s.install.state !== "failed";
+  $("lora-install-said").textContent = s.install.state === "running" ? "Installing the radio support (meshtastic, coincurve)…"
+    : s.install.state === "failed" ? "The install did not finish:" : `This arcade needs the radio support first: ${packages.join(", ")}.`
+      + (local ? "" : " Install it at the node machine itself.");
+  $("lora-install-go").hidden = !local || s.install.state === "running";
+  $("lora-install-log").hidden = !s.install.said; $("lora-install-log").textContent = s.install.said || "";
+  $("lora-start").hidden = s.enabled; $("lora-stop").hidden = !s.enabled;
+  const r = s.radio, l = s.link || {};
+  $("lora-radio-stats").innerHTML = r ? [
+    ["Node", r.node], ["Name", r.long_name || "—"], ["Region", r.region || "—"], ["Preset", r.preset || "—"],
+    ["Hardware", r.hw || "—"], ["Nodes heard", r.nodes != null ? `${r.nodes_hour} this hour · ${r.nodes} in all` : "—"],
+    ["Frames sent", (l.sent || 0).toLocaleString()], ["Acked", (l.acked || 0).toLocaleString()], ["Failed", (l.failed || 0).toLocaleString()],
+  ].map(([k, v]) => `<div class="stat"><small>${esc(k)}</small><b>${esc(v)}</b></div>`).join("")
+    : `<div class="muted">${s.enabled ? "Waiting for the radio…" : "The radio shows here while the gateway runs."}</div>`;
+  const d = s.devices || [];
+  $("lora-decks-body").innerHTML = (d.length ? `<table><thead><tr><th>T-Deck</th><th>Node</th><th>Status</th><th>Mail waiting</th><th>Watching</th></tr></thead><tbody>`
+    + d.map((x) => `<tr><td>${x.tag ? "@" + esc(x.tag) : "<span class=muted>not signed in</span>"}</td><td class="mono">${esc(x.node)}</td>`
+      + `<td>${x.online ? "<b style='color:var(--ok)'>Online</b>" : "Away"} · ${esc(ago(x.heard_ago))}</td><td>${x.outbox}</td><td>${x.watching} contacts</td></tr>`).join("")
+    + `</tbody></table>` : `<p class="muted" style="margin:0">No T-Deck has said hello to this gateway yet.</p>`)
+    + (s.outbox != null ? `<p class="muted" style="font-size:.85rem;margin:10px 0 0">${s.outbox} letters waiting to go out · ${s.receipts} delivered with a signed receipt.</p>` : "");
+}
+async function load() {
+  try {
+    got = await call("/admin/api/lora");
+    drawConfig(got.config, got.ports, got.chains);
+    drawStatus(got.status, got.local, got.packages);
+  } catch (e) { $("lora-err").hidden = false; $("lora-err").textContent = e.message; }
+}
+function chosenChains() {
+  const boxes = [...$("lora-chains").querySelectorAll("input")];
+  const on = boxes.filter((b) => b.checked).map((b) => b.value);
+  return on.length === boxes.length ? null : on;
+}
+async function save(extra) {
+  try {
+    await call("/admin/api/lora", {port: $("lora-port").value, name: $("lora-name").value, beacon: $("lora-beacon").checked,
+                                   chains: chosenChains(), ...(extra || {})});
+    await load();
+  } catch (e) { $("lora-err").hidden = false; $("lora-err").textContent = e.message; }
+}
+$("lora-start").onclick = () => save({enabled: true});
+$("lora-stop").onclick = () => save({enabled: false});
+$("lora-save").onclick = () => save();
+$("lora-rescan").onclick = (e) => { e.preventDefault(); load(); };
+$("lora-install-go").onclick = async () => { try { await call("/admin/api/lora/install", {}); load(); } catch (e) { alert(e.message); } };
+
+/* --- the flasher (esptool-js over Web Serial) --- */
+let fw = null;
+async function loadFirmware() {
+  try {
+    fw = await call("/admin/api/lora/firmware");
+    const f = fw.factory || {};
+    $("lora-fw").innerHTML = [["Version", fw.version], ["Board", fw.board], ["Built", (fw.built || "").replace("T", " ").replace("Z", " UTC")],
+      ["Size", f.size ? (f.size / 1048576).toFixed(2) + " MB" : "—"], ["sha256", (f.sha256 || "").slice(0, 16) + "…"]]
+      .map(([k, v]) => `<div class="stat"><small>${esc(k)}</small><b>${esc(v || "—")}</b></div>`).join("");
+    $("lora-fw-src").innerHTML = `${esc(fw.license || "GPL-3.0")}. Source: ` + (fw.source || []).map((u) => `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(u.replace("https://github.com/", ""))}</a>`).join(" · ");
+  } catch (e) { $("lora-fw").innerHTML = `<div class="muted">${esc(e.message)}</div>`; }
+}
+const flashLog = (t) => { const l = $("lora-flash-log"); l.hidden = false; l.textContent += t + "\n"; l.scrollTop = l.scrollHeight; };
+async function flash(which) {
+  const said = $("lora-flash-said");
+  if (!("serial" in navigator)) { said.textContent = "This browser has no Web Serial: use Chrome or Edge on a computer."; return; }
+  if (!fw) { said.textContent = "The firmware release is not read yet."; return; }
+  const part = fw[which];
+  if (!part) { said.textContent = `This release has no ${which} image.`; return; }
+  const buttons = [$("lora-flash-full"), $("lora-flash-app")];
+  buttons.forEach((b) => b.disabled = true);
+  $("lora-flash-log").textContent = "";
+  let transport = null;
+  try {
+    said.textContent = "Fetching the firmware from this arcade…";
+    const r = await fetch(`/admin/api/lora/firmware/${which}.bin`, {credentials: "same-origin", cache: "no-store"});
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `HTTP ${r.status}`);
+    const bytes = new Uint8Array(await r.arrayBuffer());
+    const sha = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
+    if (sha !== String(part.sha256).toLowerCase()) throw new Error("the firmware did not match its sha256: nothing was written");
+    flashLog(`${part.file}: ${bytes.length.toLocaleString()} bytes, sha256 ${sha.slice(0, 16)}… checked`);
+    said.textContent = "Pick the T-Deck's port…";
+    const {ESPLoader, Transport} = await import("/vendor/esptool.js");
+    const port = await navigator.serial.requestPort({});
+    transport = new Transport(port, true);
+    const terminal = {clean() {}, writeLine: (d) => flashLog(d), write: (d) => flashLog(d)};
+    const loader = new ESPLoader({transport, baudrate: 921600, terminal});
+    said.textContent = "Talking to the T-Deck…";
+    const chip = await loader.main();
+    flashLog(`connected: ${chip}`);
+    let bin = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    $("lora-flash-bar").hidden = false;
+    said.textContent = "Writing… keep it plugged in.";
+    await loader.writeFlash({fileArray: [{data: bin, address: parseInt(part.offset, 16)}], flashSize: "keep", flashMode: "keep",
+                             flashFreq: "keep", eraseAll: false, compress: true,
+                             reportProgress: (_i, done, total) => { $("lora-flash-bar").firstElementChild.style.width = `${Math.round(100 * done / total)}%`; }});
+    await loader.after("hard_reset");
+    said.textContent = `Done: ${fw.version} is on the T-Deck. It restarts by itself; if not, unplug it and plug it in again.`;
+  } catch (e) {
+    said.textContent = `Not flashed: ${e.message || e}`;
+  } finally {
+    try { if (transport) await transport.disconnect(); } catch (e) {}
+    buttons.forEach((b) => b.disabled = false);
+  }
+}
+$("lora-flash-full").onclick = () => flash("factory");
+$("lora-flash-app").onclick = () => flash("app");
+
+function start() {
+  load(); if (!fw) loadFirmware();
+  clearInterval(timer);
+  timer = setInterval(() => { if (document.querySelector('.admintab[data-tab="meshtastic"].on') && !document.hidden) load(); }, 5000);
+}
+document.querySelectorAll('.admintabs button[data-tab="meshtastic"]').forEach((b) => b.addEventListener("click", start));
+if (location.hash === "#meshtastic") start();
 </script>
 
 <div class="admintab" data-tab="affiliates" aria-label="Affiliates">

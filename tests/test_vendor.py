@@ -16,6 +16,9 @@ VENDOR = pathlib.Path("arcade/web/vendor")
 #: the file inside that tarball identical to what was fetched. See
 #: vendor/PROVENANCE.md.
 PINNED = {
+    # esptool-js 0.5.4 bundle.js: Admin -> Meshtastic's T-Deck web flasher (2026-10-24).
+    "esptool.js":
+        "2a896d5e520ea9b6ea9900223c2460df797c3b2287f441daa4e50168a50b17e6",
     "noble-secp256k1.js":
         "fb2f5bc4f05fca63bbeec3c28d1ed1e928e5d6790efb86aabe3edc21cc685a2d",
     "hashes/ripemd160.js":

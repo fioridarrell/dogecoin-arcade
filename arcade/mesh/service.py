@@ -885,7 +885,9 @@ def operator_about(state) -> dict:
         name = ""
     return {**({"tag": tag} if tag else {}), "name": name,
             "version": str(getattr(state, "running_version", "") or ""),
-            "hosts": list(getattr(state, "public_hosts", []) or []), **_shared_sites(state)}
+            "hosts": list(getattr(state, "public_hosts", []) or []), **_shared_sites(state),
+            # A LoRa gateway runs here (web/lora.py): Admin's overview wears a LoRa badge for it (2026-10-24).
+            "lora": bool(getattr(getattr(state, "lora", None), "running", False))}
 
 
 def _shared_sites(state) -> dict:
