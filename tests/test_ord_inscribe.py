@@ -142,6 +142,12 @@ def _fake_doge(monkeypatch, doge):
                 return tx.txid
             if method == "getrawtransaction":
                 return {"txid": args[0], "confirmations": mined.get(args[0], 0)}
+            if method == "getmempoolentry":
+                if "ancestors" not in mined:
+                    raise RuntimeError("Method not found")         # an older node: the run's own count is used
+                if mined.get(args[0]):
+                    raise RuntimeError("Transaction not in mempool")
+                return {"ancestorcount": mined["ancestors"]}
             raise AssertionError(method)
     real_rpc = type(doge).rpc
     monkeypatch.setattr(type(doge), "rpc", lambda self: Rpc() if self.network == "doge" else real_rpc(self))
@@ -244,3 +250,36 @@ def test_a_collection_index_comes_out_in_parts_of_one_transaction(client, monkey
         assert len(whole.items) == 300 and whole.chain == "lky"
     bad = app.post("/account/ord/collection", json={"name": "Mine", "chain": "lky", "items": items + [items[0]]})
     assert bad.status_code == 400
+
+
+def test_the_mempool_says_how_long_the_chain_is_and_a_collection_waits_on_it(client, monkeypatch, tmp_path):
+    """A collection's commits stand on one another: the node's ancestorcount, not this run's own length, says when to
+    wait for a block."""
+    import base64
+    app, state = client
+    doge, _ = _doge_account(app, state, monkeypatch, tmp_path)
+    sent, mined = _fake_doge(monkeypatch, doge)
+    key = _pubkey(int("31" * 32, 16))
+    c = app.post("/account/ord/inscribe", json={"chain": "doge", "content": base64.b64encode(b"hi").decode(),
+                                                 "content_type": "text/plain", "pubkey": key.hex()}).json()
+    commit = app.post("/account/sign", json={"offer": c["offer"], "signatures": ["30" * 71], "pubkey": key.hex()})
+    assert commit.status_code == 200, commit.text
+    mined["ancestors"] = oi.MAX_UNCONFIRMED                 # the commit stands on 19 others
+    assert app.post("/account/ord/inscribe", json={"run": c["run"]}).json()["wait"]
+    mined["ancestors"] = 3
+    assert app.post("/account/ord/inscribe", json={"run": c["run"]}).json()["step"] == 1
+    mined[commit.json()["txid"]] = 1                         # in a block: not in the mempool
+    mined["ancestors"] = 99
+    assert app.post("/account/ord/inscribe", json={"run": c["run"]}).json()["step"] == 1
+
+
+def test_a_collection_is_quoted_before_it_starts(client, monkeypatch, tmp_path):
+    app, state = client
+    _doge_account(app, state, monkeypatch, tmp_path)
+    q = app.post("/account/ord/quote", json={"chain": "doge", "files": [{"size": 100, "content_type": "image/png"},
+                                                                       {"size": 5000, "content_type": "image/png"}]})
+    assert q.status_code == 200, q.text
+    q = q.json()
+    want = [oi.plan("doge", PARAMS["doge"], "image/png", b"\x00" * n, PUBKEY, _to("doge")) for n in (100, 5000)]
+    assert [f["txs"] for f in q["files"]] == [p.reveals + 1 for p in want] == [2, 5]
+    assert q["fees"] == sum(sum(p.fees) for p in want) + 2 * q["commit_fee"] and q["commit_fee"] > 0

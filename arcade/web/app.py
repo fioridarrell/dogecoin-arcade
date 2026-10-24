@@ -14495,6 +14495,56 @@ def create_app(state: AppState) -> FastAPI:
             log.warning("ord inscribe failed", exc_info=True)
             return JSONResponse({"detail": str(exc)[:300]}, status_code=503)
 
+    def _ord_chain_too_long(chain, txids: list[str]) -> bool:
+        """Whether the next reveal would stand on MAX_UNCONFIRMED unconfirmed transactions or more. Asked of the node's
+        mempool (`ancestorcount` of the last one out): that counts what the commit stood on too -- a collection's
+        commits, one after another, are a chain of their own. A node that cannot say falls back on this run's own."""
+        from .. import ord_inscribe as oi
+        with chain.rpc() as rpc:
+            try:
+                entry = rpc.call("getmempoolentry", txids[-1]) or {}
+                return int(entry.get("ancestorcount") or 0) + 1 > oi.MAX_UNCONFIRMED
+            except Exception as exc:                      # noqa: BLE001
+                if "mempool" in str(exc).lower():
+                    return False                          # not in the mempool: in a block
+            if len(txids) < oi.MAX_UNCONFIRMED:
+                return False
+            far = rpc.call("getrawtransaction", txids[-oi.MAX_UNCONFIRMED], 1) or {}
+            return not int(far.get("confirmations") or 0)
+
+    @app.post("/account/ord/quote")
+    def account_ord_quote(request: Request, payload: Any = Body(None)):
+        """What a collection of ords costs before it starts: `{chain, files: [{size, content_type}]}` -> each one's
+        reveal fees and transactions (ord_inscribe.plan on that many bytes; the bytes themselves do not change the
+        fee), and an estimate of each commit's own fee (one coin in, the lock and change out)."""
+        from .. import ord_inscribe as oi
+        _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        try:
+            chain = next((c for c in state.token_chains if c.network == str(said.get("chain") or "")
+                          and c.network in oi.RULES), None)
+            if chain is None:
+                raise ValueError("this arcade does not run that chain, or ords are not inscribed on it")
+            files = list(said.get("files") or [])[:20000]
+            key = bytes.fromhex("02" + "11" * 32)
+            to = b58check_encode(chain.params.pubkeyhash_version, hash160(key))
+            commit = fundinglib.price(1, [(oi.POSTAGE, b"\xa9\x14" + b"\x00" * 20 + b"\x87")],
+                                      fees.rate_for(chain.params, fees.MIN_FEE_PER_KB), change=True,
+                                      params=chain.params)
+            out, sizes = [], {}
+            for f in files:
+                size = int(f.get("size") or 0)
+                kind = str(f.get("content_type") or "application/octet-stream")[:80]
+                if (size, kind) not in sizes:
+                    p = oi.plan(chain.network, chain.params, kind, b"\x00" * size, key, to)
+                    sizes[(size, kind)] = {"txs": p.reveals + 1, "reveal_fees": sum(p.fees)}
+                out.append(sizes[(size, kind)])
+            return JSONResponse({"chain": chain.network, "files": out, "commit_fee": commit, "postage": oi.POSTAGE,
+                                 "txs": sum(x["txs"] for x in out),
+                                 "fees": sum(x["reveal_fees"] for x in out) + commit * len(out)})
+        except (oi.OrdError, fundinglib.FundingError, ValueError, TypeError) as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+
     def _ord_next(account, rid: str, run: dict, content: bytes | None) -> dict:
         """The next reveal of an ord in progress, once the transaction before it went out."""
         from .. import ord_inscribe as oi
@@ -14510,11 +14560,8 @@ def create_app(state: AppState) -> FastAPI:
         _content, p = held
         chain = next(c for c in state.token_chains if c.network == run["chain"])
         i = len(txids) - 1                                  # reveal i spends lock i, made by txids[i]
-        if len(txids) >= oi.MAX_UNCONFIRMED:
-            with chain.rpc() as rpc:
-                far = rpc.call("getrawtransaction", txids[-oi.MAX_UNCONFIRMED], 1) or {}
-            if not int(far.get("confirmations") or 0):
-                return {"wait": True, **_ord_public(run, rid)}
+        if _ord_chain_too_long(chain, txids):
+            return {"wait": True, **_ord_public(run, rid)}
         vout = int(run["commit_vout"]) if i == 0 else 0
         last = i + 1 == p.reveals
         unsigned = oi.build_reveal(chain.params, p, i, {"txid": txids[i], "vout": vout},

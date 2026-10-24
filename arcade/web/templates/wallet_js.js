@@ -762,7 +762,7 @@ async function ordPost(body) {
   const r = await fetch("/account/ord/inscribe", {method: "POST", headers: {"Content-Type": "application/json"},
                                                     body: JSON.stringify(body)});
   const said = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(said.detail || `the node would not take it (HTTP ${r.status})`);
+  if (!r.ok) throw Object.assign(new Error(said.detail || `the node would not take it (HTTP ${r.status})`), {status: r.status});
   return said;
 }
 export async function startOrd(wallet, ask) {
@@ -810,8 +810,8 @@ export async function inscribeOrd(wallet, first, more = null, onStep = null) {
   for (let tries = 0; ;) {
     let said;
     try { said = await ordPost({run: rid}); tries = 0; } catch (e) {
-      // A node restarting answers through its proxy: wait it out, the run is on its disk.
-      if (++tries > 40) throw e;
+      // A node restarting answers through its proxy: wait it out, the run is on its disk. A refusal is said at once.
+      if ((e.status && e.status < 500) || ++tries > 40) throw e;
       if (onStep) onStep({wait: true, restarting: true, ...offer});
       await new Promise((r) => setTimeout(r, 15000));
       continue;

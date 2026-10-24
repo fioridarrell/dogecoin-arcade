@@ -83,7 +83,7 @@ def served(tmp_path_factory):
                                                  "blocks": 100, "headers": 100})
     fake = FakeDoge()
     real_rpc = ChainContext.rpc
-    ChainContext.rpc = lambda self: fake if self.network == "doge" else real_rpc(self)
+    ChainContext.rpc = lambda self: fake if self.network in ("doge", "regtest") else real_rpc(self)
     real_guard = funding.GUARD
     app = create_app(state)
     funding.GUARD = doginals.Doginals(state.home / "dg.sqlite",
@@ -117,14 +117,19 @@ def signed_in(browser, served):
           await w.signUp(arguments[0], arguments[1], {network: "regtest", version: 111});
           const me = await w.opened({network: "regtest", version: 111});
           await w.tellTheNode(me);
-          const row = (await w.state()).chains.find((c) => c.network === "doge");
-          done({ok: true, address: row && row.address});
+          const rows = (await w.state()).chains;
+          const row = rows.find((c) => c.network === "doge"), tag = rows.find((c) => c.network === "regtest");
+          done({ok: true, address: row && row.address, tag: tag && tag.address});
         }).catch((e) => done({ok: false, error: String(e.message || e)}));
         """, "ordtester", "a password nobody needs to guess for this test")
     assert result.get("ok") and str(result.get("address", "")).startswith("D"), result
     with state.token_index(state.doge).open() as db:
         db.conn.execute("INSERT OR REPLACE INTO utxo(txid,vout,address,value,height) VALUES (?,?,?,?,?)",
                         (FUNDS, 0, result["address"], 50 * 100_000_000, 1))
+        db.conn.commit()
+    with state.token_index(state.messaging).open() as db:
+        db.conn.execute("INSERT OR REPLACE INTO utxo(txid,vout,address,value,height) VALUES (?,?,?,?,?)",
+                        ("88" * 32, 0, result["tag"], 50 * 100_000_000, 1))
         db.conn.commit()
     return result["address"]
 
@@ -188,3 +193,72 @@ def test_an_ord_goes_on_from_the_creator_tab_signed_in_the_tab(browser, served, 
         browser.execute_script("window.scrollTo(0, 0)")
         time.sleep(0.5)
         browser.save_screenshot(os.environ["ARCADE_SHOT"])
+
+
+
+def test_a_hashlips_build_goes_on_one_ord_at_a_time_then_its_index(browser, served, signed_in):
+    """2026-10-23: "inscribe a hashlip collection just like the current NFTs one at a time ... pep test for
+    indexing". Three pictures and their _metadata.json: three ords, each its own commit and reveal, then the index (its
+    part and its root) naming each one's number and traits."""
+    import json
+    base, state, fake = served
+    browser.get(f"{base}/create/ord")
+    _wait(browser, 'return [...document.querySelectorAll("#set-chain option")].some((o) => o.value === "doge")')
+    before = set(fake.sent)
+    browser.execute_script('window.__index = []; const f = window.fetch; window.fetch = (u, o) => {'
+                           ' if (String(u) === "/account/inscribe") window.__index.push(JSON.parse(o.body)); return f(u, o); }')
+    meta = [{"name": f"Tiny #{n}", "edition": n, "image": f"ipfs://x/{n}.png",
+             "attributes": [{"trait_type": "Eyes", "value": ["Red", "Blue", "Red"][n - 1]}]} for n in (1, 2, 3)]
+    browser.execute_script("""
+        const dt = new DataTransfer();
+        for (const n of [3, 1, 2]) dt.items.add(new File([new Uint8Array(300 + n).fill(n)], n + ".png", {type: "image/png"}));
+        dt.items.add(new File([arguments[0]], "_metadata.json", {type: "application/json"}));
+        const s = document.getElementById("set-chain"); s.value = "doge";
+        const f = document.getElementById("set-folder"); f.files = dt.files; f.dispatchEvent(new Event("change"));
+        """, json.dumps(meta))
+    picked = _wait(browser, 'const p = document.getElementById("set-picked"); return !p.hidden && p.textContent.includes("transactions") && p.textContent')
+    assert "3 pictures" in picked and "JSON for 3" in picked and "6 transactions" in picked, picked
+    assert browser.find_element(By.ID, "set-name").get_attribute("value") == "Tiny"
+    browser.find_element(By.ID, "set-go").click()
+    review = _wait(browser, 'const c = document.querySelector(".mainnet-review"); return c && c.textContent')
+    assert "Inscribe Tiny: 3 pictures" in review, review
+    browser.find_element(By.CSS_SELECTOR, ".mainnet-review button.danger").click()
+    news = _wait(browser, 'const n = document.getElementById("news"); return !n.hidden && n.textContent', 90)
+    assert "Tiny is inscribed: 3 Doginals" in news, news + " / " + browser.find_element(By.ID, "trouble").text
+    new = [rawchain.read_tx(bytes.fromhex(fake.sent[t])) for t in fake.sent if t not in before]
+    ords = [t for t in new if t.vout and t.vout[0] == (oi.POSTAGE, p2pkh_script(signed_in))]
+    assert len(ords) == 3
+    # The index: its part and its root, inscribed after the ords as this account, naming each ord's number and trait.
+    import base64
+    sent = browser.execute_script("return window.__index")
+    assert [x["content_type"] for x in sent] == ["application/vnd.arcade.collection+json"] * 2
+    part, root = [json.loads(base64.b64decode(x["content"])) for x in sent]
+    runs = browser.execute_async_script('fetch("/account/ord/runs").then((r) => r.json()).then(arguments[0])')["runs"]
+    ids = {r["name"]: r["inscription"] for r in runs if r["done"]}
+    assert part["p"] == "arcade-collection-items" and root["name"] == "Tiny" and root["chain"] == "doge"
+    assert root["supply"] == 3 and root["traits"] == ["Eyes"] and len(root["parts"]) == 1
+    assert root["cover"] == ids["1.png"]
+    if os.environ.get("ARCADE_SHOT2"):
+        browser.set_window_size(1200, 1300)
+        browser.execute_script('document.getElementById("ord-set").scrollIntoView()')
+        time.sleep(0.5)
+        browser.save_screenshot(os.environ["ARCADE_SHOT2"])
+    got = {row[0]: (row[1], part["values"][0][row[2][0]]) for row in part["items"]}
+    assert got == {ids["1.png"]: (1, "Red"), ids["2.png"]: (2, "Blue"), ids["3.png"]: (3, "Red")}, got
+    # Choosing the folder again inscribes nothing twice.
+    count = len(fake.sent)
+    browser.execute_script("""
+        const dt = new DataTransfer();
+        for (const n of [3, 1, 2]) dt.items.add(new File([new Uint8Array(300 + n).fill(n)], n + ".png", {type: "image/png"}));
+        dt.items.add(new File([arguments[0]], "_metadata.json", {type: "application/json"}));
+        const f = document.getElementById("set-folder"); f.files = dt.files; f.dispatchEvent(new Event("change"));
+        """, json.dumps(meta))
+    _wait(browser, 'return !document.getElementById("set-go").disabled')
+    browser.find_element(By.ID, "set-go").click()
+    browser.find_element(By.CSS_SELECTOR, ".mainnet-review button.danger").click()
+    _wait(browser, 'const n = document.getElementById("set-says"); return n.textContent.includes("index")', 60)
+    _wait(browser, 'return !document.body.dataset.inscribing', 60)
+    again = [rawchain.read_tx(bytes.fromhex(fake.sent[t])) for t in list(fake.sent)[count:]]
+    assert not [t for t in again if t.vout and t.vout[0] == (oi.POSTAGE, p2pkh_script(signed_in))], \
+        "no picture inscribed twice: the pieces already in were skipped"
+    assert browser.execute_script("return window.__index.length") == 2, "and no second index of the same ords"

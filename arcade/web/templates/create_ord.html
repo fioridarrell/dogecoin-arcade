@@ -33,6 +33,31 @@
   </div>
 </div>
 
+<div class="panel" id="ord-set">
+  <h3 style="margin:0 0 6px">Inscribe a collection</h3>
+  <p class="muted" style="font-size:.88rem;margin:0 0 10px">Choose a HashLips Art Engine <code>build</code> folder (its
+    <code>images</code> and <code>json</code>, or <code>json/_metadata.json</code>), or any folder of pictures. You approve
+    once; every picture then goes on as its own ord, one after another, signed in this tab. When the last one is in,
+    the collection index &mdash; each piece's name, number and traits from its JSON &mdash; is inscribed on Pepecoin
+    testnet, where the arcades index it, and the collection appears on the Exchange. If the tab closes, choose the
+    folder again: pieces already inscribed are skipped and a half-done one carries on.</p>
+  <div class="ord-grid">
+    <label>Chain <select id="set-chain"></select></label>
+    <label>Folder <input type="file" id="set-folder" webkitdirectory directory multiple></label>
+  </div>
+  <label style="display:block;margin-top:8px" id="set-name-row">Collection name
+    <input id="set-name" autocomplete="off" maxlength="80" placeholder="from the JSON"></label>
+  <p class="muted" id="set-picked" hidden></p>
+  <div class="row" style="margin-top:8px;gap:8px">
+    <button type="button" id="set-go" disabled>Inscribe the collection</button>
+    <button type="button" class="ghost" id="set-stop" hidden>Stop after this piece</button>
+  </div>
+  <div id="set-progress" hidden>
+    <div class="ord-bar"><span id="set-bar"></span></div>
+    <p class="muted" id="set-says" style="margin:6px 0 0"></p>
+  </div>
+</div>
+
 <div class="panel" id="ord-index">
   <h3 style="margin:0 0 6px">Make a collection index</h3>
   <p class="muted" style="font-size:.88rem;margin:0 0 10px">Group your ords into a collection the way the Doginal Dogs,
@@ -87,7 +112,9 @@ const say = (t) => { $("trouble").textContent = t; $("trouble").hidden = !t; };
 const news = (t) => { $("news").textContent = t; $("news").hidden = !t; };
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
 const commas = (n) => Number(n || 0).toLocaleString();
-const TAG = ARCADE_CHAIN;            // where the collection index is inscribed: this arcade's own chain
+// Where a collection index is inscribed: Pepecoin testnet, where the arcades index collections (2026-10-23:
+// "pep test for indexing"), or this arcade's own chain on one that does not run it.
+const TAG = {network: ARCADE_CHAIN.network};
 let chains = [], runs = [], busy = false;
 const chainOf = (net) => chains.find((c) => c.chain === net);
 const coins = (sats, net) => `${(Number(sats || 0) / 1e8).toLocaleString(undefined, {maximumFractionDigits: 8})} ${(chainOf(net) || {}).coin || ""}`;
@@ -128,7 +155,9 @@ async function loadChains() {
   const opts = chains.map((c) => `<option value="${esc(c.chain)}">${esc(c.label)} · ${esc(c.ord)}${c.mainnet ? "" : " (testnet)"}</option>`).join("");
   $("ord-chain").innerHTML = opts || `<option value="">This arcade runs none of these chains</option>`;
   $("ix-chain").innerHTML = opts;
-  try { const last = localStorage.getItem("arcade.ord.chain"); if (last && chainOf(last)) { $("ord-chain").value = last; $("ix-chain").value = last; } } catch (e) {}
+  $("set-chain").innerHTML = opts;
+  if (chainOf("test")) TAG.network = "test";
+  try { const last = localStorage.getItem("arcade.ord.chain"); if (last && chainOf(last)) { $("ord-chain").value = last; $("ix-chain").value = last; $("set-chain").value = last; } } catch (e) {}
   drawRules();
 }
 $("ord-chain").onchange = () => { try { localStorage.setItem("arcade.ord.chain", $("ord-chain").value); } catch (e) {} drawRules(); };
@@ -241,6 +270,21 @@ async function inscribeJSON(held, value, name) {
   const out = await wallet.confirm(held, start);
   return out.txid;
 }
+/** Plan an index (/account/ord/collection) and inscribe its parts, then the root naming them, as this account on TAG. */
+async function inscribeIndex(held, body, tell, cover = true) {
+  const plan = await postJSON("/account/ord/collection", body);
+  if (cover) {
+    const one = (body.items || []).find((r) => Number(r.number) === 1) || (body.dm || [])[0];
+    if (one) plan.root.cover = String(one.id || one.inscriptionId || "").toLowerCase();
+  }
+  const ids = [];
+  for (let n = 0; n < plan.parts.length; n++) {
+    tell(`Index part ${n + 1} of ${plan.parts.length}…`);
+    ids.push(await inscribeJSON(held, plan.parts[n], `part-${String(n + 1).padStart(2, "0")}.json`));
+  }
+  tell("The index root…");
+  return inscribeJSON(held, {...plan.root, parts: ids}, "root.json");
+}
 $("ix-go").onclick = async () => {
   say(""); $("ix-says").textContent = "";
   const net = $("ix-chain").value, file = $("ix-file").value.trim();
@@ -250,26 +294,170 @@ $("ix-go").onclick = async () => {
     else body.items = rows.filter((r) => r.chain === net).map((r) => ({id: r.id, number: Number(r.number), traits: traitsOf(r.traits)}));
   } catch (e) { say("the trait file is not JSON"); return; }
   try {
-    const plan = await postJSON("/account/ord/collection", body);
-    if ($("ix-cover-first").checked) {
-      const one = (body.items || []).find((r) => r.number === 1) || (body.dm || [])[0];
-      if (one) plan.root.cover = String(one.id || one.inscriptionId || "").toLowerCase();
-    }
+    const count = body.dm ? body.dm.length : body.items.length;
     if (!(await arcadeAsk(`Inscribe the index of ${body.name}?`,
-        `${commas(plan.items)} ords on ${(chainOf(net) || {}).label || net}${plan.traits.length ? `, traits ${plan.traits.join(", ")}` : ""}: `
-        + `${plan.parts.length} part${plan.parts.length === 1 ? "" : "s"} and the root, inscribed by your account on this arcade's chain. `
-        + "The first index to name an ord owns it.", "Inscribe"))) return;
+        `${commas(count)} ords on ${(chainOf(net) || {}).label || net}: the parts and the root, inscribed by your account on `
+        + `${TAG.network === "test" ? "Pepecoin testnet" : "this arcade's chain"}. The first index to name an ord owns it.`, "Inscribe"))) return;
     const held = await keysNow();
-    const ids = [];
-    for (let n = 0; n < plan.parts.length; n++) {
-      $("ix-says").textContent = `Part ${n + 1} of ${plan.parts.length}…`;
-      ids.push(await inscribeJSON(held, plan.parts[n], `part-${String(n + 1).padStart(2, "0")}.json`));
-    }
-    $("ix-says").textContent = "The root…";
-    const root = await inscribeJSON(held, {...plan.root, parts: ids}, "root.json");
+    const root = await inscribeIndex(held, body, (t) => { $("ix-says").textContent = t; }, $("ix-cover-first").checked);
     $("ix-says").textContent = "";
     news(`Index inscribed: ${root}. The collection appears on the Exchange once its blocks are mined and the arcades read it.`);
   } catch (e) { say(String(e.message || e)); }
+};
+
+/* --- a whole HashLips build, one ord at a time, then its index on Pepecoin testnet (2026-10-23: "it should be able
+   to inscribe a hashlip collection just like the current NFTs one at a time ... pep test for indexing") --- */
+const stemOf = (name) => name.replace(/^.*\//, "").replace(/\.[^.]+$/, "");
+const natural = (a, b) => a.localeCompare(b, undefined, {numeric: true, sensitivity: "base"});
+const isPicture = (f) => /^image\//.test(f.type) || /\.(png|jpe?g|gif|webp|svg|avif)$/i.test(f.name);
+let setPlan = null, stopAsked = false;
+
+/** The folder read the way the NFT collection run reads it: _metadata.json, else <n>.json, matched to its picture by
+ *  edition or by the file its "image" names; pictures with none are numbered after the rest. */
+async function readFolder(files) {
+  const pictures = files.filter(isPicture).sort((a, b) => natural(a.name, b.name));
+  const meta = files.find((f) => f.name === "_metadata.json");
+  let entries = [];
+  if (meta) { try { const l = JSON.parse(await meta.text()); if (Array.isArray(l)) entries = l; } catch (e) {} }
+  if (!entries.length) {
+    for (const f of files.filter((f) => /^\d+\.json$/i.test(f.name))) {
+      try { entries.push(JSON.parse(await f.text())); } catch (e) {}
+    }
+  }
+  const byStem = new Map(pictures.map((p) => [stemOf(p.name), p]));
+  const has = new Map();
+  for (const e of entries) {
+    if (!e || typeof e !== "object") continue;
+    const img = typeof e.image === "string" ? stemOf(e.image.split("?")[0]) : "";
+    const pic = (Number.isInteger(e.edition) && byStem.get(String(e.edition))) || byStem.get(img);
+    if (pic) has.set(pic.name, e);
+  }
+  const used = new Set([...has.values()].map((e) => e.edition).filter(Number.isInteger));
+  let next = 1;
+  const items = pictures.map((file) => {
+    const e = has.get(file.name);
+    let number = e && Number.isInteger(e.edition) ? e.edition : (/^\d+$/.test(stemOf(file.name)) ? Number(stemOf(file.name)) : null);
+    if (number === null || (!e && used.has(number))) { while (used.has(next)) next++; number = next; }
+    used.add(number);
+    const traits = {};
+    for (const a of (e && Array.isArray(e.attributes) ? e.attributes : [])) {
+      if (a && a.trait_type != null && a.value != null && String(a.value).trim()) traits[String(a.trait_type)] = String(a.value);
+    }
+    return {file, number, name: (e && typeof e.name === "string") ? e.name : "", traits};
+  }).sort((a, b) => a.number - b.number);
+  const named = items.find((i) => i.name);
+  const name = named ? named.name.replace(/\s*#\s*\d+\s*$/, "").trim() : "";
+  return {items, name, json: has.size};
+}
+
+async function drawSet() {
+  const files = [...$("set-folder").files];
+  setPlan = null; $("set-go").disabled = true;
+  if (!files.length) { $("set-picked").hidden = true; return; }
+  const read = await readFolder(files);
+  const c = chainOf($("set-chain").value);
+  if (!read.items.length) { $("set-picked").hidden = false; $("set-picked").textContent = "That folder has no pictures."; return; }
+  if (!$("set-name").value.trim() && read.name) $("set-name").value = read.name;
+  const bytes = read.items.reduce((n, i) => n + i.file.size, 0);
+  const big = c ? read.items.filter((i) => i.file.size > c.max_bytes).length : 0;
+  let quote = null;
+  try { quote = c && await postJSON("/account/ord/quote", {chain: c.chain, files: read.items.map((i) => ({size: i.file.size, content_type: i.file.type || "image/png"}))}); }
+  catch (e) { say(e.message); }
+  setPlan = {...read, quote, chain: c};
+  $("set-picked").hidden = false;
+  $("set-picked").textContent = `${commas(read.items.length)} pictures, ${commas(bytes)} bytes, `
+    + `${read.json ? `JSON for ${commas(read.json)}` : "no JSON (numbered in file order, no traits)"}`
+    + (quote ? ` · ${commas(quote.txs)} transactions, about ${coins(quote.fees, c.chain)} in fees` : "")
+    + (big ? ` · ${commas(big)} too big for this inscriber` : "");
+  $("set-go").disabled = busy || big > 0 || !c;
+}
+$("set-folder").onchange = drawSet;
+$("set-chain").onchange = drawSet;
+$("set-stop").onclick = () => { stopAsked = true; $("set-stop").disabled = true; };
+
+/** One ord, start to end, waited out when its chain is too long in the mempool to take another transaction. */
+async function oneOrd(held, chain, file, bytes, onSay) {
+  const sha = await shaOf(bytes);
+  for (let tries = 0; ; tries++) {
+    // Asked again on every try: a piece whose commit went out is carried on, never started a second time.
+    try { runs = (await getJSON("/account/ord/runs")).runs || runs; } catch (e) {}
+    const known = runs.find((r) => r.chain === chain && r.sha256 === sha);
+    if (known && known.done) return known.inscription;
+    try {
+      const first = known ? {run: known.run, chain, name: known.name}
+        : await wallet.startOrd(held, {chain, content: b64(bytes), content_type: file.type, name: file.name});
+      return await wallet.inscribeOrd(held, first, async () => b64(bytes), onSay);
+    } catch (e) {
+      const why = String(e.message || e);
+      // The chain's mempool takes about 25 unconfirmed in a row, counting a collection's commits and their reveals
+      // together: wait for a block and go on.
+      if (!/mempool-chain|too-long|ancestor|descendant|txn-mempool-conflict/i.test(why) || tries > 60) throw e;
+      onSay({wait: true, sent: 0, of: 1, why});
+      await new Promise((r) => setTimeout(r, 30000));
+    }
+  }
+}
+
+$("set-go").onclick = async () => {
+  say(""); news("");
+  const plan = setPlan, c = plan && plan.chain, name = $("set-name").value.trim();
+  if (!plan || !c) return;
+  if (!name) { say("give the collection a name"); return; }
+  const n = plan.items.length, q = plan.quote || {fees: 0, txs: 0};
+  const label = `Inscribe ${name}: ${commas(n)} pictures as ${c.ord}s, about ${commas(q.txs)} transactions signed here without `
+    + `asking again, then its collection index on ${TAG.network === "test" ? "Pepecoin testnet" : "this arcade's chain"}. `
+    + `${coins(q.postage * n, c.chain)} stays yours as the ords' own coins.`;
+  const ok = c.mainnet
+    ? await arcadeMainnetReview({label, network: q.fees, data: 0, others: 0, operator: 0, total: q.fees + q.postage * n, chain: c.chain, estimate: true})
+    : await arcadeAsk(`Inscribe ${name}?`, `${label} Network fees: about ${coins(q.fees, c.chain)}.`, "Inscribe");
+  if (!ok) return;
+  busy = true; stopAsked = false; drawPicked();
+  $("set-go").disabled = true; $("set-stop").hidden = false; $("set-stop").disabled = false; $("set-progress").hidden = false;
+  const stay = (e) => { e.preventDefault(); e.returnValue = ""; };
+  window.addEventListener("beforeunload", stay);
+  document.body.dataset.inscribing = "1";
+  const done = [];
+  try {
+    const held = await keysNow();
+    for (let k = 0; k < n; k++) {
+      const it = plan.items[k];
+      const tell = (s) => {
+        $("set-bar").style.width = `${Math.round(100 * (k + Math.min(1, Number(s.sent || 0) / Number(s.of || 1))) / n)}%`;
+        $("set-says").textContent = `${k + 1} of ${commas(n)}: ${it.file.name}` + (s.wait ? " — waiting for a block…"
+          : s.done ? " — in." : ` — ${commas(s.sent)} of ${commas(s.of)} sent`) + " Keep this tab open.";
+      };
+      const bytes = new Uint8Array(await it.file.arrayBuffer());
+      const id = await oneOrd(held, c.chain, it.file, bytes, tell);
+      done.push({id, number: it.number, traits: it.traits});
+      addRow(id, c.chain, it.name || it.file.name);
+      const row = rows.find((r) => r.id === id);
+      if (row) { row.number = it.number; row.traits = Object.entries(it.traits).map(([a, b]) => `${a}=${b}`).join(", "); }
+      if (stopAsked) break;
+    }
+    drawRows();
+    if (done.length < n) {
+      $("set-says").textContent = `Stopped: ${commas(done.length)} of ${commas(n)} inscribed. Choose the folder again to carry on.`;
+      return;
+    }
+    $("set-says").textContent = `All ${commas(n)} ords are in. Now the collection index…`;
+    // The same ords already indexed from this browser: not a second index (the first one owns them anyway).
+    const indexKey = "arcade.ord.index." + await shaOf(new TextEncoder().encode(JSON.stringify([name, c.chain, done])));
+    let root = "";
+    try { root = localStorage.getItem(indexKey) || ""; } catch (e) {}
+    if (!root) {
+      root = await inscribeIndex(held, {name, chain: c.chain, description: "", items: done}, (t) => { $("set-says").textContent = t; });
+      try { localStorage.setItem(indexKey, root); } catch (e) {}
+    }
+    $("set-bar").style.width = "100%";
+    $("set-says").textContent = `${name}: ${commas(n)} ords and the index ${root}.`;
+    news(`${name} is inscribed: ${commas(n)} ${c.ord}s and its collection index ${root}. It appears on the Exchange once the blocks are mined and the arcades read it.`);
+  } catch (e) { say(String(e.message || e)); }
+  finally {
+    busy = false; drawPicked(); $("set-stop").hidden = true; $("set-go").disabled = false;
+    window.removeEventListener("beforeunload", stay);
+    delete document.body.dataset.inscribing;
+    loadRuns();
+  }
 };
 
 loadChains().then(loadRuns);

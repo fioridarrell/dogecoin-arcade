@@ -88,6 +88,18 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-23 Ords: a whole HashLips collection, one ord at a time, then its index on P test (Claude)
+The operator: "it should be able to inscribe a hashlip collection just like the current NFTs one at a time ... pep test for
+indexing". `/create/ord` "Inscribe a collection": a folder read like the NFT run (_metadata.json or <n>.json, matched by
+edition / image), one approval (`/account/ord/quote` prices it), each picture its own ord, then the collection index
+(collection_json, per-piece name/number/traits) inscribed on `test` (P test) where the registry reads it. Re-choosing
+the folder skips done pieces (matched by sha256 against `/account/ord/runs`), resumes a half-done one, and does not
+write the same index twice. `_ord_chain_too_long` now asks the node's `getmempoolentry` ancestorcount (a collection's
+commits chain on each other), falling back on the run's own count; the page waits out "too-long-mempool-chain" and
+retries the same run. wallet.js `inscribeOrd` no longer retries a 4xx. Tests: test_ord_inscribe 55,
+test_ord_inscribe_browser 2 (a 3-picture HashLips build in real Firefox: 3 ords, the index's part + root checked, a
+re-run inscribes nothing twice). Branch `claude/ord-inscriber`.
+
 ### 2026-10-23 Creator tab: inscribe an ord from your own wallet, each chain by its own rules (Claude)
 The operator: "I want to add the option to inscribe an ORD under the creator tab. Make sure that the inscriber follows the rules
 of each chain individually ... Change the create tab to the creator tab"; asked: DOGE, PEP, BEL, LKY first (LTC Taproot

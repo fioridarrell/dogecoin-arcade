@@ -35,7 +35,24 @@ planned transactions back under those rules.
 
 Files up to 400 kB are taken.
 
-## Making a collection
+## Inscribing a whole collection
+
+**Inscribe a collection** takes a HashLips Art Engine `build` folder (its `images` and `json`, or `json/_metadata.json`)
+or any folder of pictures:
+
+1. Choose the chain and the folder. The page reads each picture's JSON the way the NFT collection run does (by
+   `edition`, or by the file its `image` names), fills in the collection's name, and says how many transactions it
+   takes and about what it costs.
+2. Approve once. Every picture then goes on as its own ord, one after another, each with its own transactions, all
+   signed in the tab. When a chain has as many unconfirmed transactions in a row as it takes, the page waits for a block
+   and carries on.
+3. When the last picture is in, the collection index -- each piece's name, number and traits from its JSON -- is
+   inscribed on Pepecoin testnet, where the arcades index collections.
+
+If the tab closes, choose the folder again: pictures already inscribed are skipped, a half-done one carries on where it
+stopped, and the same index is not written twice. **Stop after this piece** ends a run cleanly between pictures.
+
+## Making a collection by hand
 
 Under **Make a collection index**, group your ords into a collection. It uses the same index the Doginal Dogs, the
 Doginal Frogs and the Anti Doginal Dogs are published in.
