@@ -32,7 +32,7 @@ GUIDE = Path(__file__).parent / "templates" / "guide.md"
 #: clone downloads (2026-09-28: "make the plan private"). A plan read
 #: by the public is a plan whose agent instructions are public too.
 #: arcade/bootstrap.py keeps the same list; a test holds them together.
-PRIVATE = ("multi-user.md", "voice-plan.md",
+PRIVATE = ("multi-user.md", "voice-plan.md", "doginals-index-plan.md",
            # The engineering history too (2026-09-28: the public docs are
            # general documentation -- what it is, how it works, how to run a node).
            "DECISIONS.md", "M0-notes.md", "M1-notes.md", "M2-notes.md", "03-companion-app-design.md", "p2p-messaging.md", "tokens-notes.md", "messaging/04-testnet-results.md")
@@ -93,6 +93,8 @@ ORDER = (
      "The plan for accounts, seats and keys that never leave the browser."),
     ("00-node-setup.md", "Setting up a node",
      "What the installer does, and how to do it by hand."),
+    ("remote-access.md", "Reaching your node from elsewhere",
+     "The loopback default and why, the tunnel wizard, and what each way in exposes."),
     ("messaging/02-design.md", "Messaging: the design",
      "The envelope, the encryption and what the chain carries."),
     ("messaging/01-node.md", "Messaging: the node", "The Pepecoin test side of it."),
