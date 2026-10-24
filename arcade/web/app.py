@@ -932,8 +932,7 @@ def create_app(state: AppState) -> FastAPI:
         # The LoRa gateway lets its serial port go before the next worker takes the run lock (web/lora.py).
         lora = getattr(state, "lora", None)
         if lora is not None:
-            import asyncio as _asyncio
-            await _asyncio.to_thread(lora.shutdown)
+            lora.shutdown()                   # its loop wakes every second: a stop is that long, then the port closes
         if not state.begin_shutdown():
             print("arcade-web: a send was still running at shutdown. What is "
                   "already broadcast cannot be taken back; the interface will "
