@@ -3049,7 +3049,7 @@ def test_your_own_tag_is_shown_with_your_own_address(client):
     panel = body[body.index("You are"):body.index("Add somebody by @tag")]
     assert "nobody yet" in panel, "it says so plainly when you have no name"
     assert "not published" in panel, "and whether the chain has your key"
-    assert "mainnet address" in panel and "key" in panel, \
+    assert "Pepecoin main address" in panel and "key" in panel, \
         "and what publishing puts on the chain under that name (D-137)"
     # The claimed case wants a derived address and a tag on the chain it was
     # derived for, which this fixture has no node for; it is what the running
