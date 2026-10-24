@@ -88,6 +88,12 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-23 Ords doc: the trait file's layout, and writing one with the helper (Claude)
+`docs/ords.md` gains "The trait file" (doggy.market layout: inscriptionId, name "X #n", attributes) and "Making the trait
+file with the arcade helper", so the helper (it answers from the public docs) writes one when asked. Docs only.
+Also: the Only Frogs index file (25 Pepinals from nintondo.io/pepe/collection/only-frogs, ids checked against our PEP
+index, no traits on Nintondo) was sent to @dondogecon to publish. Branch `claude/ord-inscriber`.
+
 ### 2026-10-23 Ords: a whole HashLips collection, one ord at a time, then its index on P test (Claude)
 The operator: "it should be able to inscribe a hashlip collection just like the current NFTs one at a time ... pep test for
 indexing". `/create/ord` "Inscribe a collection": a folder read like the NFT run (_metadata.json or <n>.json, matched by
