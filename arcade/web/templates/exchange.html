@@ -319,7 +319,7 @@ document.addEventListener('click', function (ev) {
        alt="{{ b.name }}" loading="lazy" onerror="this.remove()">{% else %}<span class="muted" style="display:grid;place-items:center;height:100%;font-size:.7rem">{{ (b.content_type.split('/')[-1] or 'file')[:6] }}</span>{% endif %}</a>
   {%- endmacro %}
   {% if x_in %}
-  <div class="ex-h">Offers in mainnet PEP for your things</div>
+  <div class="ex-h">Offers in Pepecoin main PEP for your things</div>
   <div class="ex-card" style="padding:4px 14px">
     {% for b in x_in %}
     <div class="offerrow">

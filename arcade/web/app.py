@@ -1608,7 +1608,7 @@ def create_app(state: AppState) -> FastAPI:
         except HTTPException:
             raise          # a rejected form is a 400, not an error page
         except Exception as exc:
-            state.flash(f"Could not reach the testnet node: {exc}", "err")
+            state.flash(f"Could not reach the Pepecoin test node: {exc}", "err")
         return RedirectResponse("/", status_code=303)
 
     # --- messenger ------------------------------------------------------------
@@ -2556,7 +2556,7 @@ def create_app(state: AppState) -> FastAPI:
                 else:
                     written = backup.backup_wallet(rpc, target, datadir=chain.datadir,
                                                    network=chain.network)
-            state.flash(f"Saved a copy of the {chain.label.lower()} wallet to {written}. "
+            state.flash(f"Saved a copy of the {chain.label} wallet to {written}. "
                         f"Keep it somewhere other than this computer.", "ok")
         except HTTPException:
             raise          # a rejected form is a 400, not an error page
@@ -3812,7 +3812,7 @@ def create_app(state: AppState) -> FastAPI:
         on the page this says it on.
         """
         if not state.unlocked:
-            return "waiting for the testnet node"
+            return "waiting for the Pepecoin test node"
         if not (_my_tag()["tag"] or ""):
             return ("claim a @tag first -- it is the name your posts appear "
                     "under, and it is one button on the address book")
@@ -8303,7 +8303,7 @@ def create_app(state: AppState) -> FastAPI:
         op = body.get("op")
         try:
             if chain.network == "main":
-                raise nodetalk.TalkError("node-to-node messages are testnet only")
+                raise nodetalk.TalkError("node-to-node messages are Pepecoin test only")
             if op == "identity":
                 identity = state.ensure_identity()
                 return JSONResponse({"ok": True, "pubkey": identity.public_bytes.hex(),
@@ -8367,7 +8367,7 @@ def create_app(state: AppState) -> FastAPI:
         op = body.get("op")
         try:
             if chain.network == "main" or chain.params.swaps_from is None:
-                raise swaplib.SwapError("shops are testnet only")
+                raise swaplib.SwapError("shops are Pepecoin test only")
             index = state.token_index(chain)
             row = _shop_page(txid, chain)
             page = row["txid"]
@@ -8509,8 +8509,8 @@ def create_app(state: AppState) -> FastAPI:
             if op != "send":
                 raise approvalslib.RequestError("op must be identity or send")
             if chain.is_mainnet:
-                raise approvalslib.RequestError("a page sends without approval on testnet "
-                                                "only; on mainnet it asks")
+                raise approvalslib.RequestError("a page sends without approval on Pepecoin test "
+                                                "only; on Pepecoin main it asks")
             if row["creator"] != row["owner"] or row["owner"] not in own:
                 raise approvalslib.RequestError(
                     "only a page this wallet created and still holds sends without "
@@ -12455,7 +12455,7 @@ def create_app(state: AppState) -> FastAPI:
         address = _account_address(account.pubkey, chain)
         if not address:
             return JSONResponse(
-                {"detail": f"this account has no {chain.label.lower()} "
+                {"detail": f"this account has no {chain.label} "
                            f"address yet"}, status_code=400)
         try:
             try:
@@ -13134,7 +13134,7 @@ def create_app(state: AppState) -> FastAPI:
         address = _account_address(account.pubkey, chain)
         if not address:
             return JSONResponse(
-                {"detail": f"this account has no {chain.label.lower()} "
+                {"detail": f"this account has no {chain.label} "
                            f"address yet"}, status_code=400)
         # One run going at a time, which is a rule rather than a courtesy. Two
         # runs from one address would be offered interleaved, and the account
@@ -13191,7 +13191,7 @@ def create_app(state: AppState) -> FastAPI:
         address = _account_address(account.pubkey, chain)
         if not address:
             return JSONResponse(
-                {"detail": f"this account has no {chain.label.lower()} "
+                {"detail": f"this account has no {chain.label} "
                            f"address yet"}, status_code=400)
         ahead = _runs.due(account.pubkey, chain.network)
         if ahead is not None:
@@ -13773,7 +13773,7 @@ def create_app(state: AppState) -> FastAPI:
         address = _account_address(account.pubkey, chain)
         if not address:
             return JSONResponse(
-                {"detail": f"this account has no {chain.label.lower()} "
+                {"detail": f"this account has no {chain.label} "
                            f"address yet"}, status_code=400)
         try:
             index = state.token_index(chain)
@@ -13916,7 +13916,7 @@ def create_app(state: AppState) -> FastAPI:
         account = _signed_in_account(request)
         one = next((c for c in state.token_chains if c.network == chain and chain in ("doge", "main")), None)
         if one is None:
-            return JSONResponse({"detail": "DRC-20 and PRC-20 are on Dogecoin and Pepecoin mainnet"}, status_code=404)
+            return JSONResponse({"detail": "DRC-20 and PRC-20 are on Dogecoin and Pepecoin main"}, status_code=404)
         address = _own_address_asked(account, one, address)
         index = state.ord_indexes().get(one.network)
         protocol = "drc-20" if one.is_doge else "prc-20"
@@ -14133,7 +14133,7 @@ def create_app(state: AppState) -> FastAPI:
             chain = next((c for c in state.token_chains if c.network == str(said.get("chain") or "")
                           and c.network in t20.PROTOCOL), None)
             if chain is None:
-                raise ValueError("DRC-20 is on Dogecoin and PRC-20 on Pepecoin mainnet")
+                raise ValueError("DRC-20 is on Dogecoin and PRC-20 on Pepecoin main")
             address = _account_address(account.pubkey, chain)
             if not address:
                 raise ValueError(f"this account has no {chain.label} address yet")
@@ -14409,7 +14409,7 @@ def create_app(state: AppState) -> FastAPI:
                 continue
             r = oi.rules_of(net)
             p = chain.params
-            out.append({"chain": net, "label": {"main": "Pepecoin", "test": "Pepecoin testnet"}.get(net, chain.label),
+            out.append({"chain": net, "label": {"main": "Pepecoin main", "test": "Pepecoin test"}.get(net, chain.label),
                         "coin": p.coin, "ord": r.label, "indexer": r.indexer,
                         "part": r.part, "empty_ok": r.empty_ok, "fee_per_kb": fees.rate_for(p, fees.MIN_FEE_PER_KB),
                         "soft_dust": bool(getattr(p, "soft_dust", True)), "postage": oi.POSTAGE,
@@ -14659,7 +14659,7 @@ def create_app(state: AppState) -> FastAPI:
         except ValueError as exc:
             return JSONResponse({"detail": str(exc)}, status_code=400)
         if not _ord_chain(chain):
-            return JSONResponse({"detail": "Doginals live on Dogecoin and Pepinals on Pepecoin mainnet: this is a "
+            return JSONResponse({"detail": "Doginals live on Dogecoin and Pepinals on Pepecoin main: this is a "
                                            f"{chain.label} send"}, status_code=400)
         address = _account_address(account.pubkey, chain)
         if not address:
@@ -14729,7 +14729,7 @@ def create_app(state: AppState) -> FastAPI:
         address = _account_address(account.pubkey, chain)
         if not address:
             return JSONResponse(
-                {"detail": f"this account has no {chain.label.lower()} "
+                {"detail": f"this account has no {chain.label} "
                            f"address yet"}, status_code=400)
         try:
             index = state.token_index(chain)
@@ -14809,7 +14809,7 @@ def create_app(state: AppState) -> FastAPI:
         address = _account_address(account.pubkey, chain)
         if not address:
             return JSONResponse(
-                {"detail": f"this account has no {chain.label.lower()} "
+                {"detail": f"this account has no {chain.label} "
                            f"address yet"}, status_code=400)
         try:
             index = state.token_index(chain)
@@ -14845,7 +14845,7 @@ def create_app(state: AppState) -> FastAPI:
                     if enough < take.amount:
                         raise ValueError(
                             f"this account holds {format_amount(enough, True)} "
-                            f"on {chain.label.lower()}, which is less than the "
+                            f"on {chain.label}, which is less than the "
                             f"{price} offered. Anything on its way back to it "
                             f"is counted once its block lands.")
                 body = inscriptionlib.Offer(txid=bytes.fromhex(row["txid"]),
@@ -15395,7 +15395,7 @@ def create_app(state: AppState) -> FastAPI:
         address = _account_address(account.pubkey, chain)
         if not address:
             return JSONResponse(
-                {"detail": f"this account has no {chain.label.lower()} "
+                {"detail": f"this account has no {chain.label} "
                            f"address yet"}, status_code=400)
         try:
             index = state.token_index(chain)
@@ -15823,7 +15823,7 @@ def create_app(state: AppState) -> FastAPI:
         address = _account_address(account.pubkey, chain)
         if not address:
             return JSONResponse(
-                {"detail": f"this account has no {chain.label.lower()} "
+                {"detail": f"this account has no {chain.label} "
                            f"address yet"}, status_code=400)
         try:
             if chain.params.take_from is None:
@@ -16045,7 +16045,7 @@ def create_app(state: AppState) -> FastAPI:
         address = _account_address(account.pubkey, chain)
         if not address:
             return JSONResponse(
-                {"detail": f"this account has no {chain.label.lower()} "
+                {"detail": f"this account has no {chain.label} "
                            f"address yet"}, status_code=400)
         try:
             index = state.token_index(chain)
@@ -16130,7 +16130,7 @@ def create_app(state: AppState) -> FastAPI:
         address = _account_address(account.pubkey, chain)
         if not address:
             return JSONResponse(
-                {"detail": f"this account has no {chain.label.lower()} "
+                {"detail": f"this account has no {chain.label} "
                            f"address yet"}, status_code=400)
         try:
             index = state.token_index(chain)
@@ -16248,7 +16248,7 @@ def create_app(state: AppState) -> FastAPI:
         address = _account_address(account.pubkey, chain)
         if not address:
             return JSONResponse(
-                {"detail": f"this account has no {chain.label.lower()} "
+                {"detail": f"this account has no {chain.label} "
                            f"address yet"}, status_code=400)
         index = state.token_index(chain)
         from fractions import Fraction
@@ -16355,7 +16355,7 @@ def create_app(state: AppState) -> FastAPI:
         address = _account_address(account.pubkey, chain)
         if not address:
             return JSONResponse(
-                {"detail": f"this account has no {chain.label.lower()} "
+                {"detail": f"this account has no {chain.label} "
                            f"address yet"}, status_code=400)
         try:
             index = state.token_index(chain)
@@ -16436,7 +16436,7 @@ def create_app(state: AppState) -> FastAPI:
         address = _account_address(account.pubkey, chain)
         if not address:
             return JSONResponse(
-                {"detail": f"this account has no {chain.label.lower()} "
+                {"detail": f"this account has no {chain.label} "
                            f"address yet"}, status_code=400)
         try:
             index = state.token_index(chain)
@@ -16480,7 +16480,7 @@ def create_app(state: AppState) -> FastAPI:
                 if hash160(pubkey) != b58check_decode(address)[1]:
                     raise ValueError(
                         "that public key is not the key behind this account's "
-                        f"{chain.label.lower()} address, so pasting it would "
+                        f"{chain.label} address, so pasting it would "
                         "write a trade one wallet paid and another is named on")
                 hex_ = fundinglib.assemble(unsigned, signatures, pubkey)
                 # Whose coin is whose is settled by the bytes, not by this
@@ -16858,7 +16858,7 @@ def create_app(state: AppState) -> FastAPI:
         address = _account_address(account.pubkey, chain)
         if not address:
             return JSONResponse(
-                {"detail": f"this account has no {chain.label.lower()} "
+                {"detail": f"this account has no {chain.label} "
                            f"address yet"}, status_code=400)
         try:
             index = state.token_index(chain)
@@ -18115,7 +18115,7 @@ def create_app(state: AppState) -> FastAPI:
         chain = _chain_asked(said)
         owner = _account_address(account.pubkey, chain)
         if not owner:
-            raise ValueError(f"this account has no {chain.label.lower()} address yet")
+            raise ValueError(f"this account has no {chain.label} address yet")
         redeem = bytes.fromhex(str(said.get("redeem") or ""))
         lock = htlclib.parse(redeem)
         if lock is None:
@@ -18136,7 +18136,7 @@ def create_app(state: AppState) -> FastAPI:
             from ..trade_orders import TICK20, TOKEN20_MAX
             if chain.network not in ("doge", "main") or not TICK20.match(asset) or not 0 < amount <= TOKEN20_MAX:
                 raise ValueError("a DRC-20 / PRC-20 leg names its tick and a whole number of tokens, on Dogecoin or "
-                                 "Pepecoin mainnet")
+                                 "Pepecoin main")
             return tradelib.Leg(chain.network, kind, asset, amount, "", "")
         if kind == "doginal":
             # A tab's own Doginal swaps (2026-10-15: "Build the things that are not built").
@@ -19727,7 +19727,7 @@ def create_app(state: AppState) -> FastAPI:
         address = _account_address(account.pubkey, chain)
         if not address:
             return JSONResponse(
-                {"detail": f"this account has no {chain.label.lower()} "
+                {"detail": f"this account has no {chain.label} "
                            f"address yet"}, status_code=400)
         pool = (_pool_of(account, str(said.get("pool") or ""), chain.network)
                 if said.get("pool") else None)
@@ -19873,7 +19873,7 @@ def create_app(state: AppState) -> FastAPI:
         address = _account_address(account.pubkey, chain)
         if not address:
             return JSONResponse(
-                {"detail": f"this account has no {chain.label.lower()} "
+                {"detail": f"this account has no {chain.label} "
                            f"address yet"}, status_code=400)
         raw = str(said.get("raw") or "")
         try:
@@ -20193,7 +20193,7 @@ def create_app(state: AppState) -> FastAPI:
         address = _account_address(account.pubkey, chain)
         if not address:
             return JSONResponse(
-                {"detail": f"this account has no {chain.label.lower()} "
+                {"detail": f"this account has no {chain.label} "
                            f"address yet"}, status_code=400)
         try:
             listing, unsigned, _ = _listing_to_fill(
@@ -20245,7 +20245,7 @@ def create_app(state: AppState) -> FastAPI:
         address = _account_address(account.pubkey, chain)
         if not address:
             return JSONResponse(
-                {"detail": f"this account has no {chain.label.lower()} "
+                {"detail": f"this account has no {chain.label} "
                            f"address yet"}, status_code=400)
         # This account's own lane, for the reason `/account/sign` gives: it
         # covers the broadcast and the note after it, not the build before it.
@@ -20292,7 +20292,7 @@ def create_app(state: AppState) -> FastAPI:
                     # another one did.
                     raise ValueError(
                         "that public key is not the key behind this account's "
-                        f"{chain.label.lower()} address, so pasting it would "
+                        f"{chain.label} address, so pasting it would "
                         "write a sale one wallet paid and another is named on")
                 raw = None
                 with chain.rpc() as rpc:
@@ -20343,7 +20343,7 @@ def create_app(state: AppState) -> FastAPI:
     # (`node_trades`, 2026-10-13): off, the tab shows what is listed and nobody lists or buys.
 
     def _ord_chain(chain) -> bool:
-        """Whether this node reads ord inscriptions on `chain`: Doginals on Dogecoin, Pepinals on Pepecoin mainnet
+        """Whether this node reads ord inscriptions on `chain`: Doginals on Dogecoin, Pepinals on Pepecoin main
         (2026-10-17: "Add pepinals support"; the same envelopes, read by the same code, doginals.py)."""
         return bool(chain is not None and (chain.is_doge or chain.network == "main"))
 
@@ -20354,7 +20354,7 @@ def create_app(state: AppState) -> FastAPI:
         """The chain an inscription route is about: Dogecoin (Doginals, the default) or Pepecoin mainnet (Pepinals)."""
         chain = _chain_asked({"chain": str((said or {}).get("chain") or "doge")})
         if not _ord_chain(chain):
-            raise ValueError("Doginals are on Dogecoin and Pepinals on Pepecoin mainnet")
+            raise ValueError("Doginals are on Dogecoin and Pepinals on Pepecoin main")
         return chain
 
     def _doginal_row(chain, row: dict) -> dict:
@@ -20726,7 +20726,7 @@ def create_app(state: AppState) -> FastAPI:
         finally:
             state.end_send(lane)
 
-    # --- coins at the account's testnet key's Dogecoin address, moved home (arcade/doge_stray.py) ------------------
+    # --- coins at the account's Pepecoin test key's Dogecoin address, moved home (arcade/doge_stray.py) ------------------
 
     _stray_reading: set = set()
 
@@ -20749,7 +20749,7 @@ def create_app(state: AppState) -> FastAPI:
         with contextlib.closing(index.open()) as db:
             if stray not in utxoslib.watching(db):
                 tip = index.indexed_height() or 0
-                utxoslib.watch(db, stray, tip, "testnet key's Dogecoin address")
+                utxoslib.watch(db, stray, tip, "Pepecoin test key's Dogecoin address")
                 first = db.conn.execute("SELECT MIN(height) FROM block").fetchone()[0] or tip
                 db.conn.commit()
                 if stray not in _stray_reading:
@@ -20783,7 +20783,7 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.get("/account/doge-stray")
     def account_doge_stray(request: Request):
-        """What sits at this account's testnet key's Dogecoin address, and what moving it home costs."""
+        """What sits at this account's Pepecoin test key's Dogecoin address, and what moving it home costs."""
         from .. import doge_stray, doginals as doginalslib
         account = _signed_in_account(request)
         try:
@@ -21051,7 +21051,7 @@ def create_app(state: AppState) -> FastAPI:
         chain = _chain_asked(said)
         address = _account_address(account.pubkey, chain)
         if not address:
-            raise ValueError(f"this account has no {chain.label.lower()} address yet")
+            raise ValueError(f"this account has no {chain.label} address yet")
         index = state.token_index(chain)
         give_spec = said.get("give") if isinstance(said.get("give"), dict) else {}
         take_spec = said.get("take") if isinstance(said.get("take"), dict) else {}
@@ -21503,7 +21503,7 @@ def create_app(state: AppState) -> FastAPI:
         address = _account_address(account.pubkey, chain)
         if not address:
             return JSONResponse(
-                {"detail": f"this account has no {chain.label.lower()} "
+                {"detail": f"this account has no {chain.label} "
                            f"address yet"}, status_code=400)
         try:
             answered = _leg_answered(said, chain, address)
@@ -21550,7 +21550,7 @@ def create_app(state: AppState) -> FastAPI:
         address = _account_address(account.pubkey, chain)
         if not address:
             return JSONResponse(
-                {"detail": f"this account has no {chain.label.lower()} "
+                {"detail": f"this account has no {chain.label} "
                            f"address yet"}, status_code=400)
         lane = f"account {account.pubkey}"
         piece_lane = ""
@@ -21590,7 +21590,7 @@ def create_app(state: AppState) -> FastAPI:
                 if hash160(pubkey) != b58check_decode(address)[1]:
                     raise ValueError(
                         "that public key is not the key behind this account's "
-                        f"{chain.label.lower()} address, so pasting it would "
+                        f"{chain.label} address, so pasting it would "
                         "write a sale one wallet paid and another is named on")
                 with chain.rpc() as rpc:
                     raw = listingslib.paste_leg(rpc, listing, unsigned,
@@ -21912,7 +21912,7 @@ def create_app(state: AppState) -> FastAPI:
         address = _account_address(account.pubkey, chain)
         if not address:
             return JSONResponse(
-                {"detail": f"this account has no {chain.label.lower()} "
+                {"detail": f"this account has no {chain.label} "
                            f"address yet"}, status_code=400)
         index = state.token_index(chain)
         from ..messaging import api as apilib
@@ -22052,7 +22052,7 @@ def create_app(state: AppState) -> FastAPI:
         address = _account_address(account.pubkey, chain)
         if not address:
             return JSONResponse(
-                {"detail": f"this account has no {chain.label.lower()} "
+                {"detail": f"this account has no {chain.label} "
                            f"address yet"}, status_code=400)
         index = state.token_index(chain)
         from ..messaging import api as apilib
@@ -22205,7 +22205,7 @@ def create_app(state: AppState) -> FastAPI:
         from .. import nodetalk
         chain = _chain_asked(said)
         if chain.network == "main" or chain.params.swaps_from is None:
-            raise swaplib.SwapError("shops are testnet only")
+            raise swaplib.SwapError("shops are Pepecoin test only")
         row = _shop_page(str(said.get("shop") or ""), chain)
         shop = swaplib.shop_of(row)
         return chain, row, shop, nodetalk.parse_pubkey(shop["node"])
@@ -22319,7 +22319,7 @@ def create_app(state: AppState) -> FastAPI:
             chain, row, shop, node = _account_shop(said)
             address = _account_address(account.pubkey, chain)
             if not address:
-                raise ValueError(f"this account has no {chain.label.lower()} "
+                raise ValueError(f"this account has no {chain.label} "
                                  f"address yet")
             index = state.token_index(chain)
             listing_no = int(said.get("listing", -1))
@@ -22449,7 +22449,7 @@ def create_app(state: AppState) -> FastAPI:
             chain, row, _shop, node = _account_shop(said)
             address = _account_address(account.pubkey, chain)
             if not address:
-                raise ValueError(f"this account has no {chain.label.lower()} "
+                raise ValueError(f"this account has no {chain.label} "
                                  f"address yet")
             offer = swaplib.check_offer(
                 said.get("offer"), shop=row["txid"], own=[address],
@@ -22478,7 +22478,7 @@ def create_app(state: AppState) -> FastAPI:
             if hash160(pubkey) != b58check_decode(address)[1]:
                 raise ValueError("that public key is not the key behind this "
                                  "account's "
-                                 f"{chain.label.lower()} address, so finishing "
+                                 f"{chain.label} address, so finishing "
                                  "it would write a trade one wallet paid and "
                                  "another is named on")
             try:
@@ -22538,9 +22538,9 @@ def create_app(state: AppState) -> FastAPI:
         chain = _account_chain()
         try:
             if chain.is_mainnet:
-                raise nodetalk.TalkError("node-to-node messages are testnet "
+                raise nodetalk.TalkError("node-to-node messages are Pepecoin test "
                                          "only, and this account lives on "
-                                         "mainnet")
+                                         "Pepecoin main")
             if op == "identity":
                 return JSONResponse({
                     "ok": True, "network": chain.network,
@@ -22668,7 +22668,7 @@ def create_app(state: AppState) -> FastAPI:
         address = _account_address(account.pubkey, chain)
         if not address:
             return JSONResponse(
-                {"detail": f"this account has no {chain.label.lower()} "
+                {"detail": f"this account has no {chain.label} "
                            f"address yet"}, status_code=400)
         try:
             index = state.token_index(chain)
@@ -22686,7 +22686,7 @@ def create_app(state: AppState) -> FastAPI:
                 to, to_tag = _pays_at(_feed_author_address(_account_chain(), tip_of), chain), ""
                 if not to:
                     raise ValueError("there is nowhere to send it: whoever wrote that has "
-                                     f"not published a {chain.label.lower()} address")
+                                     f"not published a {chain.label} address")
             else:
                 to, to_tag = _payee(said.get("to", ""), chain)
             complaint = _check_address(to, mainnet=chain)
@@ -22793,7 +22793,7 @@ def create_app(state: AppState) -> FastAPI:
         address = _account_address(account.pubkey, chain)
         if not address:
             return JSONResponse(
-                {"detail": f"this account has no {chain.label.lower()} "
+                {"detail": f"this account has no {chain.label} "
                            f"address yet"}, status_code=400)
         name = str(said.get("name") or "")
         try:
@@ -22871,7 +22871,7 @@ def create_app(state: AppState) -> FastAPI:
         address = _account_address(account.pubkey, chain)
         if not address:
             return JSONResponse(
-                {"detail": f"this account has no {chain.label.lower()} "
+                {"detail": f"this account has no {chain.label} "
                            f"address yet"}, status_code=400)
         action = str(said.get("action") or "")
         try:
@@ -23420,7 +23420,7 @@ def create_app(state: AppState) -> FastAPI:
             return JSONResponse({"detail": str(exc)}, status_code=400)
         address = _account_address(account.pubkey, chain)
         if not address:
-            return JSONResponse({"detail": f"this account has no {chain.label.lower()} "
+            return JSONResponse({"detail": f"this account has no {chain.label} "
                                            f"address yet"}, status_code=400)
         try:
             target = str(said.get("txid", "")).strip().lower()
@@ -23451,7 +23451,7 @@ def create_app(state: AppState) -> FastAPI:
                 if not where:
                     raise ValueError(
                         "there is nowhere to send it: whoever wrote that has "
-                        f"not published a {chain.label.lower()} address")
+                        f"not published a {chain.label} address")
                 outputs.append((amount, txbuild.p2pkh_script(where)))
                 paid = amount
 
@@ -23826,7 +23826,7 @@ def create_app(state: AppState) -> FastAPI:
                     [(each, txbuild.p2pkh_script(address))] * count,
                     rate=fees.MIN_FEE_PER_KB,
                     what=(f"split {format_amount(each * count, True)} "
-                          f"{chain.label.lower()} into {count} coins of your own"),
+                          f"{chain.label} into {count} coins of your own"),
                     exclude=_flights.spent_by(account.pubkey, chain.network),
                     extra=_flights.change_for(account.pubkey, chain.network))
             _quota(account, "send")
@@ -25853,7 +25853,7 @@ def create_app(state: AppState) -> FastAPI:
         address = _account_address(account.pubkey, chain)
         if not address:
             return JSONResponse(
-                {"detail": f"this account has no {chain.label.lower()} "
+                {"detail": f"this account has no {chain.label} "
                            f"address yet"}, status_code=400)
         # Send from the account's native-segwit (m/84') or P2SH-nested (m/49')
         # address when the browser names it (said["from"]): that key is the
@@ -25916,7 +25916,7 @@ def create_app(state: AppState) -> FastAPI:
                     [(amount, _pay_script(to, chain))],
                     rate=fees.MIN_FEE_PER_KB,
                     what=(f"send {format_amount(amount, True)} "
-                          f"{chain.label.lower()} to {to}"),
+                          f"{chain.label} to {to}"),
                     exclude=_flights.spent_by(account.pubkey, chain.network),
                     # Change not yet in a block, of the address being sent FROM only: another address's coin
                     # here is a transaction its key cannot sign.
@@ -26012,8 +26012,8 @@ def create_app(state: AppState) -> FastAPI:
             other = _chain_twin(other if chain.is_mainnet else found, chain.params)
         if not other:
             raise ValueError(
-                f"@{tag} has not published a {chain.label.lower()} address, "
-                f"so there is nowhere on {chain.label.lower()} to pay them. "
+                f"@{tag} has not published a {chain.label} address, "
+                f"so there is nowhere on {chain.label} to pay them. "
                 f"Ask them for an address.")
         return other
 
@@ -29909,7 +29909,7 @@ def create_app(state: AppState) -> FastAPI:
             return JSONResponse({"detail": str(exc)}, status_code=400)
         address = _account_address(account.pubkey, chain)
         if not address:
-            return JSONResponse({"detail": f"this account has no {chain.label.lower()} address yet"},
+            return JSONResponse({"detail": f"this account has no {chain.label} address yet"},
                                 status_code=400)
         try:
             index = state.token_index(chain)
@@ -29984,7 +29984,7 @@ def create_app(state: AppState) -> FastAPI:
             return {"kind": kind, "asset": str(prop["property_id"]), "name": prop["name"],
                     "divisible": bool(prop["divisible"]), "prop": prop}
         if kind == "coin":
-            return {"kind": kind, "asset": "coin", "name": "Pepecoin (testnet)", "divisible": True,
+            return {"kind": kind, "asset": "coin", "name": "Pepecoin test", "divisible": True,
                     "prop": None}
         if kind == "nft":
             row = index.inscription(contentlib._key(str(asset)))
@@ -29992,7 +29992,7 @@ def create_app(state: AppState) -> FastAPI:
                 raise ValueError("no such inscription on this node")
             return {"kind": kind, "asset": row["txid"], "name": f"inscription #{row['number']}",
                     "divisible": False, "prop": None, "row": row}
-        raise ValueError("an asset is a token, testnet coin or NFT")
+        raise ValueError("an asset is a token, Pepecoin test coin or NFT")
 
     def _x_terms(a: dict, amount: str, price: str) -> tuple[int, int]:
         """(raw units, total PEPE satoshis): `price` is PEPE per whole unit."""
@@ -30026,7 +30026,7 @@ def create_app(state: AppState) -> FastAPI:
             raise ValueError("this node does not run that chain yet")
         if leg["kind"] == "doginal":
             if not (chain.is_doge or chain.network == "main"):
-                raise ValueError("a Doginal is on Dogecoin, a Pepinal on Pepecoin mainnet")
+                raise ValueError("a Doginal is on Dogecoin, a Pepinal on Pepecoin main")
             return {**leg, "divisible": False, "name": _doginal_name(leg["asset"]), "prop": None,
                     "chain": chain, "ready": True, "key": f"{net}-doginal-{leg['asset']}"}
         if leg["kind"] == "token20":
@@ -30308,8 +30308,8 @@ def create_app(state: AppState) -> FastAPI:
             test_addr = _account_address(account.pubkey, state.messaging)
             main_addr = _account_address(account.pubkey, state.ledger)
             if not test_addr or not main_addr:
-                raise ValueError("this account needs an address on testnet and on mainnet: "
-                                 "open mainnet on the Backup page first")
+                raise ValueError("this account needs an address on Pepecoin test and on Pepecoin main: "
+                                 "open Pepecoin main on the Backup page first")
             clerk, book = state.xchain, state.xchain.book
             chain = state.messaging if side == "sell" else state.ledger
             address = test_addr if side == "sell" else main_addr
@@ -30337,7 +30337,7 @@ def create_app(state: AppState) -> FastAPI:
             else:
                 raise ValueError("an order buys or sells")
             what = (f"{side} {format_amount(units, a['divisible']) if a['kind'] != 'nft' else a['name']} "
-                    f"{a['name'] if a['kind'] != 'nft' else ''} for {format_amount(pepe, True)} mainnet PEP "
+                    f"{a['name'] if a['kind'] != 'nft' else ''} for {format_amount(pepe, True)} Pepecoin main PEP "
                     f"(deposit to this node)").replace("  ", " ")
             unsigned = _spend_now(account, chain, address, outputs, what)
             order = book.place(owner=account.pubkey.lower(), side=side, kind=a["kind"], asset=a["asset"],

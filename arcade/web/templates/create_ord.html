@@ -39,7 +39,7 @@
     <code>images</code> and <code>json</code>, or <code>json/_metadata.json</code>), or any folder of pictures. You approve
     once; every picture then goes on as its own ord, one after another, signed in this tab. When the last one is in,
     the collection index &mdash; each piece's name, number and traits from its JSON &mdash; is inscribed on Pepecoin
-    testnet, where the arcades index it, and the collection appears on the Exchange. If the tab closes, choose the
+    test, where the arcades index it, and the collection appears on the Exchange. If the tab closes, choose the
     folder again: pieces already inscribed are skipped and a half-done one carries on.</p>
   <div class="ord-grid">
     <label>Chain <select id="set-chain"></select></label>
@@ -152,7 +152,7 @@ function drawPicked() {
 }
 async function loadChains() {
   try { chains = (await getJSON("/account/ord/chains")).chains || []; } catch (e) { say(e.message); return; }
-  const opts = chains.map((c) => `<option value="${esc(c.chain)}">${esc(c.label)} · ${esc(c.ord)}${c.mainnet ? "" : " (testnet)"}</option>`).join("");
+  const opts = chains.map((c) => `<option value="${esc(c.chain)}">${esc(c.label)} · ${esc(c.ord)}</option>`).join("");
   $("ord-chain").innerHTML = opts || `<option value="">This arcade runs none of these chains</option>`;
   $("ix-chain").innerHTML = opts;
   $("set-chain").innerHTML = opts;
@@ -297,7 +297,7 @@ $("ix-go").onclick = async () => {
     const count = body.dm ? body.dm.length : body.items.length;
     if (!(await arcadeAsk(`Inscribe the index of ${body.name}?`,
         `${commas(count)} ords on ${(chainOf(net) || {}).label || net}: the parts and the root, inscribed by your account on `
-        + `${TAG.network === "test" ? "Pepecoin testnet" : "this arcade's chain"}. The first index to name an ord owns it.`, "Inscribe"))) return;
+        + `${TAG.network === "test" ? "Pepecoin test" : "this arcade's chain"}. The first index to name an ord owns it.`, "Inscribe"))) return;
     const held = await keysNow();
     const root = await inscribeIndex(held, body, (t) => { $("ix-says").textContent = t; }, $("ix-cover-first").checked);
     $("ix-says").textContent = "";
@@ -405,7 +405,7 @@ $("set-go").onclick = async () => {
   if (!name) { say("give the collection a name"); return; }
   const n = plan.items.length, q = plan.quote || {fees: 0, txs: 0};
   const label = `Inscribe ${name}: ${commas(n)} pictures as ${c.ord}s, about ${commas(q.txs)} transactions signed here without `
-    + `asking again, then its collection index on ${TAG.network === "test" ? "Pepecoin testnet" : "this arcade's chain"}. `
+    + `asking again, then its collection index on ${TAG.network === "test" ? "Pepecoin test" : "this arcade's chain"}. `
     + `${coins(q.postage * n, c.chain)} stays yours as the ords' own coins.`;
   const ok = c.mainnet
     ? await arcadeMainnetReview({label, network: q.fees, data: 0, others: 0, operator: 0, total: q.fees + q.postage * n, chain: c.chain, estimate: true})

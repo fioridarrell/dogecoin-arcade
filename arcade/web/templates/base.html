@@ -1229,7 +1229,7 @@ function arcadeMainnetReview(costs){
     h.innerHTML = doge ? '<span class="tag dogecoin">dogecoin</span> Real DOGE'
                 : ltc ? '<span class="tag litecoin">litecoin</span> Real LTC'
                 : more ? '<span class="tag ' + more[0] + '">' + more[0] + '</span> Real ' + more[1]
-                       : '<span class="tag mainnet">mainnet</span> Real PEP';
+                       : '<span class="tag mainnet">Pepecoin main</span> Real PEP';
     var what = document.createElement('p'); what.className = 'muted';
     what.textContent = costs.label ? costs.label : costs.count
       ? 'Inscribe ' + costs.count.toLocaleString() + ' pieces' + (costs.what ? ' of ' + costs.what : '')

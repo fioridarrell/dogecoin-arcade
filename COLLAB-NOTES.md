@@ -88,6 +88,19 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-24 "Pepecoin main" / "Pepecoin test" everywhere; the Wallet's sweep-back card is gone (Claude)
+The operator: Pepecoin is never just "mainnet" / "testnet" -- it is "Pepecoin main" and "Pepecoin test", as the rest of the app
+names chains (e.g. the testnet mining text); and "remove the sweep back card from the bottom of the wallet. Since sweep
+backs are automatic ... we only sweep back a coin test and that sweep back card is displayed on all of the coins".
+- Labels at the source: the two Pepecoin ChainContexts (`__main__.py`) are "Pepecoin test" / "Pepecoin main";
+  `Params.label` default "Pepecoin main", TESTNET "Pepecoin test" (`ChainContext.title` strips " main"/" test", so
+  titles stay "Pepecoin (PEP) – Main/Test"). `{chain.label.lower()}` -> `{chain.label}` in app.py messages.
+- Visible copy: wallet mining note, admin swap panel, token create/confirm buttons, contacts, exchange, inscription
+  view/send, launchpad note, backup key list, my_wallet notes, xchain, base.html review tag, coins.js key names, the
+  Guide, server error strings (faucet, trade legs, node talk, shops, approvals). Other chains' names untouched.
+- my_wallet.html: the `#dust-panel` card and its script removed (`/account/dust` and the automatic sweep stay).
+Branch `claude/pep-names-sweep`.
+
 ### 2026-10-23 Ords doc: the trait file's layout, and writing one with the helper (Claude)
 `docs/ords.md` gains "The trait file" (doggy.market layout: inscriptionId, name "X #n", attributes) and "Making the trait
 file with the arcade helper", so the helper (it answers from the public docs) writes one when asked. Docs only.

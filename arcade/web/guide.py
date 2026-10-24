@@ -91,7 +91,7 @@ ORDER = (
      "What the installer does, and how to do it by hand."),
     ("messaging/02-design.md", "Messaging: the design",
      "The envelope, the encryption and what the chain carries."),
-    ("messaging/01-node.md", "Messaging: the node", "The testnet side of it."),
+    ("messaging/01-node.md", "Messaging: the node", "The Pepecoin test side of it."),
     ("messaging/04-testnet-results.md", "Messaging: measured",
      "What it actually cost and how long it actually took."),
     ("p2p-messaging.md", "Why not peer-to-peer",

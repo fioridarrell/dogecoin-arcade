@@ -72,7 +72,7 @@ RULES = {
     "bel": Rules("Bellinal", "dogecoin", 240, False, "Nintondo ord (Doginals kind)"),
     "lky": Rules("Luckinal", "dogecoin", 240, False, "Doginals-kind indexers"),
     # Pepecoin testnet, for trying it with coins that cost nothing.
-    "test": Rules("Pepinal (testnet)", "pepecoin", 240, True, "pepecoin-ord-indexer"),
+    "test": Rules("Pepinal", "pepecoin", 240, True, "pepecoin-ord-indexer"),
 }
 #: The ones the page offers first (the operator's answer); test chains are added where the arcade runs them.
 CHAINS = ("doge", "main", "bel", "lky")

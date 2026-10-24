@@ -70,12 +70,12 @@ def _side(said: Any) -> dict:
     # inscription id, as ord-dogecoin writes it; one, on Dogecoin, locked by koinu order (htlc.doginal_out).
     # Pepinals too (2026-10-17: "Do the same for pepinals"): the same ord inscriptions on Pepecoin mainnet.
     if kind == "doginal" and (network not in ("doge", "main") or not INSCRIPTION_ID.match(asset) or amount != 1):
-        raise OrderError("a doginal (or pepinal) is on Dogecoin or Pepecoin mainnet, named by its inscription id, "
+        raise OrderError("a doginal (or pepinal) is on Dogecoin or Pepecoin main, named by its inscription id, "
                          "and moves exactly one")
     # A DRC-20 / PRC-20 token (2026-10-22: "Add prc 20 and drc 20 tokens to the token/coin exchange"): `asset`
     # its tick, `amount` WHOLE tokens; locked as a transfer note on the lock itself (arcade/token20_swap.py).
     if kind == "token20" and (network not in ("doge", "main") or not TICK20.match(asset) or amount > TOKEN20_MAX):
-        raise OrderError("a DRC-20 / PRC-20 token is on Dogecoin or Pepecoin mainnet, named by its tick (lower "
+        raise OrderError("a DRC-20 / PRC-20 token is on Dogecoin or Pepecoin main, named by its tick (lower "
                          "case), and moves a whole number of tokens")
     out = {"network": network, "kind": kind, "asset": asset, "amount": amount}
     # The lister's lock-fee terms for the side it locks (2026-10-21: "the sender of each lock script pay the

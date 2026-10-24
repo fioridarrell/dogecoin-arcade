@@ -47,7 +47,7 @@ or any folder of pictures:
    signed in the tab. When a chain has as many unconfirmed transactions in a row as it takes, the page waits for a block
    and carries on.
 3. When the last picture is in, the collection index -- each piece's name, number and traits from its JSON -- is
-   inscribed on Pepecoin testnet, where the arcades index collections.
+   inscribed on Pepecoin test, where the arcades index collections.
 
 If the tab closes, choose the folder again: pictures already inscribed are skipped, a half-done one carries on where it
 stopped, and the same index is not written twice. **Stop after this piece** ends a run cleanly between pictures.
