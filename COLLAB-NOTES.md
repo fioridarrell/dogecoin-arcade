@@ -88,6 +88,118 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-25 · SadFrog's side (Claude, node 2) · branch `team/content-cache-race` · the content cache race, and a round-up
+SadFrog: "add everything into a new github update for him". One code fix in this branch; the rest is what node 2 and
+node 3 found or changed over 10-23 to 10-25 that touches your side, gathered in one place.
+
+**In this branch: `LedgerIndex`'s content cache is thread-safe** (`arcade/ledger.py`).
+- Node 3 logged `RuntimeError: dictionary keys changed during iteration` from `_remember` (via `content()` →
+  `inscription_content`) while a player's browser fetched a game's ~460 module files in parallel.
+- `_cached` moves an entry to the end (pop and re-insert) on one request thread while `_remember` sums
+  `cache.values()` on another. Two threads popping the same entry could also lose it.
+- Now every move in the cache happens under `self._content_lock`, and `_remember` keeps a running byte total
+  (`_content_held`) instead of re-summing the whole cache on every fill. The floor-move reset clears both under the
+  lock. Least-recently-used order and the `CACHE_BYTES` limit are unchanged.
+- Test: `tests/test_ledger_content_cache.py` (3). Eight threads read and fill a 64 KB cache 3,000 times each; on the
+  old code it fails every time with "dictionary changed size during iteration". Also LRU order, and a refill of the
+  same file counted once.
+
+**Please merge when you can: ASHVALE PR dogecoinarcade/ashvale#9** ("Never a new character over a saved hero").
+A signed-in player whose Bank answered after the 20 s load timeout got a new character. The device kept it as
+"newer" (no `base`, compared by clock), and the next load synced it over the real hero. It happened to a player on
+2026-10-24; the hero was restored from the browser's page history. The PR: a never-synced local save never outranks
+the Bank's; a signed-in player with no synced save waits up to 90 s for the Bank (the loading screen counts); a fresh
+character after a timeout says nothing is kept. All 81 JS tests pass. It is not in `main` or the live registry yet.
+
+**Automatic updates, and what we do instead.** Node 3 installed 32 updates on 10-23 (about every 15 min during your
+working hours). Since the supervisor (10-20) each hands over to a new worker without 502s, but long-lived streams
+(realtime rooms, live pages) still reconnect each time. We understand D-078 (a node that misses a consensus-rule
+release reads blocks wrongly), so we did not change the updater. On node 2 and node 3 the Overview's automatic updates
+are off, and we run the signed update ourselves twice a day (09:15 and 19:15 UTC), only when a newer release is
+published (`arcade.update --check` first, since `arcade.update` reinstalls and restarts even when current). A wish,
+your call against D-078: an "update when no rooms are active" option (wait for empty rooms up to a limit, then
+install anyway), or a release flag that marks a consensus change as "install now".
+
+**Ashvale filming.** SadFrog's side now makes Ashvale promo videos automatically from a local copy of
+`dist/ashvale3d.html` (never a live arcade). Today that means patching the game from outside, so we have built a
+small film API in ASHVALE. It is a local commit, not pushed; it comes as its own ASHVALE PR when SadFrog says so. It
+adds `ASH.film.camera({eye, look, fov})` / `release` / `hud` / `hour`, `?nohud`, `?hour=` (local hour),
+`ASH.enter(zone, floor)` / `?enter=`, `ASH.zonesReady(ms)`, `ASH.music.play/auto/start/state`, documented `_inject`
+fields (`l` is the floor: we sent `l: 40` and our characters were hidden as "off floor"), and lit dungeons. It also
+fixes three things you may want to know about now:
+- `ASH.sky()` uses `Date.now()`, but the world is lit from `skyNow()` (with `?skyday`), so it reports a different sun.
+- The see-through circle is drawn around the player even when the player is hidden.
+- Fog is placed from the player by `cam.dist`, which is wrong for a camera far from the player.
+
+**Cloudflare caching for `/content/`** (any operator behind Cloudflare). Inscription files are sent
+`public, max-age=31536000, immutable`, but Cloudflare does not cache paths without a file extension. So every new
+player fetched ~460 files from the node through Cloudflare (`cf-cache-status: DYNAMIC`), about 15 s before the game
+connected. A Cache Rule (URI path starts with `/content/`: eligible for cache, edge TTL 1 day, 404 not cached) gave
+464 of 464 cache hits and 3-5 s. Maybe worth a line in the operator docs. The edge TTL is 1 day, not a year, so a
+screened inscription stops being served within a day.
+
+**What node 3 runs that differs from stock** (so nothing surprises you there):
+- For ashvale.party and pepecoinarcade.com, `/realtime/nodes` is answered by a small read-only filter in front of
+  the arcade. It lists only ways in on node 3's Affiliates list (by domain, with a mesh node id). If it is down,
+  players stay on node 3.
+- Automatic updates off, with the twice-a-day timer above. The ashvale.party landing page sits in front of the arcade.
+
+**Asked of your side:** take this branch; merge ashvale#9; say what you think of the update wish.
+
+### 2026-10-25 · SadFrog's side (Claude, node 2) · branch `team/signup-confirm-password` (on `main` 6be86223) · every new password typed twice
+SadFrog: "when someone makes an account ... they should have to type their password twice in case they type it
+incorrectly - this should also be applied to the arcade signups". Nobody can reset these passwords, so a typo at
+sign-up locks the account for good (the words still restore it, but only if they were written down).
+- **`signup.html` (/join) and `game_door.html` (/play/<game>)**: a second box, "The password again" (`#pw2`). As you
+  type it says "The two match." or "Not the same yet."; "Create my account" / "Play <game>" refuses two that differ, or an
+  empty second box, before anything is made: no seat taken, no wallet derived.
+- **`join.html` (/join/keys)**: the node's own password ("Make this node yours") and the password for the copy of the
+  words kept in this browser are each asked twice (`#new-password2`, `#keep-password2`).
+- **Bug fixed on the way (join.html)**: that keep-a-copy box was `id="password"`, the same id as the operator's sign-in
+  box above it, so `$("password")` read the sign-in box (normally empty) and `signer.keep()` sealed the words with that.
+  The box is `#keep-password` now, and keeping a copy needs a password.
+- Tests: test_signup_browser::test_two_different_passwords_make_no_account (new) and the sign-up fills in
+  test_signup_browser / test_setup_browser type the password twice; test_auth_web::test_every_new_password_is_asked_for_twice,
+  ::test_the_copy_kept_in_this_browser_has_a_password_box_of_its_own; test_game_door::test_the_door_asks_for_the_password_twice.
+- Nothing else changes: wallet.js, the server and the protocol are untouched.
+
+### 2026-10-25 · SadFrog's side (Claude, node 2) · branch `team/security-review-2026-10-25` (on `main` 966c0efd) · fixes from a full security review
+SadFrog asked for a full review of the arcade (accounts and keys, inscribed games, trust between nodes, trades and swaps,
+web and updates) and for the critical findings fixed now, everything else left as it is. One commit per fix, each with
+its tests, so they apply as patches one by one:
+1. **Sign-up with a key that already has an account** (`980da33e`): `/signup` proves nothing about holding the key, so
+   a second sign-up under a new name gave a session as the key's owner (reproduced on a test arcade). A key with a vault
+   row or a seat here is refused ("sign in instead"). test_signup_existing_key.
+2. **Escrow release / game state forwarding** (`7b664927`): `terms["node"] + path` from a game's inscribed terms was
+   posted as given, including to this node's own loopback. Now `_peer_endpoint` (plain https, no query, fragment or
+   credentials) + `_post_arcade` (public addresses only, no redirects). test_peer_endpoint.
+3. **Doginals spend guard** (`7c640a5b`): another arcade's index answer may add protection, never remove it. A peer's
+   "nothing on it" (it is asked first by its own claimed walk) is taken only from this arcade's own walk once past the
+   block, or traced on the chain; never cached as final. The explorer's "most complete index" is untouched.
+   test_doginals (5 new; one old test changed: it freed a coin on a peer's empty answer).
+4. **Swaps, who spent a lock** (`e394dca7`): decided by the branch the input script took (htlc.spend_branch), not by
+   an output paying one of my addresses, which a counterparty could pay a crumb to. Python and wallet.js.
+5. **Swaps, secrets of any length** (`4dcafdb0`): any pushed item whose SHA-256 matches the hash lock is the secret
+   (Python, wallet.js, the watchtower); `claim_script_sig` pushes it minimally. The script is unchanged (a future v2
+   could add `OP_SIZE 32 OP_EQUALVERIFY`).
+6. **Swaps, lock times** (`619112d0`): `trade.locktimes_fit` / `locktimesFit` where proposals are accepted
+   (node_trader._consider, answerProposals): T1 - T2 at least max(1 h, half the lock), T2 more than LOCK_MARGIN away
+   and at most twice the lock duration off. The code's own proposals pass.
+7. **"Local" decided by the connection and the name** (`050c1d6d`): local trust now needs a loopback TCP peer AND a
+   loopback Host (localhost, *.localhost, IP literals, or names in `local_hosts`), with no edge headers; a name that
+   merely resolves to 127.0.0.1 is outside. State-changing requests with local trust are refused when cross-site
+   (Origin / Sec-Fetch-Site), except the page API and realtime paths; `/auth/set-password` takes only JSON from its own
+   origin. test_operator_trust.
+- **Node 3** runs 1 + 2 as a stopgap since 2026-10-25 ~06:00 UTC, with its update timer paused until a release has them.
+- **Also found, not changed here** (high/medium, for a later round): the login challenge's origin comes from the server
+  (a node can relay a user's sign-in to another node); several message signatures are made without showing the text
+  (realtime certs, LLM grants and top-ups, with server-chosen words); mainnet review depends on the server's `mainnet`
+  flag; lock-funding transactions are signed without checking their outputs; swaps settle at zero confirmations below
+  the BIG lines; borrowed-Core facts (confirmations) are one sharer's word; orders carry no lister signature; the
+  camera layer sits above arcade prompts; send requests can surface over another game; the mesh's per-origin limits
+  reset with fresh keys. Happy to take any of these on.
+- **Need from your side:** a look, and taking it into a release (then we resume node 3's updates).
+
 ### 2026-10-25 Ord walk: a block's input values fetched in batches over the lanes (Claude)
 Strawberry's walk (Dogecoin through lenders) stood at 5,594,317 with its next chunks' notes already on disk: walk_block
 asked each input value it needed (inputs before a maybe-inscribed coin) as one getrawtransaction round trip.
