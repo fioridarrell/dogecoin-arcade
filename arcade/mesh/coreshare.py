@@ -414,9 +414,13 @@ class CoreShare:
             return []
         rtts = self.node.rtts()
         peers = [p for p, nets in self.offers.items() if net in nets and p in self.node.links]
-        return sorted(peers, key=lambda p: (self.failures.get(p, 0) >= FAILING,
-                                            rtts.get(p) if rtts.get(p) is not None else 9e9,
-                                            self.failures.get(p, 0)))
+        # Among the ones failing lately, the fewest failures first, then ping (2026-10-25: a sharer caught lying, +10,
+        # could stay ahead of one that merely went quiet five times, by ping alone -- the coreshare liar test flaked).
+        def order(p: str) -> tuple:
+            fails = self.failures.get(p, 0)
+            failing = fails >= FAILING
+            return (failing, fails if failing else 0, rtts.get(p) if rtts.get(p) is not None else 9e9, fails)
+        return sorted(peers, key=order)
 
     async def request(self, net: str, calls: list, timeout: float = REQUEST_SECONDS,
                       avoid: frozenset = frozenset()) -> tuple[str, list]:

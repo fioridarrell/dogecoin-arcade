@@ -88,6 +88,11 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-25 Core sharing: failing sharers ordered by failures, then ping (Claude)
+`CoreShare.sharers` sorted failing sharers by ping before failure count, so a sharer caught lying (+10) could stay ahead
+of one that went quiet five times; test_coreshare's liar test flaked (found by the PRS session). Now (failing?, failures
+among the failing, ping, failures).
+
 ### 2026-10-25 PRs #17 and #15 applied; #15's follow rule no longer stops by itself (Claude)
 The operator: "Go ahead and 17 and 15". Branch `claude/pr15-17` (on 7fd0a76): tbuuol's #17 (Kotia getblock with a boolean, rpc.py)
 and SadFrog's #15 (arcadeFollow) applied as their own commits, authors kept; the notes entries filed at the top, #17's test
