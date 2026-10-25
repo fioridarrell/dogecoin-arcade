@@ -88,6 +88,110 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-25 · SadFrog's side (Claude, node 2) · branch `team/assets-bellinals` · Arcade Assets, part 1
+SadFrog: "make sure all assets, starting with bellinals, are viewable, listable and sendable." This branch is the first
+part: one list of ord chains, each chain priced on its own, Bellinals moved like Doginals and Pepinals, and Taproot
+inscriptions shown. Existing Doginal/Pepinal behaviour is unchanged.
+
+- **Pepecoin testnet guard** (`deefc485`): inscribed coins on `test` are guarded like mainnet; before, its ords could be
+  spent as fees.
+- **`arcade/ord_chains.py`** (`6a035f2b`): one definition (`WORDS`, `MOVED`, `swappable`) in place of the doge/main
+  literals in `_ord_chain`, listing holds and the `trade_orders`/`trade_messages`/`_leg_info` gates. Swaps need CLTV.
+- **Per-chain fees** (`41fed3fa`): ord sends and listings use the chain's own fee rate, dust and least amounts.
+  Dogecoin's rates on Bells overpaid ~100x.
+- **Bellinals** (`05937742`): sent, listed and bought at the wallet's own address. **Not swapped yet:** the Bells P2SH
+  byte (30) is Dogecoin's "D", so a swap lock address can't be told apart (`config.require_p2sh_payable`). That needs a
+  protocol-level fix, which comes with its own PR and design note. Also fixes a KeyError in "Take it back" for a
+  non-doge listing.
+- **Taproot content** (`21955341`): witness envelopes are read (`taproot_bodies`, `witness_content`), so Taproot-born
+  Bellinals and Litecoin ords show their content at `/content`.
+- **Taproot spend guard** (`fffc54b6`): the chain trace reads Doginals-style envelopes only. On a Taproot chain a
+  witness-born inscription would trace as clean. There, a coin with no own walk stays protected, and a clean trace
+  counts as "unknown", not free. Two tests in `tests/test_doginals.py`.
+
+Tests: 583 passed, 16 skipped across the ord, wallet, trade, web and public suites. Two failures are not from this
+branch. `test_doginals_at_the_testnet_key_s_dogecoin_address_move_home` fails the same way on main 1fb347b9.
+`test_an_ord_goes_on_from_the_creator_tab_signed_in_the_tab` fails because snap Firefox can't read `/tmp` uploads.
+
+Still open: coins above `TRACE_MAX` (0.1) aren't traced, and the wallet only asks about coins up to `DG_POSTAGE`
+(0.01), so large-postage Bellinals/LTC ords need a per-chain rule. Next: Luckinals, Litecoin ords, Wojakinals (no
+swaps: no CLTV) and PEP testnet display. After that come Taproot wallets (BIP86 keys, key-path spends, proven on
+regtest first) and OmniLite.
+
+### 2026-10-25 · SadFrog's side (Claude, node 2) · branch `team/hardening-r2-wave1` (on `main` 1fb347b9) · Arcade Hardening round 2, wave 1: money safety
+Wave 1 of SadFrog's "Arcade Hardening, Round 2" (the open items from the security review). One commit per change, each with tests:
+1. **Lock funding read off its own bytes** (`b08d2f79`): before signing a lock's funding (coin, token/NFT, Doginal,
+   DRC-20/PRC-20) or a delegated deposit, wallet.js parses the transaction (`checkFunding`): exactly one output paying the
+   lock script built in the tab (or the order key's p2pkh) with exactly the agreed value, any OP_RETURN exactly the agreed
+   payload, everything else to the user's own keys; otherwise "Nothing was signed." `fundMyLock` and `delegateOrder`
+   exported for tests. test_lock_funding_checks (Node, run_wallet_js).
+2. **Mainnet decided by name; buys, shop halves and trade legs reviewed** (`3879a276`): `isMainnet` from
+   `MAINNETS`/`TESTNETS` (a test fails if config.NETWORKS gains a chain not listed; unknown = mainnet), not the server's flag.
+   `buy`, `shopSign` and `tradeLeg` go through the review on mainnet; the review lists recipients read from the bytes.
+   test_mainnet_review_names.
+3. **Data assets always wait a confirmation** (`b08d2f79`): SadFrog: "swaps can be instant with a cap --
+   data assets like ordinals should always have a conf." `trade.ASSET_CONFIRMATIONS = 1` for any non-coin leg (token, NFT,
+   Doginal, DRC-20/PRC-20), fixed in code and in wallet.js (no swap_big line or /account answer lowers it); coin legs keep
+   0 below the line / 1 at it. Held claims in /account/trade/watch too. Tests in test_trade, test_trade_tab (720 pairings,
+   JS parity), test_trade_watch (regtest).
+4. **Delegated orders: plain warning and per-order caps** (`9f6ea2c4`): the List dialogs say the arcade holds
+   the order's key; caps 1,000 DOGE / 100,000 PEP / 1 LTC (other real-coin chains default to their trade.BIG line;
+   operator setting `delegate_cap:<net>`, 0 = none), enforced in wallet.js before the key leaves the page and in
+   node_trader.delegate / /account/orders/delegate. docs/swaps.md updated. test_delegate_cap.
+- Combined run on this branch: 487 passed, 16 skipped (trade, trade_tab(+browser), trade_watch, delegated_orders,
+  node_trader, doginal_tab_swap, coin/asset pair, trade_fees, shop_browser, account_mainnet, web, public, new files).
+- Left open: DRC-20 lock step 1's commit output is checked only by verifyOffer (the node doesn't send the note's redeem);
+  fill/signTake/bundle/claimPrize still sign without the mainnet review; token/NFT delegated orders get the warning but no
+  cap. Next waves: accounts (split names across arcades, login origin from the browser, 12-character passwords, sessions),
+  honest prompts in games, then trust between nodes.
+
+### 2026-10-25 · SadFrog's side (Claude, node 3, for tbuuol) · branch `team/kotia-utxoset` (on 86e4371d) · Kotia's whole unspent set: wallet coins and history from block 0 (KOTIA ONLY)
+tbuuol: "Wir schreiben jetzt die utxo Datenbank, unspent only", with the blocks that carry OP_RETURNs kept apart for
+MoonBrix and assets, and wired into Admin and the Wallet, history included. The problem it solves: Kotia's Core has
+neither `scantxoutset` nor `importmulti`, so an account's KOT from below the floor (1,530,000) never showed. For example,
+1 KOT sent to @tbuuol's K address at block 1,529,529 was on the chain and absent from the Wallet.
+- **`arcade/utxoset.py` (new):** the chain's whole unspent set in `<home>/<net>-utxoset.sqlite`.
+  - `coins`: an address mapped to its packed 49-byte records (txid, vout, value, height, kind).
+  - `data_blocks`: a height mapped to its packed OP_RETURN txids (pointers only: the bytes stay on the chain).
+  - `history`: utxos.activity's rows, for the accounts only. Nothing spent is kept.
+  - It is built once from block 0 (through the Core, or straight from blk*.dat with `file_blocks`), then followed
+    block by block, with a 200-block undo for reorgs. It has a command line too: `python -m arcade.utxoset
+    build|follow|status|balance|data`.
+- **KOTIA ONLY: `Params.full_utxo_set`, true for KOTIA alone.** Another chain needs adapting before it is switched on:
+  - its size (Dogecoin's set would be gigabytes and take days)
+  - its header naming (new `Params.scrypt_headers_below`: Kotia names headers below version 7 by scrypt, so
+    rawchain does too)
+  - its block-file magic (`utxoset.MAGIC`)
+  - its transaction parts
+- **Watcher, `_keep_utxo_sets`:** builds the set on a thread of its own, paced (`UTXOSET_REST`, about 60% of one
+  core, about 30 minutes for Kotia), only from this arcade's own Core and never a borrowed one. After that it follows
+  every pass. It reads the history of accounts added later in a second pass, and then `_utxoset_seed` copies each
+  watched address's spendable coins (kind 0: P2PKH and P2SH, the `utxos.SPENDABLE` set) and its history into the
+  index the Wallet reads.
+  - Seeding happens once per address (`utxoset_seeded:<net>`), and only when the set is at or past the index.
+  - INSERT OR IGNORE, so the index's own rows win and the index carries on from there.
+  - Rows from below the index have no block time, so the Wallet files them under "Earlier" with their block.
+  - Kotia's staking rewards are P2PK: they count in the set (kind 1), but they are not seeded, because the Wallet
+    signs P2PKH.
+- **Admin -> Chains:** the Kotia row says "full unspent set: building x% (block … of …)", "reading new accounts'
+  history x%", or "at block …". It also has a **Rebuild** button, for after a reorg deeper than the undo or whenever the
+  set is not trusted. `POST /admin/api/utxoset/rebuild {net}` needs admin write access, answers 409 while a build
+  runs, and is refused for any chain without the set. The watcher's next pass then forgets the set, builds it from
+  block 0 again, and reads every account back (`utxoset_seeded:<net>` cleared; the index keeps its rows).
+- **Checked live** against Kotia 1.0.0: 1,529,856 blocks in 623 s unpaced, giving 79,022 coins and 64,943,418.9991 KOT.
+  That is the same as the Core's `gettxoutsetinfo` at the same block hash; after following three more blocks it was
+  still the same. The file is 4.8 MB; there are 71 data blocks with 294 OP_RETURN transactions.
+- **Tests:** `tests/test_utxoset.py` (10), using blocks made in Kotia's shape. They cover a scrypt-named genesis, only
+  the unspent being kept, spends inside a block, history rows matching `on_block`'s, more accounts' history without a
+  coin rebuild, staking rewards not being wallet coins, connect/disconnect, block files out of order with an orphan,
+  and the watcher seeding a real `LedgerIndex`. The watcher, utxo, web, coreshare and Kotia/Bells/Lucky files pass
+  too (345).
+- **End to end, live** (the watcher's own `_utxoset_pass` and `_utxoset_seed` against Kotia's node, into a scratch
+  wallet index watching two K addresses): built in 1,401 s at the watcher's pace; 79,022 coins and 64,943,778.9991 KOT,
+  the same as `gettxoutsetinfo` at block 1,529,874. The Wallet index then held @tbuuol's 1 KOT (1 coin, 1 history row)
+  and @liteworldsquest's 18.9788126 KOT (8 coins, 4 history rows). All of these are from below the floor.
+- **Needs from the operator:** apply it. A node that runs Kotia here builds the set by itself after the update.
+
 ### 2026-10-25 Sign-in in three round trips instead of ten (Claude)
 The operator: "Logging into arcade on my @apple account takes an absurdly long time around 3 to 5 seconds." Measured on
 staging with a 200 ms round trip (the public tunnel): 4.16 s from the click to the next page; ten requests one after
