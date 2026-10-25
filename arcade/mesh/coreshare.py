@@ -200,8 +200,10 @@ class CoreShare:
             got = self.shared() or {}
         except Exception:                                      # noqa: BLE001 -- shares nothing this minute
             return {}
-        # "p": where this arcade is paid its tenth by those who use its Core (2026-10-18).
-        return {str(n): {"h": int(v.get("h", 0)), "b": str(v.get("b", "")),
+        # "p": where this arcade is paid its tenth by those who use its Core (2026-10-18). "l": how many ord-index
+        # lanes one borrower may read from it at once (2026-10-25): a big machine 4, a small one 1, so a small server's
+        # disk is never asked for more than one block at a time per borrower.
+        return {str(n): {"h": int(v.get("h", 0)), "b": str(v.get("b", "")), "l": lanes_lent(),
                          **({"p": str(v["p"])[:100]} if v.get("p") else {})}
                 for n, v in got.items() if isinstance(v, dict)}
 
@@ -526,9 +528,28 @@ class OneSharer:
         return getattr(self._share, name)
 
 
-def lenders(net: str) -> list[str]:
-    """The linked arcades sharing `net` now, fastest first: each one a lane for an ord index."""
-    return CURRENT.sharers(net) if CURRENT is not None else []
+#: Lanes a sharer lends each borrower's ord index at once: a big machine (8+ cores) this many, a small one 1.
+LANES_BIG = 4
+
+
+def lanes_lent() -> int:
+    import os
+    return LANES_BIG if (os.cpu_count() or 1) >= 8 else 1
+
+
+def lenders(net: str) -> list[tuple[str, int]]:
+    """The linked arcades sharing `net` now, fastest first, each with the lanes it lends (2026-10-25: several
+    lanes on each lender; an arcade that does not say lends one)."""
+    if CURRENT is None:
+        return []
+    out = []
+    for peer in CURRENT.sharers(net):
+        try:
+            lanes = int((CURRENT.offers.get(peer, {}).get(net) or {}).get("l") or 1)
+        except (TypeError, ValueError):
+            lanes = 1
+        out.append((peer, max(1, min(lanes, 16))))
+    return out
 
 
 def lent_rpc(peer: str, params) -> "BorrowedRpc":

@@ -1777,15 +1777,30 @@ class DoginalIndex:
         except (TypeError, ValueError):
             return 1
 
-    def _lent(self) -> dict:
-        """{node: client factory} of the arcades lending this chain now, at most as many as this arcade gives cores."""
+    def _lenders_now(self) -> list[tuple[str, Any, int]]:
+        """(node, client factory, lanes it lends) of the arcades lending this chain now, the resting ones left out."""
         try:
             got = list(self.lenders() or [])
         except Exception:                                # noqa: BLE001 -- the mesh not up yet: none this pass
             got = []
         rest = self.__dict__.setdefault("_lender_rest", {})
         now = time.time()
-        return dict([(n, f) for n, f in got if rest.get(n, 0) < now][:self._lanes_wanted()])
+        return [(row[0], row[1], int(row[2]) if len(row) > 2 else 1) for row in got if rest.get(row[0], 0) < now]
+
+    def _lent(self) -> dict:
+        """{node: client factory} of the arcades lending this chain now."""
+        return {n: f for n, f, _lanes in self._lenders_now()}
+
+    def _lent_lanes(self) -> list[str]:
+        """A lane per lane each lender lends (2026-10-25: "several lanes on each lender"), dealt round the
+        lenders -- each one's first lane, then each one's second -- so the cores this arcade gives cut the slowest last;
+        as many as this arcade gives cores."""
+        rows = self._lenders_now()
+        out, round_ = [], 0
+        while len(out) < self._lanes_wanted() and any(lanes > round_ for _n, _f, lanes in rows):
+            out += [n for n, _f, lanes in rows if lanes > round_]
+            round_ += 1
+        return out[:self._lanes_wanted()]
 
     def _lane_sources(self, walking: bool = False) -> list[str]:
         """Where each lane reads from: "" for this arcade's own Core (all its cores helping; walking, one fewer -- the
@@ -1793,7 +1808,7 @@ class DoginalIndex:
         available and run them each on their own lane"; "Anytime an arcade is indexing. It should be able to borrow as
         many nodes as it wants"). An arcade with no Core of its own reads only through its lenders."""
         own = (self._lanes_wanted() - (1 if walking else 0)) if self.own_core() else 0
-        return [""] * max(0, own) + list(self._lent())
+        return [""] * max(0, own) + self._lent_lanes()
 
     def _help(self, rpc, budget: float, walking: bool = False) -> None:
         """Help with a chunk on each lane at once -- one per core given to it on this arcade's own Core, and one on every
@@ -1802,7 +1817,7 @@ class DoginalIndex:
         now = time.time()
         ready = ready_chunks(self.tip, self.base)
         sources = self._lane_sources(walking) if (walking or not self.own_core()) else (
-            [""] * self._lanes_wanted() + list(self._lent()))
+            [""] * self._lanes_wanted() + self._lent_lanes())
         lanes = self.chunks.lanes
         # A lane whose lender is gone, or more of this arcade's own than it gives cores now: let go, newest first.
         free = list(sources)

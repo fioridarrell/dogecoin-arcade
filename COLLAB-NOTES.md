@@ -88,6 +88,12 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-25 Several ord-index lanes per lender (Claude)
+The operator: run several lanes on each lender. A Core-share offer now says `"l"`: lanes one borrower may read at once
+(`coreshare.lanes_lent`: 4 on 8+ cores, else 1; unsaid = 1). `coreshare.lenders(net)` -> [(node, lanes)];
+`DoginalIndex._lent_lanes` deals them round the lenders up to the ord cores setting. **Your side:** a big sharer of
+yours now lends 4 lanes per borrower once it runs this; a small one stays at 1.
+
 ### 2026-10-25 Core sharing: failing sharers ordered by failures, then ping (Claude)
 `CoreShare.sharers` sorted failing sharers by ping before failure count, so a sharer caught lying (+10) could stay ahead
 of one that went quiet five times; test_coreshare's liar test flaked (found by the PRS session). Now (failing?, failures

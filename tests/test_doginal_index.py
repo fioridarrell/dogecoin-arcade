@@ -1382,3 +1382,40 @@ def test_a_lender_that_goes_quiet_rests_and_the_other_lanes_go_on(tmp_path):
     assert "bad" in borrower._lender_rest, "three misses: the quiet arcade rests"
     assert all(lane.get("via") != "bad" for lane in borrower.chunks.lanes), "and its chunk was let go"
     assert borrower._lane_sources() == ["good"]
+
+
+def test_a_lender_that_lends_several_lanes_gets_several_dealt_round_the_lenders(tmp_path):
+    """2026-10-25: several lanes on each lender. Each lender says how many it lends ("l": a big machine 4, a small
+    one 1, so a small server's disk is asked for one block at a time); the lanes are dealt round the lenders, as many as
+    this arcade gives cores."""
+    chain = _busy_chain(40)
+    big, small = _Lender(chain), _Lender(chain)
+    rows = lambda: [("big", lambda: big, 4), ("small", lambda: small, 1)]
+    index = dx.DoginalIndex(tmp_path / "b.sqlite", lambda: chain, lambda: "walk", own_core=lambda: False,
+                            cores=lambda: 8, lenders=rows)
+    assert index._lane_sources(walking=True) == ["big", "small", "big", "big", "big"]
+    index.cores = lambda: 3
+    assert index._lane_sources(walking=True) == ["big", "small", "big"], "cut to the cores given, the small one kept"
+    index.cores = lambda: 8
+    index.step(budget=0)
+    assert sorted(lane["via"] for lane in index.chunks.lanes) == ["big", "big", "big", "big", "small"]
+    assert len({lane["c"] for lane in index.chunks.lanes}) == 5
+    for _ in range(12):
+        index.step()
+    assert big.blocks > 3 * small.blocks, "the big lender read on four lanes, the small one on one"
+
+
+def test_a_sharer_says_how_many_lanes_it_lends(monkeypatch):
+    from arcade.mesh import coreshare
+    monkeypatch.setattr("os.cpu_count", lambda: 18)
+    assert coreshare.lanes_lent() == coreshare.LANES_BIG
+    monkeypatch.setattr("os.cpu_count", lambda: 4)
+    assert coreshare.lanes_lent() == 1, "a small machine (the live server) lends one lane per borrower"
+
+    class Share:
+        offers = {"a": {"doge": {"h": 1, "l": 4}}, "b": {"doge": {"h": 1}}, "c": {"doge": {"h": 1, "l": "x"}}}
+
+        def sharers(self, net):
+            return ["a", "b", "c"]
+    monkeypatch.setattr(coreshare, "CURRENT", Share())
+    assert coreshare.lenders("doge") == [("a", 4), ("b", 1), ("c", 1)], "an arcade that does not say lends one"
