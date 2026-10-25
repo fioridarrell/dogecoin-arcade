@@ -170,6 +170,7 @@ PUBLIC_TREES = (
     "/v1/models",             # the LLM API's model list, for an API key
     "/signup/",               # is this name free
     "/signin/",               # somebody's encrypted wallet, by name
+    "/coins/walk/",           # the shared walk: whether this arcade reads a chain for others, a job's state (2026-10-25)
     "/vendor/",               # the two vendored crypto libraries
     "/docs/",                 # the whole written record, as shipped
     "/account/who/",          # where to write to somebody, from the chain
@@ -506,6 +507,7 @@ PUBLIC_POST = ("/auth/challenge", "/auth/login", "/auth/logout",
 #: that address's key signed (web/app.py signin_imported_coins; nothing without it).
 PUBLIC_POST_SHAPES = (
     re.compile(r"^/signin/[^/]{1,64}/imported-coins$"),
+    re.compile(r"^/coins/walk/job$"),      # another arcade's part of a shared walk: blocks to read, never a spend
 )
 
 #: What an inscribed page's own hostname may reach, and nothing else. A page
