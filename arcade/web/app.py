@@ -25884,20 +25884,24 @@ def create_app(state: AppState) -> FastAPI:
                 keep += ours(good[0])
                 verified.append((bottom, top))
                 continue
-            for r in rs:                                    # whoever failed or disagreed rests; this arcade re-reads
-                if r["reader"] != "self" and (not r["ok"] or len(good) >= 2):
-                    _walk_resting[r["reader"]] = time.time()
-            try:
+            try:                                            # this arcade reads the segment itself, then knows who was wrong
                 canaries = _walk_canaries(chain, top, bottom, wanted)
                 again = _walk_reader.read(chain, top, bottom, addresses + [c[2] for c in canaries], {})
                 if coinlistlib.canaries_missing(again, canaries):
                     raise RuntimeError("this arcade's own re-read missed a canary")
-                keep += [m for m in again if m[4] in wanted]
+                right = [m for m in again if m[4] in wanted]
+                for r in rs:                                # whoever failed, or found other coins than this read, rests
+                    if r["reader"] != "self" and (not r["ok"] or coinlistlib.agree(ours(r), right) != (set(), set())):
+                        _walk_resting[r["reader"]] = time.time()
+                keep += right
                 verified.append((bottom, top))
                 redone.append({"segment": seg, "readers": [r["reader"] for r in rs],
                                "why": [r.get("error") or ("canary missing" if r.get("missing") else "disagreed")
                                        for r in rs]})
             except Exception as exc:                        # noqa: BLE001 -- that segment stays a gap
+                for r in rs:
+                    if r["reader"] != "self" and not r["ok"]:
+                        _walk_resting[r["reader"]] = time.time()
                 failed.append({"segment": seg, "top": top, "bottom": bottom, "error": str(exc)[:200]})
         filed = 0
         by_address: dict[str, list] = {}
@@ -25916,6 +25920,7 @@ def create_app(state: AppState) -> FastAPI:
                 "redone": redone, "failed": failed}
 
     state.shared_walk = _shared_walk
+    state.walk_resting = _walk_resting
 
     def _walk_start(chain, address: str) -> None:
         """Queue `address` for its chain's next shared walk (several imports share one), shown like a read-back."""
