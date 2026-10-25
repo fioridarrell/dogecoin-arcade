@@ -28,6 +28,7 @@ import urllib.parse
 import shutil
 import sys
 import os
+import types
 import requests
 from pathlib import Path
 from urllib.parse import quote
@@ -94,6 +95,7 @@ from .. import admin as adminlib
 from .. import funding as fundinglib
 from .. import listings as listingslib
 from .. import utxos as utxoslib
+from .. import coinlist as coinlistlib
 from .. import doginals as doginalslib
 from .. import update as updatelib
 from ..messaging.keys import fingerprint_of
@@ -11820,7 +11822,161 @@ def create_app(state: AppState) -> FastAPI:
             out[chain.network] = {"address": address, "since": since,
                                   "coins": [{k: c[k] for k in ("txid", "vout", "value", "height")} for c in coins],
                                   "held": [list(o) for o in held]}
-        return JSONResponse({"tag": found["tag"], "chains": out})
+        # The account's whole coin list (2026-10-25, arcade/coinlist.py): every address it has on every chain -- the
+        # main one, its SegWit kinds, its imported wallets -- with the block ranges this index is complete over and
+        # the coins that carry an inscription marked. Public, as everything a chain says is (the operator: "Wallet
+        # information is already public"). `chains` above stays for arcades on older code.
+        return JSONResponse({"tag": found["tag"], "chains": out, "v": coinlistlib.VERSION,
+                             "lists": _coin_lists(found["pubkey"])})
+
+    def _coin_marks(db, address: str) -> dict[tuple[str, int], str]:
+        """(txid, vout) -> "ins:<txid>i<vout>" (or "ins:?" when it could not be read) for this address's coins that
+        carry an inscription: the same guard funding.choose spends around (`_inscribed`)."""
+        from .. import doginals as D
+        guard = fundinglib.guard_for(address)
+        if guard is None:
+            return {}
+        out = {}
+        for coin in utxoslib.unspent(db, address):
+            if int(coin["value"]) > D.TRACE_MAX:
+                continue
+            try:
+                on = guard.held(coin["txid"]).get(int(coin["vout"]))
+            except D.Unknown:
+                on = [{"unknown": True}]
+            if on:
+                first = on[0] if isinstance(on, list) and on else {}
+                ident = first.get("id") if isinstance(first, dict) else None
+                out[(coin["txid"], int(coin["vout"]))] = f"ins:{ident}" if ident else "ins:?"
+        return out
+
+    def _coin_lists(pubkey: str) -> dict[str, dict]:
+        """{network: {address: {"coins", "covered"}}} for every address of the account here (coinlist.listing)."""
+        who = types.SimpleNamespace(pubkey=pubkey)
+        out: dict[str, dict] = {}
+        for chain in _account_chains():
+            try:
+                addresses = list(_account_own_addresses(who, chain))
+                if not addresses:
+                    continue
+                index = state.token_index(chain)
+                tip = int(index.indexed_height() or 0)
+                with contextlib.closing(index.open()) as db:
+                    marks: dict = {}
+                    for a in addresses:
+                        try:
+                            marks.update(_coin_marks(db, a))
+                        except Exception:                   # noqa: BLE001 -- unmarked rather than no list
+                            pass
+                    out[chain.network] = coinlistlib.listing(db, addresses, tip, marks)
+            except Exception:                               # noqa: BLE001 -- a chain with no index here
+                continue
+        return out
+
+    _reconciled_at: dict[str, float] = {}
+
+    def _reconcile_coins(tag: str, hosts: list[str] | None = None) -> dict:
+        """2026-10-25: "any of the current arcade accounts that are held by more than one arcade. Like @apple
+        the UTXO's and balances cross arcade need to be reconciled." Every arcade that holds the account is asked for
+        its list; the lists are merged with this one; every coin this index does not have is CHECKED against this
+        arcade's chain (_file_checked_coins: unspent, in a block, paying that address) and filed; and the block ranges
+        the holders vouch for are added to this index's coverage. Only the account's own addresses here are read
+        from what others say. What no holder covers is a gap (coinlist.gaps), for the shared walk."""
+        found = state.vault().get(tag)
+        if found is None:
+            return {"tag": tag, "detail": "not held here"}
+        mine = _coin_lists(found["pubkey"])
+        heard: dict[str, list] = {}
+        asked = []
+        for host in (hosts if hosts is not None else _arcade_hosts()):
+            try:
+                r = _ask_arcade(f"https://{host}/signin/{urllib.parse.quote(found['tag'])}/coins", timeout=15,
+                                headers={"User-Agent": "arcade-node"})
+                if r.status_code != 200:
+                    continue
+                said = r.json()
+            except Exception:                               # noqa: BLE001 -- that arcade did not answer
+                continue
+            asked.append(host)
+            lists = said.get("lists") if isinstance(said.get("lists"), dict) else None
+            if lists is None:                               # an arcade on older code: its coins, no coverage
+                lists = {net: {row.get("address"): {"coins": [[c.get("txid"), c.get("vout"), c.get("value"),
+                                                                 c.get("height"), ""] for c in row.get("coins") or []],
+                                                     "covered": []}}
+                         for net, row in (said.get("chains") or {}).items() if isinstance(row, dict)}
+            for net, by_address in lists.items():
+                if isinstance(by_address, dict):
+                    heard.setdefault(net, []).append(by_address)
+        filed, covered = 0, 0
+        for chain in _account_chains():
+            own = mine.get(chain.network) or {}
+            if not own:
+                continue
+            merged = coinlistlib.merge([own] + heard.get(chain.network, []))
+            index = state.token_index(chain)
+            for address in own:
+                said = merged.get(address) or {}
+                have = {(c[0], c[1]) for c in own[address]["coins"]}
+                new = [{"txid": c[0], "vout": c[1]} for c in said.get("coins") or [] if (c[0], c[1]) not in have]
+                if new:
+                    try:
+                        filed += _file_checked_coins(state, chain, address, new)
+                    except Exception as exc:                # noqa: BLE001 -- the chain away: next time
+                        log.info("reconcile %s %s: %s", tag, address, exc)
+                ranges = said.get("covered") or []
+                if ranges and coinlistlib.union(ranges) != coinlistlib.union(own[address]["covered"]):
+                    with contextlib.closing(index.open()) as db:
+                        coinlistlib.mark_covered(db, address, ranges, "holders: " + ",".join(asked)[:200])
+                    covered += 1
+        _reconciled_at[tag] = time.time()
+        if filed or covered:
+            state.bump_generation()
+        return {"tag": found["tag"], "asked": asked, "filed": filed, "covered": covered}
+
+    state.reconcile_coins = _reconcile_coins
+
+    @app.post("/account/coins/reconcile")
+    def account_coins_reconcile(request: Request):
+        """The signed-in account's coins reconciled with every arcade that holds it (at most once a minute)."""
+        account = _signed_in_account(request)
+        found = state.vault().by_pubkey(account.pubkey) or {}
+        tag = found.get("tag") or ""
+        if not tag:
+            return JSONResponse({"detail": "this arcade keeps no wallet for your account"}, status_code=404)
+        if time.time() - _reconciled_at.get(tag, 0.0) < 60:
+            return JSONResponse({"tag": tag, "skipped": "reconciled less than a minute ago"})
+        return JSONResponse(_reconcile_coins(tag))
+
+    def _reconcile_everyone() -> None:
+        """Once per coin-list version (the operator: on update, all at once): every account this arcade holds,
+        reconciled with the other arcades that hold it, one at a time so the pages keep answering."""
+        key = f"coinlists_reconciled:v{coinlistlib.VERSION}"
+        if state.setting(key):
+            return
+        time.sleep(RECONCILE_DELAY)
+        try:
+            tags = [r[0] for r in state.vault().conn.execute("SELECT tag FROM vault ORDER BY made")]
+        except Exception as exc:                            # noqa: BLE001
+            log.warning("coin lists: no accounts to reconcile: %s", exc)
+            return
+        hosts = _arcade_hosts()
+        done = 0
+        for tag in tags:
+            try:
+                got = _reconcile_coins(tag, hosts)
+                done += 1
+                if got.get("filed") or got.get("covered"):
+                    log.info("coin lists: @%s reconciled with %s: %d coins filed, %d addresses' coverage grew",
+                             tag, ",".join(got.get("asked") or []) or "nobody", got.get("filed", 0),
+                             got.get("covered", 0))
+            except Exception as exc:                        # noqa: BLE001 -- one account does not stop the pass
+                log.info("coin lists: @%s: %s", tag, exc)
+            time.sleep(RECONCILE_PACE)
+        state.set_setting(key, int(time.time()))
+        log.info("coin lists: %d accounts reconciled", done)
+
+    if getattr(state, "home", None) is not None and not os.environ.get("ARCADE_NO_RECONCILE"):
+        threading.Thread(target=_reconcile_everyone, daemon=True, name="coin lists reconcile").start()
 
     @app.get("/signin/{tag}/activity")
     def signin_activity(request: Request, tag: str, chain: str = "", before: int | None = None, limit: int = 50):
@@ -33246,3 +33402,7 @@ IMPORT_CORES_MIN = 2
 CHECKED_COINS_MAX = 100_000
 #: Coins read in one batch while checking them.
 CHECKED_COINS_BATCH = 250
+#: Seconds after a start before the once-per-version reconcile of every account begins (the pages first), and between
+#: two accounts in it (coin lists, 2026-10-25).
+RECONCILE_DELAY = 180.0
+RECONCILE_PACE = 2.0

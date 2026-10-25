@@ -336,6 +336,9 @@ def install_schema(db: Database) -> None:
     # block back has to un-spend what that block spent (arcade/utxos.py).
     from . import utxos
     utxos.install(db)
+    # The block ranges each watched address's coins are complete over, beyond watching (arcade/coinlist.py).
+    from . import coinlist
+    coinlist.install(db)
     _rekey_moves(db)
     _file_collections(db)
 

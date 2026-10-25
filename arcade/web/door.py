@@ -385,7 +385,7 @@ PUBLIC_POST = ("/auth/challenge", "/auth/login", "/auth/logout",
                # signed verdict on one run, for the address its seed was issued to
                "/account/referee/attest", "/r/referee/attest",
                # an account brought from elsewhere: find the coins it already held
-               "/account/coins/backfill",
+               "/account/coins/backfill", "/account/coins/reconcile",
                # the pair that fills one of those listings: the first shows a
                # buyer the transaction, the second pastes its signatures onto
                # the seller's leg and broadcasts. Neither reaches
