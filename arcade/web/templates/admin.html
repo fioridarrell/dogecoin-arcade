@@ -16,6 +16,7 @@
   <button type="button" role="tab" data-tab="safety">Safety</button>
   <button type="button" role="tab" data-tab="network">Network</button>
   <button type="button" role="tab" data-tab="ords">Ords</button>
+  <button type="button" role="tab" data-tab="imports">Wallet imports</button>
   <button type="button" role="tab" data-tab="llm">LLM</button>
   <button type="button" role="tab" data-tab="meshtastic">Meshtastic</button>
   <button type="button" role="tab" data-tab="affiliates">Affiliates</button>
@@ -426,6 +427,189 @@
    checkmark to share on client side affiliate tab." Which URLs: "Arcade's names + ones I add". Then: "The second list
    should be a list of operators and their published URLs that they shared with the affiliates." arcade/affiliates.py;
    shared over the mesh in the operators "me" frame's `sites` (mesh/operators.py). #}
+{#- 2026-10-25: "Please add another admin panel specifically just for Wallet imports" (mock-up "Wallet imports",
+   arcade/coinlist.py, arcade/coinwalk.py): what is known for certain about each imported wallet, the shared walk that
+   finds the rest (every block read by two arcades, canaries in every part), the arcades that read for walks, the last
+   walks, the reconcile with other arcades, and the settings. No Core rescans. #}
+<div class="admintab" data-tab="imports" aria-label="Wallet imports">
+<style>
+.wim .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin:10px 0 4px}
+.wim .stat{border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.wim .stat b{display:block;font-size:1.4rem;margin-top:2px}
+.wim .stat span{color:var(--muted);font-size:.8rem}
+.wim .coins{display:flex;gap:6px;flex-wrap:wrap}
+.wim .coins button{font-size:.82rem;padding:5px 12px;border-radius:999px;border:1px solid var(--line);background:transparent;color:var(--fg)}
+.wim .coins button.on{border-color:var(--accent);color:var(--accent)}
+.wim .seg{display:grid;grid-template-columns:150px 1fr 1fr 130px;gap:8px;align-items:center;padding:7px 0;border-bottom:1px solid var(--line);font-size:.84rem}
+.wim .reader{display:flex;flex-direction:column;gap:3px;min-width:0}
+.wim .wbar{height:7px;border-radius:4px;background:var(--code);overflow:hidden}
+.wim .wbar i{display:block;height:100%;background:var(--accent)}
+.wim .wbar i.ok{background:var(--ok)} .wim .wbar i.bad{background:var(--bad)}
+.wim .cov{position:relative;height:16px;border-radius:5px;background:color-mix(in srgb,var(--bad) 35%,transparent);overflow:hidden;margin:6px 0 2px}
+.wim .cov i{position:absolute;top:0;bottom:0;background:var(--ok)}
+.wim table{width:100%;border-collapse:collapse;font-size:.84rem}
+.wim th,.wim td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+.wim th{color:var(--muted);font-weight:500;font-size:.76rem}
+.wim .toggle{display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--line);gap:12px}
+.wim .note{border-left:3px solid var(--warn);padding:8px 12px;border-radius:6px;font-size:.84rem;margin-top:10px;background:color-mix(in srgb,var(--warn) 10%,transparent)}
+.wim pre{background:var(--code);padding:8px 10px;border-radius:6px;overflow-x:auto;font-size:.8rem;margin:6px 0 0;white-space:pre-wrap;word-break:break-all}
+@media (max-width:640px){.wim .seg{grid-template-columns:1fr}}
+</style>
+<div class="wim">
+<section class="panel">
+  <h2>Wallet imports</h2>
+  <p class="muted" style="margin-top:-6px;font-size:.86rem">Imported wallets and every account's coin list: what the arcades know for certain, the
+    shared walks that find the rest, and the arcades that read for them. No Core rescans.</p>
+  <div class="coins" id="wim-coins" role="tablist" aria-label="Chain"></div>
+  <div class="stats" id="wim-stats"></div>
+  <span class="muted" id="wim-said" aria-live="polite"></span>
+</section>
+<section class="panel"><h2>The walk now</h2><div id="wim-walk"><p class="muted">Loading&hellip;</p></div></section>
+<section class="panel"><h2>Waiting</h2><div id="wim-waiting"></div></section>
+<section class="panel"><h2>Imported wallets here</h2><div id="wim-wallets"></div></section>
+<section class="panel"><h2>Arcades that read for walks</h2><div id="wim-readers"></div></section>
+<section class="panel"><h2>Recent walks</h2><div id="wim-history"></div></section>
+<section class="panel"><h2>Look up a wallet</h2>
+  <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
+    <input autocomplete="off" id="wim-q" type="search" style="flex:1 1 260px;min-width:0;font-size:16px" placeholder="an address on this chain" aria-label="Address">
+    <button type="button" class="small" id="wim-go">Look up</button>
+  </div>
+  <div id="wim-look"></div>
+</section>
+<section class="panel"><h2>Reconcile with other arcades</h2>
+  <p class="muted" style="margin-top:-6px;font-size:.86rem">Every account held here, merged with the arcades that hold it too, each coin checked on the chain.</p>
+  <div id="wim-rec"></div>
+  <div class="row" style="margin-top:10px"><button type="button" class="small" id="wim-recgo">Reconcile everyone again</button></div>
+</section>
+<section class="panel"><h2>Settings</h2><div id="wim-settings"></div></section>
+</div>
+</div>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var net = '', data = null;
+  function esc(t) { return String(t == null ? '' : t).replace(/[&<>"']/g, function (c) { return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]; }); }
+  function n(x) { return Number(x || 0).toLocaleString(); }
+  function when(t) { if (!t) return ''; var d = new Date(t * 1000); return d.toDateString() === new Date().toDateString() ? d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : d.toLocaleDateString(); }
+  function said(t, bad) { $('wim-said').textContent = t || ''; $('wim-said').style.color = bad ? 'var(--bad)' : ''; }
+  function post(body) {
+    return fetch('/admin/api/imports', {method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json', 'X-Arcade-Admin': '1'},
+      body: JSON.stringify(body)}).then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) {
+        if (r.status === 401) location.href = '/admin/login';
+        if (!r.ok) throw new Error(j.detail || ('refused (' + r.status + ')')); return j; }); });
+  }
+  function covBar(cov, tip) {
+    tip = Math.max(1, tip || 1);
+    return '<div class="cov">' + (cov || []).map(function (r) {
+      return '<i style="left:' + (100 * r[0] / tip).toFixed(2) + '%;width:' + Math.max(0.4, 100 * (r[1] - r[0] + 1) / tip).toFixed(2) + '%"></i>'; }).join('') + '</div>';
+  }
+  function short(a) { a = String(a || ''); return a.length > 20 ? a.slice(0, 10) + '…' + a.slice(-6) : a; }
+  function draw() {
+    var d = data;
+    $('wim-coins').innerHTML = (d.chains || []).map(function (c) {
+      return '<button type="button" data-net="' + esc(c.network) + '"' + (c.network === d.chain ? ' class="on"' : '') + '>' + esc(c.title) + '</button>'; }).join('');
+    var s = d.stats || {}, w = d.walk;
+    $('wim-stats').innerHTML = '<div class="stat"><span>Imported wallets here</span><b>' + n(s.wallets) + '</b><span>across ' + n(s.accounts) + ' accounts</span></div>'
+      + '<div class="stat"><span>Known for certain</span><b>' + n(s.certain) + '</b><span>whole past covered</span></div>'
+      + '<div class="stat"><span>Waiting for a walk</span><b>' + n(s.waiting) + '</b><span>join the next walk</span></div>'
+      + '<div class="stat"><span>Walk</span><b>' + (w ? n(w.done) + ' of ' + n(w.jobs) : 'idle') + '</b><span>' + (w ? 'parts done' : 'nothing to find') + '</span></div>';
+    if (!w) $('wim-walk').innerHTML = '<p class="muted">No walk is running on ' + esc(d.title) + '. One starts by itself when a wallet no arcade knows is imported here.</p>';
+    else {
+      var segs = {};
+      (w.parts || []).forEach(function (p) { (segs[p.segment] = segs[p.segment] || []).push(p); });
+      $('wim-walk').innerHTML = '<p class="muted" style="margin-top:-6px;font-size:.86rem">Blocks ' + n(w.hi) + ' down to ' + n(w.lo) + ' for ' + n(w.wallets)
+        + ' wallet' + (w.wallets === 1 ? '' : 's') + ' · started ' + when(w.began) + ' · ' + (w.readers || []).length + ' arcade' + ((w.readers || []).length === 1 ? '' : 's') + ', each block read by two</p>'
+        + Object.keys(segs).map(function (k) {
+          var ps = segs[k], top = ps[0].top, bottom = ps[0].bottom;
+          var cells = ps.map(function (p) {
+            var at = (p.progress && p.progress.height) ? Math.max(0, Math.min(100, 100 * (top - p.progress.height) / Math.max(1, top - bottom))) : 0;
+            var pct = p.state === 'reading' ? at : 100, cls = p.state === 'done' ? 'ok' : p.state === 'failed' ? 'bad' : '';
+            var tagp = p.state === 'done' ? '<span class="pill ok">✓ ' + (p.canaries || 0) + ' canar' + (p.canaries === 1 ? 'y' : 'ies') + '</span>'
+              : p.state === 'failed' ? '<span class="pill bad">✗ ' + esc(p.missed ? 'missed a canary' : (p.error || 'failed')) + '</span>' : '';
+            return '<div class="reader"><span>' + esc(p.reader === 'self' ? 'this arcade' : p.reader) + (p.progress && p.progress.how ? ' · ' + esc(p.progress.how) : '') + ' ' + tagp + '</span>'
+              + '<div class="wbar"><i class="' + cls + '" style="width:' + pct.toFixed(0) + '%"></i></div></div>';
+          }).join('');
+          var done = ps.every(function (p) { return p.state !== 'reading'; });
+          return '<div class="seg"><b>' + n(top) + ' – ' + n(bottom) + '</b>' + cells + (ps.length < 2 ? '<span></span>' : '')
+            + '<span class="pill' + (done ? ' ok' : '') + '">' + (done ? 'read' : 'reading') + '</span></div>';
+        }).join('');
+    }
+    $('wim-waiting').innerHTML = (d.waiting || []).length ? '<table><tr><th>Account</th><th>Wallet</th></tr>' + d.waiting.map(function (x) {
+      return '<tr><td>' + esc(x.tag ? '@' + x.tag : '') + '</td><td><code>' + esc(x.address) + '</code></td></tr>'; }).join('') + '</table>'
+      : '<p class="muted">Nothing waits.</p>';
+    $('wim-wallets').innerHTML = (d.wallets || []).length ? '<table><tr><th>Account</th><th>Wallet</th><th>Known for certain</th><th></th></tr>' + d.wallets.map(function (x) {
+      return '<tr><td>' + esc(x.tag ? '@' + x.tag : short(x.account)) + '</td><td><code>' + esc(short(x.address)) + '</code></td><td style="min-width:140px">'
+        + covBar(x.covered, d.tip) + '</td><td>' + (x.whole ? '<span class="pill ok">whole past</span>'
+        : '<button type="button" class="small ghost" data-walk="' + esc(x.address) + '">Walk its gaps</button>') + '</td></tr>'; }).join('') + '</table>'
+      : '<p class="muted">No wallet is imported on ' + esc(d.title) + ' here.</p>';
+    $('wim-readers').innerHTML = (d.readers || []).length ? '<table><tr><th>Arcade</th><th>Reads</th><th>Speed</th><th>Last part</th><th>Standing</th></tr>' + d.readers.map(function (r) {
+      return '<tr><td>' + esc(r.reader === 'self' ? 'this arcade' : r.reader) + '</td><td>' + esc(r.how === 'files' ? 'block files' : r.how === 'rpc' ? 'RPC' : r.how || '') + '</td><td>'
+        + (r.blocks_per_s ? n(Math.round(r.blocks_per_s)) + ' blocks/s' : '') + '</td><td>' + when(r.at) + '</td><td>'
+        + (r.resting ? '<span class="pill bad">resting ' + Math.ceil(r.resting / 60) + ' min</span>' : '<span class="pill ok">good</span>') + '</td></tr>'; }).join('') + '</table>'
+      : '<p class="muted">No walk has run since the arcade started.</p>';
+    $('wim-history').innerHTML = (d.history || []).length ? '<table><tr><th>Started</th><th>Wallets</th><th>Blocks</th><th>Readers</th><th>Coins found</th><th>Re-read</th><th>Result</th></tr>' + d.history.map(function (h) {
+      var mins = Math.max(1, Math.round((h.ended - h.began) / 60));
+      return '<tr><td>' + when(h.began) + '</td><td>' + n(h.wallets) + '</td><td>' + n(h.hi) + ' – ' + n(h.lo) + '</td><td>' + n(h.readers) + '</td><td>' + n(h.found)
+        + ' (' + n(h.filed) + ' unspent)</td><td>' + n(h.redone) + '</td><td>' + (h.whole ? '<span class="pill ok">whole past · ' + mins + ' min</span>'
+        : '<span class="pill warn">' + n(h.failed) + ' part' + (h.failed === 1 ? '' : 's') + ' failed · queued again</span>') + '</td></tr>'; }).join('') + '</table>'
+      : '<p class="muted">No walk yet.</p>';
+    var rec = (d.reconcile || {}).last;
+    $('wim-rec').innerHTML = (d.reconcile || {}).running ? '<p><span class="pill warn">running now</span></p>' : rec
+      ? '<table><tr><th>Last pass</th><th>Accounts</th><th>Arcades asked</th><th>Coins filed</th><th>Coverage grew</th></tr><tr><td>v' + esc(rec.v) + ' · ' + when(rec.at)
+        + '</td><td>' + n(rec.accounts) + '</td><td>' + n(rec.hosts) + '</td><td>' + n(rec.filed) + '</td><td>' + n(rec.covered) + ' addresses</td></tr></table>'
+      : '<p class="muted">The first pass runs by itself a few minutes after this release starts.</p>';
+    var st = d.settings || {}, f = d.files || {};
+    $('wim-settings').innerHTML = '<div class="toggle"><div><b>Shared walk for imports on ' + esc(d.title) + '</b><br><span class="muted" style="font-size:.84rem">Find an imported wallet\'s coins by walking the blocks with the other arcades (instead of a Core rescan).</span></div>'
+      + '<input type="checkbox" id="wim-walkon"' + (st.walk ? ' checked' : '') + '></div>'
+      + '<div class="toggle"><div><b>Read for other arcades\' walks</b><br><span class="muted" style="font-size:.84rem">Lend this machine\'s disk and cores to walks other arcades start.</span></div>'
+      + '<input type="checkbox" id="wim-lend"' + (st.lend ? ' checked' : '') + '></div>'
+      + '<div class="toggle"><div><b>Most arcades in one walk</b><br><span class="muted" style="font-size:.84rem">More arcades finish sooner; every block is read by two whatever the number.</span></div>'
+      + '<input type="number" id="wim-most" min="2" max="32" value="' + esc(st.readers_max) + '" style="width:70px"></div>'
+      + (f.borrowed ? '<div class="note">This arcade borrows ' + esc(d.title) + ' from another arcade: it reads its part of a walk over the mesh (slow); arcades with their own node read the rest.</div>'
+        : !f.known ? '<div class="note">' + esc(d.title) + '\'s blocks are read through its node (the block-file reader does not know this chain\'s blocks).</div>'
+        : !f.readable ? '<div class="note"><b>This arcade reads ' + esc(d.title) + ' over RPC (slow).</b> Its node\'s block files are not readable by the arcade. One command lets it read them directly (many times faster):'
+          + '<pre>sudo setfacl -R -m u:' + esc(f.user || '$USER') + ':rX ' + esc(f.dir) + ' &amp;&amp; sudo setfacl -R -d -m u:' + esc(f.user || '$USER') + ':rX ' + esc(f.dir) + '</pre></div>'
+        : '<p class="muted" style="font-size:.84rem;margin:10px 0 0">This arcade reads ' + esc(d.title) + '\'s block files directly (' + esc(f.dir) + ').</p>');
+  }
+  function load(force) {
+    if (!force && !document.querySelector('.admintab[data-tab="imports"].on')) return;
+    fetch('/admin/api/imports' + (net ? '?chain=' + encodeURIComponent(net) : ''), {credentials: 'same-origin', headers: {'X-Arcade-Admin': '1'}})
+      .then(function (r) { if (r.status === 401) location.href = '/admin/login'; return r.json(); })
+      .then(function (j) { data = j; net = j.chain || net; draw(); })
+      .catch(function (e) { said('Could not load: ' + e.message, true); });
+  }
+  document.addEventListener('click', function (e) {
+    var c = e.target.closest('#wim-coins button'); if (c) { net = c.dataset.net; load(true); return; }
+    var w = e.target.closest('[data-walk]'); if (w) { post({do: 'walk', chain: net, address: w.dataset.walk}).then(function () { said('Queued for the next walk.'); load(true); }, function (err) { said(err.message, true); }); return; }
+    if (e.target.id === 'wim-recgo') post({do: 'reconcile'}).then(function () { said('Reconciling every account with the other arcades.'); load(true); }, function (err) { said(err.message, true); });
+    if (e.target.id === 'wim-go') {
+      var q = $('wim-q').value.trim(); if (!q) return;
+      fetch('/admin/api/imports/lookup?chain=' + encodeURIComponent(net) + '&q=' + encodeURIComponent(q), {credentials: 'same-origin', headers: {'X-Arcade-Admin': '1'}})
+        .then(function (r) { return r.json(); }).then(function (j) {
+          if (j.detail) { $('wim-look').innerHTML = '<p class="muted">' + esc(j.detail) + '</p>'; return; }
+          var who = j.owner ? '<b>@' + esc(j.owner.tag || '') + '</b>\'s ' + (j.owner.own ? 'own' : 'imported') + ' wallet' : 'Not an account\'s wallet here';
+          $('wim-look').innerHTML = '<p style="margin:10px 0 0;font-size:.86rem">' + who + ' · ' + n(j.coins) + ' coins · ' + (j.sats / 1e8).toLocaleString(undefined, {maximumFractionDigits: 8})
+            + (j.marked ? ' (' + n(j.marked) + ' carry inscriptions)' : '') + '</p>' + covBar(j.covered, j.tip)
+            + '<div class="row muted" style="justify-content:space-between;font-size:.78rem"><span>block 0</span><span>tip ' + n(j.tip) + '</span></div>'
+            + (j.gaps.length ? '<p style="font-size:.84rem;margin:6px 0 0">' + j.gaps.slice(0, 4).map(function (g) { return '<span class="pill warn">gap ' + n(g[0]) + ' – ' + n(g[1]) + '</span>'; }).join(' ')
+              + (j.waiting ? ' · in the next walk' : ' <button type="button" class="small ghost" data-walk="' + esc(j.address) + '">Walk its gaps</button>') + '</p>'
+              : '<p style="font-size:.84rem;margin:6px 0 0"><span class="pill ok">whole past known for certain</span></p>');
+        });
+    }
+  });
+  document.addEventListener('change', function (e) {
+    var body = null;
+    if (e.target.id === 'wim-walkon') { body = {do: 'set'}; body['walk_' + net] = e.target.checked; }
+    if (e.target.id === 'wim-lend') body = {do: 'set', lend: e.target.checked};
+    if (e.target.id === 'wim-most') body = {do: 'set', readers_max: Number(e.target.value) || 8};
+    if (body) post(body).then(function () { said('Saved.'); }, function (err) { said(err.message, true); });
+  });
+  document.querySelectorAll('.admintabs button[data-tab="imports"]').forEach(function (b) { b.addEventListener('click', function () { load(true); }); });
+  setInterval(function () { if (!document.hidden) load(); }, 5000);
+  load();
+})();
+</script>
+
 {#- 2026-10-23: "There should be a admin LLM tab, where I can enter my local LLM server and decide how much I
    want to charge per LLM token" (arcade/llm.py, web/llmweb.py; approved mock-up "LLM Exchange Mock-up"). #}
 <div class="admintab" data-tab="llm" aria-label="LLM">

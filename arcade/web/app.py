@@ -27,6 +27,7 @@ import sqlite3
 import urllib.parse
 import shutil
 import sys
+import getpass
 import os
 import tempfile
 import types
@@ -11993,24 +11994,32 @@ def create_app(state: AppState) -> FastAPI:
             return JSONResponse({"tag": tag, "skipped": "reconciled less than a minute ago"})
         return JSONResponse(_reconcile_coins(tag))
 
-    def _reconcile_everyone() -> None:
+    _reconciling = threading.Event()
+
+    def _reconcile_everyone(force: bool = False) -> None:
         """Once per coin-list version (the operator: on update, all at once): every account this arcade holds,
         reconciled with the other arcades that hold it, one at a time so the pages keep answering."""
         key = f"coinlists_reconciled:v{coinlistlib.VERSION}"
-        if state.setting(key):
+        if state.setting(key) and not force:
             return
-        time.sleep(RECONCILE_DELAY)
+        if not force:
+            time.sleep(RECONCILE_DELAY)
+        _reconciling.set()
         try:
             tags = [r[0] for r in state.vault().conn.execute("SELECT tag FROM vault ORDER BY made")]
         except Exception as exc:                            # noqa: BLE001
             log.warning("coin lists: no accounts to reconcile: %s", exc)
+            _reconciling.clear()
             return
         hosts = _arcade_hosts()
         done = 0
+        totals = {"filed": 0, "covered": 0}
         for tag in tags:
             try:
                 got = _reconcile_coins(tag, hosts)
                 done += 1
+                totals["filed"] += int(got.get("filed") or 0)
+                totals["covered"] += int(got.get("covered") or 0)
                 if got.get("filed") or got.get("covered"):
                     log.info("coin lists: @%s reconciled with %s: %d coins filed, %d addresses' coverage grew",
                              tag, ",".join(got.get("asked") or []) or "nobody", got.get("filed", 0),
@@ -12018,7 +12027,10 @@ def create_app(state: AppState) -> FastAPI:
             except Exception as exc:                        # noqa: BLE001 -- one account does not stop the pass
                 log.info("coin lists: @%s: %s", tag, exc)
             time.sleep(RECONCILE_PACE)
+        _reconciling.clear()
         state.set_setting(key, int(time.time()))
+        state.set_setting("coinlists_reconcile_last", {"at": int(time.time()), "v": coinlistlib.VERSION,
+                                                       "accounts": done, "hosts": len(hosts), **totals})
         log.info("coin lists: %d accounts reconciled", done)
 
     if getattr(state, "home", None) is not None and not os.environ.get("ARCADE_NO_RECONCILE"):
@@ -25770,6 +25782,8 @@ def create_app(state: AppState) -> FastAPI:
     _walk_pending: dict[str, set] = {}
     _walk_running: dict[str, dict] = {}
     _walk_resting: dict[str, float] = {}
+    _walk_seen: dict[str, dict] = {}                      # reader -> how it read last, when, how fast
+    _walk_history: list[dict] = []                        # the last walks, newest first
 
     def _walk_chain_by(network: str):
         return next((c for c in _account_chains() if c.network == network), None)
@@ -25778,7 +25792,7 @@ def create_app(state: AppState) -> FastAPI:
     def coins_walk_can(request: Request, chain: str = ""):
         """Whether this arcade reads `chain`'s blocks for another's walk, and how (its node's files, or RPC)."""
         picked = _walk_chain_by(chain)
-        if picked is None or not _readable(picked) or picked.borrowed:
+        if picked is None or not _readable(picked) or picked.borrowed or state.setting("walk_lend", True) is False:
             return JSONResponse({"chain": chain, "files": False, "rpc": False})
         return JSONResponse({"chain": chain, **_walk_reader.can(picked),
                              "tip": state.token_index(picked).indexed_height() or 0})
@@ -25791,7 +25805,7 @@ def create_app(state: AppState) -> FastAPI:
             return JSONResponse({"detail": "too many in a row. Wait a few minutes."}, status_code=429)
         said = payload if isinstance(payload, dict) else {}
         picked = _walk_chain_by(str(said.get("chain") or ""))
-        if picked is None or picked.borrowed or not _readable(picked):
+        if picked is None or picked.borrowed or not _readable(picked) or state.setting("walk_lend", True) is False:
             return JSONResponse({"detail": "this arcade does not read that chain for others"}, status_code=404)
         try:
             top, bottom = int(said["top"]), int(said["bottom"])
@@ -25830,7 +25844,8 @@ def create_app(state: AppState) -> FastAPI:
                 files.append(host)
             elif said.get("rpc"):
                 rpc_only.append(host)
-        readers = files[:WALK_READERS_MAX]
+        most = int(state.setting("walk_readers_max", WALK_READERS_MAX) or WALK_READERS_MAX)
+        readers = files[:most]
         if len(readers) < 2:
             readers += rpc_only[:2 - len(readers)]
         return readers
@@ -25885,23 +25900,35 @@ def create_app(state: AppState) -> FastAPI:
         if not readers:
             raise RuntimeError(f"nobody can read {chain.title} right now")
         jobs = coinlistlib.segments(lo, hi, readers)
-        progress.update({"readers": readers, "jobs": len(jobs), "done": 0})
+        parts = [{"segment": j["segment"], "reader": j["reader"], "top": j["top"], "bottom": j["bottom"],
+                  "state": "reading", "progress": {}} for j in jobs]
+        progress.update({"readers": readers, "jobs": len(jobs), "done": 0, "parts": parts, "lo": lo, "hi": hi,
+                         "wallets": len(addresses), "began": time.time()})
         results: dict[int, dict] = {}
         lock = threading.Lock()
 
         def run(i: int, job: dict) -> None:
             canaries = _walk_canaries(chain, job["top"], job["bottom"], set(addresses))
             asked = addresses + [c[2] for c in canaries]
-            mine: dict = {}
+            mine = parts[i]["progress"]
+            parts[i]["canaries"] = len(canaries)
+            took = time.time()
             try:
                 found = _walk_job(chain, job["reader"], job["top"], job["bottom"], asked, mine)
                 missing = coinlistlib.canaries_missing(found, canaries)
                 out = {"ok": not missing, "found": found, "missing": missing}
             except Exception as exc:                        # noqa: BLE001 -- the segment goes to somebody else
                 out = {"ok": False, "error": str(exc)[:200], "found": []}
+            took = max(0.001, time.time() - took)
             with lock:
                 results[i] = {**job, **out, "canaries": len(canaries)}
                 progress["done"] = progress.get("done", 0) + 1
+                parts[i].update({"state": "done" if out["ok"] else "failed", "missed": len(out.get("missing") or []),
+                                 "error": out.get("error", ""), "seconds": round(took, 1),
+                                 "matches": len([m for m in out["found"] if m[4] in set(addresses)])})
+                seen = _walk_seen.setdefault(job["reader"], {})
+                seen.update({"at": time.time(), "how": mine.get("how") or seen.get("how", ""),
+                             "blocks_per_s": round((job["top"] - job["bottom"] + 1) / took, 1)})
 
         threads = [threading.Thread(target=run, args=(i, j), daemon=True, name=f"walk {chain.network} {j['reader']}")
                    for i, j in enumerate(jobs)]
@@ -25959,8 +25986,14 @@ def create_app(state: AppState) -> FastAPI:
                     coinlistlib.mark_covered(db, address, verified, "shared walk: " + ",".join(readers)[:200])
         log.info("shared walk %s %d..%d for %d addresses: readers %s, %d coins filed, %d segments re-read, %d failed",
                  chain.network, lo, hi, len(addresses), ",".join(readers), filed, len(redone), len(failed))
-        return {"readers": readers, "filed": filed, "verified": [list(v) for v in coinlistlib.union(verified)],
-                "redone": redone, "failed": failed}
+        got = {"readers": readers, "filed": filed, "verified": [list(v) for v in coinlistlib.union(verified)],
+               "redone": redone, "failed": failed}
+        _walk_history.insert(0, {"chain": chain.network, "began": progress.get("began"), "ended": time.time(),
+                                 "wallets": len(addresses), "lo": lo, "hi": hi, "readers": len(readers),
+                                 "found": len(keep), "filed": filed, "redone": len(redone), "failed": len(failed),
+                                 "whole": coinlistlib.covers(got["verified"], lo, hi)})
+        del _walk_history[WALK_HISTORY:]
+        return got
 
     state.shared_walk = _shared_walk
     state.walk_resting = _walk_resting
@@ -26008,6 +26041,128 @@ def create_app(state: AppState) -> FastAPI:
                 _rescan_queue_wake()
 
         threading.Thread(target=go, daemon=True, name=f"shared walk {chain.network}").start()
+
+    # --- Admin -> Wallet imports (2026-10-25: "add another admin panel specifically just for Wallet imports") --
+    def _imports_of(network: str) -> list[dict]:
+        """Every imported wallet on `network` held here: {account, tag, address, registered}."""
+        prefix = f"extra_address:{network}:"
+        out = []
+        for name, value in state.settings().items():
+            if not name.startswith(prefix):
+                continue
+            pubkey = name[len(prefix):]
+            tag = (state.vault().by_pubkey(pubkey) or {}).get("tag") or ""
+            for e in importslib.entries(value):
+                out.append({"account": pubkey, "tag": tag, "address": e["a"], "registered": e.get("t")})
+        return out
+
+    @app.get("/admin/api/imports")
+    def admin_imports(request: Request, chain: str = ""):
+        """Admin -> Wallet imports: the chain's imported wallets and how much of each is known for certain, the walk
+        now, what waits for the next one, the arcades that read for walks, the last walks, the reconcile, settings."""
+        _admin_check(request)
+        chains = [{"network": c.network, "title": c.title} for c in _account_chains()]
+        picked = _walk_chain_by(chain) or (_account_chains()[0] if _account_chains() else None)
+        if picked is None:
+            return JSONResponse({"chains": chains})
+        net = picked.network
+        index = state.token_index(picked)
+        tip = int(index.indexed_height() or 0)
+        wallets = _imports_of(net)
+        certain = 0
+        with contextlib.closing(index.open()) as db:
+            for w in wallets:
+                cov = coinlistlib.coverage(db, w["address"], tip)
+                w["covered"] = [list(r) for r in cov]
+                w["whole"] = coinlistlib.covers(cov, 0, tip) or _rescan_done(picked, w["address"])
+                certain += 1 if w["whole"] else 0
+        run = _walk_running.get(net)
+        live = None
+        if run is not None:
+            p = (next((r for r in _backfill_runs.values() if r.get("walk") and r.get("network") == net), run)
+                 .get("progress") or {})
+            live = {k: p.get(k) for k in ("readers", "jobs", "done", "parts", "lo", "hi", "wallets", "began")}
+        waiting = sorted(_walk_pending.get(net) or ()) + sorted(a for (n, a) in _rescan_queue if n == net)
+        tags = {w["address"]: w["tag"] for w in wallets}
+        readers = []
+        for who, seen in sorted(_walk_seen.items()):
+            rest = _walk_resting.get(who, 0.0)
+            readers.append({"reader": who, **seen, "resting": max(0, int(rest + WALK_REST - time.time()))})
+        try:
+            mine = _walk_reader.can(picked)
+        except Exception:                                   # noqa: BLE001
+            mine = {"files": False}
+        return JSONResponse({
+            "chains": chains, "chain": net, "title": picked.title, "tip": tip,
+            "stats": {"wallets": len(wallets), "accounts": len({w["account"] for w in wallets}), "certain": certain,
+                      "waiting": len(waiting)},
+            "walk": live, "waiting": [{"address": a, "tag": tags.get(a, "")} for a in dict.fromkeys(waiting)],
+            "readers": readers, "history": [h for h in _walk_history if h["chain"] == net][:WALK_HISTORY],
+            "reconcile": {"last": state.setting("coinlists_reconcile_last", None), "running": _reconciling.is_set()},
+            "settings": {"walk": _walk_on(picked), "lend": state.setting("walk_lend", True) is not False,
+                         "readers_max": int(state.setting("walk_readers_max", WALK_READERS_MAX) or WALK_READERS_MAX)},
+            "files": {"readable": bool(mine.get("files")), "dir": str(coinwalklib.blocks_dir(picked) or ""),
+                      "user": getpass.getuser(),
+                      "borrowed": bool(picked.borrowed), "known": coinwalklib.files_ok(picked.params)},
+            "wallets": sorted(wallets, key=lambda w: (w["whole"], w["tag"]))[:500],
+        })
+
+    @app.get("/admin/api/imports/lookup")
+    def admin_imports_lookup(request: Request, chain: str = "", q: str = ""):
+        """One address: whose it is here, its coins and balance, and the block ranges known for certain (the rest is
+        a gap the next walk reads)."""
+        _admin_check(request)
+        picked = _walk_chain_by(chain)
+        address = q.strip()
+        if picked is None or not address:
+            return JSONResponse({"detail": "a chain and an address"}, status_code=400)
+        index = state.token_index(picked)
+        tip = int(index.indexed_height() or 0)
+        with contextlib.closing(index.open()) as db:
+            coins = utxoslib.unspent(db, address)
+            cov = coinlistlib.coverage(db, address, tip)
+            marks = _coin_marks(db, address)
+        owner = next((w for w in _imports_of(picked.network) if w["address"] == address), None)
+        if owner is None:
+            for row in state.vault().conn.execute("SELECT tag, pubkey FROM vault"):
+                if address in _account_own_addresses(types.SimpleNamespace(pubkey=row[1]), picked):
+                    owner = {"tag": row[0], "account": row[1], "own": True}
+                    break
+        return JSONResponse({"address": address, "chain": picked.network, "tip": tip, "owner": owner,
+                             "coins": len(coins), "sats": sum(int(c["value"]) for c in coins), "marked": len(marks),
+                             "covered": [list(r) for r in cov], "gaps": [list(g) for g in coinlistlib.gaps(cov, 0, tip)],
+                             "waiting": address in (_walk_pending.get(picked.network) or ())})
+
+    @app.post("/admin/api/imports")
+    def admin_imports_do(request: Request, payload: Any = Body(None)):
+        """Wallet imports actions: {"do": "reconcile"} (everyone, again), {"do": "walk", "chain", "address"} (fill a
+        wallet's gaps in the next walk), {"do": "set", "walk_<net>"|"lend"|"readers_max": value}."""
+        _admin_check(request, write=True)
+        said = payload if isinstance(payload, dict) else {}
+        do = said.get("do")
+        if do == "reconcile":
+            if _reconciling.is_set():
+                return JSONResponse({"detail": "a reconcile is already running"}, status_code=409)
+            threading.Thread(target=_reconcile_everyone, kwargs={"force": True}, daemon=True,
+                             name="coin lists reconcile (admin)").start()
+            return JSONResponse({"started": True})
+        if do == "walk":
+            picked = _walk_chain_by(str(said.get("chain") or ""))
+            address = str(said.get("address") or "").strip()
+            if picked is None or not address:
+                return JSONResponse({"detail": "a chain and an address"}, status_code=400)
+            _walk_start(picked, address)
+            return JSONResponse({"queued": address})
+        if do == "set":
+            for k, v in said.items():
+                if k.startswith("walk_") and _walk_chain_by(k[5:]) is not None:
+                    state.set_setting(f"import_walk:{k[5:]}", bool(v))
+                elif k == "lend":
+                    state.set_setting("walk_lend", bool(v))
+                elif k == "readers_max":
+                    state.set_setting("walk_readers_max", max(2, min(32, int(v))))
+            return JSONResponse({"saved": True})
+        return JSONResponse({"detail": "reconcile, walk or set"}, status_code=400)
 
     def _walk_on(chain) -> bool:
         said = state.setting(f"import_walk:{chain.network}", None)
@@ -33733,3 +33888,5 @@ WALK_READERS_MAX = 8
 WALK_JOB_SECONDS = 4 * 3600.0
 WALK_POLL = 5.0
 WALK_REST = 3600.0
+#: Walks the admin's Wallet imports tab lists.
+WALK_HISTORY = 30

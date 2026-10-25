@@ -149,3 +149,27 @@ def test_the_browsers_copy_is_listed_and_merged_checked(tmp_path, no_nodes, monk
     listed = client.get("/account/coins/list").json()["lists"][here.messaging.network]
     assert [c[0] for c in listed[ADDR]["coins"]] == ["aa" * 32] and "nSomebodyElsesAddressXXXXXXXXXXXXXX" not in listed
     assert client.post("/account/coins/merge", json={"lists": copy}).json().get("skipped"), "once a minute"
+
+
+def test_admin_wallet_imports_tab(tmp_path, no_nodes, monkeypatch):
+    """2026-10-25: "add another admin panel specifically just for Wallet imports"."""
+    here, client = _arcade(tmp_path, "here")
+    LOCAL, WRITE = {"host": "127.0.0.1:8420"}, {"x-arcade-admin": "1"}
+    net = here.messaging.network
+    here.set_setting(f"extra_address:{net}:{PUB}", [{"a": ADDR, "k": "p2pkh", "p": "", "t": 1}])
+    here.vault().put("wanderer", PUB, "nMainAddressXXXXXXXXXXXXXXXXXXXXXXX", json.dumps(BLOB))
+    with contextlib.closing(here.token_index(here.messaging).open()) as db:
+        utxos.watch(db, ADDR, 0, why="test")
+        db.conn.execute("INSERT INTO utxo VALUES (?,?,?,?,?)", ("aa" * 32, 0, ADDR, 5 * 10**8, 20))
+        db.conn.commit()
+    said = client.get(f"/admin/api/imports?chain={net}", headers=LOCAL).json()
+    assert said["chain"] == net and said["stats"]["wallets"] == 1 and said["stats"]["accounts"] == 1
+    assert said["wallets"][0]["tag"] == "wanderer" and said["walk"] is None and "user" in said["files"]
+    look = client.get(f"/admin/api/imports/lookup?chain={net}&q={ADDR}", headers=LOCAL).json()
+    assert look["owner"]["tag"] == "wanderer" and look["coins"] == 1 and look["sats"] == 5 * 10**8
+    assert client.post("/admin/api/imports", headers={**LOCAL, **WRITE},
+                       json={"do": "set", f"walk_{net}": False, "lend": False, "readers_max": 3}).json() == {"saved": True}
+    st = client.get(f"/admin/api/imports?chain={net}", headers=LOCAL).json()["settings"]
+    assert st == {"walk": False, "lend": False, "readers_max": 3}
+    assert client.get(f"/coins/walk/can?chain={net}").json()["files"] is False, "not lent when lending is off"
+    assert client.get("/admin/api/imports", headers={"host": "node.example.com", "cf-ray": "x"}).status_code in (401, 403, 404)
