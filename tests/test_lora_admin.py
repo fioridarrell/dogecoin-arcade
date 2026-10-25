@@ -176,6 +176,17 @@ def test_admin_routes_need_the_admin_and_save_the_settings(client, radio, monkey
     assert app.post("/admin/api/lora", json={"enabled": False}, headers=WRITE).status_code == 200
     page = app.get("/admin", headers=LOCAL).text
     assert 'data-tab="meshtastic"' in page and "Flash a T-Deck" in page and "/vendor/esptool.js" in page
+    # The flasher (2026-10-24): only Espressif's own USB is offered, so the gateway's Heltec (behind a USB bridge)
+    # can never be picked; the port is asked for first, inside the click, before the 3 MB fetch; no byte tracing;
+    # and the steps say to switch the T-Deck on (switch down) while holding the trackball.
+    flasher = page[page.index("async function flash("):page.index('$("lora-flash-full").onclick')]
+    assert "requestPort({filters: [{usbVendorId: 0x303a}]})" in flasher and "requestPort({})" not in flasher
+    assert flasher.index("requestPort(") < flasher.index("await fetch(") < flasher.index('import("/vendor/esptool.js")')
+    assert flasher.split("await navigator.serial.requestPort(")[0].count("await ") == 0, \
+        "nothing is awaited before the picker opens"
+    assert "new Transport(port, false)" in flasher and "new Transport(port, true)" not in flasher
+    steps = page[page.index("The first flash"):page.index("lora-flash-full")]
+    assert steps.index("Hold the trackball down") < steps.index("switch it on (switch down)") < steps.index("wait 2 seconds")
 
 
 def test_the_lora_badge_travels_in_the_operators_frame():

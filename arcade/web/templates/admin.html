@@ -1051,9 +1051,10 @@
   <details style="margin-top:12px" open>
     <summary style="cursor:pointer;font-weight:650">The first flash (a T-Deck still on stock Meshtastic)</summary>
     <ol>
-      <li>Switch the T-Deck on.</li>
-      <li>Hold the trackball down, plug in the USB cable, and let go after 2 seconds. It is now in flash mode (the screen stays dark).</li>
-      <li>Press <b>Install the firmware</b> and pick the T-Deck's port (usually <span class="mono">USB JTAG/serial debug unit</span>).</li>
+      <li>Start with the T-Deck switched off (switch up).</li>
+      <li>Hold the trackball down and plug in the USB cable.</li>
+      <li>Still holding the trackball, switch it on (switch down), wait 2 seconds, then let go. It is now in flash mode (the screen stays dark).</li>
+      <li>Press <b>Install the firmware</b> and pick the T-Deck's port (usually <span class="mono">USB JTAG/serial debug unit</span>). Only T-Decks are offered, never the gateway's radio.</li>
       <li>When it says done, unplug and plug it in again, or press its reset.</li>
     </ol>
     <p class="muted" style="font-size:.85rem;margin:8px 0 0">Once the arcade firmware is on, a T-Deck goes into flash mode by itself: plug it in and press either button.</p>
@@ -1166,6 +1167,18 @@ async function flash(which) {
   const part = fw[which];
   if (!part) { said.textContent = `This release has no ${which} image.`; return; }
   const buttons = [$("lora-flash-full"), $("lora-flash-app")];
+  // The port first, while the click still counts: Chrome opens its picker only within a few seconds of a click,
+  // and fetching 3 MB over a slow link to a remote arcade can take longer. Only Espressif's own USB (vendor 0x303a,
+  // a T-Deck's "USB JTAG/serial debug unit") is offered, so the gateway's radio (a Heltec, ESP32-S3 behind a
+  // CP2102 or CH340 bridge) can never be picked and overwritten by mistake.
+  let port;
+  try { port = await navigator.serial.requestPort({filters: [{usbVendorId: 0x303a}]}); }
+  catch (e) {
+    said.textContent = e && e.name === "NotFoundError"
+      ? "No T-Deck picked. If none was listed, it is not in flash mode or not plugged in: see the steps above."
+      : `Not flashed: ${e.message || e}`;
+    return;
+  }
   buttons.forEach((b) => b.disabled = true);
   $("lora-flash-log").textContent = "";
   let transport = null;
@@ -1177,10 +1190,8 @@ async function flash(which) {
     const sha = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
     if (sha !== String(part.sha256).toLowerCase()) throw new Error("the firmware did not match its sha256: nothing was written");
     flashLog(`${part.file}: ${bytes.length.toLocaleString()} bytes, sha256 ${sha.slice(0, 16)}… checked`);
-    said.textContent = "Pick the T-Deck's port…";
     const {ESPLoader, Transport} = await import("/vendor/esptool.js");
-    const port = await navigator.serial.requestPort({});
-    transport = new Transport(port, true);
+    transport = new Transport(port, false);              // no tracing: it logs every byte of a 3 MB write
     const terminal = {clean() {}, writeLine: (d) => flashLog(d), write: (d) => flashLog(d)};
     const loader = new ESPLoader({transport, baudrate: 921600, terminal});
     said.textContent = "Talking to the T-Deck…";

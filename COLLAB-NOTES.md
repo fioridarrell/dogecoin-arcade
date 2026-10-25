@@ -88,6 +88,19 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-24 Admin -> Meshtastic flasher: only T-Decks in the port picker, the port asked for first, no tracing, the right steps (Claude)
+The operator: "make the fixes first" (before flashing a T-Deck from the page), and "You have to hold the Meshtastic ball down, plug it
+in and then turn it on and wait for two seconds ... The on position is with the switch down". Branch `claude/flasher-fixes`.
+- admin.html `flash()`: `navigator.serial.requestPort({filters: [{usbVendorId: 0x303a}]})`, so only Espressif's own USB
+  (a T-Deck's "USB JTAG/serial debug unit") is offered. The gateway's Heltec V3 is also an ESP32-S3, behind a CP2102 (.25:
+  /dev/ttyUSB0), and Linux let Chrome open it while the gateway held it, so a wrong pick wrote T-Deck firmware onto the radio.
+- The picker is asked for first, inside the click, before the 3 MB fetch: Chrome opens it only within ~5 s of a click, which a
+  slow remote link could pass. Cancelling says why a T-Deck may be missing from the list.
+- `new Transport(port, false)`: tracing logged and kept every byte of the write.
+- The first-flash steps: switched off (switch up), hold the trackball, plug in, switch on (switch down), 2 s, let go.
+- Tests: test_lora_admin (the filter, nothing awaited before the picker, no tracing, the steps' order). Checked in Firefox
+  with a stand-in picker: asked first with the filter; cancel; a port: fetch, sha256 checked, esptool connecting.
+
 ### 2026-10-24 Contacts test reads only contactsChange (Claude)
 The node-hop door (`accessDoor`, from `team/in-game-wallet-access`) sits between `contactsChange` and the message
 listener in `_page_doors.js.html`, so `test_contacts_bridge` counted its "Play ... on ...?" card as a third contacts
