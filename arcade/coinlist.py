@@ -38,6 +38,8 @@ CREATE TABLE IF NOT EXISTS covered (
 
 #: A list's version: a receiving arcade reads only what it knows.
 VERSION = 1
+#: Coins one browser copy may hand the node to check in one sign-in.
+BROWSER_COINS_MAX = 20_000
 
 
 def install(db) -> None:

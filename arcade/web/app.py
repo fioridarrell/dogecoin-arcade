@@ -11938,6 +11938,49 @@ def create_app(state: AppState) -> FastAPI:
 
     state.reconcile_coins = _reconcile_coins
 
+    @app.get("/account/coins/list")
+    def account_coins_list(request: Request):
+        """The signed-in account's coin list (for the browser's own copy)."""
+        account = _signed_in_account(request)
+        return JSONResponse({"v": coinlistlib.VERSION, "lists": _coin_lists(account.pubkey)})
+
+    _merged_at: dict[str, float] = {}
+
+    @app.post("/account/coins/merge")
+    def account_coins_merge(request: Request, payload: Any = Body(None)):
+        """The browser's copy of the signed-in account's coin list, merged here: each coin this index does not have is
+        checked against this chain before it counts; only the account's own addresses are read. At most once a minute."""
+        account = _signed_in_account(request)
+        if time.time() - _merged_at.get(account.pubkey, 0.0) < 60:
+            return JSONResponse({"skipped": "merged less than a minute ago"})
+        _merged_at[account.pubkey] = time.time()
+        said = payload if isinstance(payload, dict) else {}
+        lists = said.get("lists") if isinstance(said.get("lists"), dict) else {}
+        mine = _coin_lists(account.pubkey)
+        filed = covered = 0
+        for chain in _account_chains():
+            own, theirs = mine.get(chain.network) or {}, lists.get(chain.network)
+            if not own or not isinstance(theirs, dict):
+                continue
+            merged = coinlistlib.merge([own, {a: v for a, v in theirs.items() if a in own}])
+            index = state.token_index(chain)
+            for address in own:
+                m = merged.get(address) or {}
+                have = {(c[0], c[1]) for c in own[address]["coins"]}
+                new = [{"txid": c[0], "vout": c[1]} for c in m.get("coins") or [] if (c[0], c[1]) not in have]
+                if new:
+                    try:
+                        filed += _file_checked_coins(state, chain, address, new[:coinlistlib.BROWSER_COINS_MAX])
+                    except Exception:                       # noqa: BLE001 -- the chain away: next time
+                        pass
+                if m.get("covered") and coinlistlib.union(m["covered"]) != coinlistlib.union(own[address]["covered"]):
+                    with contextlib.closing(index.open()) as db:
+                        coinlistlib.mark_covered(db, address, m["covered"], "browser")
+                    covered += 1
+        if filed or covered:
+            state.bump_generation()
+        return JSONResponse({"filed": filed, "covered": covered})
+
     @app.post("/account/coins/reconcile")
     def account_coins_reconcile(request: Request):
         """The signed-in account's coins reconciled with every arcade that holds it (at most once a minute)."""

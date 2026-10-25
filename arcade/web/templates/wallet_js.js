@@ -380,6 +380,7 @@ async function _signIn(tag, password, {network, version}) {
     Promise.all([bringImports(""), openImportsWith(wallet, password)])
       .then(([brought]) => brought && brought.outcome === "taken" ? openImportsWith(wallet, password) : null),
   ]);
+  keepCoins(wallet.pubkey).catch(() => {});        // the browser's copy of the coin list, both ways (not waited for)
   // Any chain whose coins were never read back here (a read-back cut short by a restart): finished now. A chain
   // already done costs the node nothing (2026-10-19).
   fetch("/account/coins/backfill", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"})
@@ -2559,6 +2560,36 @@ function mergeImports(given) {
     if (!have || Number(got.updated || 0) >= Number(have.updated || 0)) all[who] = got;
   }
   try { sessionStorage.setItem(OPEN_IMPORTS, JSON.stringify(all)); } catch (e) {}
+}
+
+/* --- the account's coin list, kept in this browser too (2026-10-25: "the users valid UTXO list should also be
+ * stored in their arcade, browser local storage, the same way that the rest of our arcade local storage works") ---
+ * At sign-in the copy kept here is handed to the node (which checks every coin against its own chain before it counts:
+ * arcade/coinlist.py), and the node's list, merged, is kept here again. Never waited for: sign-in does not slow down. */
+const COINS_SLOT = "arcade_coins:";
+
+export function keptCoins(account) {
+  try { return JSON.parse(localStorage.getItem(COINS_SLOT + String(account).toLowerCase()) || "null"); } catch (e) { return null; }
+}
+
+export async function keepCoins(account) {
+  const slot = COINS_SLOT + String(account || "").toLowerCase();
+  if (!account) return null;
+  const mine = keptCoins(account);
+  if (mine && mine.lists) {
+    try {
+      await fetch("/account/coins/merge", {method: "POST", headers: {"Content-Type": "application/json"},
+                                           body: JSON.stringify({lists: mine.lists})});
+    } catch (e) { /* the node is away: next time */ }
+  }
+  try {
+    const got = await fetch("/account/coins/list", {cache: "no-store"});
+    if (!got.ok) return mine;
+    const said = await got.json();
+    const kept = {v: said.v, at: Date.now(), lists: said.lists || {}};
+    try { localStorage.setItem(slot, JSON.stringify(kept)); } catch (e) { /* full or blocked: the node keeps it */ }
+    return kept;
+  } catch (e) { return mine; }
 }
 
 function keepImports(account, opened) {

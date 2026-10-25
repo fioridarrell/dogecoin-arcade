@@ -113,3 +113,39 @@ def test_a_holder_on_older_code_still_gives_its_coins(tmp_path, no_nodes, monkey
     assert here.reconcile_coins("wanderer", ["old.example.com"])["filed"] == 1
     with contextlib.closing(here.token_index(here.messaging).open()) as db:
         assert coinlist.coverage(db, ADDR, 100) == [(50, 100)], "an older arcade vouches for nothing"
+
+
+def _sign_in(client):
+    from nacl.signing import SigningKey
+
+    from arcade import accounts
+    key = SigningKey.generate()
+    ch = client.get("/auth/challenge").json()
+    sig = key.sign(accounts.login_message(ch["origin"], ch["nonce"])).signature
+    r = client.post("/auth/login", json={"pubkey": key.verify_key.encode().hex(), "nonce": ch["nonce"],
+                                         "signature": sig.hex(), "join": True})
+    assert r.status_code == 200, r.text
+    return key.verify_key.encode().hex()
+
+
+def test_the_browsers_copy_is_listed_and_merged_checked(tmp_path, no_nodes, monkeypatch):
+    """the operator: "the users valid UTXO list should also be stored in their arcade, browser local storage". The browser
+    keeps the node's list; at sign-in it hands its copy back, and only coins this chain says are real and the account's
+    own are filed."""
+    here, client = _arcade(tmp_path, "here")
+    pub = _sign_in(client)
+    here.set_setting(f"address:{pub}", ADDR)
+    with contextlib.closing(here.token_index(here.messaging).open()) as db:
+        utxos.watch(db, ADDR, 50, why="test")
+        db.conn.commit()
+    assert client.get("/account/coins/list").json()["lists"][here.messaging.network][ADDR]["coins"] == []
+    monkeypatch.setattr(type(here.messaging), "rpc", lambda self: _Rpc())
+    copy = {here.messaging.network: {
+        ADDR: {"coins": [["aa" * 32, 0, 5, 20, ""], ["bb" * 32, 0, 5, 20, ""], ["cc" * 32, 0, 9, 20, ""]],
+               "covered": [[0, 49]]},
+        "nSomebodyElsesAddressXXXXXXXXXXXXXX": {"coins": [["dd" * 32, 0, 5, 20, ""]], "covered": [[0, 100]]}}}
+    said = client.post("/account/coins/merge", json={"lists": copy}).json()
+    assert said == {"filed": 1, "covered": 1}
+    listed = client.get("/account/coins/list").json()["lists"][here.messaging.network]
+    assert [c[0] for c in listed[ADDR]["coins"]] == ["aa" * 32] and "nSomebodyElsesAddressXXXXXXXXXXXXXX" not in listed
+    assert client.post("/account/coins/merge", json={"lists": copy}).json().get("skipped"), "once a minute"
