@@ -11834,24 +11834,15 @@ def create_app(state: AppState) -> FastAPI:
                              "lists": _coin_lists(found["pubkey"])})
 
     def _coin_marks(db, address: str) -> dict[tuple[str, int], str]:
-        """(txid, vout) -> "ins:<txid>i<vout>" (or "ins:?" when it could not be read) for this address's coins that
-        carry an inscription: the same guard funding.choose spends around (`_inscribed`)."""
-        from .. import doginals as D
+        """(txid, vout) -> "ins" (an inscription sits on it) or "ins:?" (a small coin not checked yet, held meanwhile)
+        for this address's coins, from what is already known and reading NOTHING new (guard.sort_known): other arcades
+        ask for an account's list about once a minute, and a read per coin made @apple's take 30 s (2026-10-25)."""
         guard = fundinglib.guard_for(address)
         if guard is None:
             return {}
-        out = {}
-        for coin in utxoslib.unspent(db, address):
-            if int(coin["value"]) > D.TRACE_MAX:
-                continue
-            try:
-                on = guard.held(coin["txid"]).get(int(coin["vout"]))
-            except D.Unknown:
-                on = [{"unknown": True}]
-            if on:
-                first = on[0] if isinstance(on, list) and on else {}
-                ident = first.get("id") if isinstance(first, dict) else None
-                out[(coin["txid"], int(coin["vout"]))] = f"ins:{ident}" if ident else "ins:?"
+        _free, inscribed, unchecked = guard.sort_known(utxoslib.unspent(db, address))
+        out = {(c["txid"], int(c["vout"])): "ins:?" for c in unchecked}
+        out.update({(c["txid"], int(c["vout"])): "ins" for c in inscribed})
         return out
 
     def _coin_lists(pubkey: str) -> dict[str, dict]:
@@ -25777,7 +25768,8 @@ def create_app(state: AppState) -> FastAPI:
     # read by two different arcades; each job carries canaries (coins this index already knows in its range, of every
     # output kind) so a reader that misses a kind is caught even when two arcades on the same code agree. The operator:
     # "Fast full walks" -- from block zero, each arcade reading its node's block files where it can.
-    _walk_reader = coinwalklib.Reader(Path(state.home) if getattr(state, "home", None) else Path(tempfile.gettempdir()))
+    _walk_reader = coinwalklib.Reader(Path(state.home) if getattr(state, "home", None) else Path(tempfile.gettempdir()),
+                                      override=lambda network: state.setting(f"blocks_dir:{network}", None))
     _walk_jobs = coinwalklib.Jobs(_walk_reader)
     _walk_pending: dict[str, set] = {}
     _walk_running: dict[str, dict] = {}
@@ -26106,7 +26098,11 @@ def create_app(state: AppState) -> FastAPI:
             "reconcile": {"last": state.setting("coinlists_reconcile_last", None), "running": _reconciling.is_set()},
             "settings": {"walk": _walk_on(picked), "lend": state.setting("walk_lend", True) is not False,
                          "readers_max": int(state.setting("walk_readers_max", WALK_READERS_MAX) or WALK_READERS_MAX)},
-            "files": {"readable": bool(mine.get("files")), "dir": str(coinwalklib.blocks_dir(picked) or ""),
+            "files": {"readable": bool(mine.get("files")),
+                      "dir": str(coinwalklib.blocks_dir(picked, state.setting(f"blocks_dir:{net}", None)) or ""),
+                      "set_dir": state.setting(f"blocks_dir:{net}", None) or "",
+                      "exists": bool(coinwalklib.blocks_dir(picked, state.setting(f"blocks_dir:{net}", None))
+                                     and coinwalklib.blocks_dir(picked, state.setting(f"blocks_dir:{net}", None)).is_dir()),
                       "user": getpass.getuser(),
                       "borrowed": bool(picked.borrowed), "known": coinwalklib.files_ok(picked.params)},
             "wallets": sorted(wallets, key=lambda w: (w["whole"], w["tag"]))[:500],
@@ -26133,7 +26129,7 @@ def create_app(state: AppState) -> FastAPI:
                 if address in _account_own_addresses(types.SimpleNamespace(pubkey=row[1]), picked):
                     owner = {"tag": row[0], "account": row[1], "own": True}
                     break
-        known = sum(1 for m in marks.values() if m != "ins:?")
+        known = sum(1 for m in marks.values() if m == "ins")
         return JSONResponse({"address": address, "chain": picked.network, "tip": tip, "owner": owner,
                              "coins": len(coins), "sats": sum(int(c["value"]) for c in coins), "marked": known,
                              "unchecked": len(marks) - known,
@@ -26172,6 +26168,11 @@ def create_app(state: AppState) -> FastAPI:
                     state.set_setting("walk_lend", bool(v))
                 elif k == "readers_max":
                     state.set_setting("walk_readers_max", max(2, min(32, int(v))))
+                elif k.startswith("blocks_dir_") and _walk_chain_by(k[11:]) is not None:
+                    path = str(v or "").strip()
+                    if path and not path.startswith("/"):
+                        return JSONResponse({"detail": "the node's block folder, as a full path"}, status_code=400)
+                    state.set_setting(f"blocks_dir:{k[11:]}", path or None)
             return JSONResponse({"saved": True})
         return JSONResponse({"detail": "reconcile, walk or set"}, status_code=400)
 

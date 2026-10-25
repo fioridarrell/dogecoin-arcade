@@ -33,9 +33,15 @@ def files_ok(params) -> bool:
     return not getattr(params, "tx_time", False) and not getattr(params, "mweb", False)
 
 
-def blocks_dir(chain) -> Path | None:
-    """Where `chain`'s node keeps its block files, when the node is this machine's own."""
-    if getattr(chain, "borrowed", False) or getattr(chain, "datadir", None) is None:
+def blocks_dir(chain, override: str | None = None) -> Path | None:
+    """Where `chain`'s node keeps its block files, when the node is this machine's own: the operator's setting when it
+    names one (a node run as its own user keeps them elsewhere, e.g. /var/lib/dogecoind/blocks), else beside the
+    datadir the arcade reads the node's cookie or conf from."""
+    if getattr(chain, "borrowed", False):
+        return None
+    if override:
+        return Path(override)
+    if getattr(chain, "datadir", None) is None:
         return None
     sub = chain.params.datadir_subdir
     base = Path(chain.datadir)
@@ -45,18 +51,21 @@ def blocks_dir(chain) -> Path | None:
 class Reader:
     """One arcade's reading of walk jobs for its chains."""
 
-    def __init__(self, home: Path):
+    def __init__(self, home: Path, override=None):
         self.home = Path(home)
+        self.override = override or (lambda network: None)   # network -> the operator's block folder, or None
         self._files: dict[str, blkscan.BlockFiles] = {}
         self._lock = threading.Lock()
 
     def _block_files(self, chain) -> blkscan.BlockFiles | None:
         if not files_ok(chain.params):
             return None
-        d = blocks_dir(chain)
+        d = blocks_dir(chain, self.override(chain.network))
         if d is None or not d.is_dir():
             return None
         bf = self._files.get(chain.network)
+        if bf is not None and bf.dir != str(d):
+            bf = None
         if bf is None:
             bf = blkscan.BlockFiles(str(d), str(self.home / f"blkindex-{chain.network}.sqlite"),
                                     auxpow=not getattr(chain.params, "block_sig", False))

@@ -567,6 +567,8 @@
       + '<input autocomplete="off" type="number" id="wim-most" min="2" max="32" value="' + esc(st.readers_max) + '" style="width:70px"></div>'
       + (f.borrowed ? '<div class="note">This arcade borrows ' + esc(d.title) + ' from another arcade: it reads its part of a walk over the mesh (slow); arcades with their own node read the rest.</div>'
         : !f.known ? '<div class="note">' + esc(d.title) + '\'s blocks are read through its node (the block-file reader does not know this chain\'s blocks).</div>'
+        : !f.exists ? '<div class="note"><b>This arcade reads ' + esc(d.title) + ' over RPC (slow).</b> Its node\'s block files are not at ' + esc(f.dir || 'the folder it knows')
+          + '. Where does the node keep them (the folder holding blk00000.dat)?<div class="row" style="gap:8px;margin-top:6px;flex-wrap:wrap"><input autocomplete="off" id="wim-dir" type="text" style="flex:1 1 260px;min-width:0" placeholder="/var/lib/dogecoind/blocks" value="' + esc(f.set_dir) + '"><button type="button" class="small" id="wim-dirgo">Save</button></div></div>'
         : !f.readable ? '<div class="note"><b>This arcade reads ' + esc(d.title) + ' over RPC (slow).</b> Its node\'s block files are not readable by the arcade. One command lets it read them directly (many times faster):'
           + '<pre>sudo setfacl -R -m u:' + esc(f.user || '$USER') + ':rX ' + esc(f.dir) + ' &amp;&amp; sudo setfacl -R -d -m u:' + esc(f.user || '$USER') + ':rX ' + esc(f.dir) + '</pre></div>'
         : '<p class="muted" style="font-size:.84rem;margin:10px 0 0">This arcade reads ' + esc(d.title) + '\'s block files directly (' + esc(f.dir) + ').</p>');
@@ -581,6 +583,7 @@
   document.addEventListener('click', function (e) {
     var c = e.target.closest('#wim-coins button'); if (c) { net = c.dataset.net; load(true); return; }
     var w = e.target.closest('[data-walk]'); if (w) { post({do: 'walk', chain: net, address: w.dataset.walk}).then(function () { said('Queued for the next walk.'); load(true); }, function (err) { said(err.message, true); }); return; }
+    if (e.target.id === 'wim-dirgo') { var body = {do: 'set'}; body['blocks_dir_' + net] = $('wim-dir').value.trim(); post(body).then(function () { said('Saved.'); load(true); }, function (err) { said(err.message, true); }); return; }
     if (e.target.id === 'wim-recgo') post({do: 'reconcile'}).then(function () { said('Reconciling every account with the other arcades.'); load(true); }, function (err) { said(err.message, true); });
     if (e.target.id === 'wim-go') {
       var q = $('wim-q').value.trim(); if (!q) return;
