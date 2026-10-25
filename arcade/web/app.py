@@ -9988,7 +9988,9 @@ def create_app(state: AppState) -> FastAPI:
     # gameslib.app_key) so an app stays on the screen across its versions. A screen never arranged starts with the
     # tabs, the App Store and the apps the account already starred (2026-10-24: "pre-add apps that they've
     # already starred").
-    HOME_KEY = re.compile(r"tab:/[a-z/-]{0,40}|store|app:[A-Za-z0-9]{20,90}:[a-z0-9-]{1,80}")
+    HOME_KEY = re.compile(r"tab:/[a-z/-]{0,40}|store|helper|app:[A-Za-z0-9]{20,90}:[a-z0-9-]{1,80}")
+    #: Icons the dock holds at most (2026-10-25: anything dragged in or out of it).
+    HOME_DOCK = 6
     HOME_MOST = 120
     # Pages of icons, and folders on them (2026-10-24: "several pages of apps ... put apps inside of a folder and
     # just like on the homepage of an Apple phone"): [[key | {"id", "folder", "apps": [key, ...]}, ...], ...].
@@ -10027,15 +10029,31 @@ def create_app(state: AppState) -> FastAPI:
             out.append(kept)
         return out if count <= HOME_MOST else None
 
-    def _home_apps(owner: str) -> list | None:
-        return _home_pages(state.setting(f"homeapps:{owner}"))
+    def _home_dock(said: Any) -> list | None:
+        if not isinstance(said, list) or len(said) > HOME_DOCK:
+            return None
+        out: list[str] = []
+        for k in said:
+            if not isinstance(k, str) or not HOME_KEY.fullmatch(k):
+                return None
+            if k not in out:
+                out.append(k)
+        return out
+
+    def _home_apps(owner: str) -> tuple[list | None, list | None]:
+        """(pages, dock) as kept; a screen kept before the dock was (a list of pages) has no dock of its own yet."""
+        kept = state.setting(f"homeapps:{owner}")
+        if isinstance(kept, dict):
+            return _home_pages(kept.get("pages")), _home_dock(kept.get("dock"))
+        return _home_pages(kept), None
 
     @app.get("/account/homeapps")
     def homeapps_get(request: Request):
         owner = _favorites_owner(request)
         if owner is None:
             return JSONResponse({"pages": None, "starred": [], "saved": False}, headers={"Cache-Control": "no-store"})
-        return JSONResponse({"pages": _home_apps(owner),
+        pages, dock = _home_apps(owner)
+        return JSONResponse({"pages": pages, "dock": dock,
                              "starred": [k for k in _favorites(owner) if k.startswith("app:")], "saved": True},
                             headers={"Cache-Control": "no-store"})
 
@@ -10049,8 +10067,13 @@ def create_app(state: AppState) -> FastAPI:
         if pages is None:
             return JSONResponse({"detail": f"pages of icons and folders, at most {HOME_MOST} icons on "
                                            f"{HOME_PAGES} pages"}, status_code=400)
-        state.set_setting(f"homeapps:{owner}", pages)
-        return JSONResponse({"pages": pages, "saved": True})
+        dock = _home_dock(said["dock"]) if "dock" in said else None
+        if "dock" in said and dock is None:
+            return JSONResponse({"detail": f"a dock of at most {HOME_DOCK} icons"}, status_code=400)
+        if dock is None:
+            dock = _home_apps(owner)[1]
+        state.set_setting(f"homeapps:{owner}", {"pages": pages, "dock": dock})
+        return JSONResponse({"pages": pages, "dock": dock, "saved": True})
 
     @app.get("/account/badges")
     def account_badges(request: Request):

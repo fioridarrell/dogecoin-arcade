@@ -136,6 +136,10 @@ header, footer.version, .notice, #appbar, #newposts { display: none !important; 
 .hs-fgrid .hs-label, .hs-fgrid .hs-dot { display: block; }
 /* Hold an icon (2026-10-24: "a menu with edit Home Screen, open app, remove app, close app"). */
 body.hs-win-open #arc-bot, body.hs-win-open #arc-bot-box { display: none !important; }
+/* On the home screen the robot is an app (byKey.helper), not a button floating over the icons. */
+body.fullscreen #arc-bot { display: none !important; }
+.hs-robot svg { width: 44px; height: 44px; image-rendering: pixelated; display: block; }
+.hs-dock { min-height: 64px; }
 .hs-menu-back { position: fixed; inset: 0; z-index: 44; background: rgba(0,0,0,.25); }
 .hs-menu { position: fixed; z-index: 45; min-width: 220px; border-radius: 14px; overflow: hidden; background: var(--panel);
   border: 1px solid var(--line); box-shadow: 0 14px 40px rgba(0,0,0,.4); }
@@ -285,13 +289,21 @@ body.hs-win-open #arc-bot, body.hs-win-open #arc-bot-box { display: none !import
     var t = TABS.filter(function (x) { return x.href === h; })[0];
     if (t && !(h === '/' && !OPERATOR && TABS.some(function (x) { return x.href === '/me'; }))) dockTabs.push(t);
   });
-  var dockKeys = dockTabs.map(function (t) { return t.key; });
+  // The dock: these four to start with; any icon may be dragged in or out of it (2026-10-25: "apps in the dock
+  // should be able to be dragged out of the dock and any app should be able to be dragged into the dock"), kept with
+  // the layout. At most DOCK_MOST.
+  var DOCK_MOST = 4;
+  var dock = dockTabs.map(function (t) { return t.key; });
   // Notifications is the bell in the corner, not an icon (2026-10-25).
   var bellTab = TABS.filter(function (t) { return t.href === '/me/notifications' || t.href === '/notifications'; })[0];
-  if (bellTab) dockKeys.push(bellTab.key);
+  var bellKey = bellTab ? bellTab.key : null;
+  function outOfGrid(k) { return k === bellKey || dock.indexOf(k) >= 0; }
   var byKey = {};
   TABS.forEach(function (t) { byKey[t.key] = {key: t.key, kind: 'tab', name: t.name, href: t.href, badge: t.badge, glyph: glyphOf(t.href)}; });
   byKey.store = {key: 'store', kind: 'store', name: 'App Store', img: STORE_ICON};
+  // The robot helper is an app on the home screen (2026-10-25: "The robot helper should be another app when in
+  // the home screen"); its face is the robot's own (_helper.html).
+  byKey.helper = {key: 'helper', kind: 'helper', name: 'Helper'};
   APPS.forEach(function (a) { byKey[a.key] = {key: a.key, kind: 'app', name: a.name, img: a.cover, app: a}; });
 
   var $ = function (id) { return document.getElementById(id); };
@@ -302,12 +314,16 @@ body.hs-win-open #arc-bot, body.hs-win-open #arc-bot-box { display: none !import
     clearTimeout(say.t); say.t = setTimeout(function () { el.hidden = true; }, 2600);
   }
   function iconHtml(it) {
+    if (it.kind === 'helper') {
+      var face = document.getElementById('arc-bot-face');
+      return '<span class="hs-robot">' + (face ? face.innerHTML : '') + '</span>';
+    }
     if (it.img) return '<img src="' + esc(it.img) + '" alt="" draggable="false">';
     if (it.glyph) return '<svg width="32" height="32" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="' + it.glyph[2]
       + '" stroke="' + it.glyph[1] + '" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
     return '<span class="hs-letter">' + esc((it.name || '?').slice(0, 2)) + '</span>';
   }
-  function iconBg(it) { return it.glyph ? it.glyph[0] : (it.img ? '#111' : '#6b4fa0'); }
+  function iconBg(it) { return it.kind === 'helper' ? '#1f2933' : it.glyph ? it.glyph[0] : (it.img ? '#111' : '#6b4fa0'); }
   function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]; }); }
 
   // ---------- the icons: pages of them, and folders (2026-10-24: "you should be able to have several pages of
@@ -325,6 +341,8 @@ body.hs-win-open #arc-bot, body.hs-win-open #arc-bot-box { display: none !import
   }
   function hasKey(k) { return everyKey().indexOf(k) >= 0; }
   function find(id) {
+    var d = dock.indexOf(id);
+    if (d >= 0) return {dock: true, index: d, item: id};
     for (var p = 0; p < pages.length; p++) for (var i = 0; i < pages[p].length; i++) {
       var it = pages[p][i];
       if (idOf(it) === id) return {page: p, index: i, item: it};
@@ -334,35 +352,41 @@ body.hs-win-open #arc-bot, body.hs-win-open #arc-bot-box { display: none !import
   }
   function newId() { return 'f' + Math.random().toString(36).slice(2, 9); }
   function seed(starred) {
-    return [TABS.filter(function (t) { return dockKeys.indexOf(t.key) < 0; }).map(function (t) { return t.key; })
-      .concat(['store']).concat((starred || []).filter(function (k) { return byKey[k]; }))];
+    return [TABS.filter(function (t) { return !outOfGrid(t.key); }).map(function (t) { return t.key; })
+      .concat(['store', 'helper']).concat((starred || []).filter(function (k) { return byKey[k]; }))];
   }
   // Older saves are one flat list (one page). Tabs a later release adds join the last page; the App Store is always there.
-  function complete(said) {
+  function complete(said, savedDock) {
+    if (Array.isArray(savedDock)) {
+      var kept = [];
+      savedDock.forEach(function (k) { if (typeof k === 'string' && k !== bellKey && kept.indexOf(k) < 0) kept.push(k); });
+      dock = kept.slice(0, DOCK_MOST);
+    }
     var out = Array.isArray(said) && said.length && Array.isArray(said[0]) ? said : [Array.isArray(said) ? said : []];
     var seen = {};
     out = out.map(function (pg) {
       return (Array.isArray(pg) ? pg : []).map(function (it) {
         if (isFolder(it)) {
           var apps = (Array.isArray(it.apps) ? it.apps : []).filter(function (k) {
-            if (typeof k !== 'string' || seen[k] || dockKeys.indexOf(k) >= 0) return false; seen[k] = 1; return true;
+            if (typeof k !== 'string' || seen[k] || outOfGrid(k)) return false; seen[k] = 1; return true;
           });
           return apps.length ? {id: typeof it.id === 'string' ? it.id : newId(), folder: String(it.folder || 'Folder').slice(0, 30), apps: apps} : null;
         }
-        if (typeof it !== 'string' || seen[it] || dockKeys.indexOf(it) >= 0) return null;
+        if (typeof it !== 'string' || seen[it] || outOfGrid(it)) return null;
         seen[it] = 1; return it;
       }).filter(Boolean);
     });
     if (!out.length) out = [[]];
-    TABS.forEach(function (t) { if (dockKeys.indexOf(t.key) < 0 && !seen[t.key]) out[out.length - 1].push(t.key); });
-    if (!seen.store) out[out.length - 1].push('store');
+    TABS.forEach(function (t) { if (!outOfGrid(t.key) && !seen[t.key]) out[out.length - 1].push(t.key); });
+    if (!seen.store && !outOfGrid('store')) out[out.length - 1].push('store');
+    if (!seen.helper && !outOfGrid('helper')) out[out.length - 1].push('helper');
     return out;
   }
   function persist() {
     var body = pages.filter(function (pg) { return pg.length; });
-    if (!saved) { try { localStorage.setItem(SAVE_LS, JSON.stringify(body)); } catch (e) {} return; }
+    if (!saved) { try { localStorage.setItem(SAVE_LS, JSON.stringify({pages: body, dock: dock})); } catch (e) {} return; }
     fetch('/account/homeapps', {method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({pages: body})}).catch(function () {});
+      body: JSON.stringify({pages: body, dock: dock})}).catch(function () {});
   }
   // Each page holds what fits the screen; what does not spills onto the next one. Empty pages go.
   function settle() {
@@ -379,6 +403,7 @@ body.hs-win-open #arc-bot, body.hs-win-open #arc-bot-box { display: none !import
     pages = kept.length ? kept : [[]];
     if (pageNow > pages.length - 1) pageNow = pages.length - 1;
   }
+  function dockList() { return dock.filter(function (k) { return byKey[k]; }); }
   function addKey(k) {
     if (hasKey(k)) return;
     settle();
@@ -459,9 +484,12 @@ body.hs-win-open #arc-bot, body.hs-win-open #arc-bot-box { display: none !import
       return '<span class="' + (p === pageNow ? 'on' : '') + '"></span>';
     }).join('') : '';
     pager.scrollLeft = pageNow * pager.clientWidth;
-    var dock = $('hs-dock'); dock.innerHTML = '';
-    dockTabs.forEach(function (t) { dock.appendChild(tileFor(t.key, true)); });
-    dock.hidden = !dockTabs.length;
+    var dockEl = $('hs-dock'); dockEl.innerHTML = '';
+    dockList().forEach(function (k) {
+      var t = tileFor(k, true); t.dataset.dock = '1';
+      if (drag && k === drag.id) t.classList.add('ghosted');
+      dockEl.appendChild(t);
+    });
     $('hs-done').hidden = !editing;
     paintBell();
     home.classList.toggle('editing', editing);
@@ -507,6 +535,29 @@ body.hs-win-open #arc-bot, body.hs-win-open #arc-bot-box { display: none !import
     var b = e.target.closest('.hs-tile'); if (!b || e.target.closest('.hs-minus') || e.button > 0) return;
     startPress(e, b.dataset.key, null);
   });
+  // A dock icon is held, opened and dragged like any other: out onto a page, or to another place in the dock.
+  $('hs-dock').addEventListener('pointerdown', function (e) {
+    var b = e.target.closest('.hs-tile'); if (!b || e.button > 0) return;
+    startPress(e, b.dataset.key, null);
+  });
+  $('hs-dock').addEventListener('contextmenu', function (e) { e.preventDefault(); });
+  // Out of wherever it is: the dock or its page.
+  function takeOut(at) {
+    if (at.dock) dock.splice(dock.indexOf(at.item), 1);
+    else pages[at.page].splice(pages[at.page].indexOf(at.item), 1);
+  }
+  function dockPlace(slot) {
+    if (!drag) return;
+    var at = find(drag.id); if (!at || isFolder(at.item) || at.inFolder) return;
+    if (!at.dock && dockList().length >= DOCK_MOST) {
+      if (!drag.toldFull) { drag.toldFull = true; say('The dock holds ' + DOCK_MOST + '. Drag one out of it first.'); }
+      return;
+    }
+    if (at.dock && dock.indexOf(at.item) === slot) return;
+    takeOut(at);
+    dock.splice(Math.min(slot, dock.length), 0, at.item);
+    draw();
+  }
   function begin() {
     if (!press) return;
     var r = press.el.getBoundingClientRect();
@@ -544,6 +595,18 @@ body.hs-win-open #arc-bot, body.hs-win-open #arc-bot-box { display: none !import
     // At an edge for a moment: the next (or a new) page, or the one before.
     var edge = e.clientX < 26 ? -1 : e.clientX > W - 26 ? 1 : 0;
     if (edge !== drag.edge) { drag.edge = edge; clearTimeout(drag.et); if (edge) drag.et = setTimeout(function () { flip(edge); }, 650); }
+    // Over the dock: in there, at the slot under the finger, once it rests.
+    var dr = $('hs-dock').getBoundingClientRect();
+    if (e.clientY >= dr.top - 6) {
+      clearOver();
+      var slot = Math.max(0, Math.min(DOCK_MOST - 1, Math.floor((e.clientX - dr.left) / (dr.width / DOCK_MOST))));
+      var rd = drag.rest;
+      if (rd && rd.cell === 'dock' + slot && Math.abs(e.clientX - rd.x) + Math.abs(e.clientY - rd.y) < 14) return;
+      drag.rest = {cell: 'dock' + slot, page: -1, x: e.clientX, y: e.clientY};
+      clearTimeout(drag.rt);
+      drag.rt = setTimeout(function () { dockPlace(slot); }, 300);
+      return;
+    }
     var g = pager.querySelector('.hs-grid[data-page="' + pageNow + '"]'); if (!g) return;
     var gr = g.getBoundingClientRect(), x = e.clientX - gr.left, y = e.clientY - gr.top;
     var here = pages[pageNow].filter(visible), at = find(drag.id);
@@ -583,11 +646,11 @@ body.hs-win-open #arc-bot, body.hs-win-open #arc-bot-box { display: none !import
     var to = Math.min(cell, here.length - (at.page === pageNow ? 1 : 0));
     var from = at.page === pageNow ? here.indexOf(at.item) : -1;
     if (to === from) return;
-    pages[at.page].splice(pages[at.page].indexOf(at.item), 1);
+    takeOut(at);
     var list = pages[pageNow], vis = list.filter(visible);
     var before = vis[to];
     list.splice(before ? list.indexOf(before) : list.length, 0, at.item);
-    if (at.page === pageNow) placePage(pageNow); else draw();
+    if (!at.dock && at.page === pageNow) placePage(pageNow); else draw();
   }
   function clearOver() {
     if (!drag) return;
@@ -600,7 +663,7 @@ body.hs-win-open #arc-bot, body.hs-win-open #arc-bot-box { display: none !import
     var next = pageNow + dir;
     if (next < 0) return;
     if (next > pages.length - 1) { if (pages[pageNow].filter(visible).length <= 1) return; pages.push([]); }
-    pages[at.page].splice(pages[at.page].indexOf(at.item), 1);
+    takeOut(at);
     pages[next].push(at.item);
     pageNow = next; draw(); goPage(next);
     drag.edge = 0;
@@ -621,8 +684,8 @@ body.hs-win-open #arc-bot, body.hs-win-open #arc-bot-box { display: none !import
   }
   // One icon dropped on another: a folder of the two, named for what they share; or into a folder.
   function fold(id, ontoId) {
-    var a = find(id), b = find(ontoId); if (!a || !b || a.inFolder) return;
-    pages[a.page].splice(pages[a.page].indexOf(a.item), 1);
+    var a = find(id), b = find(ontoId); if (!a || !b || a.inFolder || b.dock) return;
+    takeOut(a);
     b = find(ontoId);
     if (isFolder(b.item)) { b.item.apps.push(id); return; }
     var ga = byKey[id] && byKey[id].app, gb = byKey[ontoId] && byKey[ontoId].app;
@@ -788,6 +851,13 @@ body.hs-win-open #arc-bot, body.hs-win-open #arc-bot-box { display: none !import
   function openKey(k) {
     var it = byKey[k]; if (!it) return;
     if (it.kind === 'store') { openStore(); return; }
+    if (it.kind === 'helper') {
+      // The robot's own chat (_helper.html), opened by its button, which the home screen keeps out of sight.
+      var bot = document.getElementById('arc-bot');
+      if (!bot || bot.style.display !== 'flex') { say('The helper is not on this arcade right now.'); return; }
+      bot.click();
+      return;
+    }
     if (it.kind === 'tab') openWin({key: k, url: it.href, name: it.name, item: it});
     else openWin({key: k, url: it.app.open, name: it.name, item: it});
   }
@@ -1099,8 +1169,8 @@ body.hs-win-open #arc-bot, body.hs-win-open #arc-bot-box { display: none !import
   }
 
   // ---------- start ----------
-  function start(list, starred) {
-    pages = complete(list || seed(starred));
+  function start(list, starred, savedDock) {
+    pages = complete(list || seed(starred), savedDock);
     if (!list) persist();
     draw();
     var m = /^#open=(.+)$/.exec(location.hash);
@@ -1120,10 +1190,11 @@ body.hs-win-open #arc-bot, body.hs-win-open #arc-bot-box { display: none !import
       .catch(function () { return {saved: false}; })
       .then(function (d) {
         saved = !!d.saved;
-        if (saved) { start(d.pages || d.apps, d.starred); return; }
+        if (saved) { start(d.pages || d.apps, d.starred, d.dock); return; }
         var local = null;
         try { local = JSON.parse(localStorage.getItem(SAVE_LS) || 'null'); } catch (e) {}
-        start(Array.isArray(local) ? local : null, []);
+        if (local && !Array.isArray(local) && typeof local === 'object') start(local.pages || null, [], local.dock);
+        else start(Array.isArray(local) ? local : null, []);
       });
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();

@@ -25,8 +25,9 @@
 /* A page in a window of the home screen (below): the icons are its tabs, so no tab strip; room for the pull strip. */
 html.inshell header{display:none !important}
 html.inshell body:not(.fullscreen){padding-top:18px}
-/* No robot helper over an app or a page opened from the home screen (2026-10-24). */
-html.inshell #arc-bot,html.inshell #arc-bot-box{display:none !important}
+/* No robot helper over an app opened from the home screen (2026-10-24); on its pages it stays in the corner, as it
+   always was (2026-10-25: "it should just be visible like it used to be in the lower right hand corner of the PWA pages"). */
+html.inshell body.fullscreen #arc-bot,html.inshell body.fullscreen #arc-bot-box{display:none !important}
 /* Back to the home screen, the App Store's own link (2026-10-24: "all of the pages should have a back to home
    link like the App Store does"). */
 .inshell-home{display:inline-block;background:none !important;border:0;box-shadow:none !important;color:var(--accent);

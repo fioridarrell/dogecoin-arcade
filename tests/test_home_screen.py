@@ -52,9 +52,10 @@ def test_a_screen_never_arranged_starts_with_the_starred_apps_and_keeps_its_orde
     star = f"app:{MAKER}:little-app"
     assert app.post("/account/favorites", headers=EDGE, json={"key": star, "on": True}).status_code == 200
     first = app.get("/account/homeapps", headers=EDGE).json()
-    assert first == {"pages": None, "starred": [star], "saved": True}, "never arranged: the page seeds it"
+    assert first == {"pages": None, "dock": None, "starred": [star], "saved": True}, "never arranged: the page seeds it"
     order = [star, "tab:/me/messages", "store", "tab:/feed"]
-    assert app.post("/account/homeapps", headers=EDGE, json={"apps": order}).json() == {"pages": [order], "saved": True}, \
+    assert app.post("/account/homeapps", headers=EDGE, json={"apps": order}).json() == {"pages": [order], "dock": None,
+                                                                                         "saved": True}, \
         "a flat list (before pages) is one page"
     two = [[star, {"id": "f1", "folder": "Games", "apps": ["tab:/feed", f"app:{MAKER}:other"]}], ["store"]]
     assert app.post("/account/homeapps", headers=EDGE, json={"pages": two}).json()["pages"] == two
@@ -72,7 +73,7 @@ def test_a_stranger_keeps_the_screen_in_the_browser_and_the_operator_on_the_node
     assert app.get("/account/homeapps", headers=EDGE).json()["saved"] is False
     assert app.post("/account/homeapps", headers=EDGE, json={"apps": ["store"]}).status_code == 403
     assert app.post("/account/homeapps", headers=LOCAL, json={"apps": ["store"]}).status_code == 200
-    assert state.setting("homeapps:node") == [["store"]]
+    assert state.setting("homeapps:node") == {"pages": [["store"]], "dock": None}
 
 
 def test_only_the_installed_app_is_sent_to_the_home_screen():
@@ -187,7 +188,7 @@ def test_holding_an_icon_opens_its_menu_and_no_robot_over_an_open_app():
         "held and moved on: the menu goes and the icon is dragged"
     assert "body.hs-win-open #arc-bot" in home and "document.body.classList.toggle('hs-win-open', !!front)" in home
     base = (TEMPLATES / "base.html").read_text()
-    assert "html.inshell #arc-bot,html.inshell #arc-bot-box{display:none !important}" in base
+    assert "html.inshell body.fullscreen #arc-bot,html.inshell body.fullscreen #arc-bot-box{display:none !important}" in base
 
 
 def test_notifications_are_a_bell_in_the_corner_and_nothing_is_selected():
@@ -198,7 +199,27 @@ def test_notifications_are_a_bell_in_the_corner_and_nothing_is_selected():
     home = (TEMPLATES / "home.html").read_text()
     assert 'id="hs-bell"' in home and ".hs-bell #hs-bell-shape { fill: none; stroke: #e5484d; }" in home
     assert ".hs-bell.on #hs-bell-shape { fill: #e5484d; }" in home and "b.classList.toggle('on', n > 0);" in home
-    assert "if (bellTab) dockKeys.push(bellTab.key);" in home, "the Notifications icon leaves the grid"
+    assert "function outOfGrid(k) { return k === bellKey || dock.indexOf(k) >= 0; }" in home, "the Notifications icon leaves the grid"
     assert "body.fullscreen, body.fullscreen * { -webkit-user-select: none; user-select: none;" in home
     assert "Math.abs(e.clientX - rest.x) + Math.abs(e.clientY - rest.y) < 14" in home, "a twitch is still resting"
     assert "if (drag || (press && press.menu)) e.preventDefault();" in home
+
+
+def test_the_dock_is_kept_with_the_layout_and_the_helper_is_an_app(public):
+    """2026-10-25: "apps in the dock should be able to be dragged out of the dock and any app should be able to be
+    dragged into the dock. The robot helper should be another app when in the home screen"; on the pages opened from it,
+    the robot stays "in the lower right hand corner"."""
+    app, state = public
+    assert _sign_in(app, SigningKey.generate(), headers=EDGE).status_code == 200
+    pages, dock = [["store", "helper"]], ["tab:/feed", f"app:{MAKER}:little-app"]
+    got = app.post("/account/homeapps", headers=EDGE, json={"pages": pages, "dock": dock}).json()
+    assert got == {"pages": pages, "dock": dock, "saved": True}
+    assert app.get("/account/homeapps", headers=EDGE).json()["dock"] == dock
+    assert app.post("/account/homeapps", headers=EDGE, json={"pages": pages}).json()["dock"] == dock, "kept when unsaid"
+    assert app.post("/account/homeapps", headers=EDGE, json={"pages": pages, "dock": ["x"] * 7}).status_code == 400
+    home = (TEMPLATES / "home.html").read_text()
+    assert "function dockPlace(slot)" in home and "$('hs-dock').addEventListener('pointerdown'" in home
+    assert "byKey.helper = {key: 'helper', kind: 'helper', name: 'Helper'};" in home
+    assert "body.fullscreen #arc-bot { display: none !important; }" in home
+    base = (TEMPLATES / "base.html").read_text()
+    assert "html.inshell body.fullscreen #arc-bot" in base and "html.inshell #arc-bot," not in base

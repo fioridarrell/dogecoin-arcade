@@ -88,6 +88,12 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-25 PWA: an editable dock; the helper as an app; robot back on pages (Claude)
+home.html: icons drag out of the dock onto a page and into it (4 at most, a dock slot taken once the finger rests);
+the dock is kept with the layout (`/account/homeapps` now `{pages, dock}`; the setting is a dict, an old list read as
+pages). New key `helper`: an icon with the robot's face that opens the robot's chat; the floating robot is hidden on
+the home screen. base.html: the robot shows again on pages in home-screen windows, still never over a full-screen app.
+
 ### 2026-10-25 PWA: notifications bell, no text selection, reshuffle on phones (Claude)
 home.html: Notifications is a bell top right (red outline at 0, solid red with the count), out of the grid; nothing is
 selectable but inputs; a held icon's rest is "within 14 px" (a phone finger twitches, which restarted the 350 ms wait
