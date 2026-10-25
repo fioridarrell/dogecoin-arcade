@@ -166,3 +166,11 @@ def test_pages_folders_and_back_on_the_home_screen():
     assert "window.addEventListener('popstate'" in home and "history.pushState({hs: kind}" in home
     assert "if (w.item && w.item.kind === 'app') minimize(); else closeWin(w);" in home
     assert 'id="hs-edge"' in home, "an iPhone's installed app has no back swipe of its own"
+
+
+def test_the_wallet_is_asked_for_as_the_app_opens_and_no_hint_text():
+    """2026-10-24: "Make sure the login pops up as soon as the PWA loads"; "Remove the touch and hold icons to move
+    Text"."""
+    home = (TEMPLATES / "home.html").read_text()
+    assert "if (!keys) arcadeUnlockSheet('');" in home and "askForWallet();" in home
+    assert "Touch and hold an icon to move it." not in home

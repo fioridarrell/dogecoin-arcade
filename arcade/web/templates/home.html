@@ -26,7 +26,7 @@
     </div>
     <button type="button" class="hs-done" id="hs-done" hidden>Done</button>
   </div>
-  <p class="hs-hint" id="hs-hint"></p>
+  <p class="hs-hint" id="hs-hint" hidden></p>
   <div class="hs-pager" id="hs-pager"></div>
   <div class="hs-dots" id="hs-dots" aria-hidden="true"></div>
   <div class="hs-dock" id="hs-dock"></div>
@@ -435,8 +435,10 @@ header, footer.version, .notice, #appbar, #newposts { display: none !important; 
     dock.hidden = !dockTabs.length;
     $('hs-done').hidden = !editing;
     home.classList.toggle('editing', editing);
-    $('hs-hint').textContent = editing ? 'Drag to move, onto another to make a folder, to the edge for the next page.'
-                                       : 'Touch and hold an icon to move it.';
+    // Only while arranging (2026-10-24: "Remove the touch and hold icons to move text ... that should be pretty
+    // intuitive").
+    $('hs-hint').textContent = editing ? 'Drag to move, onto another to make a folder, to the edge for the next page.' : '';
+    $('hs-hint').hidden = !editing;
     paintRunning();
   }
   function placePage(p) {
@@ -987,6 +989,16 @@ header, footer.version, .notice, #appbar, #newposts { display: none !important; 
   document.addEventListener('visibilitychange', wake);
   document.addEventListener('pointerdown', wake, true);     // some browsers grant it only after a touch
 
+  // ---------- the wallet: asked for the moment the app opens (2026-10-24: "Make sure the login pops up as soon
+  // as the PWA loads"). Signed in on this node but locked in this launch: the password sheet at once; open here, it is
+  // open in every window (they share this tab's session). Nobody signed in never gets here (/home sends them to sign in).
+  function askForWallet() {
+    if (typeof ARCADE_SIGNED === 'undefined' || !ARCADE_SIGNED || !ARCADE_ME) return;
+    import('/wallet.js').then(function (w) { return w.opened(ARCADE_CHAIN); }).then(function (keys) {
+      if (!keys) arcadeUnlockSheet('');
+    }).catch(function () {});
+  }
+
   // ---------- start ----------
   function start(list, starred) {
     pages = complete(list || seed(starred));
@@ -1000,6 +1012,7 @@ header, footer.version, .notice, #appbar, #newposts { display: none !important; 
       if (tab) openKey(tab.key); else window.arcadeShell.open(url);
     }
     wake();
+    askForWallet();
   }
   window.addEventListener('resize', function () { if (!drag) draw(); });
   function boot() {

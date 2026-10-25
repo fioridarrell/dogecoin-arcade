@@ -88,6 +88,11 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-24 Home screen asks for the wallet as it opens; no hint text (Claude)
+The operator: "Make sure the login pops up as soon as the PWA loads"; "Remove the touch and hold icons to move Text". home.html:
+signed in but locked in this launch -> arcadeUnlockSheet at once (full-screen pages never show the unlock bar, and each
+PWA launch is a new session); the hint shows only while arranging.
+
 ### 2026-10-24 Home screen: pages of apps, folders, back (Claude)
 The operator: "several pages of apps ... put apps inside of a folder and just like on the homepage of an Apple phone"; "If you
 swipe back, you should go back to the last page you were on and your app should be minimized unless it's a page then it
