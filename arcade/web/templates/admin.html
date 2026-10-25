@@ -589,7 +589,7 @@
           if (j.detail) { $('wim-look').innerHTML = '<p class="muted">' + esc(j.detail) + '</p>'; return; }
           var who = j.owner ? '<b>@' + esc(j.owner.tag || '') + '</b>\'s ' + (j.owner.own ? 'own' : 'imported') + ' wallet' : 'Not an account\'s wallet here';
           $('wim-look').innerHTML = '<p style="margin:10px 0 0;font-size:.86rem">' + who + ' · ' + n(j.coins) + ' coins · ' + (j.sats / 1e8).toLocaleString(undefined, {maximumFractionDigits: 8})
-            + (j.marked ? ' (' + n(j.marked) + ' carry inscriptions)' : '') + '</p>' + covBar(j.covered, j.tip)
+            + (j.marked || j.unchecked ? ' (' + [j.marked ? n(j.marked) + ' carry inscriptions' : '', j.unchecked ? n(j.unchecked) + ' small coins not checked for inscriptions yet, held meanwhile' : ''].filter(Boolean).join(', ') + ')' : '') + '</p>' + covBar(j.covered, j.tip)
             + '<div class="row muted" style="justify-content:space-between;font-size:.78rem"><span>block 0</span><span>tip ' + n(j.tip) + '</span></div>'
             + (j.gaps.length ? '<p style="font-size:.84rem;margin:6px 0 0">' + j.gaps.slice(0, 4).map(function (g) { return '<span class="pill warn">gap ' + n(g[0]) + ' – ' + n(g[1]) + '</span>'; }).join(' ')
               + (j.waiting ? ' · in the next walk' : ' <button type="button" class="small ghost" data-walk="' + esc(j.address) + '">Walk its gaps</button>') + '</p>'

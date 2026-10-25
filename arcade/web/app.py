@@ -26128,8 +26128,10 @@ def create_app(state: AppState) -> FastAPI:
                 if address in _account_own_addresses(types.SimpleNamespace(pubkey=row[1]), picked):
                     owner = {"tag": row[0], "account": row[1], "own": True}
                     break
+        known = sum(1 for m in marks.values() if m != "ins:?")
         return JSONResponse({"address": address, "chain": picked.network, "tip": tip, "owner": owner,
-                             "coins": len(coins), "sats": sum(int(c["value"]) for c in coins), "marked": len(marks),
+                             "coins": len(coins), "sats": sum(int(c["value"]) for c in coins), "marked": known,
+                             "unchecked": len(marks) - known,
                              "covered": [list(r) for r in cov], "gaps": [list(g) for g in coinlistlib.gaps(cov, 0, tip)],
                              "waiting": address in (_walk_pending.get(picked.network) or ())})
 
@@ -26151,6 +26153,10 @@ def create_app(state: AppState) -> FastAPI:
             address = str(said.get("address") or "").strip()
             if picked is None or not address:
                 return JSONResponse({"detail": "a chain and an address"}, status_code=400)
+            try:                                            # followed from now on too, so what the walk finds stays true
+                _watch(address, "admin walk", chain=picked)
+            except Exception:                               # noqa: BLE001 -- the index not ready: the walk says so
+                pass
             _walk_start(picked, address)
             return JSONResponse({"queued": address})
         if do == "set":
