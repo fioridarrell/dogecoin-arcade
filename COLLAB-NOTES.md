@@ -88,6 +88,11 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-25 PWA: a menu on a held icon; no robot over an open app (Claude)
+home.html: holding an icon (450 ms) opens a menu -- Edit Home Screen, Open (Go back to it when running), Close (when
+running), Remove from Home Screen (apps); moving the held finger on drags as before. `#arc-bot` is hidden while a window
+is open (body.hs-win-open) and inside windows (html.inshell, base.html).
+
 ### 2026-10-25 Broadcasts fan out to every sharer; collections inscribe on lanes (Claude)
 The operator: "Build both. Make sure they work and then publish them."
 - Broadcast fan-out: `rpc.FAN_OUT` (set to `coreshare.fan_out`) runs after every successful `sendrawtransaction` of a

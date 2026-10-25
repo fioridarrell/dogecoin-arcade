@@ -174,3 +174,17 @@ def test_the_wallet_is_asked_for_as_the_app_opens_and_no_hint_text():
     home = (TEMPLATES / "home.html").read_text()
     assert "if (!keys) arcadeUnlockSheet('');" in home and "askForWallet();" in home
     assert "Touch and hold an icon to move it." not in home
+
+
+def test_holding_an_icon_opens_its_menu_and_no_robot_over_an_open_app():
+    """2026-10-24: "When you Long click on one of the app icons, it should open a menu with edit Home Screen, open
+    app, remove app, close app"; "when you have an app open, you should not see the robot helper"."""
+    home = (TEMPLATES / "home.html").read_text()
+    assert "press.t = setTimeout(fromFolder ? begin : showMenu, 450);" in home, "held: the menu, not a drag at once"
+    for words in ("Edit Home Screen", "Remove from Home Screen", "'Close'", "'Open'"):
+        assert words in home, words
+    assert "if (!drag && press.menu) { if (Math.abs(dx) + Math.abs(dy) > 10) { hideMenu(); begin(); } return; }" in home, \
+        "held and moved on: the menu goes and the icon is dragged"
+    assert "body.hs-win-open #arc-bot" in home and "document.body.classList.toggle('hs-win-open', !!front)" in home
+    base = (TEMPLATES / "base.html").read_text()
+    assert "html.inshell #arc-bot,html.inshell #arc-bot-box{display:none !important}" in base
