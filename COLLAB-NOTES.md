@@ -88,6 +88,39 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-25 Coin lists between arcades, the shared walk, Admin -> Wallet imports; the PWA home always portrait (Claude)
+The operator: "each users valid, UTXO list should be stored alongside their encrypted wallet file ... also be stored in their
+arcade, browser local storage ... any of the current arcade accounts that are held by more than one arcade. Like @apple
+the UTXO's and balances cross arcade need to be reconciled"; then, one decision at a time: the chain decides (every coin
+gettxout-checked), lists public, no Core watch-only and no rescan, a walk shared across arcades from block 0 reading
+block files, every block read by two arcades plus canaries, walking only when an unknown wallet is imported.
+- `arcade/coinlist.py`: coverage per address (`covered` table beside `utxo`: the block ranges this index is complete
+  over, besides watching), `listing`, `merge`, `gaps`, the walk's `segments` (one per reader, staggered, each read by
+  its own reader and the one above), `agree`, `canaries_missing`.
+- `/signin/<tag>/coins` adds `lists` (every address of the account on every chain -- main, SegWit, imported -- with
+  coverage and inscription marks); `chains` stays for older arcades. `_reconcile_coins`: every holder's list merged,
+  new coins checked (`_file_checked_coins`), coverage merged. Once per coin-list version every account is reconciled
+  (`coinlists_reconciled:v1`, 3 min after start, paced). Backfills record their coverage.
+- Browser copy: `wallet.keepCoins` (localStorage `arcade_coins:<pubkey>`), sent back at sign-in (not waited for) to
+  `POST /account/coins/merge` (own addresses only, every coin checked, once a minute); `GET /account/coins/list`.
+- `arcade/blkscan.py`: a node's blk*.dat as a height table (headers read once, main chain followed from the tip),
+  outputs of the utxos.SPENDABLE kinds matched per block; `scan_parallel` over the cores. Pepecoin mainnet: all
+  1,265,572 blocks in 13.6 s on 8 cores; 351/351 against RPC.
+- `arcade/coinwalk.py` + `/coins/walk/can|job`: a walk part read here (block files, else RPC) for another arcade, in
+  the background, fetched by id. `_shared_walk`: readers (files first), segments, canaries from this index (one per
+  kind), compare per segment; a disagreement or missed canary is read again here and the reader that was wrong rests an
+  hour. Imports use it instead of the Core rescan/read-back (`import_walk:<net>`, on by default); several imports
+  share a walk. Kotia addresses seeded from #23's whole unspent set count as covered from block 0.
+- Admin -> Wallet imports (approved mock-up): per chain, wallets and how much is known for certain, the walk now (each
+  segment, its two readers, canaries), waiting, readers, recent walks, lookup (coverage bar, gaps), reconcile, settings
+  (walk on/off, lend to others, most readers), and the exact `setfacl` line when the node's block files are unreadable.
+- Live on staging: three Pepecoin addresses walked 0..1,265,644 from the block files in 26 s; against Core's own
+  decoding of the last 30,000 blocks, 1,374 of 1,374 unspent coins, none extra.
+- PWA home (`home.html`): Android locks portrait (screen.orientation.lock) while no app is in front; an iPhone has the
+  page turned back a quarter (html.turn90 / turn-90) with every touch and box read through `loc()`/`R()`.
+- Needs: a node whose block files the arcade cannot read walks over RPC (slow); Admin -> Wallet imports shows the
+  one `setfacl` command for it (on .25 Dogecoin's /var/lib/dogecoind is dogecoin-only).
+
 ### 2026-10-25 · SadFrog's side (Claude, node 2) · branch `team/assets-bellinals` · Arcade Assets, part 1
 SadFrog: "make sure all assets, starting with bellinals, are viewable, listable and sendable." This branch is the first
 part: one list of ord chains, each chain priced on its own, Bellinals moved like Doginals and Pepinals, and Taproot
