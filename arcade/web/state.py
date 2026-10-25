@@ -1739,6 +1739,7 @@ class AppState:
                 kept[net] = DoginalIndex(Path(self.home) / f"ord-{net}.sqlite", chain.rpc,
                                          (lambda n=net: self.ord_mode(n)),
                                          own_core=(lambda c=chain: not getattr(c, "borrowed", False)),
+                                         lenders=(lambda c=chain: self._ord_lenders(c)),
                                          net=net, mweb=bool(getattr(chain.params, "mweb", False)),
                                          cores=self.ord_cores, walk_share=self.ord_share)
             except Exception:                                  # noqa: BLE001 -- e.g. the file still locked by the
@@ -1747,6 +1748,14 @@ class AppState:
                 logging.getLogger("arcade.web").warning("ord index of %s not opened yet; asked again later", net,
                                                          exc_info=True)
         return dict(kept)
+
+    @staticmethod
+    def _ord_lenders(chain) -> list:
+        """Every linked arcade sharing `chain` now, each with a client that reads from it alone: an ord index gives each
+        one a lane (2026-10-24: "Anytime an arcade is indexing. It should be able to borrow as many nodes as it
+        wants"). [(node id, client factory)], fastest first."""
+        from ..mesh import coreshare
+        return [(peer, (lambda p=peer: coreshare.lent_rpc(p, chain.params))) for peer in coreshare.lenders(chain.network)]
 
     def doginal_index(self):
         """Dogecoin's ord index (the first one, 2026-10-20), or None on an arcade that reads no Dogecoin."""

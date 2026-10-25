@@ -500,6 +500,40 @@ class CoreShare:
 WALLET_HINT = "this arcade borrows {label} from another arcade's Core, and a borrowed chain has no node wallet"
 
 
+class OneSharer:
+    """A CoreShare seen through one sharer only: a BorrowedRpc on it reads from that arcade and no other (an ord index
+    gives each lending arcade a lane of its own; 2026-10-24: "borrow as many nodes as are available and run them
+    each on their own lane"). Should that sharer fail, the call fails: the lane waits, the others go on."""
+
+    def __init__(self, share: "CoreShare", peer: str):
+        self._share, self.peer = share, peer
+
+    def sharers(self, net: str) -> list[str]:
+        return [self.peer] if self.peer in self._share.sharers(net) else []
+
+    def call_from(self, net: str, calls: list, timeout: float = REQUEST_SECONDS,
+                  avoid: frozenset = frozenset()) -> tuple[str, list]:
+        if self.peer in avoid or self.peer not in self._share.sharers(net):
+            raise RpcTransportError(f"arcade {self.peer[:12]} does not share {net} now")
+        others = frozenset(p for p in self._share.sharers(net) if p != self.peer)
+        return self._share.call_from(net, calls, timeout, others | frozenset(avoid))
+
+    def __getattr__(self, name: str):
+        return getattr(self._share, name)
+
+
+def lenders(net: str) -> list[str]:
+    """The linked arcades sharing `net` now, fastest first: each one a lane for an ord index."""
+    return CURRENT.sharers(net) if CURRENT is not None else []
+
+
+def lent_rpc(peer: str, params) -> "BorrowedRpc":
+    """A client reading `params`' chain from `peer` only."""
+    if CURRENT is None:
+        raise RpcTransportError("the mesh is not running")
+    return BorrowedRpc(OneSharer(CURRENT, peer), params)
+
+
 class BorrowedRpc(RpcClient):
     """An RpcClient whose node is another arcade's, reached through the mesh (CoreShare).
 

@@ -88,6 +88,16 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-24 Ord index lanes on every lending arcade (Claude)
+The operator: "borrow as many nodes as are available and run them each on their own lane to get this index done on Strawberry
+as fast as possible"; "Anytime an arcade is indexing. It should be able to borrow as many nodes as it wants".
+Strawberry (no Dogecoin Core since the disk ran out) stood at 5,594,100: `_notes_for` never let an arcade without its own
+Core read a chunk, and nobody else was that far. Now `DoginalIndex(lenders=...)` (state._ord_lenders: every linked
+sharer of the chain, `coreshare.lent_rpc(peer)` pinned to one arcade via `OneSharer`) gives each lender a lane, beside
+the own-Core lanes, capped by the arcade's ord cores setting (Strawberry 17: all; .25 1). Lanes carry `via`; a lender
+that misses three times rests 5 min and its chunk is let go. Your side: an arcade sharing its Core now gets lane reads
+(getblockhash + raw getblock) from every indexing arcade linked to it.
+
 ### 2026-10-25 Wojakcoin (PR #14) applied; no swap or escrow lock on a chain that does not enforce CLTV (Claude)
 The operator: "incorporate the swaps for it ... And then merge this PR". Branch `claude/wojakcoin`: reallyshadydev's #14 applied as
 its own commit (author kept), conflicts taken with master's wording and master's Kotia `initialblockdownload` fix kept

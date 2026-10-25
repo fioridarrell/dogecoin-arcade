@@ -1396,8 +1396,11 @@ class DoginalIndex:
 
     def __init__(self, path: Path, rpc_factory: Callable[[], Any] | None, mode: Callable[[], str],
                  own_core: Callable[[], bool] = lambda: True, net: str = "doge", mweb: bool = False,
-                 cores: Callable[[], int] | None = None, walk_share: Callable[[], int] | None = None):
+                 cores: Callable[[], int] | None = None, walk_share: Callable[[], int] | None = None,
+                 lenders: Callable[[], list] | None = None):
         self.net = net
+        # The linked arcades lending this chain's Core, [(node, client factory)]: a lane each (2026-10-24).
+        self.lenders = lenders or (lambda: [])
         self.cores = cores or default_cores
         # Without a setting: all of a big machine, half of a small one (as it paced before 2026-10-21).
         self.walk_share = walk_share or (lambda: 100 if self._big() else 50)
@@ -1520,10 +1523,8 @@ class DoginalIndex:
         # first wins (2026-10-22: "Both"; Snapshots.step lets the copy go once the walk passes its block).
         if snaps.fetch is None:
             self._ask_for_snapshot()
-        own = self.own_core()
-        lanes = self._lanes_wanted() - 1 if own else 0
-        if lanes > 0:
-            self._help(rpc, budget / 2, lanes=lanes)
+        if self._lane_sources(walking=True):
+            self._help(rpc, budget / 2, walking=True)
         else:
             self._let_go()
         self._fetch_ahead()
@@ -1614,7 +1615,7 @@ class DoginalIndex:
             return None                                  # not a whole chunk yet: nobody scans it; its few blocks read
         if any(lane["c"] == c for lane in self.chunks.lanes) or c in self._fetching():
             return False
-        if self.own_core() and self._lanes_wanted() > 1:
+        if self._lane_sources(walking=True):
             return False                                 # the lanes here take every chunk in line, this one too
         lo = chunk_range(c, self.base)[0]
         now = time.time()
@@ -1776,21 +1777,47 @@ class DoginalIndex:
         except (TypeError, ValueError):
             return 1
 
-    def _help(self, rpc, budget: float, lanes: int | None = None) -> None:
-        """Help with as many chunks at once as this arcade gives cores (a lane each): their next blocks are fetched
-        side by side and read in worker processes, a block a lane at a time (2026-10-20: dedicate cores)."""
+    def _lent(self) -> dict:
+        """{node: client factory} of the arcades lending this chain now, at most as many as this arcade gives cores."""
+        try:
+            got = list(self.lenders() or [])
+        except Exception:                                # noqa: BLE001 -- the mesh not up yet: none this pass
+            got = []
+        rest = self.__dict__.setdefault("_lender_rest", {})
+        now = time.time()
+        return dict([(n, f) for n, f in got if rest.get(n, 0) < now][:self._lanes_wanted()])
+
+    def _lane_sources(self, walking: bool = False) -> list[str]:
+        """Where each lane reads from: "" for this arcade's own Core (all its cores helping; walking, one fewer -- the
+        walk is one), then one lane on every arcade lending the chain (2026-10-24: "borrow as many nodes as are
+        available and run them each on their own lane"; "Anytime an arcade is indexing. It should be able to borrow as
+        many nodes as it wants"). An arcade with no Core of its own reads only through its lenders."""
+        own = (self._lanes_wanted() - (1 if walking else 0)) if self.own_core() else 0
+        return [""] * max(0, own) + list(self._lent())
+
+    def _help(self, rpc, budget: float, walking: bool = False) -> None:
+        """Help with a chunk on each lane at once -- one per core given to it on this arcade's own Core, and one on every
+        arcade lending the chain: their next blocks are fetched side by side, each lane from its own Core, and read in
+        worker processes, a block a lane at a time (2026-10-20: dedicate cores; 2026-10-24: borrowed lanes)."""
         now = time.time()
         ready = ready_chunks(self.tip, self.base)
-        want = self._lanes_wanted() if lanes is None else max(1, lanes)
+        sources = self._lane_sources(walking) if (walking or not self.own_core()) else (
+            [""] * self._lanes_wanted() + list(self._lent()))
         lanes = self.chunks.lanes
-        while len(lanes) > want:                                  # fewer cores now: the newest lanes let go
-            self._drop_lane(lanes[-1])
+        # A lane whose lender is gone, or more of this arcade's own than it gives cores now: let go, newest first.
+        free = list(sources)
+        for lane in list(lanes):
+            via = lane.get("via", "")
+            if via in free:
+                free.remove(via)
+            else:
+                self._drop_lane(lane)
         held = {lane["c"] for lane in lanes}
-        while len(lanes) < want:
+        while free:
             c = self.chunks.choose(ready, now, exclude=held, first=self._needed() if self.mode() == "walk" else ())
             if c is None:
                 break
-            lane = {"c": c, "at": chunk_range(c, self.base)[0]}
+            lane = {"c": c, "at": chunk_range(c, self.base)[0], "via": free.pop(0)}
             lanes.append(lane)
             held.add(c)
             self._say_lease(lane)
@@ -1802,21 +1829,35 @@ class DoginalIndex:
             todo = [lane for lane in lanes if lane["at"] < chunk_range(lane["c"], self.base)[1]]
             if not todo:
                 break
-            heights = [lane["at"] for lane in todo]
-            stored = {h for h in heights if self.store.q("SELECT 1 FROM pnote WHERE height=?", (h,))}
-            for h, (block_hash, line, n, notes) in self._scan_many(rpc, [h for h in heights if h not in stored]).items():
+            stored = {lane["at"] for lane in todo if self.store.q("SELECT 1 FROM pnote WHERE height=?", (lane["at"],))}
+            asked = [(lane["at"], lane.get("via", "")) for lane in todo if lane["at"] not in stored]
+            scanned = self._scan_many(rpc, asked)
+            for h, (block_hash, line, n, notes) in scanned.items():
                 with self.store.tx() as db:
                     if not db.execute("SELECT 1 FROM block WHERE height=?", (h,)).fetchone():
                         db.execute("INSERT INTO block (height, hash, line, n) VALUES (?,?,?,?)",
                                    (h, block_hash, line, n))
                     db.execute("INSERT OR REPLACE INTO pnote VALUES (?,?)", (h, notes))
             for lane in todo:
+                if lane["at"] not in stored and lane["at"] not in scanned:
+                    # Its lender did not answer: the lane waits; three misses in a row and that arcade rests five
+                    # minutes, its chunk let go for another lane to take.
+                    lane["miss"] = lane.get("miss", 0) + 1
+                    if lane["miss"] >= 3 and lane.get("via"):
+                        self.__dict__.setdefault("_lender_rest", {})[lane["via"]] = time.time() + 300
+                        log.info("ord index %s: arcade %s did not answer three times; rests 5 minutes",
+                                 self.net, lane["via"][:12])
+                        self._drop_lane(lane)
+                    continue
+                lane.pop("miss", None)
                 lo = chunk_range(lane["c"], self.base)[0]
                 lane["at"] += 1
                 done += 1
                 if (lane["at"] - lo) % PROGRESS_EVERY == 0:
                     self._say_lease(lane)
             self._keep_lanes()
+            if not scanned and not stored:
+                break
         if done:
             self.help_rate = done / max(time.monotonic() - start, 1e-6)
         for lane in list(lanes):
@@ -1832,25 +1873,42 @@ class DoginalIndex:
                 self._drop_lane(lane)
         self._keep_lanes()
 
-    def _scan_many(self, rpc, heights: list[int]) -> dict[int, tuple[str, str, int]]:
-        """(hash, line, births) for each height: one at a time on one lane; on several, fetched side by side (threads,
-        each its own connection) and read in worker processes (Python reads blocks on one core per process)."""
-        if not heights:
+    def _scan_many(self, rpc, asked: list) -> dict[int, tuple[str, str, int]]:
+        """(hash, line, births) for each (height, via) a lane asks: one at a time on one lane of this arcade's own Core;
+        on several, fetched side by side (threads, each its own connection: this Core's, or the lending arcade's the
+        lane reads from) and read in worker processes (Python reads blocks on one core per process)."""
+        if not asked:
             return {}
         import os
         small = (os.cpu_count() or 1) < BIG_FROM_CORES
-        if (len(heights) == 1 or self._lanes_wanted() == 1) and not small:
+        heights = [h for h, _via in asked]
+        if (len(asked) == 1 or self._lanes_wanted() == 1) and not small and not any(via for _h, via in asked):
             return {h: scan_block(rpc, h, self.taproot, self.mweb, self.dialect) for h in heights}
         # A small machine reads every block in a worker process, even on one lane: parsed here, it held the web
         # process's threads (2026-10-20, .25 helping: pages waited a minute).
         from concurrent.futures import ThreadPoolExecutor
+        lent = self._lent()
 
-        def fetch(h: int) -> tuple[str, str]:
-            with self.rpc_factory() as own:
-                block_hash = own.call("getblockhash", h)
-                return block_hash, own.call("getblock", block_hash, 0)
-        with ThreadPoolExecutor(max_workers=len(heights)) as fetchers:
-            raws = list(fetchers.map(fetch, heights))
+        def fetch(job: tuple) -> tuple[str, str] | None:
+            h, via = job
+            factory = lent.get(via) if via else self.rpc_factory
+            if factory is None:
+                return None                              # no longer lends this chain: the lane lets go
+            try:
+                with factory() as own:
+                    block_hash = own.call("getblockhash", h)
+                    return block_hash, own.call("getblock", block_hash, 0)
+            except Exception as exc:                     # noqa: BLE001 -- one lane's lender: the others go on
+                if not via:
+                    raise
+                log.debug("ord index %s: block %d from arcade %s failed: %s", self.net, h, via[:12], exc)
+                return None
+        with ThreadPoolExecutor(max_workers=len(asked)) as fetchers:
+            got = list(fetchers.map(fetch, asked))
+        heights = [h for (h, _via), raw in zip(asked, got) if raw is not None]
+        raws = [raw for raw in got if raw is not None]
+        if not raws:
+            return {}
         pool = self._workers()
         jobs = [(raw, block_hash, self.taproot, self.mweb, self.dialect) for block_hash, raw in raws]
         return dict(zip(heights, pool.map(_parse, jobs)))

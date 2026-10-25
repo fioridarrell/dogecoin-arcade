@@ -1316,3 +1316,69 @@ def test_a_compressed_answer_that_unpacks_too_far_or_is_not_zlib_is_a_wrong_piec
             await n_share._get_part(to_holder, {"op": "gb", "id": rid, "seq": 0, "end": True, "z": 1}, data)
     asyncio.run(go())
     assert failed == [("holder", "s" * 64, 3), ("holder", "s" * 64, 3)] and got == []
+
+
+class _Lender:
+    """Another arcade lending the chain's Core: the same chain, its own reads counted; `down` makes it fail."""
+
+    def __init__(self, chain):
+        self.chain, self.blocks, self.down = chain, 0, False
+
+    def call(self, method, *params):
+        if self.down:
+            raise ConnectionError("this arcade went quiet")
+        if method == "getblock":
+            self.blocks += 1
+        return self.chain.call(method, *params)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def test_an_arcade_with_no_core_of_its_own_reads_a_lane_on_every_lending_arcade(tmp_path):
+    """2026-10-24: "borrow as many nodes as are available and run them each on their own lane to get this index
+    done on Strawberry as fast as possible"; "Anytime an arcade is indexing. It should be able to borrow as many nodes
+    as it wants". Before, a walker with no Core of its own only waited for other arcades' notes, and stood still at the
+    front (Strawberry, 2026-10-24, block 5,594,100)."""
+    chain = _story_chain()
+    walked = _walker(tmp_path, chain)
+    walked.walker.step(chain, dx.BASE + 11, budget=60)
+    lenders = {f"node{i}": _Lender(chain) for i in range(3)}
+    borrower = dx.DoginalIndex(tmp_path / "b.sqlite", lambda: chain, lambda: "walk", own_core=lambda: False,
+                               cores=lambda: 8, lenders=lambda: [(n, (lambda l=l: l)) for n, l in lenders.items()])
+    assert borrower._lane_sources(walking=True) == ["node0", "node1", "node2"], "no Core here: a lane on each lender"
+    borrower.step(budget=0)
+    assert sorted(lane["via"] for lane in borrower.chunks.lanes) == ["node0", "node1", "node2"]
+    assert len({lane["c"] for lane in borrower.chunks.lanes}) == 3, "three different chunks at once"
+    for _ in range(20):
+        borrower.step()
+        if borrower.walker.next_height() > dx.BASE + 11 - dx.WALK_SETTLE:
+            break
+    assert borrower.walker.next_height() == dx.BASE + 12, "the walk reaches the tip on borrowed lanes alone"
+    assert all(l.blocks > 0 for l in lenders.values()), "every lending arcade read blocks"
+    assert _dump(borrower) == _dump(walked), "the same index as a walk from its own Core"
+    # As many as it gives cores: two cores, two lenders read.
+    two = dx.DoginalIndex(tmp_path / "two.sqlite", lambda: chain, lambda: "walk", own_core=lambda: False,
+                          cores=lambda: 2, lenders=lambda: [(n, (lambda l=l: l)) for n, l in lenders.items()])
+    assert two._lane_sources(walking=True) == ["node0", "node1"]
+    # An arcade with its own Core borrows too, beside its own lanes.
+    own = dx.DoginalIndex(tmp_path / "own.sqlite", lambda: chain, lambda: "walk", cores=lambda: 3,
+                          lenders=lambda: [(n, (lambda l=l: l)) for n, l in lenders.items()])
+    assert own._lane_sources(walking=True) == ["", "", "node0", "node1", "node2"]
+
+
+def test_a_lender_that_goes_quiet_rests_and_the_other_lanes_go_on(tmp_path):
+    chain = _busy_chain(24)
+    good, bad = _Lender(chain), _Lender(chain)
+    bad.down = True
+    borrower = dx.DoginalIndex(tmp_path / "b.sqlite", lambda: chain, lambda: "help", own_core=lambda: False,
+                               cores=lambda: 4, lenders=lambda: [("good", lambda: good), ("bad", lambda: bad)])
+    for _ in range(4):
+        borrower.step()
+    assert good.blocks > 0, "the answering lender's lane went on"
+    assert "bad" in borrower._lender_rest, "three misses: the quiet arcade rests"
+    assert all(lane.get("via") != "bad" for lane in borrower.chunks.lanes), "and its chunk was let go"
+    assert borrower._lane_sources() == ["good"]
