@@ -88,6 +88,12 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-25 Ord walk: a block's input values fetched in batches over the lanes (Claude)
+Strawberry's walk (Dogecoin through lenders) stood at 5,594,317 with its next chunks' notes already on disk: walk_block
+asked each input value it needed (inputs before a maybe-inscribed coin) as one getrawtransaction round trip.
+`Walker._prefetch` gathers them per block and `DoginalIndex._fetch_many` fetches them in batches of 200
+(`fetch_raw_many`), split over the own Core and every lender, side by side; anything missed is still asked singly.
+
 ### 2026-10-25 Documentation brought up to date; step-by-step Apps and Collections guides; the helper sees every page (Claude)
 The operator: "Update all of the documentation. Especially user guides on how to add inscriptions collections and especially
 how to create an application and add it to the apps"; "Make sure that the helper bot has access to all of these docs."

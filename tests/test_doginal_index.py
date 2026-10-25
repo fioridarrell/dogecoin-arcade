@@ -1419,3 +1419,38 @@ def test_a_sharer_says_how_many_lanes_it_lends(monkeypatch):
             return ["a", "b", "c"]
     monkeypatch.setattr(coreshare, "CURRENT", Share())
     assert coreshare.lenders("doge") == [("a", 4), ("b", 1), ("c", 1)], "an arcade that does not say lends one"
+
+
+def test_a_walk_fetches_a_blocks_earlier_transactions_in_batches_over_the_lenders(tmp_path):
+    """2026-10-25: Strawberry, reading Dogecoin through lenders, crawled through the 2023 blocks: every input value the
+    walk needed (the inputs before a coin an inscription may sit on) was one round trip. Now a block's are gathered first
+    and fetched in batches, split over every lender."""
+    chain = Chain()
+    a = [_tx([(FUND, n, b"")], [5 * 10 ** 8 + n], tag=bytes([n])) for n in range(6)]     # big coins: never cached by the walk
+    chain.add(a)
+    spend = _tx([(a[n][1], 0, b"") for n in range(6)], [3 * 10 ** 9])
+    chain.add([spend])
+
+    class Batching(_Lender):
+        def __init__(self, chain):
+            super().__init__(chain)
+            self.singles, self.batched = 0, 0
+
+        def call(self, method, *params):
+            if method == "getrawtransaction":
+                self.singles += 1
+            return super().call(method, *params)
+
+        def batch(self, calls):
+            self.batched += len(calls)
+            return [self.chain.call(m, *p) for m, p in calls]
+    lenders = {f"n{i}": Batching(chain) for i in range(2)}
+    index = dx.DoginalIndex(tmp_path / "b.sqlite", lambda: chain, lambda: "walk", own_core=lambda: False,
+                            cores=lambda: 4, lenders=lambda: [(n, (lambda l=l: l)) for n, l in lenders.items()])
+    block = rawchain.read_block(bytes.fromhex(chain.blocks[1][1].hex()), chain.blocks[1][0])
+    tracked = {dx._outpoint(a[5][1], 0)}                    # an inscription may sit on the last input
+    got = index.walker._prefetch(chain, block, tracked)
+    assert got == 5, "the five inputs before it, fetched first"
+    assert all(l.batched > 0 for l in lenders.values()), "split over both lenders, in batches"
+    assert sum(l.singles for l in lenders.values()) == 0, "not one lookup at a time"
+    assert all(index.walker.values.get(dx._outpoint(a[n][1], 0)) == 5 * 10 ** 8 + n for n in range(5))

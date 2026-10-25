@@ -886,6 +886,9 @@ class Walker:
         self.tracked: _Seen | None = None                                  # coins an inscription may sit on
         self.values: OrderedDict[bytes, int] = OrderedDict()               # recent outputs' koinu
         self.rate = 0.0
+        # How a block's earlier transactions are fetched, many at once: fetch_many(txids) -> {txid: raw bytes}; the
+        # index gives one that spreads them over every lane's Core (DoginalIndex._fetch_many). None: batched on `rpc`.
+        self.fetch_many: Callable[[list[str]], dict] | None = None
         self.error = ""
 
     def next_height(self) -> int:
@@ -932,6 +935,36 @@ class Walker:
         for n, (v, _s) in enumerate(tx.vout):
             self._keep(_outpoint(txid, n), v)
         return tx.vout[vout][0]
+
+    #: Transactions asked of a Core in one round trip while a block's input values are gathered.
+    PREFETCH_BATCH = 200
+
+    def _prefetch(self, rpc, block, tracked) -> int:
+        """Every earlier transaction this block will ask the value of (the inputs before a coin an inscription may sit
+        on), fetched before the walk goes through it -- in batches, spread over the lanes' Cores -- instead of one round
+        trip each (2026-10-25: Strawberry, reading through lenders, crawled through the 2023 blocks a lookup at a time,
+        thousands a block). What is not fetched here is still asked one at a time (_value). Returns how many."""
+        inblock = {tx.txid for tx in block.txs}
+        want: dict[str, None] = {}
+        for tx in block.txs[1:]:
+            maybe = [j for j, i in enumerate(tx.vin) if i["vout"] != -1 and _outpoint(i["txid"], i["vout"]) in tracked]
+            if not maybe:
+                continue
+            for i in tx.vin[:max(maybe)]:
+                if i["txid"] not in inblock and _outpoint(i["txid"], i["vout"]) not in self.values:
+                    want[i["txid"]] = None
+        if not want:
+            return 0
+        txids = list(want)
+        got = self.fetch_many(txids) if self.fetch_many is not None else fetch_raw_many(rpc, txids, self.PREFETCH_BATCH)
+        for txid, raw in got.items():
+            try:
+                tx = rawchain.read_tx(raw, txid)
+            except Exception:                            # noqa: BLE001 -- asked again one at a time
+                continue
+            for n, (v, _s) in enumerate(tx.vout):
+                self._keep(_outpoint(txid, n), v)
+        return len(got)
 
     def _keep(self, key: bytes, value: int) -> None:
         self.values[key] = value
@@ -999,6 +1032,10 @@ class Walker:
         next_number = int(self.store.meta("next_number", 0))
         number_before = next_number
         next_rid = (self.store.q("SELECT COALESCE(MAX(rid), 0) FROM insc")[0][0]) + 1
+        try:
+            self._prefetch(rpc, block, tracked)
+        except Exception:                                # noqa: BLE001 -- the values are asked one at a time instead
+            log.debug("ord index: prefetch for block %d failed", h, exc_info=True)
         with self.store.tx() as db:
             w = _Block(db)
             for pos, tx in enumerate(block.txs):
@@ -1379,6 +1416,22 @@ class Chunks:
         return random.choice([c for best, c in audit[:16] if best == least])
 
 
+def fetch_raw_many(rpc, txids: list[str], batch: int = 200) -> dict[str, bytes]:
+    """{txid: raw} for as many of `txids` as `rpc` gives, `batch` to a round trip; a batch that fails is left out (each
+    of its transactions is asked one at a time later)."""
+    out: dict[str, bytes] = {}
+    for at in range(0, len(txids), batch):
+        part = txids[at:at + batch]
+        try:
+            raws = rpc.batch([("getrawtransaction", [t, 0]) for t in part])
+        except Exception:                                # noqa: BLE001
+            continue
+        for t, raw in zip(part, raws):
+            if isinstance(raw, str):
+                out[t] = bytes.fromhex(raw)
+    return out
+
+
 def scan_block(rpc, h: int, taproot: bool = False, mweb: bool = False,
                dialect: str = "dogecoin") -> tuple[str, str, int, bytes]:
     """(block hash, its line, births in it, its spend notes) for one block, read raw and proved (rawchain)."""
@@ -1419,6 +1472,7 @@ class DoginalIndex:
         self.walker = Walker(self.store, self.taproot, mweb, params=NETWORKS.get(net),
                              token_protocol="prc-20" if net in ("main", "test") else "drc-20", dialect=self.dialect)
         self.chunks = Chunks(self.store)
+        self.walker.fetch_many = self._fetch_many
         self.share: Any = None                       # DxShare, when the mesh runs
         self.me: str | None = None                   # this arcade's node id on the mesh (DxShare sets it)
         self.tip = 0
@@ -1790,6 +1844,35 @@ class DoginalIndex:
     def _lent(self) -> dict:
         """{node: client factory} of the arcades lending this chain now."""
         return {n: f for n, f, _lanes in self._lenders_now()}
+
+    def _fetch_many(self, txids: list[str]) -> dict[str, bytes]:
+        """A block's earlier transactions for the walk, split over every Core a lane reads from -- this arcade's own and
+        each lender's (their lanes) -- side by side, each in batches (Walker._prefetch)."""
+        factories = ([self.rpc_factory] if self.own_core() and self.rpc_factory is not None else []) + \
+            list(self._lent().values())
+        if not factories:
+            factories = [self.rpc_factory] if self.rpc_factory is not None else []
+        if not factories:
+            return {}
+        parts = [txids[i::len(factories)] for i in range(len(factories))]
+
+        def one(job) -> dict[str, bytes]:
+            factory, part = job
+            if not part:
+                return {}
+            try:
+                with factory() as rpc:
+                    return fetch_raw_many(rpc, part, Walker.PREFETCH_BATCH)
+            except Exception:                            # noqa: BLE001 -- its share is asked one at a time
+                return {}
+        out: dict[str, bytes] = {}
+        if len(factories) == 1:
+            return one((factories[0], parts[0]))
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=len(factories)) as pool:
+            for got in pool.map(one, zip(factories, parts)):
+                out.update(got)
+        return out
 
     def _lent_lanes(self) -> list[str]:
         """A lane per lane each lender lends (2026-10-25: "several lanes on each lender"), dealt round the
