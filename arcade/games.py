@@ -20,7 +20,16 @@ loads its parts from other inscriptions.
               "cover": "<inscription txid>",           a picture for the card
               "play": "<inscription txid>",            the page Play opens, if not this one
               "wallet": true,                          uses the player's wallet (trades, pays, signs)
+              "minimized": {"timeout": 300},           seconds it keeps running minimized; 0 no limit; 15 min unsaid
               "genre": "rpg"}}                         up to 24
+
+**Minimized** (the installed app's home screen, 2026-10-24; the operator: "App builders should be able to decide their apps
+do when they are minimized that should be stored in the game card ... remain in the server and active in a game for
+five minutes before they time out. Other apps could have a different timeout or no timeout"; "If an app doesn't have a
+timeout specified, it should default to 15 minutes. A specified timeout of zero should be an unlimited timeout").
+`timeout` is seconds the app keeps running after it is minimized; then the arcade closes it (it hears "closing" first).
+Not said: 15 minutes. 0: no limit, kept until the player closes it. At most a day. A bare number means the same as
+`{"timeout": n}`. Either way the app is told (arcade.app, /r/app.js) when it is minimized and restored.
 
 **One card per game.** The newest inscription per creator and name is the
 game; inscribing a new version with the same name replaces the card, and
@@ -91,6 +100,7 @@ def parse(json_text: Any) -> dict | None:
     out["notify"] = game.get("notify") is True
     # An app that reads the player's address book (arcade.contacts.list) says so: its card shows the Contacts switch.
     out["contacts"] = game.get("contacts") is True
+    out["minimized_timeout"] = minimized_timeout(game.get("minimized"))
     family = game.get("family")
     out["family"] = family if isinstance(family, str) and _FAMILY.match(family) else ""
     cover = str(game.get("cover") or "").lower()
@@ -98,6 +108,23 @@ def parse(json_text: Any) -> dict | None:
     play = str(game.get("play") or "").lower()
     out["play"] = play if _TXID.match(play) else ""
     return out
+
+
+#: How long a minimized app keeps running when its card does not say (15 minutes), and the longest a card may ask
+#: for (a day). A card's 0 is no limit.
+MINIMIZED_DEFAULT = 900
+MINIMIZED_MOST = 86400
+
+
+def minimized_timeout(said: Any) -> int | None:
+    """The seconds a card's app is kept running while minimized, or None for no limit (the card said 0)."""
+    if isinstance(said, dict):
+        said = said.get("timeout")
+    if isinstance(said, bool) or not isinstance(said, (int, float)) or said != said or said < 0:
+        return MINIMIZED_DEFAULT
+    if said == 0:
+        return None
+    return int(min(max(said, 1), MINIMIZED_MOST))
 
 
 def is_page(content_type: Any) -> bool:

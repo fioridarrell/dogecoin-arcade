@@ -29,7 +29,7 @@ def test_the_door_lets_anybody_see_the_home_screen_and_an_account_keep_its_own_i
 def test_the_home_screen_has_every_tab_as_an_icon_and_the_apps_for_its_store(client):
     app, state = client
     _inscribe(state, "a1" * 32, 51, MAKER, {"app": {"name": "Call Me", "media": True, "contacts": True,
-                                                       "genre": "calls"}}, height=100)
+                                                       "genre": "calls", "minimized": {"timeout": 300}}}, height=100)
     page = app.get("/home")
     assert page.status_code == 200
     apps = json.loads(re.search(r"var APPS = (\[.*?\]);\n", page.text).group(1))
@@ -41,6 +41,7 @@ def test_the_home_screen_has_every_tab_as_an_icon_and_the_apps_for_its_store(cli
     assert one["key"] == gameslib.app_key(MAKER, "Call Me")
     assert one["perms"] == ["contacts", "media"] and one["genre"] == "calls"
     assert one["open"] == f"/inscriptions/{one['page']}/full"
+    assert one["timeout"] == 300, "the card's minimized timeout reaches the home screen"
     icon = app.get("/apps/store-icon.png")
     assert icon.status_code == 200 and icon.headers["content-type"] == "image/png"
 
@@ -78,3 +79,49 @@ def test_only_the_installed_app_is_sent_to_the_home_screen():
     assert "html.inshell header{display:none !important}" in head
     home = (TEMPLATES / "home.html").read_text()
     assert "navigator.wakeLock.request('screen')" in home, "the screen stays awake while the app is open"
+
+
+def test_nobody_signed_in_is_asked_to_sign_in_first(public):
+    """2026-10-24: "PWA should ask for you to login right away"."""
+    app, _state = public
+    r = app.get("/home", headers=EDGE, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/join?next=/home"
+    assert _sign_in(app, SigningKey.generate(), headers=EDGE).status_code == 200
+    assert app.get("/home", headers=EDGE, follow_redirects=False).status_code == 200
+
+
+def test_a_card_says_how_long_its_app_keeps_running_minimized():
+    """2026-10-24: "App builders should be able to decide their apps do when they are minimized that should be
+    stored in the game card ... five minutes before they time out. Other apps could have a different timeout or no
+    timeout"."""
+    def said(m):
+        return gameslib.parse(json.dumps({"app": {"name": "X", "minimized": m}}))["minimized_timeout"]
+    assert said({"timeout": 300}) == 300
+    assert said(120) == 120, "a bare number is the timeout"
+    assert said({"timeout": 0}) is None, "0 is no limit (2026-10-24)"
+    assert said(None) == 900 and said({}) == 900, "not said: 15 minutes"
+    assert said({"timeout": -5}) == 900 and said({"timeout": "300"}) == 900 and said({"timeout": True}) == 900
+    assert said({"timeout": 10 ** 9}) == 86400, "a day at most"
+    assert gameslib.parse(json.dumps({"app": {"name": "Y"}}))["minimized_timeout"] == 900
+
+
+def test_the_app_is_told_when_it_is_minimized_restored_or_closing(client):
+    app, _state = client
+    shim = app.get("/r/app.js")
+    assert shim.status_code == 200 and "javascript" in shim.headers["content-type"]
+    assert "window.arcade.app" in shim.text and "arcade:app" in shim.text
+    doors = (TEMPLATES / "_page_doors.js.html").read_text()
+    assert "app: 'viewer'" in doors and "if (m.arcade === 'app') { appDoor(m, answer); return; }" in doors
+    assert "e.source !== window.parent || e.origin !== location.origin" in doors, "only the home screen is heard"
+    home = (TEMPLATES / "home.html").read_text()
+    for state in ("minimized", "restored", "closing"):
+        assert f"tell(w, '{state}')" in home
+    assert "expire(w)" in home and "w.timeout === 0" not in home, "0 is no limit, never closed at once"
+
+
+def test_the_installed_app_opens_on_the_apps(client):
+    """2026-10-24: "The PWA should open directly to the apps"."""
+    app, _state = client
+    assert app.get("/manifest.webmanifest").json()["start_url"] == "/home"
+    head = (TEMPLATES / "base.html").read_text().split("</head>")[0]
+    assert "nav.redirectCount > 0" in head, "a start page the server redirected (an account's / to the Feed) lands home"

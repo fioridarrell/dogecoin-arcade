@@ -24,14 +24,13 @@
       <div class="hs-brand">{{ brand.name }}</div>
       <div class="hs-name">{% if account_name %}@{{ account_name }}{% elif operator_view %}This arcade{% else %}Welcome{% endif %}</div>
     </div>
-    <button type="button" class="hs-theme" id="hs-theme" aria-label="Light or dark"></button>
     <button type="button" class="hs-done" id="hs-done" hidden>Done</button>
   </div>
   <p class="hs-hint" id="hs-hint"></p>
   <div class="hs-scroll" id="hs-scroll"><div class="hs-grid" id="hs-grid"></div></div>
   <div class="hs-mini" id="hs-mini" hidden>
     <button type="button" class="hs-mini-back" id="hs-mini-back"><span class="hs-mini-icon" id="hs-mini-icon"></span>
-      <span class="hs-mini-text"><strong id="hs-mini-name"></strong><span>Running · tap to go back</span></span></button>
+      <span class="hs-mini-text"><strong id="hs-mini-name"></strong><span id="hs-mini-left">Running · tap to go back</span></span></button>
     <button type="button" class="hs-mini-x" id="hs-mini-x" aria-label="Close it">&#x2715;</button>
   </div>
   <div class="hs-dock" id="hs-dock"></div>
@@ -87,8 +86,6 @@ header, footer.version, .notice, #appbar, #newposts { display: none !important; 
 .hs-who { flex: 1; min-width: 0; }
 .hs-brand { font-weight: 800; letter-spacing: .08em; font-size: .72rem; color: var(--accent); text-transform: uppercase; }
 .hs-name { font-size: 1.35rem; font-weight: 750; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.hs-theme { width: 44px; height: 44px; border-radius: 50%; padding: 0; display: flex; align-items: center;
-  justify-content: center; background: var(--panel); color: var(--fg); border: 1px solid var(--line); box-shadow: none; }
 .hs-done { border-radius: 999px; padding: 8px 18px; min-height: 40px; }
 .hs-hint { margin: 2px 16px 6px; min-height: 1.1em; font-size: .8rem; color: var(--muted); }
 .hs-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; padding-bottom: 12px; }
@@ -422,7 +419,11 @@ header, footer.version, .notice, #appbar, #newposts { display: none !important; 
       f.className = 'hs-win'; f.src = o.url; f.title = o.name;
       f.setAttribute('allow', 'camera; microphone; autoplay; fullscreen; clipboard-write; screen-wake-lock');
       $('hs-wins').appendChild(f);
-      w = {key: o.key, frame: f, name: o.name, item: o.item || {name: o.name}};
+      var it = o.item || {name: o.name};
+      // The card's "minimized" timeout (games.py; 2026-10-24): seconds it keeps running minimized (15 minutes
+      // when the card does not say), null for no limit.
+      w = {key: o.key, frame: f, name: o.name, item: it,
+           timeout: it.app && typeof it.app.timeout === 'number' ? it.app.timeout : null};
       wins.push(w);
       if (wins.length > MOST) {
         var old = wins.filter(function (x) { return x !== w; })[0];
@@ -433,8 +434,38 @@ header, footer.version, .notice, #appbar, #newposts { display: none !important; 
     wins = wins.filter(function (x) { return x !== w; }).concat([w]);
     show(w);
   }
+  // Told to the app inside (arcade.app, /r/app.js, through its viewer's 'app' door).
+  function tell(w, state) {
+    try {
+      w.frame.contentWindow.postMessage({arcade: 'app', push: true, state: state, timeout: w.timeout,
+                                         closesAt: w.until || null}, location.origin);
+    } catch (e) {}
+  }
+  function minimized(w) {
+    if (!w || w.min) return;
+    w.min = true;
+    if (typeof w.timeout === 'number') {
+      w.until = Date.now() + w.timeout * 1000;
+      clearTimeout(w.timer);
+      w.timer = setTimeout(function () { expire(w); }, w.timeout * 1000);
+    }
+    tell(w, 'minimized');
+  }
+  function expire(w) {
+    if (wins.indexOf(w) < 0 || !w.min) return;
+    var m = Math.round(w.timeout / 60);
+    say(w.name + ' closed after ' + (w.timeout >= 60 ? m + ' minute' + (m === 1 ? '' : 's') : w.timeout + ' seconds') + ' minimized');
+    closeWin(w);
+  }
+  // A phone that slept or ran another app may not have run the timers: catch up when the home screen is seen again.
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState !== 'visible') return;
+    wins.slice().forEach(function (w) { if (w.min && w.until && w.until <= Date.now()) expire(w); });
+  });
   function show(w) {
-    wins.forEach(function (x) { x.frame.hidden = x !== w; });
+    wins.forEach(function (x) { if (x !== w && !x.frame.hidden) { x.frame.hidden = true; minimized(x); } });
+    w.frame.hidden = false;
+    if (w.min) { w.min = false; w.until = null; clearTimeout(w.timer); tell(w, 'restored'); }
     front = w;
     $('hs-pull').hidden = false;
     hideBar();
@@ -444,12 +475,18 @@ header, footer.version, .notice, #appbar, #newposts { display: none !important; 
   var hinted = {};
   function minimize() {
     if (!front) return;
+    var w = front;
     front.frame.hidden = true; front = null;
+    minimized(w);
     $('hs-pull').hidden = true; hideBar(); paintRunning();
   }
   function closeWin(w, quiet) {
-    if (!w) return;
-    w.frame.remove();
+    if (!w || wins.indexOf(w) < 0) return;
+    // "closing" first, then a moment for the app to save before its page goes.
+    clearTimeout(w.timer);
+    tell(w, 'closing');
+    w.frame.hidden = true;
+    setTimeout(function () { w.frame.remove(); }, 800);
     wins = wins.filter(function (x) { return x !== w; });
     if (front === w) { front = null; $('hs-pull').hidden = true; hideBar(); }
     paintRunning();
@@ -465,10 +502,17 @@ header, footer.version, .notice, #appbar, #newposts { display: none !important; 
     $('hs-mini').hidden = !last;
     if (last) {
       $('hs-mini-name').textContent = last.name;
+      $('hs-mini-left').textContent = last.until ? 'Closes in ' + left(last.until) + ' \u00b7 tap to go back'
+                                                 : 'Running \u00b7 tap to go back';
       var ic = $('hs-mini-icon'); ic.style.background = iconBg(last.item); ic.innerHTML = iconHtml(last.item);
       $('hs-mini').dataset.key = last.key;
     }
   }
+  function left(until) {
+    var s = Math.max(0, Math.round((until - Date.now()) / 1000));
+    return Math.floor(s / 60) + ':' + ('0' + s % 60).slice(-2);
+  }
+  setInterval(function () { if (!$('hs-mini').hidden && wins.some(function (w) { return w.until; })) paintRunning(); }, 1000);
   $('hs-mini-back').addEventListener('click', function () {
     var w = wins.filter(function (x) { return x.key === $('hs-mini').dataset.key; })[0]; if (w) show(w);
   });
@@ -483,7 +527,13 @@ header, footer.version, .notice, #appbar, #newposts { display: none !important; 
       if (app) openWin({key: app.key, url: path, name: app.name, item: byKey[app.key]});
       else openWin({key: 'url:' + path, url: path, name: name || 'Page', item: {name: name || 'Page'}});
     },
-    home: function () { minimize(); }
+    home: function () { minimize(); },
+    // A page's "‹ Home" link (base.html): an app is minimized, a page is closed (as the back swipe does).
+    leave: function (win) {
+      var w = wins.filter(function (x) { return x.frame.contentWindow === win; })[0] || front;
+      if (!w) return;
+      if (w.item && w.item.kind === 'app') { if (w === front) minimize(); else minimized(w); } else closeWin(w);
+    }
   };
 
   // ---------- pull down from the top edge for Minimize / Close ----------
@@ -548,11 +598,13 @@ header, footer.version, .notice, #appbar, #newposts { display: none !important; 
     $('hs-cards').innerHTML = got.length ? got.map(function (a) {
       var on = keys.indexOf(a.key) >= 0;
       var meta = ['by ' + a.by, a.version ? 'v' + a.version : '', a.players].filter(Boolean).join(' · ');
+      var bg = a.timeout === null ? 'Keeps running when minimized, no time limit'
+             : 'Keeps running ' + (a.timeout >= 60 ? Math.round(a.timeout / 60) + ' min' : a.timeout + ' s') + ' when minimized';
       return '<div class="hs-card"><div class="hs-card-cover"' + (a.cover ? '' : ' style="background:#6b4fa0"') + '>'
         + (a.cover ? '<img src="' + esc(a.cover) + '" alt="" loading="lazy">' : esc(a.name)) + '</div>'
         + '<div class="hs-card-body"><div class="hs-card-name"><strong>' + esc(a.name) + '</strong>'
         + (a.mp ? '<span class="pill">multiplayer</span>' : '') + (a.genre ? '<span class="pill">' + esc(a.genre) + '</span>' : '') + '</div>'
-        + '<div class="hs-card-by">' + esc(meta) + '</div>'
+        + '<div class="hs-card-by">' + esc(meta) + '</div><div class="hs-card-by">' + esc(bg) + '</div>'
         + (a.desc ? '<p class="hs-card-desc">' + esc(a.desc) + '</p>' : '')
         + '<div class="hs-card-acts">'
         + (on ? '<span class="hs-added">✓ On your home screen</span>'
@@ -632,25 +684,6 @@ header, footer.version, .notice, #appbar, #newposts { display: none !important; 
     if (keys.indexOf(a.key) < 0) keys.push(a.key);
     persist(); cards(); say(a.name + ' added to your home screen');
   }
-
-  // ---------- light or dark (base.html, LIGHT OR DARK): Auto, then Light, then Dark ----------
-  var THEME_ICON = {
-    auto: 'M12 3a9 9 0 1 0 0 18zM12 3a9 9 0 0 1 0 18',
-    light: 'M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10zM12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4',
-    dark: 'M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z'
-  };
-  var THEME_NAME = {auto: 'Auto: as this phone is set', light: 'Light', dark: 'Dark'};
-  function themeIcon() {
-    var t = window.arcadeTheme();
-    $('hs-theme').innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="'
-      + THEME_ICON[t] + '" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-    $('hs-theme').setAttribute('aria-label', 'Theme: ' + THEME_NAME[t] + '. Tap to change.');
-  }
-  $('hs-theme').addEventListener('click', function () {
-    var now = window.arcadeTheme(), next = now === 'auto' ? 'light' : now === 'light' ? 'dark' : 'auto';
-    window.arcadeTheme(next); themeIcon(); say('Theme: ' + THEME_NAME[next]);
-  });
-  themeIcon();
 
   // ---------- the screen stays awake while the app is open ----------
   var lock = null;

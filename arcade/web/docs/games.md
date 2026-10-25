@@ -50,6 +50,7 @@ wrong shape is simply left out rather than refusing the game.
 | `cover` | The txid of a picture you inscribed. It fills the card; without one, the card shows the name. | a 64-character txid |
 | `play` | The txid of the page *Play* opens, when this inscription is only the game's card. Counts only if you inscribed both. | a 64-character txid |
 | `genre` | One word or two: `rpg`, `racing`, `puzzle`. Shown as a tag. | 24 characters |
+| `minimized` | How long your game keeps running after a player minimizes it on the installed app's home screen: `{"timeout": 300}` is 300 seconds, then it is closed; `0` is no limit; left out, 15 minutes. See *Minimized* below. | up to 86400 seconds |
 
 The JSON is inscribed with the page and can never be edited, so check it
 before you inscribe. Text is trimmed to its limit and extra spaces are folded,
@@ -151,6 +152,42 @@ your layout moves, and keep your buttons out from under them: the pictures sit o
 (say, to add the camera to a voice-only call) swaps the tracks without a gap; `mute({video, audio})` darkens or
 silences them; `stop()` closes both. A pair that cannot connect directly (state `room`) gets no media unless your
 builder has leased a relay: say "could not connect directly".
+
+## Minimized: what your game does in the background
+
+On a phone with the arcade installed (the PWA), every app opens full screen over the home screen, and the player can
+pull down from the top edge to **Minimize** it. A minimized app keeps running: its page, its sockets and its seat in a
+room all stay. You decide for how long, on your card:
+
+```json
+{"game": {"name": "Moon Miner", "minimized": {"timeout": 300}}}
+```
+
+- `{"timeout": 300}` -- keep running five minutes after it is minimized, then the arcade closes it. Restoring it before
+  then stops the clock. At most 86400 (a day).
+- `{"timeout": 0}` -- no limit: keep running until the player closes it.
+- no `minimized` (or no `timeout`) -- 15 minutes.
+
+Your page is told what is happening, so it can pause, save, or keep its seat warm. Load `/r/app.js`:
+
+```html
+<script src="/r/app.js"></script>
+<script>
+arcade.app.on(function (s) {
+  // s.state: "minimized", "restored" or "closing"; s.timeout: your seconds (null: none);
+  // s.closesAt: when it will be closed, in ms since 1970 (null: never); s.inShell: on the home screen.
+  if (s.state === 'minimized') pauseTheMusic();
+  if (s.state === 'restored') resumeTheMusic();
+  if (s.state === 'closing') saveTheGame();      // the player closed it, or your timeout ran out
+});
+arcade.app.state().then(function (s) { /* {state: "open", ...} until something happens */ });
+</script>
+```
+
+"closing" comes a moment before the page is removed: save quickly. The same thing is sent as a window event,
+`arcade:app`. In a browser tab nothing is ever minimized (the browser has tabs of its own), so only `"open"` is heard.
+A phone may still pause the whole arcade when the player leaves it for another app; when they come back, an app whose
+timeout ran out meanwhile is closed then.
 
 ## How the tab ranks games
 

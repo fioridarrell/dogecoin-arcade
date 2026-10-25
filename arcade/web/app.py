@@ -8195,6 +8195,15 @@ def create_app(state: AppState) -> FastAPI:
         return Response(body, media_type="application/javascript",
                         headers={**contentlib.CORS, "Cache-Control": "public, max-age=3600"})
 
+    @app.get("/r/app.js")
+    def r_app_js():
+        """The app shim an inscribed page loads (2026-10-24): arcade.app.on(fn) -- told when the installed app's home
+        screen minimizes it, restores it, or is about to close it (its card's "minimized" timeout) -- and
+        arcade.app.state(). The viewer answers (_page_doors, the 'app' door)."""
+        body = (TEMPLATE_DIR / "app_js.js").read_text()
+        return Response(body, media_type="application/javascript",
+                        headers={**contentlib.CORS, "Cache-Control": "public, max-age=3600"})
+
     @app.get("/r/storage.js")
     def r_storage_js():
         """The storage shim an inscribed page loads (see pagestore.py).
@@ -9889,7 +9898,9 @@ def create_app(state: AppState) -> FastAPI:
         return JSONResponse({
             "name": brandlib.current().name, "short_name": "Arcade",
             "description": "Messages, a feed, tokens and art on Pepecoin.",
-            "id": "/", "start_url": "/", "scope": "/", "display": "standalone",
+            # Opens on the home screen (home.html; 2026-10-24: "The PWA should open directly to the apps"). The
+            # id stays "/" so an installed app is the same app; one installed before reads "/" and base.html sends it.
+            "id": "/", "start_url": "/home", "scope": "/", "display": "standalone",
             "background_color": brandlib.current().light_bg,
             "theme_color": brandlib.current().light_fg,
             "icons": [
@@ -10012,7 +10023,10 @@ def create_app(state: AppState) -> FastAPI:
     def home_screen(request: Request):
         """The installed app's one page (PWA only): the tabs and the apps as icons, each opened full screen over it
         and kept running when minimized. A browser tab never comes here by itself (base.html sends only the
-        installed app), and still works if it does."""
+        installed app), and still works if it does. Nobody signed in: the sign-in page first, then back here
+        (2026-10-24: "PWA should ask for you to login right away")."""
+        if _account_view(request) and signed_in(request) is None:
+            return RedirectResponse("/join?next=/home", status_code=303)
         rows = _games_ranked(request, "popular")
         apps = []
         for it in rows:
@@ -10029,6 +10043,7 @@ def create_app(state: AppState) -> FastAPI:
                 "version": str(g.get("version") or "")[:24], "players": str(g.get("players") or "")[:40],
                 "likes": it.get("likes", 0), "comments": it.get("comments", 0),
                 "perms": [p for p in ("wallet", "contacts", "media", "notify") if g.get(p)],
+                "timeout": g.get("minimized_timeout"),
             })
         return render(request, "home.html", fullscreen=True, apps=apps,
                       operator_view=not _account_view(request))

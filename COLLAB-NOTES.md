@@ -88,6 +88,19 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-24 App cards say what happens when minimized; arcade.app tells the app; PWA opens on the apps (Claude)
+The operator: "App builders should be able to decide their apps do when they are minimized that should be stored in the game
+card"; "If an app doesn't have a timeout specified, it should default to 15 minutes. A specified timeout of zero should be
+an unlimited timeout"; "there needs to be a way for the app to know it's been minimized". Branch `claude/app-lifecycle`.
+- Card field `"minimized": {"timeout": seconds}` (or a bare number): kept running that long minimized on the PWA home
+  screen, then closed. Unsaid: 900 s. 0: no limit. Max 86400. `games.minimized_timeout`; docs/games.md "Minimized".
+- `/r/app.js` -> `arcade.app.on(fn)` / `off` / `state()`: "minimized" (timeout, closesAt), "restored", "closing" (a moment
+  before the window goes). The viewer's new `app` door relays only from its parent on the same origin (the home screen).
+- /home: nobody signed in -> /join?next=/home. Manifest start_url /home (id stays /); base.html sends a redirected landing
+  (an account's / -> /feed) to the apps instead of opening it in a window. Light/dark picker moved to Your arcade (me.html).
+- Every page in a home-screen window gets a "‹ Home" link like the App Store's (an app is minimized, a page closed).
+- Not yet: several pages of apps, folders, back swipe (next).
+
 ### 2026-10-24 Admin -> Meshtastic flasher: a help box when the T-Deck can't be reached, said for the visitor's system (Claude)
 The operator, flashing from .55 in snap Firefox, picker empty: "How will the average user be able to figure this out?" Branch
 `claude/flasher-fixes`. admin.html `flashHelp(kind)` under the buttons, from the user agent (OS, browser):

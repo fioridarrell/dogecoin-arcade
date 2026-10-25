@@ -38,7 +38,7 @@
     var CHAIN = {network: "{{chain.network}}",
                  version: {{chain.params.pubkeyhash_version}}};
     var doors = {access: 'viewer', contacts: 'viewer', storage: '/storage/', node: '/node/', swap: '/swap/', owner: '/owner/',
-                 realtime: '/realtime/', escrow: '/r/escrow/', state: '/r/state/', llm: 'viewer'};
+                 realtime: '/realtime/', escrow: '/r/escrow/', state: '/r/state/', llm: 'viewer', app: 'viewer'};
 
     // Realtime rooms (arcade/web/realtime.py, templates/realtime.js): this page
     // joins on the frame's behalf, holds the token and the stream, and passes
@@ -1651,6 +1651,26 @@
       answer({ok: false, error: 'access: op is status, wallet, nodes or move'});
     }
 
+    // THE APP AROUND IT (arcade.app, /r/app.js; 2026-10-24): the installed app's home screen tells this page when it
+    // minimizes the window, restores it, or is about to close it (the card's "minimized" timeout, games.py), and this
+    // page tells the app. Only the home screen, this page's own parent on this origin, is listened to.
+    var appNow = {state: 'open', timeout: null, closesAt: null, inShell: false};
+    try { appNow.inShell = window.parent !== window && window.parent.location.pathname === '/home'; } catch (e) {}
+    window.addEventListener('message', function(e){
+      var m = e.data || {};
+      if (m.arcade !== 'app' || !m.push || e.source !== window.parent || e.origin !== location.origin) return;
+      if (['minimized', 'restored', 'closing'].indexOf(m.state) < 0) return;
+      appNow = {state: m.state, timeout: typeof m.timeout === 'number' ? m.timeout : null,
+                closesAt: typeof m.closesAt === 'number' ? m.closesAt : null, inShell: appNow.inShell};
+      if (sandbox && sandbox.contentWindow) {
+        sandbox.contentWindow.postMessage(Object.assign({arcade: 'app', event: true}, appNow), '*');
+      }
+    });
+    function appDoor(m, answer){
+      if (m.op === 'state') { answer(Object.assign({ok: true}, appNow)); return; }
+      answer({ok: false, error: 'app: op is state'});
+    }
+
     window.addEventListener('message', function(e){
       if (!sandbox || e.source !== sandbox.contentWindow) return;
       var m = e.data || {};
@@ -1661,6 +1681,7 @@
       }
       if (m.arcade === 'realtime') { realtimeDoor(m, answer, e.source); return; }
       if (m.arcade === 'access') { accessDoor(m, answer); return; }
+      if (m.arcade === 'app') { appDoor(m, answer); return; }
       if (m.arcade === 'contacts') { contactsDoor(m, answer); return; }
       if (m.arcade === 'llm') { llmDoor(m, answer, e.source); return; }
       if (m.arcade === 'escrow') { escrowDoor(m, answer); return; }

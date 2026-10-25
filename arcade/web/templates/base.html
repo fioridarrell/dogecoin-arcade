@@ -22,6 +22,10 @@
 /* A page in a window of the home screen (below): the icons are its tabs, so no tab strip; room for the pull strip. */
 html.inshell header{display:none !important}
 html.inshell body:not(.fullscreen){padding-top:18px}
+/* Back to the home screen, the App Store's own link (2026-10-24: "all of the pages should have a back to home
+   link like the App Store does"). */
+.inshell-home{display:inline-block;background:none !important;border:0;box-shadow:none !important;color:var(--accent);
+  padding:8px 8px 8px 0;margin:0 0 6px;font:inherit;font-weight:650;font-size:1rem;cursor:pointer}
 </style>
 {#- THE HOME SCREEN (PWA only, home.html; 2026-10-24). The installed app lives on /home: opened anywhere else (its
     start page, a notification, a link) it goes there and opens that page in a window. A page inside one of its windows
@@ -29,7 +33,7 @@ html.inshell body:not(.fullscreen){padding-top:18px}
     never sent there: it already has tabs of its own. -#}
 <script>
 /* LIGHT OR DARK (2026-10-24: "the arcade a dark mode, light mode"): the device's own unless this browser picked
-   one; kept here, so every page and every window of the home screen follows at once. */
+   one (me.html; the footer); kept here, so every page and every window of the home screen follows at once. */
 (function () {
   var KEY = 'arcade.theme', root = document.documentElement;
   function apply(t) {
@@ -56,6 +60,14 @@ html.inshell body:not(.fullscreen){padding-top:18px}
   try { if (window.top !== window && window.top.location.pathname === '/home') shell = window.top; } catch (e) {}
   if (shell) {
     document.documentElement.classList.add('inshell');
+    document.addEventListener('DOMContentLoaded', function () {
+      if (document.body.classList.contains('fullscreen')) return;     // an app: the pull-down bar is its way home
+      var home = document.createElement('button');
+      home.type = 'button'; home.className = 'inshell-home'; home.textContent = '\u2039 Home';
+      home.addEventListener('click', function () { if (shell.arcadeShell) shell.arcadeShell.leave(window); });
+      var main = document.querySelector('main') || document.body;
+      main.insertBefore(home, main.firstChild);
+    });
     document.addEventListener('click', function (e) {
       var a = e.target.closest && e.target.closest('a[href]');
       if (!a || e.defaultPrevented || !shell.arcadeShell) return;
@@ -75,8 +87,13 @@ html.inshell body:not(.fullscreen){padding-top:18px}
     (window.matchMedia && matchMedia('(display-mode: standalone)').matches);
   if (!installed || window.top !== window || location.pathname === '/home') return;
   if (/^\/(join|restore|signin|offline|clone)(\/|$)/.test(location.pathname)) return;
-  var here = location.pathname + location.search + location.hash;
-  location.replace(here === '/' ? '/home' : '/home#open=' + encodeURIComponent(here));
+  // Opening the app goes straight to the apps (2026-10-24: "The PWA should open directly to the apps"): its start
+  // page, or wherever the server sent it from there (an account's / goes to the Feed). A link to one page -- a
+  // notification, a shared link -- opens that page in a window over them.
+  var here = location.pathname + location.search + location.hash, nav = null;
+  try { nav = performance.getEntriesByType('navigation')[0]; } catch (e) {}
+  var landed = here === '/' || (nav && nav.redirectCount > 0);
+  location.replace(landed ? '/home' : '/home#open=' + encodeURIComponent(here));
 })();
 </script>
 <link rel="stylesheet" href="/base.css">

@@ -260,6 +260,33 @@
 })();
 </script>
 
+{#- 2026-10-24: "The light mode dark mode, auto selector should be in the your arcade page" (base.html, LIGHT OR
+    DARK): kept in this browser; every page and every window of the home screen follows at once. #}
+<div class="panel" style="margin-top:14px" id="theme-pref">
+  <h2 style="margin-top:0">Light or dark</h2>
+  <p class="muted" style="margin-top:0">Auto follows this device's setting. Kept in this browser.</p>
+  <div class="row" style="gap:8px;flex-wrap:wrap" role="radiogroup" aria-label="Light or dark">
+    <button type="button" class="btn small ghost" data-theme-set="auto" role="radio">Auto</button>
+    <button type="button" class="btn small ghost" data-theme-set="light" role="radio">Light</button>
+    <button type="button" class="btn small ghost" data-theme-set="dark" role="radio">Dark</button>
+  </div>
+</div>
+<script>
+(function () {
+  var bs = document.querySelectorAll('[data-theme-set]');
+  function paint() {
+    var now = window.arcadeTheme();
+    bs.forEach(function (b) {
+      var on = b.dataset.themeSet === now;
+      b.classList.toggle('on', on); b.classList.toggle('ghost', !on); b.setAttribute('aria-checked', on ? 'true' : 'false');
+    });
+  }
+  bs.forEach(function (b) { b.addEventListener('click', function () { window.arcadeTheme(b.dataset.themeSet); paint(); }); });
+  window.addEventListener('storage', function (e) { if (e.key === 'arcade.theme') paint(); });
+  paint();
+})();
+</script>
+
 {#- 2026-10-23: "In the users your arcade tab you should be able to disable the robot helper" (_helper.html). #}
 <div class="panel" style="margin-top:14px" id="helper-pref">
   <h2 style="margin-top:0">Arcade helper</h2>

@@ -37,7 +37,8 @@
     "media": true,
     "family": "my-app",
     "cover": "&lt;txid of a picture you inscribed&gt;",
-    "genre": "puzzle"
+    "genre": "puzzle",
+    "minimized": {"timeout": 300}
   }
 }</pre>
   <p class="muted" style="font-size:.86rem;margin-bottom:0">Only <code>name</code> is
@@ -47,6 +48,9 @@
     card. An app that uses the wallet without saying so is stopped the first time it asks.
     An app that uses the camera or microphone (a video call) says <code>"media": true</code>: its
     card shows a Camera &amp; microphone switch, off until the player turns it on.
+    <code>"minimized": {"timeout": 300}</code> keeps it running five minutes after a player minimizes it on the
+    installed app's home screen (0: no limit; left out: 15 minutes); it hears about it through
+    <code>arcade.app</code>.
     The full guide is in the <a href="/docs">docs</a>.</p>
 </div>
 

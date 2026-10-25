@@ -137,7 +137,8 @@ def test_the_app_shell_is_public(client):
 def test_the_manifest_makes_it_installable(client):
     app, state = client
     manifest = app.get("/manifest.webmanifest").json()
-    assert manifest["display"] == "standalone" and manifest["start_url"] == "/"
+    assert manifest["display"] == "standalone" and manifest["start_url"] == "/home"   # the home screen (2026-10-24)
+    assert manifest["id"] == "/", "the same installed app as before"
     assert {i["sizes"] for i in manifest["icons"]} >= {"192x192", "512x512"}
     for icon in manifest["icons"]:
         assert app.get(icon["src"]).headers["content-type"] == "image/png"
