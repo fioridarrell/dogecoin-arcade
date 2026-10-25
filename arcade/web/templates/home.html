@@ -732,6 +732,7 @@ body.fullscreen #arc-bot { display: none !important; }
     edit: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>',
     open: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     close: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+    rename: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4zM13.5 6.5l4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     remove: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>'
   };
   function showMenu() {
@@ -740,6 +741,8 @@ body.fullscreen #arc-bot { display: none !important; }
     var it = folder ? null : byKey[id], running = wins.some(function (w) { return w.key === id; });
     var items = [['edit', 'Edit Home Screen']];
     items.push(['open', folder ? 'Open folder' : (running ? 'Go back to it' : 'Open')]);
+    // 2026-10-25: "the folder drop-down menu should include rename".
+    if (folder) items.push(['rename', 'Rename']);
     if (running) items.push(['close', 'Close']);
     if (it && it.kind === 'app') items.push(['remove', 'Remove from Home Screen', true]);
     var m = $('hs-menu');
@@ -764,6 +767,8 @@ body.fullscreen #arc-bot { display: none !important; }
     hideMenu(); swallowClick = false;
     if (act === 'edit') { editing = true; draw(); return; }
     if (act === 'open') { if (m.dataset.folder) openFolder(id); else openKey(id); return; }
+    // The open folder's own name field, selected to type over (saved on change, as when it is edited there).
+    if (act === 'rename') { openFolder(id); var n = $('hs-fname'); n.focus(); n.select(); return; }
     if (act === 'close') { closeWin(wins.filter(function (w) { return w.key === id; })[0]); return; }
     if (act === 'remove') {
       var at = find(id);
