@@ -170,6 +170,33 @@ def test_arcade_follow_lets_the_reader_scroll_up_while_text_streams_in(browser, 
     browser.execute_script("clearInterval(window.__typing)")
 
 
+def test_a_list_that_gets_shorter_by_itself_keeps_following(browser, arcade):
+    """A placeholder ("Thinking...") replaced by the first short words, or a code block closing, makes the list shorter and
+    pulls scrollTop down with nobody touching it. That is not the reader leaving: it keeps following (2026-10-25)."""
+    browser.get(arcade + "/apps")
+    lst = browser.execute_script("""
+        const l = document.createElement('div');
+        l.style.cssText = 'position:fixed;left:20px;top:20px;width:400px;height:300px;overflow:auto;z-index:99999;background:#fff';
+        for (let n = 0; n < 60; n++) { const p = document.createElement('p'); p.textContent = 'earlier ' + n; l.appendChild(p); }
+        const ph = document.createElement('div'); ph.id = 'ph'; ph.style.height = '900px'; ph.textContent = 'Thinking...';
+        l.appendChild(ph); document.body.appendChild(l);
+        window.__toBottom2 = arcadeFollow(l); window.__toBottom2(true);
+        return l;""")
+    time.sleep(0.3)
+    browser.execute_script("document.getElementById('ph').style.height = '20px'")   # the list shrinks by itself
+    time.sleep(0.3)                                                                  # its scroll event lands
+    browser.execute_script("""const l = arguments[0];
+        for (let n = 0; n < 10; n++) { const p = document.createElement('p'); p.textContent = 'reply ' + n; l.appendChild(p);
+                                       window.__toBottom2(); }""", lst)
+    assert _until(lambda: _gap(browser, lst) < 40, 2), "a list that got shorter by itself still follows the reply"
+    _wheel_up(browser, lst)
+    time.sleep(0.3)
+    held = browser.execute_script("return arguments[0].scrollTop", lst)
+    browser.execute_script("""const l = arguments[0]; const p = document.createElement('p'); p.textContent = 'more';
+        l.appendChild(p); window.__toBottom2();""", lst)
+    assert abs(browser.execute_script("return arguments[0].scrollTop", lst) - held) < 2, "the reader's own scroll still stops it"
+
+
 def test_corner_helper_reply_can_be_read_back_while_it_types(browser, arcade):
     browser.get(arcade + "/apps")
     browser.execute_script("localStorage.clear()")

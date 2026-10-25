@@ -1788,10 +1788,6 @@ async function arcadeKeys(chain, why){
   return chain ? await w.opened(chain) : got.opened;
 }
 
-// Every field has a name a screen reader can say (a tester, 2026-09-26: 78
-// inputs across the site had only a placeholder). One pass after the page is
-// drawn and after each in-place redraw: a field with no <label>, no aria-label
-// and no aria-labelledby is named by its placeholder, or its name.
 // A message list that follows what is written into it only while the reader is at its bottom (SadFrog, 2026-10-24: a
 // renter "cannot scroll up to see what it typed before; it keeps locked in on the active typing of the model"). Scrolling
 // up -- wheel, touch, keys -- stops following at once; scrolling back to the bottom resumes it. Returns toBottom(force):
@@ -1802,22 +1798,32 @@ function arcadeFollow(list){
   // reader leaving; a move down (or our own jump) that ends near the bottom -- within 120 px, for the text that landed
   // meanwhile -- is following again, but not within 400 ms of the reader reaching up: a browser scrolls on the wheel
   // before the page hears of it, so a piece of text may already have pulled the view back down by then.
-  var follow = true, last = 0, leftAt = 0;
+  // A drop that comes with the list getting SHORTER is not the reader: a placeholder ("Thinking...") replaced by
+  // the first words, or a code block closing, pulls scrollTop down with nobody touching it (Claude's review, 2026-10-25).
+  var follow = true, last = 0, lastHeight = 0, leftAt = 0, touchY = null;
   function leave(){ follow = false; leftAt = Date.now(); }
   list.addEventListener('scroll', function(){
-    if (list.scrollTop < last - 2) leave();
+    if (list.scrollTop < last - 2 && list.scrollHeight >= lastHeight) leave();
     else if (list.scrollHeight - list.scrollTop - list.clientHeight < 120 && Date.now() - leftAt > 400) follow = true;
-    last = list.scrollTop;
+    last = list.scrollTop; lastHeight = list.scrollHeight;
   }, {passive: true});
   list.addEventListener('wheel', function(e){ if (e.deltaY < 0) leave(); }, {passive: true});
-  list.addEventListener('touchmove', leave, {passive: true});
+  // A finger dragging DOWN shows older text (the reader leaving); dragging up, or an iOS bounce at the bottom, does not.
+  list.addEventListener('touchstart', function(e){ touchY = e.touches.length ? e.touches[0].clientY : null; }, {passive: true});
+  list.addEventListener('touchmove', function(e){
+    if (touchY !== null && e.touches.length && e.touches[0].clientY - touchY > 6) leave();
+  }, {passive: true});
   list.addEventListener('keydown', function(e){ if (e.key === 'ArrowUp' || e.key === 'PageUp' || e.key === 'Home') leave(); });
   return function toBottom(force){
     if (force) { follow = true; leftAt = 0; }
-    if (follow) { list.scrollTop = list.scrollHeight; last = list.scrollTop; }
+    if (follow) { list.scrollTop = list.scrollHeight; last = list.scrollTop; lastHeight = list.scrollHeight; }
   };
 }
 
+// Every field has a name a screen reader can say (a tester, 2026-09-26: 78
+// inputs across the site had only a placeholder). One pass after the page is
+// drawn and after each in-place redraw: a field with no <label>, no aria-label
+// and no aria-labelledby is named by its placeholder, or its name.
 function arcadeLabel(root){
   (root || document).querySelectorAll('input:not([type=hidden]),textarea,select').forEach(function(el){
     if (el.getAttribute('aria-label') || el.getAttribute('aria-labelledby')) return;

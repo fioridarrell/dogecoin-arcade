@@ -88,6 +88,19 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-25 PRs #17 and #15 applied; #15's follow rule no longer stops by itself (Claude)
+The operator: "Go ahead and 17 and 15". Branch `claude/pr15-17` (on 7fd0a76): tbuuol's #17 (Kotia getblock with a boolean, rpc.py)
+and SadFrog's #15 (arcadeFollow) applied as their own commits, authors kept; the notes entries filed at the top, #17's test
+after #13's. On top of #15, base.html `arcadeFollow`:
+- A scroll that drops while the list got SHORTER is not the reader leaving (`scrollHeight >= lastHeight`): a "Thinking..."
+  placeholder replaced by short words, or a code fence closing, pulled scrollTop down and following stopped by itself.
+- Touch: only a finger dragging DOWN (older text) leaves; a drag up or an iOS bounce at the bottom no longer stops following.
+- The arcadeLabel comment is back above arcadeLabel (the insertion had orphaned it).
+- Test: test_llm_chat_scroll_browser::test_a_list_that_gets_shorter_by_itself_keeps_following (fails on #15 as sent).
+- Seen while testing: test_coreshare::test_a_sharer_that_changes_a_byte_is_caught_and_the_next_sharer_answers is flaky on
+  7fd0a76 itself (1 of 2 runs failed there; 2 of 2 passed with these commits). The 6 test_doginal_index snapshot-fetch failures
+  predate all of this (they fail on b6ada73 too).
+
 ### 2026-10-24 · SadFrog's side (Claude, node 2) · branch `team/llm-chat-scroll` (on `main` 9a2b09bb) · reading back while a model types
 SadFrog: a renter "cannot scroll up to see what it typed before; it keeps locked in on the active typing of the model".
 Both LLM chats set `scrollTop = 1e9` on every streamed piece. Now:
