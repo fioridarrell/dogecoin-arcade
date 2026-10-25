@@ -88,6 +88,18 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-25 Sign-in in three round trips instead of ten (Claude)
+The operator: "Logging into arcade on my @apple account takes an absurdly long time around 3 to 5 seconds." Measured on
+staging with a 200 ms round trip (the public tunnel): 4.16 s from the click to the next page; ten requests one after
+another (`/signin/<tag>`, the word list, `/account` for the chains, `/auth/challenge`, `/auth/login`, `/account` again
+for tellTheNode, `/account/imported/bring`, `/account/imported`, backfill), PBKDF2 only 0.13 s. Now (`wallet_js.js`
+`_signIn`, `seatWith`, `bringImports`; `signin.js` `words`): the sealed wallet, the chain list, the word list and the
+nonce are asked for at once and the password is worked through while they come; after `/auth/login`, tellTheNode and
+the imported wallets go side by side, and the record here is opened while the node asks the arcade it came from (read
+again only on "taken"). The word list is fetched once however many ask. Same conditions: 1.33 s, sign-in itself ~0.8 s.
+The node's own latency (a trivial `/auth/challenge` at 5-170 ms on the box, seconds in busy minutes behind `/account`
+and `/account/messages` polling) is a separate thing, not touched here.
+
 ### 2026-10-25 Ord walk: the coin filter kept on disk (Claude)
 Every start rebuilt the walk's Bloom filter (`_Seen`) from all of `at` -- 172 M rows on Dogecoin, ~an hour of one core,
 the walk standing still; each update restarted it. `Walker.save_seen` keeps it at `<index>.seen` (header + bits; ~512 MB

@@ -343,7 +343,16 @@ export async function signIn(tag, password, options) {
 }
 
 async function _signIn(tag, password, {network, version}) {
-  const found = await fetch(`/signin/${encodeURIComponent(tag)}`);
+  // Everything the sign-in will need is asked for at once (2026-10-25: "Logging into arcade on my @apple account
+  // takes an absurdly long time around 3 to 5 seconds"): it was ten round trips one after another. The sealed wallet,
+  // the chain list, the word list and the nonce to sign travel together, and the password is worked through while
+  // they come; a nonce is good for two minutes and one not used costs nothing.
+  const asked = fetch(`/signin/${encodeURIComponent(tag)}`);
+  const running = chains();
+  const challenge = fetch("/auth/challenge").then((r) => r.json());
+  signer.words().catch(() => {});
+  challenge.catch(() => {});
+  const found = await asked;
   const said = await found.json();
   if (!found.ok) throw new Error(said.detail || "no wallet by that name");
   // Made on another arcade: this one found it there by itself (2026-10-19: "It should just know
@@ -354,18 +363,23 @@ async function _signIn(tag, password, {network, version}) {
   }
   const phrase = await open(said.blob, password);
   const wallet = await walletFrom(phrase, network, version);
-  await everyChain(wallet, await chains());
+  await everyChain(wallet, await running);
   if (wallet.pubkey !== said.pubkey) {
     // The blob opened, and produced a different key than the node has on
     // file. That is not a wrong password -- it is a wallet that does not
     // match its own name, and going on would sign in as somebody else.
     throw new Error("that wallet does not match this name. Nothing was opened.");
   }
-  const result = await seatWith(wallet);
+  const result = await seatWith(wallet, {challenge, tell: false});
   // A newer record of its imported wallets from the arcade it came from, when this one has not heard (the mesh
-  // carries them too); then they open with the same password (plan item 18), in the second sealed record.
-  await bringImports("");
-  await openImportsWith(wallet, password);
+  // carries them too); then they open with the same password (plan item 18), in the second sealed record. Side by
+  // side with telling the node any address it does not know yet: neither waits for the other.
+  await Promise.all([
+    tellTheNode(wallet).catch(() => {}),
+    // the record here is opened while the node asks the arcade it came from; read again only when that brought a newer one
+    Promise.all([bringImports(""), openImportsWith(wallet, password)])
+      .then(([brought]) => brought && brought.outcome === "taken" ? openImportsWith(wallet, password) : null),
+  ]);
   // Any chain whose coins were never read back here (a read-back cut short by a restart): finished now. A chain
   // already done costs the node nothing (2026-10-19).
   fetch("/account/coins/backfill", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"})
@@ -526,8 +540,9 @@ async function _restore(phrase, password, {network, version}) {
 /** Prove a wallet to the node the only way a node believes, and open it
  *  from here -- the same two requests whichever way the words arrived.
  */
-async function seatWith(wallet, {join = true} = {}) {
-  const challenge = await (await fetch("/auth/challenge")).json();
+async function seatWith(wallet, {join = true, challenge: asked = null, tell = true} = {}) {
+  let challenge = asked ? await asked.catch(() => null) : null;
+  if (!challenge || !challenge.nonce) challenge = await (await fetch("/auth/challenge")).json();
   const signature = await wallet.sign(
     signer.loginMessage(challenge.origin, challenge.nonce));
   const opened = await fetch("/auth/login", {
@@ -540,8 +555,8 @@ async function seatWith(wallet, {join = true} = {}) {
   remember(wallet.phrase);
   // An account made before this node ran a second chain has no address
   // registered there, and nothing else will ever notice: told here, once,
-  // on the first sign-in that can derive it.
-  try { await tellTheNode(wallet); } catch (e) { /* not worth refusing a login */ }
+  // on the first sign-in that can derive it (signIn tells it beside its other steps).
+  if (tell) { try { await tellTheNode(wallet); } catch (e) { /* not worth refusing a login */ } }
   return result;
 }
 
@@ -4347,12 +4362,14 @@ async function tidyImports(wallet, password) {
 /** The account's signed record from the arcade it came from (`from`, or the one this node remembers), kept by this
  *  node when it checks. A few seconds at most: a sign-in never waits on another arcade for long. */
 async function bringImports(from) {
+  // What the node said ({asked, outcome, ...}), or null: "taken" is a newer record brought here just now.
   try {
-    await Promise.race([
+    const got = await Promise.race([
       fetch("/account/imported/bring", {method: "POST", headers: {"Content-Type": "application/json"},
                                         body: JSON.stringify({from: from || ""})}),
       new Promise((ok) => setTimeout(ok, 12000))]);
-  } catch (e) { /* the mesh brings it later */ }
+    return got && got.ok ? await got.json() : null;
+  } catch (e) { return null; /* the mesh brings it later */ }
 }
 
 const syncTried = new Set();

@@ -45,12 +45,14 @@ const unhex = (text) => new Uint8Array(
  * Fetched once and remembered. The same file the node vendors, served from
  * the node, so a phrase made here is a phrase every other wallet reads.
  */
-let WORDS = null;
+let WORDS = null, WORDS_ASKED = null;
 export async function words() {
   if (WORDS === null) {
-    const text = await (await fetch("/bip39-english.txt")).text();
-    WORDS = text.split(/\s+/).filter(Boolean);
-    if (WORDS.length !== 2048) throw new Error("the word list is damaged");
+    // One fetch however many ask at once (2026-10-25: a sign-in page asked for it four times in the same moment).
+    if (!WORDS_ASKED) WORDS_ASKED = fetch("/bip39-english.txt").then((r) => r.text()).finally(() => { WORDS_ASKED = null; });
+    const list = (await WORDS_ASKED).split(/\s+/).filter(Boolean);
+    if (list.length !== 2048) throw new Error("the word list is damaged");
+    WORDS = list;
   }
   return WORDS;
 }
