@@ -96,6 +96,14 @@ header, footer.version, .notice, #appbar, #newposts { display: none !important; 
 .hs { position: fixed; inset: 0; display: flex; flex-direction: column; background: var(--bg); color: var(--fg);
   padding-top: env(safe-area-inset-top, 0px); -webkit-user-select: none; user-select: none; }
 .hs-top { display: flex; align-items: center; gap: 10px; padding: 18px 16px 2px; }
+/* Always portrait on the home screen (2026-10-25: "make it so the home screen on the PWA is always in portrait mode,
+   regardless of the orientation of the phone"). Android locks it (screen.orientation.lock); an iPhone cannot be locked
+   from a page, so there the page is turned back against the phone's turn while no app is in front, the way the phone's
+   own home screen stays put. An app in front turns with the phone as before. */
+html.turn90 body, html.turn-90 body { position: fixed; top: 0; left: 0; width: 100vh; height: 100vw; overflow: hidden;
+  transform-origin: top left; }
+html.turn90 body { transform: rotate(90deg) translateY(-100%); }
+html.turn-90 body { transform: rotate(-90deg) translateX(-100%); }
 .hs-who { flex: 1; min-width: 0; }
 .hs-brand { font-weight: 800; letter-spacing: .08em; font-size: .72rem; color: var(--accent); text-transform: uppercase; }
 .hs-name { font-size: 1.35rem; font-weight: 750; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -418,7 +426,7 @@ body.fullscreen #arc-bot { display: none !important; }
   var COLS = 4, ROWS = 5, PER = 20, CW = 0, RH = 100, PAD = 8, pageNow = 0;
   var pager = $('hs-pager'), dots = $('hs-dots');
   function geometry() {
-    var w = pager.clientWidth || window.innerWidth, h = pager.clientHeight || (window.innerHeight - 260);
+    var w = pager.clientWidth || LW(), h = pager.clientHeight || (LH() - 260);
     COLS = Math.max(4, Math.min(8, Math.floor((w - 2 * PAD) / 92)));
     CW = (w - 2 * PAD) / COLS;
     ROWS = Math.max(2, Math.floor((h - 18) / RH));
@@ -527,9 +535,28 @@ body.fullscreen #arc-bot { display: none !important; }
   });
 
   // ---------- long press, drag, auto-shuffle, folders, pages ----------
+  // Where a touch is, and where a box is, in the home screen's own (portrait) frame: the page may be turned a quarter
+  // round on an iPhone held sideways (orient below), and touches come in the phone's frame.
+  var ROT = 0, LOCKED = false;
+  function loc(x, y) {
+    if (ROT === 90) return {x: y, y: window.innerWidth - x};
+    if (ROT === -90) return {x: window.innerHeight - y, y: x};
+    return {x: x, y: y};
+  }
+  function PX(e) { return loc(e.clientX, e.clientY).x; }
+  function PY(e) { return loc(e.clientX, e.clientY).y; }
+  function R(el) {
+    var r = el.getBoundingClientRect();
+    if (!ROT) return r;
+    var a = loc(r.left, r.top), b = loc(r.right, r.bottom);
+    var left = Math.min(a.x, b.x), top = Math.min(a.y, b.y), right = Math.max(a.x, b.x), bottom = Math.max(a.y, b.y);
+    return {left: left, top: top, right: right, bottom: bottom, width: right - left, height: bottom - top};
+  }
+  function LW() { return ROT ? window.innerHeight : window.innerWidth; }
+  function LH() { return ROT ? window.innerWidth : window.innerHeight; }
   var editing = false, press = null, drag = null, swallowClick = false, ghost = null;
   function startPress(e, id, fromFolder) {
-    press = {id: id, x0: e.clientX, y0: e.clientY, pid: e.pointerId, el: e.target.closest('.hs-tile'), fromFolder: fromFolder};
+    press = {id: id, x0: PX(e), y0: PY(e), pid: e.pointerId, el: e.target.closest('.hs-tile'), fromFolder: fromFolder};
     clearTimeout(press.t);
     if (editing && !fromFolder) begin();
     else press.t = setTimeout(fromFolder ? begin : showMenu, 450);
@@ -563,7 +590,7 @@ body.fullscreen #arc-bot { display: none !important; }
   }
   function begin() {
     if (!press) return;
-    var r = press.el.getBoundingClientRect();
+    var r = R(press.el);
     if (press.fromFolder) {
       // Out of the folder: onto this page, then dragged like any icon.
       var f = press.fromFolder;
@@ -589,29 +616,29 @@ body.fullscreen #arc-bot { display: none !important; }
   document.addEventListener('touchmove', function (e) { if (drag || (press && press.menu)) e.preventDefault(); }, {passive: false});
   document.addEventListener('pointermove', function (e) {
     if (!press) return;
-    var dx = e.clientX - press.x0, dy = e.clientY - press.y0;
+    var dx = PX(e) - press.x0, dy = PY(e) - press.y0;
     // Held, the menu up, and the finger moves on: as on a phone, the menu goes and the icon is dragged.
     if (!drag && press.menu) { if (Math.abs(dx) + Math.abs(dy) > 10) { hideMenu(); begin(); } return; }
     if (!drag) { if (Math.abs(dx) + Math.abs(dy) > 10) { clearTimeout(press.t); press = null; } return; }
-    ghost.style.left = (e.clientX - drag.dx) + 'px'; ghost.style.top = (e.clientY - drag.dy) + 'px';
-    var W = window.innerWidth;
+    ghost.style.left = (PX(e) - drag.dx) + 'px'; ghost.style.top = (PY(e) - drag.dy) + 'px';
+    var W = LW();
     // At an edge for a moment: the next (or a new) page, or the one before.
-    var edge = e.clientX < 26 ? -1 : e.clientX > W - 26 ? 1 : 0;
+    var edge = PX(e) < 26 ? -1 : PX(e) > W - 26 ? 1 : 0;
     if (edge !== drag.edge) { drag.edge = edge; clearTimeout(drag.et); if (edge) drag.et = setTimeout(function () { flip(edge); }, 650); }
     // Over the dock: in there, at the slot under the finger, once it rests.
-    var dr = $('hs-dock').getBoundingClientRect();
-    if (e.clientY >= dr.top - 6) {
+    var dr = R($('hs-dock'));
+    if (PY(e) >= dr.top - 6) {
       clearOver();
-      var slot = Math.max(0, Math.min(DOCK_MOST - 1, Math.floor((e.clientX - dr.left) / (dr.width / DOCK_MOST))));
+      var slot = Math.max(0, Math.min(DOCK_MOST - 1, Math.floor((PX(e) - dr.left) / (dr.width / DOCK_MOST))));
       var rd = drag.rest;
-      if (rd && rd.cell === 'dock' + slot && Math.abs(e.clientX - rd.x) + Math.abs(e.clientY - rd.y) < 14) return;
-      drag.rest = {cell: 'dock' + slot, page: -1, x: e.clientX, y: e.clientY};
+      if (rd && rd.cell === 'dock' + slot && Math.abs(PX(e) - rd.x) + Math.abs(PY(e) - rd.y) < 14) return;
+      drag.rest = {cell: 'dock' + slot, page: -1, x: PX(e), y: PY(e)};
       clearTimeout(drag.rt);
       drag.rt = setTimeout(function () { dockPlace(slot); }, 300);
       return;
     }
     var g = pager.querySelector('.hs-grid[data-page="' + pageNow + '"]'); if (!g) return;
-    var gr = g.getBoundingClientRect(), x = e.clientX - gr.left, y = e.clientY - gr.top;
+    var gr = R(g), x = PX(e) - gr.left, y = PY(e) - gr.top;
     var here = pages[pageNow].filter(visible), at = find(drag.id);
     var col = Math.max(0, Math.min(COLS - 1, Math.floor((x - PAD) / CW)));
     var row = Math.max(0, Math.min(ROWS - 1, Math.floor((y - TOP) / RH)));
@@ -637,8 +664,8 @@ body.fullscreen #arc-bot { display: none !important; }
     // A finger is never quite still (2026-10-25: on a phone every twitch started the wait again, and nothing moved):
     // resting is staying within a small circle over the same place.
     var rest = drag.rest;
-    if (rest && rest.cell === cell && rest.page === pageNow && Math.abs(e.clientX - rest.x) + Math.abs(e.clientY - rest.y) < 14) return;
-    drag.rest = {cell: cell, page: pageNow, x: e.clientX, y: e.clientY};
+    if (rest && rest.cell === cell && rest.page === pageNow && Math.abs(PX(e) - rest.x) + Math.abs(PY(e) - rest.y) < 14) return;
+    drag.rest = {cell: cell, page: pageNow, x: PX(e), y: PY(e)};
     clearTimeout(drag.rt);
     drag.rt = setTimeout(function () { shuffle(cell); }, 300);
   });
@@ -752,9 +779,9 @@ body.fullscreen #arc-bot { display: none !important; }
     }).join('');
     m.dataset.key = id; m.dataset.folder = folder ? '1' : '';
     $('hs-menu-back').hidden = false; m.hidden = false;
-    var r = el.getBoundingClientRect(), mw = m.offsetWidth, mh = m.offsetHeight;
-    var left = Math.max(10, Math.min(window.innerWidth - mw - 10, r.left + r.width / 2 - mw / 2));
-    var top = r.bottom + 8 + mh < window.innerHeight - 10 ? r.bottom + 8 : Math.max(10, r.top - mh - 8);
+    var r = R(el), mw = m.offsetWidth, mh = m.offsetHeight;
+    var left = Math.max(10, Math.min(LW() - mw - 10, r.left + r.width / 2 - mw / 2));
+    var top = r.bottom + 8 + mh < LH() - 10 ? r.bottom + 8 : Math.max(10, r.top - mh - 8);
     m.style.left = left + 'px'; m.style.top = top + 'px';
     press.menu = true;
     if (navigator.vibrate) { try { navigator.vibrate(10); } catch (err) {} }
@@ -845,10 +872,10 @@ body.fullscreen #arc-bot { display: none !important; }
   function paintEdge() { $('hs-edge').hidden = !IOS || !(front || !store.hidden || folderOpen); }
   (function () {
     var edge = $('hs-edge'), st = null;
-    edge.addEventListener('pointerdown', function (e) { st = {x: e.clientX, y: e.clientY}; try { edge.setPointerCapture(e.pointerId); } catch (err) {} });
+    edge.addEventListener('pointerdown', function (e) { st = {x: PX(e), y: PY(e)}; try { edge.setPointerCapture(e.pointerId); } catch (err) {} });
     edge.addEventListener('pointermove', function (e) {
       if (!st) return;
-      if (e.clientX - st.x > 50 && Math.abs(e.clientY - st.y) < 60) { st = null; history.back(); }
+      if (PX(e) - st.x > 50 && Math.abs(PY(e) - st.y) < 60) { st = null; history.back(); }
     });
     edge.addEventListener('pointerup', function () { st = null; });
     edge.addEventListener('pointercancel', function () { st = null; });
@@ -951,7 +978,31 @@ body.fullscreen #arc-bot { display: none !important; }
     setTimeout(badges, 900);
     paintRunning();
   }
+  function orient() {
+    // On the home screen: portrait. Locked where the browser lets an installed app lock (Android); else, held
+    // sideways with no app in front, the page turned back a quarter (iPhone). An app in front: as the phone is.
+    var so = screen.orientation;
+    if (front) {
+      if (LOCKED && so && so.unlock) { try { so.unlock(); } catch (err) {} }
+      LOCKED = false;
+    } else if (!LOCKED && so && so.lock && !orient.refused) {
+      so.lock('portrait').then(function () { LOCKED = true; orient(); }, function () { orient.refused = true; orient(); });
+    }
+    var want = 0;
+    if (!front && !LOCKED && window.innerWidth > window.innerHeight) {
+      var a = typeof window.orientation === 'number' ? window.orientation : ((so && so.angle) || 0);
+      if (a === 270) a = -90;
+      want = a === 90 ? -90 : a === -90 ? 90 : 0;
+    }
+    if (want === ROT) return;
+    ROT = want;
+    document.documentElement.classList.toggle('turn90', ROT === 90);
+    document.documentElement.classList.toggle('turn-90', ROT === -90);
+    if (!drag) draw();
+  }
+  window.addEventListener('orientationchange', function () { setTimeout(orient, 60); });
   function paintRunning() {
+    orient();
     paintEdge();
     document.body.classList.toggle('hs-win-open', !!front);    // no robot helper over an open app
     var open = {};
@@ -992,12 +1043,12 @@ body.fullscreen #arc-bot { display: none !important; }
   $('hs-pull').addEventListener('pointerdown', function (e) {
     if (!front || e.button > 0) return;
     try { e.target.setPointerCapture(e.pointerId); } catch (err) {}
-    pull = {y0: e.clientY}; clearTimeout(hideBar.t);
+    pull = {y0: PY(e)}; clearTimeout(hideBar.t);
     $('hs-bar-name').textContent = front.name;
   });
   $('hs-pull').addEventListener('pointermove', function (e) {
     if (!pull) return;
-    var y = Math.max(0, Math.min(90, e.clientY - pull.y0));
+    var y = Math.max(0, Math.min(90, PY(e) - pull.y0));
     bar.hidden = y < 3;
     bar.style.transition = 'none';
     bar.style.transform = 'translateY(' + (y * 0.87 - BAR_H - 12) + 'px)';
@@ -1191,7 +1242,7 @@ body.fullscreen #arc-bot { display: none !important; }
     wake();
     askForWallet();
   }
-  window.addEventListener('resize', function () { if (!drag) draw(); });
+  window.addEventListener('resize', function () { orient(); if (!drag) draw(); });
   function boot() {
     fetch('/account/homeapps', {cache: 'no-store', credentials: 'same-origin'})
       .then(function (r) { return r.ok ? r.json() : {saved: false}; })
