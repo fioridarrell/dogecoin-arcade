@@ -258,6 +258,7 @@ class ChainContext:
         """This arcade's own Core, never a sharer: what it shares with other arcades, and its wallet."""
         creds = self.credentials()
         client = RpcClient(creds)
+        client.fan_net = self.network          # its broadcasts also go to every arcade sharing this chain (rpc.FAN_OUT)
         # Checks reality, not intent: a stray config must not silently point us
         # at the other chain. With two nodes in play this matters more, not less.
         verify_connected_chain(client, self.params)

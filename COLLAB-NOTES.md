@@ -88,6 +88,17 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-25 Broadcasts fan out to every sharer; collections inscribe on lanes (Claude)
+The operator: "Build both. Make sure they work and then publish them."
+- Broadcast fan-out: `rpc.FAN_OUT` (set to `coreshare.fan_out`) runs after every successful `sendrawtransaction` of a
+  client with `fan_net` (BorrowedRpc; `ChainContext.local_rpc`): the same raw to every linked sharer of that chain, a
+  thread each, once per arcade per tx (`_FANNED`). Sharers relay it on once too.
+- Inscription lanes (Creator -> Ords collections of 8+): `POST /account/ord/split {chain, lanes 2-8, each}` (self-send,
+  `wallet.splitForLanes` checks every output is the key's own), `GET /account/ord/confirmed` (waits a block), then up
+  to 4 lanes; `/account/ord/inscribe` takes `lane: {txid, vout}` (commit paid from that coin only) and answers
+  `change_vout`; `inscribeOrd(..., onCommit)`. signOffer now retries `/account/sign`'s 409 "still going" (the per-wallet
+  broadcast lane) for ~20 s instead of failing. Door: `/account/ord/split` POST, `/account/ord/confirmed` GET.
+
 ### 2026-10-25 Several ord-index lanes per lender (Claude)
 The operator: run several lanes on each lender. A Core-share offer now says `"l"`: lanes one borrower may read at once
 (`coreshare.lanes_lent`: 4 on 8+ cores, else 1; unsaid = 1). `coreshare.lenders(net)` -> [(node, lanes)];

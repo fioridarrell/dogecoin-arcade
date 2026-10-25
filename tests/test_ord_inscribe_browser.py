@@ -262,3 +262,41 @@ def test_a_hashlips_build_goes_on_one_ord_at_a_time_then_its_index(browser, serv
     assert not [t for t in again if t.vout and t.vout[0] == (oi.POSTAGE, p2pkh_script(signed_in))], \
         "no picture inscribed twice: the pieces already in were skipped"
     assert browser.execute_script("return window.__index.length") == 2, "and no second index of the same ords"
+
+
+def test_a_big_collection_goes_on_lanes_each_paid_from_a_coin_of_its_own(browser, served, signed_in):
+    """2026-10-25, "Build both": a collection of eight goes on two lanes at once. First a split pays two coins to
+    this account's own address (signed after the tab checked every output is its own); after its block each lane's
+    first commit spends its own coin, and every later commit of a lane its last commit's change -- two unconfirmed
+    chains instead of one."""
+    import json
+    base, state, fake = served
+    browser.get(f"{base}/create/ord")
+    _wait(browser, 'return [...document.querySelectorAll("#set-chain option")].some((o) => o.value === "doge")')
+    before = list(fake.sent)
+    meta = [{"name": f"Lane #{n}", "edition": n, "image": f"ipfs://x/{n}.png", "attributes": []} for n in range(1, 9)]
+    browser.execute_script("""
+        const dt = new DataTransfer();
+        for (let n = 1; n <= 8; n++) dt.items.add(new File([new Uint8Array(200 + n).fill(40 + n)], n + ".png", {type: "image/png"}));
+        dt.items.add(new File([arguments[0]], "_metadata.json", {type: "application/json"}));
+        const s = document.getElementById("set-chain"); s.value = "doge";
+        const f = document.getElementById("set-folder"); f.files = dt.files; f.dispatchEvent(new Event("change"));
+        """, json.dumps(meta))
+    _wait(browser, 'const p = document.getElementById("set-picked"); return !p.hidden && p.textContent.includes("transactions")')
+    browser.find_element(By.ID, "set-go").click()
+    _wait(browser, 'return document.querySelector(".mainnet-review")')
+    browser.find_element(By.CSS_SELECTOR, ".mainnet-review button.danger").click()
+    news = _wait(browser, 'const n = document.getElementById("news"); return !n.hidden && n.textContent.includes("is inscribed") && n.textContent', 120)
+    assert "Lane is inscribed: 8 Doginals" in news, news
+    new = [rawchain.read_tx(bytes.fromhex(fake.sent[t])) for t in fake.sent if t not in before]
+    mine = p2pkh_script(signed_in)
+    split = new[0]
+    assert len(split.vout) >= 2 and split.vout[0] == split.vout[1] and split.vout[0][1] == mine, "two equal coins, mine"
+    commits = [t for t in new if any(s[:2] == b"\xa9\x14" for _v, s in t.vout) and any(s == mine for _v, s in t.vout)]
+    spends = [(i["txid"], i["vout"]) for t in commits for i in t.vin]
+    assert (split.txid, 0) in spends and (split.txid, 1) in spends, "each lane's first commit spends its own coin"
+    by_txid = {t.txid: t for t in commits}
+    chained = [t for t in commits if all(i["txid"] in by_txid or i["txid"] == split.txid for i in t.vin)]
+    assert len(chained) == len(commits) == 8, "every commit paid from its lane: the split's coin or a commit's change"
+    ords = [t for t in new if t.vout and t.vout[0] == (oi.POSTAGE, mine)]
+    assert len(ords) == 8

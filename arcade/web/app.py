@@ -897,6 +897,9 @@ def create_app(state: AppState) -> FastAPI:
         # being read like any small coin (2026-10-15).
         if _guards:
             _rpclib.AFTER_BROADCAST = lambda raw, txid, _g=tuple(_guards): [g.vouch_broadcast(raw, txid) for g in _g]
+        # Every broadcast also to every arcade sharing that chain's Core (2026-10-25), on their own threads.
+        from ..mesh import coreshare as _coreshare
+        _rpclib.FAN_OUT = _coreshare.fan_out
     @contextlib.asynccontextmanager
     async def _lifespan(_app: FastAPI):
         """Hold the shutdown while a send is in flight.
@@ -14631,13 +14634,25 @@ def create_app(state: AppState) -> FastAPI:
             kind = media.standard_type(str(said.get("content_type") or ""), str(said.get("name") or "")) \
                 or "application/octet-stream"
             p = oi.plan(chain.network, chain.params, kind, content, coin_key, address)
+            spent = _flights.spent_by(account.pubkey, chain.network)
+            extra = _flights.change_for(account.pubkey, chain.network)
             with contextlib.closing(state.token_index(chain).open()) as db:
+                # A lane of a collection (2026-10-25: inscription lanes): the commit is paid from that lane's own
+                # coin -- the coin the split made it, then its last commit's change -- and no other, so each lane is a
+                # chain of unconfirmed transactions of its own, each under the network's 25 in a row.
+                lane = said.get("lane") if isinstance(said.get("lane"), dict) else None
+                if lane is not None:
+                    want = (str(lane.get("txid") or "").lower(), int(lane.get("vout") or 0))
+                    if not re.fullmatch(r"[0-9a-f]{64}", want[0]):
+                        raise ValueError("that lane's coin is not a coin")
+                    every = {(u["txid"], u["vout"]) for u in utxoslib.unspent(db, address)} | \
+                        {(u["txid"], u["vout"]) for u in extra}
+                    spent = frozenset(set(spent) | (every - {want}))
                 unsigned = fundinglib.build(db, chain.params, address, [(p.commit_value, oi.p2sh(p.locks[0]))],
                                             rate=fees.MIN_FEE_PER_KB,
                                             what=f"inscribe {str(said.get('name') or kind)[:60]} as a "
                                                  f"{oi.rules_of(chain.network).label} (1 of {p.reveals + 1})",
-                                            exclude=_flights.spent_by(account.pubkey, chain.network),
-                                            extra=_flights.change_for(account.pubkey, chain.network))
+                                            exclude=spent, extra=extra)
             _quota(account, "send")
             rid = secrets.token_urlsafe(12)
             run = {"pubkey": account.pubkey, "chain": chain.network, "address": address, "coin_key": coin_key.hex(),
@@ -14655,14 +14670,73 @@ def create_app(state: AppState) -> FastAPI:
                 _ord_update(r, lambda run: (run.__setitem__("txids", [txid]), run.__setitem__("commit_vout", v)))
             offer = _offers.add(account.pubkey, chain.network, unsigned, unsigned.what, done=committed)
             c = oi.costs(p)
+            mine = txbuild.p2pkh_script(address)
+            change_vout = next((n for n, (_v, s) in enumerate(unsigned.outputs) if s == mine), None)
             return JSONResponse({"run": rid, "step": 0, "of": p.reveals + 1, "offer": offer.id, "chain": chain.network,
                                  "label": oi.rules_of(chain.network).label, "next_lock": p.locks[0].hex(),
+                                 "change_vout": change_vout,
                                  "costs": {**c, "commit_fee": unsigned.fee}, **unsigned.as_json()})
         except (fundinglib.FundingError, oi.OrdError, ValueError) as exc:
             return JSONResponse({"detail": str(exc)}, status_code=400)
         except Exception as exc:                          # noqa: BLE001 -- the node did not answer
             log.warning("ord inscribe failed", exc_info=True)
             return JSONResponse({"detail": str(exc)[:300]}, status_code=503)
+
+    #: Lanes a collection may be inscribed on at once (2026-10-25): each its own coin, so its own unconfirmed chain.
+    ORD_LANES_MOST = 8
+
+    @app.post("/account/ord/split")
+    def account_ord_split(request: Request, payload: Any = Body(None)):
+        """`{chain, lanes, each}`: an offer paying this account's own address `lanes` coins of `each`, one per lane of a
+        collection inscribed side by side (2026-10-25: "Build both"). The page signs it, waits for its block
+        (/account/ord/confirmed: until then every lane's transactions would count against its one unconfirmed chain),
+        and gives each lane its coin (`vouts`)."""
+        from .. import ord_inscribe as oi
+        account = _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        try:
+            chain = next((c for c in state.token_chains if c.network == str(said.get("chain") or "")
+                          and c.network in oi.RULES), None)
+            if chain is None:
+                raise ValueError("this arcade does not run that chain, or ords are not inscribed on it")
+            address = _account_address(account.pubkey, chain)
+            if not address:
+                raise ValueError(f"this account has no {chain.label} address yet")
+            lanes, each = int(said.get("lanes") or 0), int(said.get("each") or 0)
+            if not 2 <= lanes <= ORD_LANES_MOST:
+                raise ValueError(f"from 2 to {ORD_LANES_MOST} lanes")
+            if each < max(fees.dust_limit(chain.params), oi.POSTAGE * 2):
+                raise ValueError("each lane needs at least enough for one ord")
+            mine = txbuild.p2pkh_script(address)
+            with contextlib.closing(state.token_index(chain).open()) as db:
+                unsigned = fundinglib.build(db, chain.params, address, [(each, mine)] * lanes, rate=fees.MIN_FEE_PER_KB,
+                                            what=f"split into {lanes} coins of your own, one per lane of a collection",
+                                            exclude=_flights.spent_by(account.pubkey, chain.network),
+                                            extra=_flights.change_for(account.pubkey, chain.network))
+            _quota(account, "send")
+            offer = _offers.add(account.pubkey, chain.network, unsigned, unsigned.what)
+            return JSONResponse({"offer": offer.id, "chain": chain.network, "vouts": list(range(lanes)),
+                                 **unsigned.as_json()})
+        except (fundinglib.FundingError, oi.OrdError, ValueError) as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        except Exception as exc:                          # noqa: BLE001 -- the node did not answer
+            log.warning("ord split failed", exc_info=True)
+            return JSONResponse({"detail": str(exc)[:300]}, status_code=503)
+
+    @app.get("/account/ord/confirmed")
+    def account_ord_confirmed(request: Request, chain: str = "", txid: str = ""):
+        """How many blocks a transaction of this account's has (0 while it waits in the mempool), for a collection's
+        split to be in a block before its lanes start."""
+        _signed_in_account(request)
+        c = next((x for x in state.token_chains if x.network == chain), None)
+        if c is None or not re.fullmatch(r"[0-9a-f]{64}", txid or ""):
+            return JSONResponse({"detail": "which chain, which transaction"}, status_code=400)
+        try:
+            with c.rpc() as rpc:
+                got = rpc.call("getrawtransaction", txid, 1) or {}
+            return JSONResponse({"confirmations": int(got.get("confirmations") or 0)}, headers={"Cache-Control": "no-store"})
+        except Exception as exc:                          # noqa: BLE001 -- not seen yet
+            return JSONResponse({"confirmations": 0, "why": str(exc)[:120]}, headers={"Cache-Control": "no-store"})
 
     def _ord_chain_too_long(chain, txids: list[str]) -> bool:
         """Whether the next reveal would stand on MAX_UNCONFIRMED unconfirmed transactions or more. Asked of the node's

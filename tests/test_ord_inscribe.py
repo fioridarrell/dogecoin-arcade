@@ -283,3 +283,28 @@ def test_a_collection_is_quoted_before_it_starts(client, monkeypatch, tmp_path):
     want = [oi.plan("doge", PARAMS["doge"], "image/png", b"\x00" * n, PUBKEY, _to("doge")) for n in (100, 5000)]
     assert [f["txs"] for f in q["files"]] == [p.reveals + 1 for p in want] == [2, 5]
     assert q["fees"] == sum(sum(p.fees) for p in want) + 2 * q["commit_fee"] and q["commit_fee"] > 0
+
+
+def test_a_collections_lanes_split_pays_only_this_account(client, monkeypatch, tmp_path):
+    """2026-10-25: a collection inscribed on lanes, each its own coin. The split is coins of this account's own,
+    2 to 8 of them; its block is asked of the node; a commit given a lane's coin is paid from that coin alone."""
+    import base64
+    app, state = client
+    doge, _ = _doge_account(app, state, monkeypatch, tmp_path)
+    sent, mined = _fake_doge(monkeypatch, doge)
+    assert app.post("/account/ord/split", json={"chain": "doge", "lanes": 1, "each": 10 ** 8}).status_code == 400
+    assert app.post("/account/ord/split", json={"chain": "doge", "lanes": 9, "each": 10 ** 8}).status_code == 400
+    split = app.post("/account/ord/split", json={"chain": "doge", "lanes": 3, "each": 9 * 10 ** 7})
+    assert split.status_code == 200, split.text
+    s = split.json()
+    assert s["vouts"] == [0, 1, 2]
+    assert app.get("/account/ord/confirmed", params={"chain": "doge", "txid": "ab" * 32}).json()["confirmations"] == 0
+    mined["ab" * 32] = 2
+    assert app.get("/account/ord/confirmed", params={"chain": "doge", "txid": "ab" * 32}).json()["confirmations"] == 2
+    key = _pubkey(int("31" * 32, 16))
+    body = {"chain": "doge", "content": base64.b64encode(b"x" * 300).decode(), "content_type": "image/png",
+            "name": "l.png", "pubkey": key.hex()}
+    bad = app.post("/account/ord/inscribe", json={**body, "lane": {"txid": "nope", "vout": 0}})
+    assert bad.status_code == 400
+    gone = app.post("/account/ord/inscribe", json={**body, "lane": {"txid": "cd" * 32, "vout": 0}})
+    assert gone.status_code == 400, "a lane's coin this account does not hold pays nothing"

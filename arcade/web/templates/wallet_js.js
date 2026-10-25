@@ -726,16 +726,27 @@ async function signOffer(wallet, offer, given = null, options = null) {
   for (const sighash of shown.hashes) {
     signatures.push(coinsHex(await coins.signInput(keys.key, unhex(sighash))));
   }
-  const done = await fetch("/account/sign", {
-    method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({offer: offer.offer, signatures,
-                          pubkey: coinsHex(keys.pubkey)}),
-  });
-  // A node restarting answers through its proxy with an HTML page, not JSON:
-  // say that, rather than a JSON parse error nobody can act on.
-  const said = await done.json().catch(() => {
-    throw new Error(`the node did not answer (HTTP ${done.status}); it may be restarting`);
-  });
+  // The wallet's lane (/account/sign) is held only while one broadcast goes out, and claimed before the offer is taken,
+  // so "still going" refuses nothing for good: wait a moment and send again (2026-10-25: a collection's lanes sign
+  // side by side, each from its own coin, and meet here one broadcast at a time).
+  let done, said;
+  for (let tries = 0; ; tries++) {
+    done = await fetch("/account/sign", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({offer: offer.offer, signatures,
+                            pubkey: coinsHex(keys.pubkey)}),
+    });
+    // A node restarting answers through its proxy with an HTML page, not JSON:
+    // say that, rather than a JSON parse error nobody can act on.
+    said = await done.json().catch(() => {
+      throw new Error(`the node did not answer (HTTP ${done.status}); it may be restarting`);
+    });
+    if (done.status === 409 && /still going/.test(said.detail || "") && tries < 40) {
+      await new Promise((r) => setTimeout(r, 300 + Math.random() * 500));
+      continue;
+    }
+    break;
+  }
   if (!done.ok) throw new Error(said.detail || "the node would not take it");
   return {...said, fee: shown.fee, change: shown.change, says: shown.says};
 }
@@ -813,7 +824,20 @@ async function ordCheck(keys, offer, prev) {
   }
   return {value: out.value};
 }
-export async function inscribeOrd(wallet, first, more = null, onStep = null) {
+/** A collection's lanes (2026-10-25): `first` is /account/ord/split's answer, coins to this wallet's own address
+ *  and nothing else -- every output checked here to be this key's own before it is signed. Its txid. */
+export async function splitForLanes(wallet, first) {
+  const keys = keysOn(wallet, first.chain);
+  const tx = coins.parseTx(first.raw);
+  const mine = coins.p2pkh(await coins.hash160(keys.pubkey));
+  if (!tx.outputs.length || !tx.outputs.every((o) => SAME(o.script, mine))) {
+    throw new Error("a split for lanes pays only your own address. Nothing was signed.");
+  }
+  const sent = await working(() => signOffer(wallet, first, null, {reviewed: true}));
+  return sent.txid;
+}
+/** `onCommit(txid)`: the commit went out (a collection's lane carries on from its change). */
+export async function inscribeOrd(wallet, first, more = null, onStep = null, onCommit = null) {
   const keys = keysOn(wallet, first.chain);
   const rid = first.run;
   let offer = first, prev = null;
@@ -828,6 +852,7 @@ export async function inscribeOrd(wallet, first, more = null, onStep = null) {
     if (onStep) onStep(offer);
     const sent = await working(() => signOffer(wallet, offer, null, {reviewed: true}));
     prev = {txid: sent.txid, vout: at, value: tx.outputs[at].value};
+    if (onCommit) onCommit(sent.txid);
   }
   for (let tries = 0; ;) {
     let said;

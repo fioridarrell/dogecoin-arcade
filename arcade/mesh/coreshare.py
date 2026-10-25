@@ -33,6 +33,7 @@ compared, and a mismatch is said in the admin panel.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import itertools
 import json
 import logging
@@ -528,6 +529,42 @@ class OneSharer:
         return getattr(self._share, name)
 
 
+#: Transactions already fanned out, so a copy one arcade sends another (which fans out in turn) goes round only once.
+_FANNED: "OrderedDict[str, float]" = OrderedDict()
+_FAN_LOCK = threading.Lock()
+FAN_SECONDS = 20.0
+
+
+def fan_out(net: str, raw: str) -> list[str]:
+    """A signed transaction a node took, also sent to every linked arcade sharing `net`, each on its own thread (the operator
+    2026-10-25): in several mempools at once it reaches the miners sooner, and one slow or badly connected node no
+    longer leaves it unseen. Sending it twice is harmless -- a transaction cannot be spent twice; a node that has it
+    already says so. Each transaction once per arcade (a sharer that takes a copy fans it out once too). Returns the
+    arcades it went to."""
+    share = CURRENT
+    if share is None or not raw:
+        return []
+    key = hashlib.sha256(raw.encode()).hexdigest()
+    now = time.time()
+    with _FAN_LOCK:
+        if key in _FANNED:
+            return []
+        _FANNED[key] = now
+        while len(_FANNED) > 5000:
+            _FANNED.popitem(last=False)
+    peers = list(share.sharers(net))
+
+    def one(peer: str) -> None:
+        others = frozenset(p for p in peers if p != peer)
+        try:
+            share.call_from(net, [("sendrawtransaction", [raw])], FAN_SECONDS, others)
+        except Exception as exc:                          # noqa: BLE001 -- a copy: whatever it says
+            log.debug("coreshare: copy of a broadcast to %s: %s", peer[:12], exc)
+    for peer in peers:
+        threading.Thread(target=one, args=(peer,), name="fan-out", daemon=True).start()
+    return peers
+
+
 #: Lanes a sharer lends each borrower's ord index at once: a big machine (8+ cores) this many, a small one 1.
 LANES_BIG = 4
 
@@ -584,6 +621,10 @@ class BorrowedRpc(RpcClient):
 
     @property
     def net(self) -> str:
+        return self._params.name
+
+    @property
+    def fan_net(self) -> str:
         return self._params.name
 
     def _post(self, payload: Any) -> Any:

@@ -375,8 +375,10 @@ $("set-folder").onchange = drawSet;
 $("set-chain").onchange = drawSet;
 $("set-stop").onclick = () => { stopAsked = true; $("set-stop").disabled = true; };
 
-/** One ord, start to end, waited out when its chain is too long in the mempool to take another transaction. */
-async function oneOrd(held, chain, file, bytes, onSay) {
+/** One ord, start to end, waited out when its chain is too long in the mempool to take another transaction. `lane`
+ *  (a collection's lanes, 2026-10-25): {coin} -- the commit is paid from that coin only, and the lane carries on
+ *  from the commit's change, so each lane is an unconfirmed chain of its own. */
+async function oneOrd(held, chain, file, bytes, onSay, lane = null) {
   const sha = await shaOf(bytes);
   for (let tries = 0; ; tries++) {
     // Asked again on every try: a piece whose commit went out is carried on, never started a second time.
@@ -385,10 +387,14 @@ async function oneOrd(held, chain, file, bytes, onSay) {
     if (known && known.done) return known.inscription;
     try {
       const first = known ? {run: known.run, chain, name: known.name}
-        : await wallet.startOrd(held, {chain, content: b64(bytes), content_type: file.type, name: file.name});
-      return await wallet.inscribeOrd(held, first, async () => b64(bytes), onSay);
+        : await wallet.startOrd(held, {chain, content: b64(bytes), content_type: file.type, name: file.name,
+                                       ...(lane && lane.coin ? {lane: lane.coin} : {})});
+      const moved = (txid) => { if (lane) lane.coin = first.change_vout != null ? {txid, vout: Number(first.change_vout)} : null; };
+      return await wallet.inscribeOrd(held, first, async () => b64(bytes), onSay, moved);
     } catch (e) {
       const why = String(e.message || e);
+      // A lane whose coin ran short goes on from the rest of the wallet.
+      if (lane && lane.coin && /not enough|insufficient|cannot cover|afford|no coins/i.test(why)) { lane.coin = null; continue; }
       // The chain's mempool takes about 25 unconfirmed in a row, counting a collection's commits and their reveals
       // together: wait for a block and go on.
       if (!/mempool-chain|too-long|ancestor|descendant|txn-mempool-conflict/i.test(why) || tries > 60) throw e;
@@ -416,25 +422,60 @@ $("set-go").onclick = async () => {
   const stay = (e) => { e.preventDefault(); e.returnValue = ""; };
   window.addEventListener("beforeunload", stay);
   document.body.dataset.inscribing = "1";
-  const done = [];
+  let done = [];
   try {
     const held = await keysNow();
-    for (let k = 0; k < n; k++) {
-      const it = plan.items[k];
-      const tell = (s) => {
-        $("set-bar").style.width = `${Math.round(100 * (k + Math.min(1, Number(s.sent || 0) / Number(s.of || 1))) / n)}%`;
-        $("set-says").textContent = `${k + 1} of ${commas(n)}: ${it.file.name}` + (s.wait ? " — waiting for a block…"
-          : s.done ? " — in." : ` — ${commas(s.sent)} of ${commas(s.of)} sent`) + " Keep this tab open.";
-      };
-      const bytes = new Uint8Array(await it.file.arrayBuffer());
-      const id = await oneOrd(held, c.chain, it.file, bytes, tell);
-      done.push({id, number: it.number, traits: it.traits});
-      addRow(id, c.chain, it.name || it.file.name);
-      const row = rows.find((r) => r.id === id);
-      if (row) { row.number = it.number; row.traits = Object.entries(it.traits).map(([a, b]) => `${a}=${b}`).join(", "); }
-      if (stopAsked) break;
+    // LANES (2026-10-25: "Build both"): a big collection goes up to four ords at a time. The network takes about
+    // 25 unconfirmed transactions in a row, so one lane waits for a block every twenty or so ords; each lane is paid
+    // from a coin of its own (a split into one coin per lane first, then a block), so each is a chain of its own.
+    let L = n >= 8 ? Math.min(4, Math.floor(n / 4)) : 1;
+    const lanes = [];
+    if (L > 1) {
+      try {
+        const per = (Number(q.fees) + Number(q.postage) * n) / n;
+        const each = Math.ceil(per * Math.ceil(n / L) * 1.25) + 2000000;
+        $("set-says").textContent = `Making ${L} lanes, a coin each, so ${L} ords go at once…`;
+        const split = await postJSON("/account/ord/split", {chain: c.chain, lanes: L, each});
+        const txid = await wallet.splitForLanes(held, split);
+        for (;;) {
+          let got = {};
+          try { got = await getJSON(`/account/ord/confirmed?chain=${encodeURIComponent(c.chain)}&txid=${txid}`); } catch (e) {}
+          if (Number(got.confirmations) > 0) break;
+          $("set-says").textContent = `Making ${L} lanes: waiting for the split's block… Keep this tab open.`;
+          await new Promise((r) => setTimeout(r, 15000));
+        }
+        for (let i = 0; i < L; i++) lanes.push({coin: {txid, vout: split.vouts[i]}});
+      } catch (e) {
+        L = 1;                                            // not enough for lanes: one after another, as before
+        news(`One ord at a time: ${String(e.message || e)}`);
+      }
     }
+    if (!lanes.length) lanes.push({coin: null});
+    const results = new Array(n);
+    let next = 0, finished = 0, failed = null;
+    const tell = (k, it, s) => {
+      $("set-bar").style.width = `${Math.round(100 * finished / n)}%`;
+      $("set-says").textContent = `${commas(finished)} of ${commas(n)} in` + (lanes.length > 1 ? ` (${lanes.length} at a time)` : "")
+        + ` · ${it.file.name}` + (s.wait ? " — waiting for a block…" : s.done ? " — in."
+        : ` — ${commas(s.sent || 0)} of ${commas(s.of || 1)} sent`) + " Keep this tab open.";
+    };
+    const worker = async (lane) => {
+      while (!stopAsked && !failed && next < n) {
+        const k = next++, it = plan.items[k];
+        const bytes = new Uint8Array(await it.file.arrayBuffer());
+        const id = await oneOrd(held, c.chain, it.file, bytes, (s) => tell(k, it, s), lane);
+        results[k] = {id, number: it.number, traits: it.traits};
+        finished++;
+        addRow(id, c.chain, it.name || it.file.name);
+        const row = rows.find((r) => r.id === id);
+        if (row) { row.number = it.number; row.traits = Object.entries(it.traits).map(([a, b]) => `${a}=${b}`).join(", "); }
+      }
+    };
+    const settled = await Promise.allSettled(lanes.map((lane) => worker(lane).catch((e) => { failed = e; throw e; })));
+    done = results.filter(Boolean);
     drawRows();
+    const bad = settled.find((x) => x.status === "rejected");
+    if (bad) throw bad.reason;
     if (done.length < n) {
       $("set-says").textContent = `Stopped: ${commas(done.length)} of ${commas(n)} inscribed. Choose the folder again to carry on.`;
       return;

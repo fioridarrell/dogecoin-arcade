@@ -523,3 +523,32 @@ def test_a_compressed_answer_that_unpacks_too_far_or_is_not_zlib_fails_the_call(
         with pytest.raises(Exception, match="does not unpack"):
             await fut
     run(go())
+
+
+def test_a_broadcast_goes_to_every_sharer_once(monkeypatch):
+    """2026-10-25, "Build both": a signed transaction a node took is also sent to every other arcade sharing the
+    chain, side by side, so it is in several mempools at once; once per arcade, however many copies come round."""
+    from arcade import rpc as rpclib
+    one, two = FakeCore("doge"), FakeCore("doge")
+    raw = one.tx["hex"]
+
+    async def go():
+        a, c, b = mk(), mk(), mk()
+        sa, sc, sb = _share(one), _share(two), _borrower()
+        a.add_extension(sa); c.add_extension(sc); b.add_extension(sb)
+        await started(a, c, b)
+        try:
+            await _linked((b, a), (b, c))
+            await until(lambda: len(sb.sharers("doge")) == 2, what="two sharers")
+            monkeypatch.setattr(coreshare, "CURRENT", sb)
+            monkeypatch.setattr(rpclib, "FAN_OUT", coreshare.fan_out)
+            coreshare._FANNED.clear()
+            rpc = BorrowedRpc(sb, NETWORKS["doge"])
+            assert rpc.fan_net == "doge"
+            await asyncio.to_thread(rpc.call, "sendrawtransaction", raw)
+            await until(lambda: raw in one.sent and raw in two.sent, what="both sharers' nodes have it")
+            assert coreshare.fan_out("doge", raw) == [], "once per arcade"
+        finally:
+            for n in (a, c, b):
+                await n.stop()
+    run(go())

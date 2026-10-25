@@ -29,6 +29,11 @@ BROADCAST_EPOCH = 0
 #: Called with (raw hex, txid) after every broadcast that went through: the Doginal guard vouches
 #: for what the arcade itself sent (doginals.Doginals.vouch_broadcast, 2026-10-15).
 AFTER_BROADCAST = None
+#: Every broadcast also sent to every other node this arcade can reach for that chain, side by side (2026-10-25:
+#: "Build both" -- a transaction in several mempools at once reaches the miners sooner, and one slow or badly connected
+#: node no longer leaves it unseen). FAN_OUT(network, raw hex) after a node took it; set by the web app
+#: (coreshare.fan_out). A client says its network as `fan_net`.
+FAN_OUT = None
 
 class RpcError(Exception):
     """A JSON-RPC level error returned by the node."""
@@ -112,6 +117,11 @@ class RpcClient:
             try:
                 AFTER_BROADCAST(str(params[0]), str(data.get("result") or ""))
             except Exception:                         # noqa: BLE001 -- never fail a send that went
+                pass
+        if method == "sendrawtransaction" and FAN_OUT is not None and params and getattr(self, "fan_net", None):
+            try:
+                FAN_OUT(str(self.fan_net), str(params[0]))
+            except Exception:                         # noqa: BLE001 -- the copies are extra: never fail the send
                 pass
         return data.get("result")
 

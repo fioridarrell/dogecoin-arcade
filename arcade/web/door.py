@@ -143,6 +143,7 @@ PUBLIC_PAGES = frozenset({
     "/account/token20",               # this account's DRC-20 / PRC-20 balances, from the most complete ord index
     "/account/listed",                # what this account's standing listings hold (the Wallet shows them held)
     "/account/ord/runs",              # this account's ords being inscribed, and the ones made here
+    "/account/ord/confirmed",         # how many blocks this account's transaction has (a collection's lanes wait for one)
     "/account/ord/chains",            # the chains an ord is inscribed on here, each with its rules
     "/account/arcades",               # the arcades on the mesh, for the Your arcade page's Arcades card
     "/account/favorites",             # the markets this account starred (Exchange, 2026-10-17)
@@ -478,7 +479,7 @@ PUBLIC_POST = ("/auth/challenge", "/auth/login", "/auth/logout",
                # a DRC-20 / PRC-20 send of the caller's own tokens: its three offers, one after the other
                "/account/token20/send",
                # an ord from the caller's own wallet: its commit and reveals, one after the other; its list
-               "/account/ord/inscribe", "/account/ord/forget", "/account/ord/quote",
+               "/account/ord/inscribe", "/account/ord/forget", "/account/ord/quote", "/account/ord/split",
                # an ord collection index worked out (nothing spent; the page inscribes it as the caller)
                "/account/ord/collection",
                # a DRC-20 / PRC-20 token into the caller's own trade lock: its four offers, one after the other
