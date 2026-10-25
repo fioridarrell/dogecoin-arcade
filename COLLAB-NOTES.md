@@ -88,6 +88,27 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-25 Ord walk keeps every coin's value on disk; parallel lookups; Ords modes renamed (Claude)
+Strawberry walked Dogecoin at 0.02 blocks a second through borrowed Cores. Profiled: the time was all in
+`Walker._prefetch` (the values of coins spent ahead of an inscribed one). Each was a `getrawtransaction` on the
+lender, and on .25's hard disk that is 40-250 ms, up to ~700 per 2023 block. More than 99% were coins made after the
+index's first block, already walked: the walk kept only 500,000 values in memory, only those of 1 coin or less, and
+lost them at every start. The operator chose "Remember + parallel asks".
+- `arcade/ord_values.py` (new): every output the walk files, in `<index>.values` (sqlite, key = 12 bytes of txid +
+  output number); spent coins let go. A value goes in only from bytes that hash to its txid, so the file is never
+  wrong, only short. `from` = the first block filed there.
+- `Walker._value` / `_prefetch`: memory, then that file, then a Core; what a Core sends is kept too.
+- Backfill: lanes with nothing to scan for the shared list read the chunks walked before `from` and keep their coins
+  (`DoginalIndex._values_wanted`, `_absorb_values`). These lanes are never said or leased (`_vlanes`, meta `vlanes`).
+  The backfill runs only on a big machine, walking, at least `VALUES_BEHIND` (10,000) blocks behind the tip. A
+  whole-index install starts the file again (`_forget_values`).
+- `_fetch_many`: batches of at most 50, as many at once on each source as the lanes it lends (own Core 4).
+- Ords status has `values` {from, bytes, behind_chunks, brought_in, lanes}; the panel shows the backfill.
+- Ords modes renamed (the operator): Keep the full index / Help scan / Watch only / Off. Help stays: its scans are the
+  audit's second words. Setting values unchanged (walk/help/read/off).
+- Tests: `test_every_coin_the_walk_saw_is_kept_on_disk_and_never_asked_of_a_core_again`,
+  `test_lanes_bring_in_the_coins_of_blocks_walked_before_the_values_file`; prefetch-batching test still passes.
+
 ### 2026-10-25 Coin lists between arcades, the shared walk, Admin -> Wallet imports; the PWA home always portrait (Claude)
 The operator: "each users valid, UTXO list should be stored alongside their encrypted wallet file ... also be stored in their
 arcade, browser local storage ... any of the current arcade accounts that are held by more than one arcade. Like @apple

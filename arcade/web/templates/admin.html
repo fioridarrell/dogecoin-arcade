@@ -374,7 +374,7 @@
      and DRC token info and the ability to search by token ticker borrow the search tool from the token exchange. When a
      ticker is selected it should show information about token and a list rich list of the token holders paginated to
      20 holders." One explorer for the chain picked at the top (no chain choice of its own), answered by this arcade's
-     own walk or, on Read only, by a linked arcade that walks the chain. #}
+     own walk or, on Watch only, by a linked arcade that walks the chain. #}
   {% include "_pick.html" %}
   <div class="ordcard ordx" id="ordexplorer">
   <h3>Explorer: <span id="ordxchain">the chain above</span></h3>
@@ -2339,7 +2339,7 @@ section.panel h2{margin-top:0}
   }
   loadSwaps(); setInterval(loadSwaps, 15000);
   // --- Ords (2026-10-20): each chain's own ord index, every 5 s while the tab shows; and Network -> Other operators.
-  var ORD_WORDS = {walk: 'Hold the full index', help: 'Help scan', read: 'Read only', off: 'Off'};
+  var ORD_WORDS = {walk: 'Keep the full index', help: 'Help scan', read: 'Watch only', off: 'Off'};
   function pct(x) { return (x == null ? '\u2014' : Number(x).toFixed(x < 10 ? 2 : 1) + '%'); }
   function num(x) { return Number(x || 0).toLocaleString(); }
   function bytes(n) {
@@ -2361,12 +2361,13 @@ section.panel h2{margin-top:0}
   // they match the inner ring"): one copy alone is red, a second makes yellow, a third green.
   var ORD_COLORS = ['#c0392b', '#d4a017', '#2f7d4f', '#a05cc4', '#d0573c', '#6b8e23'];
   var ORD_CHOICES = [
-    ['walk', 'Hold the full index', 'Keeps every inscription, who owns it and every token balance, stitched in order from '
+    ['walk', 'Keep the full index', 'Keeps every inscription, who owns it and every token balance, stitched in order from '
       + 'the chunks every arcade scans. Answers lookups for the arcades that only read. Takes disk (see below) and, on a '
       + 'big machine, its spare cores scan ahead.'],
-    ['help', 'Help scan', 'Scans chunks of blocks for everyone, in line, and keeps small notes until the holders have '
-      + 'stitched them. No index here. Uses the cores set below.'],
-    ['read', 'Read only', 'Keeps nothing; asks an arcade that holds the index. Costs nothing here.'],
+    ['help', 'Help scan', 'Keeps no index. Scans chunks of blocks for the arcades that keep it, in line, and keeps '
+      + 'small notes until they have stitched them; its scans are also the second opinions every chunk is checked by. '
+      + 'Uses the cores set below.'],
+    ['read', 'Watch only', 'Keeps nothing; asks an arcade that keeps the full index. Costs nothing here.'],
     ['off', 'Off', 'This arcade takes no part in this chain’s ords.']];
   // What a linked arcade says of the whole-index copy it is fetching (2026-10-22): its pieces so far, or nothing.
   function ordCopyWord(p) {
@@ -2446,10 +2447,10 @@ section.panel h2{margin-top:0}
     if (r.differ) out.push(['', num(r.differ) + ' chunk' + (r.differ > 1 ? 's were' : ' was') + ' read differently by '
       + 'two arcades. Another arcade scans it to settle which is right.']);
     if (r.mode !== 'off' && !copies.length) out.push(['bad', 'No arcade holds this chain’s index yet. One that can '
-      + 'spare the disk should choose Hold the full index.']);
+      + 'spare the disk should choose Keep the full index.']);
     else if (r.mode !== 'off' && copies.length === 1) out.push(['', 'Only one copy: ' + ordName(copies[0]) + ' holds it. '
       + 'A second arcade holding the index (ring B) would keep it safe if that one goes offline.']);
-    if (r.mode === 'read' && !(r.walkers || []).length) out.push(['', 'Read only, but no linked arcade holds this '
+    if (r.mode === 'read' && !(r.walkers || []).length) out.push(['', 'Watch only, but no linked arcade keeps this '
       + 'chain’s index right now: lookups cannot be answered.']);
     var sn = r.snapshot || {};
     if (sn.fetching) out.push(['', 'Fetching the whole index from arcade ' + sn.fetching.from + ': '
@@ -2506,14 +2507,19 @@ section.panel h2{margin-top:0}
     });
     box.appendChild(ordEl('div', 'ordtitle', ordEsc(r.title)));
     var copies = r.copies || [], mine = copies.filter(function (c) { return c.me; })[0];
-    var what = r.mode === 'walk' ? 'This arcade <b>holds the full index</b>' + (mine ? ', walked to block ' + num(mine.walked_to)
+    var what = r.mode === 'walk' ? 'This arcade <b>keeps the full index</b>' + (mine ? ', walked to block ' + num(mine.walked_to)
       + ' of ' + num(r.tip) : '') + '.'
       : r.mode === 'help' ? 'This arcade <b>helps scan</b> this chain' + ((r.lanes || []).length ? ': ' + (r.lanes || []).map(function (l) {
           return 'chunk ' + num(l.chunk) + ', ' + l.done + ' of ' + r.chunk + ' blocks'; }).join('; ') : '') + '.'
-      : r.mode === 'read' ? 'This arcade is <b>read only</b> for this chain' + ((r.walkers || []).length ? ': it asks '
+      : r.mode === 'read' ? 'This arcade is <b>watch only</b> for this chain' + ((r.walkers || []).length ? ': it asks '
           + ordEsc(ordName((copies.filter(function (c) { return c.node === r.walkers[0].node; })[0]) || {node: r.walkers[0].node})) : '') + '.'
       : 'This arcade takes <b>no part</b> in this chain’s ords.';
     box.appendChild(ordEl('div', 'muted', what));
+    // The coin values the walk keeps on disk (2026-10-25): chunks walked before they were kept, brought in by the lanes.
+    var vals = r.values;
+    if (r.mode === 'walk' && vals && vals.behind_chunks > vals.brought_in)
+      box.appendChild(ordEl('div', 'muted', 'Coin values: bringing in the chunks walked before they were kept, '
+        + num(vals.brought_in) + ' of ' + num(vals.behind_chunks) + ' (' + (vals.lanes || []).length + ' lanes).'));
     // how complete
     var three = 0;
     Object.keys(r.levels || {}).forEach(function (k) { if (Number(k) >= 3) three += r.levels[k].chunks; });
@@ -2551,7 +2557,7 @@ section.panel h2{margin-top:0}
         + (k < 3 ? 'ABC'[k] : '–') + ', ' + (c.frac == null ? 'waiting for the tip' : Math.round(c.frac * 100) + '%')
         + ' (block ' + num(c.walked_to) + ')' + ordCopyWord((r.peers || {})[c.node]) + '</span></div>';
     }).join('');
-    var others = (r.others || []).map(function (o) { return '<b>' + ordEsc(ordName(o)) + '</b> (' + (o.mode === 'help' ? 'helps scan' : 'read only') + ')'; });
+    var others = (r.others || []).map(function (o) { return '<b>' + ordEsc(ordName(o)) + '</b> (' + (o.mode === 'help' ? 'helps scan' : 'watch only') + ')'; });
     ring.appendChild(ordEl('div', '', legend + (others.length ? '<div class="muted" style="margin-top:6px">Also linked, holding '
       + 'no copy: ' + others.join(', ') + '</div>' : '')));
     box.appendChild(ring);

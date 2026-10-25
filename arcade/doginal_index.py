@@ -34,7 +34,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Callable
 
-from . import ord_rules, rawchain
+from . import ord_rules, ord_values, rawchain
 
 log = logging.getLogger("arcade.doginal_index")
 
@@ -89,6 +89,11 @@ PREFETCH = 8
 #: Spend notes kept here when no arcade holds the index (and so nobody stitches them): beyond this the furthest are
 #: let go -- they can be scanned again. Notes everybody holding the index has stitched past are let go at once.
 NOTES_MAX_BYTES = 512 * 1024 ** 2
+#: Lookups at once on this arcade's own Core while the walk gathers a block's earlier transactions (_fetch_many).
+LANES_OWN_FETCH = 4
+#: The lanes bring in the coin values of the blocks walked before the values file existed (ord_values) only while the
+#: walk is at least this far behind the tip: one at the tip asks so little it is not worth reading the chain again.
+VALUES_BEHIND = 10_000
 #: walk: the whole index here; help: chunks for the shared list; read: no index here, its questions asked of a linked
 #: arcade that walks (2026-10-20: "read only. Where it can read the index, but it doesn't hold the index on
 #: its own copy of arcade"); off.
@@ -925,6 +930,8 @@ class Walker:
         self.token_protocol = token_protocol
         self.tracked: _Seen | None = None                                  # coins an inscription may sit on
         self.values: OrderedDict[bytes, int] = OrderedDict()               # recent outputs' koinu
+        #: Every coin's value seen, on disk (ord_values); None: memory only (asked of a Core again once let go of).
+        self.disk: ord_values.Values | None = None
         self.rate = 0.0
         # How a block's earlier transactions are fetched, many at once: fetch_many(txids) -> {txid: raw bytes}; the
         # index gives one that spreads them over every lane's Core (DoginalIndex._fetch_many). None: batched on `rpc`.
@@ -1032,9 +1039,16 @@ class Walker:
         got = self.values.get(key)
         if got is not None:
             return got
+        if self.disk is not None:
+            got = self.disk.get(ord_values.key(txid, vout))
+            if got is not None:
+                self._keep(key, got)
+                return got
         tx = rawchain.read_tx(bytes.fromhex(rpc.call("getrawtransaction", txid, 0)), txid)
         for n, (v, _s) in enumerate(tx.vout):
             self._keep(_outpoint(txid, n), v)
+        if self.disk is not None:
+            self.disk.put([(ord_values.key(txid, n), v) for n, (v, _s) in enumerate(tx.vout)])
         return tx.vout[vout][0]
 
     #: Transactions asked of a Core in one round trip while a block's input values are gathered.
@@ -1046,18 +1060,28 @@ class Walker:
         trip each (2026-10-25: Strawberry, reading through lenders, crawled through the 2023 blocks a lookup at a time,
         thousands a block). What is not fetched here is still asked one at a time (_value). Returns how many."""
         inblock = {tx.txid for tx in block.txs}
-        want: dict[str, None] = {}
+        want: dict[tuple[str, int], None] = {}
         for tx in block.txs[1:]:
             maybe = [j for j, i in enumerate(tx.vin) if i["vout"] != -1 and _outpoint(i["txid"], i["vout"]) in tracked]
             if not maybe:
                 continue
             for i in tx.vin[:max(maybe)]:
                 if i["txid"] not in inblock and _outpoint(i["txid"], i["vout"]) not in self.values:
-                    want[i["txid"]] = None
+                    want[(i["txid"], i["vout"])] = None
         if not want:
             return 0
-        txids = list(want)
+        if self.disk is not None:                        # walked here before: on disk (ord_values), no Core asked
+            kept = self.disk.get_many([ord_values.key(t, n) for t, n in want])
+            for t, n in list(want):
+                got_v = kept.get(ord_values.key(t, n))
+                if got_v is not None:
+                    self._keep(_outpoint(t, n), got_v)
+                    del want[(t, n)]
+        txids = list(dict.fromkeys(t for t, _n in want))
+        if not txids:
+            return 0
         got = self.fetch_many(txids) if self.fetch_many is not None else fetch_raw_many(rpc, txids, self.PREFETCH_BATCH)
+        fetched: list[tuple[bytes, int]] = []
         for txid, raw in got.items():
             try:
                 tx = rawchain.read_tx(raw, txid)
@@ -1065,6 +1089,9 @@ class Walker:
                 continue
             for n, (v, _s) in enumerate(tx.vout):
                 self._keep(_outpoint(txid, n), v)
+                fetched.append((ord_values.key(txid, n), v))
+        if self.disk is not None and fetched:
+            self.disk.put(fetched)
         return len(got)
 
     def _keep(self, key: bytes, value: int) -> None:
@@ -1289,6 +1316,8 @@ class Walker:
                 kept = self.store.notes_of(c)
                 nd = kept[1] if kept and kept[2] == "" else (self.store.finish_notes(c, rpc) or (None,))[0]
                 self.store.say(c, "", chunk_hash_of([r[0] for r in rows]), sum(r[1] for r in rows), nd)
+        if self.disk is not None:
+            self.disk.block(block.txs, h)
         return moves
 
     def _parent(self, w: _Block, claimed: list[str], carried: list) -> tuple[str, list[int]] | None:
@@ -1684,6 +1713,8 @@ class DoginalIndex:
         # first wins (2026-10-22: "Both"; Snapshots.step lets the copy go once the walk passes its block).
         if snaps.fetch is None:
             self._ask_for_snapshot()
+        if self.walker.disk is None:
+            self.walker.disk = ord_values.Values(Path(str(self.store.path) + ".values"))
         if self._lane_sources(walking=True):
             self._help(rpc, budget / 2, walking=True)
         else:
@@ -1746,6 +1777,7 @@ class DoginalIndex:
         self.walker.tracked = None
         self._decoded = None
         self.chunks.lanes = []
+        self._forget_values()
         self._said_upto = -1
         self.store.set_meta("said_upto", -1)
         self._status_kept = None
@@ -1952,32 +1984,41 @@ class DoginalIndex:
         """{node: client factory} of the arcades lending this chain now."""
         return {n: f for n, f, _lanes in self._lenders_now()}
 
+    #: Transactions in one ask of the walk's parallel lookups (_fetch_many): small, so a lender's lanes each take one.
+    FETCH_BATCH = 50
+
     def _fetch_many(self, txids: list[str]) -> dict[str, bytes]:
         """A block's earlier transactions for the walk, split over every Core a lane reads from -- this arcade's own and
-        each lender's (their lanes) -- side by side, each in batches (Walker._prefetch)."""
-        factories = ([self.rpc_factory] if self.own_core() and self.rpc_factory is not None else []) + \
-            list(self._lent().values())
-        if not factories:
-            factories = [self.rpc_factory] if self.rpc_factory is not None else []
-        if not factories:
+        each lender's -- in small batches, as many at once on each as the lanes it lends (2026-10-25: "parallel
+        asks": one batch at a time left a lender's disk serving a lookup at a time; several let it read side by side)."""
+        sources: list[tuple[Any, int]] = []
+        if self.own_core() and self.rpc_factory is not None:
+            sources.append((self.rpc_factory, LANES_OWN_FETCH))
+        sources += [(f, lanes) for _n, f, lanes in self._lenders_now()]
+        if not sources and self.rpc_factory is not None:
+            sources = [(self.rpc_factory, 1)]
+        if not sources:
             return {}
-        parts = [txids[i::len(factories)] for i in range(len(factories))]
+        # Dealt round the sources in proportion to their lanes: a lender lending 4 takes four batches to another's one;
+        # a few transactions still spread over every slot.
+        slots = [f for f, lanes in sources for _l in range(max(1, lanes))]
+        size = max(1, min(self.FETCH_BATCH, -(-len(txids) // len(slots))))
+        batches = [txids[at:at + size] for at in range(0, len(txids), size)]
+        jobs = [(slots[i % len(slots)], part) for i, part in enumerate(batches)]
 
         def one(job) -> dict[str, bytes]:
             factory, part = job
-            if not part:
-                return {}
             try:
                 with factory() as rpc:
-                    return fetch_raw_many(rpc, part, Walker.PREFETCH_BATCH)
+                    return fetch_raw_many(rpc, part, len(part))
             except Exception:                            # noqa: BLE001 -- its share is asked one at a time
                 return {}
+        if len(jobs) == 1:
+            return one(jobs[0])
         out: dict[str, bytes] = {}
-        if len(factories) == 1:
-            return one((factories[0], parts[0]))
         from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=len(factories)) as pool:
-            for got in pool.map(one, zip(factories, parts)):
+        with ThreadPoolExecutor(max_workers=min(len(jobs), len(slots))) as pool:
+            for got in pool.map(one, jobs):
                 out.update(got)
         return out
 
@@ -2026,18 +2067,36 @@ class DoginalIndex:
             lanes.append(lane)
             held.add(c)
             self._say_lease(lane)
+        # Lanes with nothing to scan for the shared list bring in the coin values of blocks walked before the values
+        # file existed (ord_values): never said, never leased -- for this arcade's walk alone.
+        vlanes = self._values_lanes()
+        for lane in list(vlanes):
+            if lane.get("via", "") in free:
+                free.remove(lane.get("via", ""))
+            else:
+                vlanes.remove(lane)                      # its lender gone, or the shared list needs the lane
+        if free:
+            for c in self._values_wanted({lane["c"] for lane in vlanes}):
+                if not free:
+                    break
+                vlanes.append({"c": c, "at": chunk_range(c, self.base)[0], "via": free.pop(0)})
         self._keep_lanes()
-        if not lanes:
+        if not lanes and not vlanes:
             return
         start, done = time.monotonic(), 0
         while not (done and time.monotonic() - start >= budget):
-            todo = [lane for lane in lanes if lane["at"] < chunk_range(lane["c"], self.base)[1]]
+            todo = [lane for lane in lanes + vlanes if lane["at"] < chunk_range(lane["c"], self.base)[1]]
             if not todo:
                 break
-            stored = {lane["at"] for lane in todo if self.store.q("SELECT 1 FROM pnote WHERE height=?", (lane["at"],))}
+            stored = {lane["at"] for lane in todo if lane in lanes and
+                      self.store.q("SELECT 1 FROM pnote WHERE height=?", (lane["at"],))}
             asked = [(lane["at"], lane.get("via", "")) for lane in todo if lane["at"] not in stored]
             scanned = self._scan_many(rpc, asked)
+            for_values = {lane["at"] for lane in todo if lane in vlanes}
             for h, (block_hash, line, n, notes) in scanned.items():
+                if h in for_values:
+                    self._absorb_values(h, notes)
+                    continue
                 with self.store.tx() as db:
                     if not db.execute("SELECT 1 FROM block WHERE height=?", (h,)).fetchone():
                         db.execute("INSERT INTO block (height, hash, line, n) VALUES (?,?,?,?)",
@@ -2052,13 +2111,16 @@ class DoginalIndex:
                         self.__dict__.setdefault("_lender_rest", {})[lane["via"]] = time.time() + 300
                         log.info("ord index %s: arcade %s did not answer three times; rests 5 minutes",
                                  self.net, lane["via"][:12])
-                        self._drop_lane(lane)
+                        if lane in vlanes:
+                            vlanes.remove(lane)
+                        else:
+                            self._drop_lane(lane)
                     continue
                 lane.pop("miss", None)
                 lo = chunk_range(lane["c"], self.base)[0]
                 lane["at"] += 1
                 done += 1
-                if (lane["at"] - lo) % PROGRESS_EVERY == 0:
+                if (lane["at"] - lo) % PROGRESS_EVERY == 0 and lane in lanes:
                     self._say_lease(lane)
             self._keep_lanes()
             if not scanned and not stored:
@@ -2076,7 +2138,71 @@ class DoginalIndex:
                     self.helped += 1
                     self.store.set_meta("helped", self.helped)
                 self._drop_lane(lane)
+        for lane in list(vlanes):
+            if lane["at"] >= chunk_range(lane["c"], self.base)[1]:
+                self.walker.disk.mark_done(lane["c"])
+                vlanes.remove(lane)
         self._keep_lanes()
+
+    def _forget_values(self) -> None:
+        """The walk jumped (a whole index installed): the values file would miss the blocks jumped over without
+        knowing it, so it starts again from the walk's next block, and the lanes bring in everything before."""
+        disk, self.walker.disk = self.walker.disk, None
+        if disk is not None:
+            disk.close()
+        for tail in ("", "-wal", "-shm"):
+            try:
+                Path(str(self.store.path) + ".values" + tail).unlink()
+            except FileNotFoundError:
+                pass
+        self._vlanes = []
+        self.store.set_meta("vlanes", [])
+
+    def _values_status(self) -> dict | None:
+        """For the Ords panel: the coin values kept on disk (ord_values), and how many chunks walked before the file
+        existed are still to bring in."""
+        disk = self.walker.disk
+        if disk is None:
+            return None
+        start = disk.start()
+        before = chunk_of(start - 1, self.base) + 1 if start is not None and start > self.base else 0
+        return {"from": start, "bytes": disk.size(), "behind_chunks": before,
+                "brought_in": len([c for c in disk.done() if c < before]),
+                "lanes": [{"chunk": l["c"], "at": l["at"]} for l in self._values_lanes()]}
+
+    def _values_lanes(self) -> list[dict]:
+        if getattr(self, "_vlanes", None) is None:
+            self._vlanes = list(self.store.meta("vlanes") or [])
+        return self._vlanes
+
+    def _values_wanted(self, exclude: set) -> list[int]:
+        """The next chunks (lowest first, a few) whose coin values the walk has never seen: walked before the values
+        file existed. Only on a big machine, walking, far enough behind the tip to be worth it."""
+        disk = self.walker.disk
+        if disk is None or self.mode() != "walk" or not self._big():
+            return []
+        if self.tip - self.walker.next_height() < VALUES_BEHIND:
+            return []
+        start = disk.start()
+        if start is None or start <= self.base:
+            return []
+        done, out = disk.done(), []
+        for c in range(0, chunk_of(start - 1, self.base) + 1):
+            if c not in done and c not in exclude:
+                out.append(c)
+                if len(out) >= 64:
+                    break
+        return out
+
+    def _absorb_values(self, h: int, notes: bytes) -> None:
+        """A block a values lane read (its notes, proved by the merkle root): its coins on disk. A block the walk has
+        filed itself (from the values file's first block on) is left alone -- its spends are in already."""
+        from . import ord_notes
+        disk = self.walker.disk
+        start = disk.start() if disk is not None else None
+        if start is None or h >= start:
+            return
+        disk.block(ord_notes.decode(bytes([ord_notes.VERSION]) + notes)[0].txs, h)
 
     def _scan_many(self, rpc, asked: list) -> dict[int, tuple[str, str, int]]:
         """(hash, line, births) for each (height, via) a lane asks: one at a time on one lane of this arcade's own Core;
@@ -2131,6 +2257,8 @@ class DoginalIndex:
 
     def _keep_lanes(self) -> None:
         self.store.set_meta("lanes", self.chunks.lanes)
+        if getattr(self, "_vlanes", None) is not None:
+            self.store.set_meta("vlanes", self._vlanes)
         self.store.set_meta("lease", None)
 
     def _drop_lane(self, lane: dict) -> None:
@@ -2369,6 +2497,7 @@ class DoginalIndex:
                 "lanes": [{"chunk": lane["c"], "at": lane["at"], "done": lane["at"] - chunk_range(lane["c"], self.base)[0]}
                           for lane in self.chunks.lanes],
                 "cores": self._lanes_wanted(),
+                "values": self._values_status(),
                 "walkers": [{"node": n[:12], "walked_to": h} for n, h in self.walkers()],
                 "helped": self.helped, "help_rate": round(self.help_rate, 2), "leases": sorted(leases, key=lambda l: l["chunk"]),
                 # With the copy of the whole index each one is fetching, as its "hi" says it (2026-10-22: two arcades

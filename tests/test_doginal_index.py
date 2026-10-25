@@ -3,6 +3,7 @@ knows where each inscription is now, and helpers that lease small chunks over th
 and say each chunk's hash, so two arcades' scans agree or a difference shows. Blocks here are made up, byte for byte,
 and read by rawchain like any real one."""
 import hashlib
+from pathlib import Path
 import time
 
 import pytest
@@ -1476,3 +1477,62 @@ def test_the_coin_filter_is_kept_on_disk_and_a_start_adds_only_what_came_since(t
         assert bytes(tx) + vout.to_bytes(4, "little") in again.walker.tracked, "every coin an inscription sits on"
     again.store.reset()
     assert not path.exists(), "a reset lets the kept filter go"
+
+
+def test_every_coin_the_walk_saw_is_kept_on_disk_and_never_asked_of_a_core_again(tmp_path):
+    """2026-10-25 ("Remember + parallel asks"): the walk kept 500,000 values in memory, only of coins of 1 or
+    less, lost at every start -- and asked a lender's disk again for transactions it had walked (Strawberry, Dogecoin
+    from .25's hard disk: 0.02 blocks a second). Kept on disk, a restarted walk asks nobody; a spent coin is let go."""
+    from arcade import ord_values
+    chain = Chain()
+    a = [_tx([(FUND, n, b"")], [5 * 10 ** 8 + n], tag=bytes([n])) for n in range(6)]     # big: never kept in memory
+    chain.add(a)
+    spend = _tx([(a[n][1], 0, b"") for n in range(6)], [3 * 10 ** 9])
+    chain.add([spend])
+    path = tmp_path / "v.sqlite"
+    first = dx.DoginalIndex(path, lambda: chain, lambda: "walk")
+    first.walker.disk = ord_values.Values(Path(str(path) + ".values"))
+    first.walker.step(chain, dx.BASE)                       # block 0 only
+    assert first.walker.disk.start() == dx.BASE
+    first.walker.disk.close()
+
+    lender = _Lender(chain)
+    again = dx.DoginalIndex(path, lambda: chain, lambda: "walk", own_core=lambda: False,
+                            lenders=lambda: [("n0", lambda: lender)])
+    again.walker.disk = ord_values.Values(Path(str(path) + ".values"))
+    block = rawchain.read_block(bytes.fromhex(chain.blocks[1][1].hex()), chain.blocks[1][0])
+    asked = chain.calls
+    assert again.walker._prefetch(chain, block, {dx._outpoint(a[5][1], 0)}) == 0, "all five on disk"
+    assert chain.calls == asked, "no Core asked"
+    assert all(again.walker.values.get(dx._outpoint(a[n][1], 0)) == 5 * 10 ** 8 + n for n in range(5))
+    again.walker.step(chain, dx.BASE + 1)
+    assert again.walker.disk.get(ord_values.key(a[0][1], 0)) is None, "spent: let go"
+    assert again.walker.disk.get(ord_values.key(spend[1], 0)) == 3 * 10 ** 9
+
+
+def test_lanes_bring_in_the_coins_of_blocks_walked_before_the_values_file(tmp_path, monkeypatch):
+    """A walk already far along when the values file came (Strawberry: block 5.61M of Dogecoin, from 4.6M): the lanes,
+    with nothing to scan for the shared list, read the blocks before it once, a chunk at a time, and keep their coins --
+    never said, never leased."""
+    from arcade import ord_values
+    monkeypatch.setattr(dx, "VALUES_BEHIND", -100)          # this little chain's walk is soon at the tip: anyway
+    monkeypatch.setattr("os.cpu_count", lambda: 20)
+    chain = _busy_chain(24)                                   # six chunks of four
+    lenders = {f"node{i}": _Lender(chain) for i in range(2)}
+    index = dx.DoginalIndex(tmp_path / "b.sqlite", lambda: chain, lambda: "walk", own_core=lambda: False,
+                            cores=lambda: 2, lenders=lambda: [(n, (lambda l=l: l)) for n, l in lenders.items()])
+    index.walker.step(chain, dx.BASE + 11)                    # three chunks walked with no values file
+    posted = []
+    index.share = type("S", (), {"post": lambda self, f: posted.append(f)})()
+    for _ in range(40):
+        index.step()
+        st = index._values_status()
+        if st and st["behind_chunks"] and st["brought_in"] == st["behind_chunks"]:
+            break
+    st = index._values_status()
+    assert st["from"] == dx.BASE + 12 and st["behind_chunks"] == 3 and st["brought_in"] == 3
+    disk = index.walker.disk
+    born = chain.blocks[0][1]
+    first_tx = rawchain.read_block(born, chain.blocks[0][0]).txs[1]
+    assert disk.get(ord_values.key(first_tx.txid, 0)) == 100_000, "a coin from the first block, brought in"
+    assert not [f for f in posted if f.get("op") in ("ls", "ld") and f["c"] < 3], "values lanes are never leased"
