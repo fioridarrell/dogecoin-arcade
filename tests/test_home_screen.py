@@ -125,3 +125,15 @@ def test_the_installed_app_opens_on_the_apps(client):
     assert app.get("/manifest.webmanifest").json()["start_url"] == "/home"
     head = (TEMPLATES / "base.html").read_text().split("</head>")[0]
     assert "nav.redirectCount > 0" in head, "a start page the server redirected (an account's / to the Feed) lands home"
+
+
+def test_a_picked_dark_theme_makes_the_iphone_status_bar_black(client):
+    """2026-10-24: "The top of my screen where my clock and battery meters are showing up white, even though my
+    PWA is black"."""
+    app, _state = client
+    bar = re.compile(r'name="apple-mobile-web-app-status-bar-style" content="([a-z-]+)"')
+    assert bar.search(app.get("/feed").text).group(1) == "default"
+    app.cookies.set("arcade_theme", "dark")
+    assert bar.search(app.get("/feed").text).group(1) == "black"
+    app.cookies.set("arcade_theme", "light")
+    assert bar.search(app.get("/feed").text).group(1) == "default"

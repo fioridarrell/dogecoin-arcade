@@ -88,6 +88,11 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-24 iPhone status bar follows the theme (Claude)
+The operator: "The top of my screen where my clock and battery meters are showing up white, even though my PWA is black".
+base.html keeps the theme showing (picked, or the device's on Auto) in the cookie `arcade_theme` (dark|light) and serves
+`apple-mobile-web-app-status-bar-style` "black" for dark, "default" otherwise; iOS reads it when the app starts.
+
 ### 2026-10-24 App cards say what happens when minimized; arcade.app tells the app; PWA opens on the apps (Claude)
 The operator: "App builders should be able to decide their apps do when they are minimized that should be stored in the game
 card"; "If an app doesn't have a timeout specified, it should default to 15 minutes. A specified timeout of zero should be

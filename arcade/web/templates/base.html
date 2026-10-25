@@ -14,7 +14,10 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Arcade">
-<meta name="apple-mobile-web-app-status-bar-style" content="default">
+{#- The iPhone's status bar behind the clock and battery (2026-10-24: "showing up white, even though my PWA is
+    black"): the installed app reads this when it starts, so the theme showing in this browser -- picked, or the phone's
+    own on Auto -- is kept in a cookie (base.html, LIGHT OR DARK) and dark gets a black bar. -#}
+<meta name="apple-mobile-web-app-status-bar-style" content="{{ 'black' if request and request.cookies.get('arcade_theme') == 'dark' else 'default' }}">
 <style>
 /* The one rule that must hold before the shared stylesheet arrives (2026-10-20: the rest moved to /base.css, kept by
    the browser): without it, anything marked hidden would flash into view while the page loads. */
@@ -46,11 +49,23 @@ html.inshell body:not(.fullscreen){padding-top:18px}
     }
   }
   function read() { try { return localStorage.getItem(KEY) || 'auto'; } catch (e) { return 'auto'; } }
+  // What is showing, for the server: the iPhone's status bar is drawn from it the next time the app starts.
+  function keep(t) {
+    var dark = t === 'dark' || (t !== 'light' && window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);
+    var want = 'arcade_theme=' + (dark ? 'dark' : 'light');
+    if (document.cookie.indexOf(want) < 0) document.cookie = want + '; path=/; max-age=31536000; samesite=lax';
+  }
   apply(read());
+  keep(read());
+  if (window.matchMedia) {
+    var mq = matchMedia('(prefers-color-scheme: dark)');
+    if (mq.addEventListener) mq.addEventListener('change', function () { keep(read()); });
+  }
   window.addEventListener('storage', function (e) { if (e.key === KEY) apply(read()); });
   window.arcadeTheme = function (t) {
     if (t === undefined) return read();
     try { if (t === 'auto') localStorage.removeItem(KEY); else localStorage.setItem(KEY, t); } catch (e) {}
+    keep(t);
     apply(t);
     return t;
   };
