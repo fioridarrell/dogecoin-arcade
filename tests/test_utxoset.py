@@ -215,6 +215,9 @@ def test_the_watcher_seeds_account_coins_and_history_into_the_wallet_index(tmp_p
         assert {r["txid"] for r in rows} == {ids["cb1"], ids["spend"]}
         assert next(r for r in rows if r["txid"] == ids["spend"])["net"] == 199_000_000 - 5 * COIN
     assert settings["utxoset_seeded:kot"] == sorted([A, B]) and bumps == [1]
+    from arcade import coinlist
+    with contextlib.closing(index.open()) as db:                    # coin lists: complete from block 0, no walk
+        assert coinlist.covers(coinlist.coverage(db, A, s.height), 0, s.height)
     BlockWatcher._utxoset_seed(me, kot, s)                          # once per address
     assert bumps == [1]
 

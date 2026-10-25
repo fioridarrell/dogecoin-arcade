@@ -417,6 +417,10 @@ class BlockWatcher:
                         "VALUES (?,?,?,?,?,?,?)",
                         [(r["txid"], r["address"], r["height"], r["received"], r["spent"], r["paid_out"], r["other"])
                          for r in uset.history([address])])
+            # The whole unspent set is complete from block 0 (coin lists, 2026-10-25): these addresses never need a walk.
+            from .. import coinlist as coinlistlib
+            for address in todo:
+                coinlistlib.mark_covered(db, address, [(0, int(uset.height))], "full unspent set")
         self.state.set_setting(key, sorted(seeded | set(todo)))
         log.info("%s: %d accounts' coins and history read from the unspent set", chain.params.label, len(todo))
         self.state.bump_generation()
