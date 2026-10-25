@@ -88,6 +88,20 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-24 Home screen: pages of apps, folders, back (Claude)
+The operator: "several pages of apps ... put apps inside of a folder and just like on the homepage of an Apple phone"; "If you
+swipe back, you should go back to the last page you were on and your app should be minimized unless it's a page then it
+should just close"; "a back swipe should bring you to the previous app page".
+- home.html: a horizontal pager of pages (scroll-snap, dots); drag to an edge for the next / a new page; rest on another
+  icon's middle to make a folder (named for a shared genre); a folder opens over a blur, renameable; long-press inside to
+  drag an icon out. Icons only make room once the finger rests (350 ms).
+- `/account/homeapps` now keeps `{"pages": [[key | {"id","folder","apps"}]]}` (15 pages, 120 icons); a flat list is read
+  as one page.
+- Back: each window, the App Store, a folder and every page past the first push one history step; popstate minimizes an
+  app, closes a page, closes the store / folder, or goes back a page. iPhone PWAs have no back swipe: a 12 px left-edge
+  swipe zone over windows calls history.back() there.
+- The running bar above the dock is gone; the green dot sits above a running app's icon (or its folder).
+
 ### 2026-10-24 Home screen red counts stay fresh; the phone's app icon shows them (Claude)
 `GET /account/badges` -> {tab href: count}, the tab strip's numbers; /home polls it every 30 s, on return and after a
 window closes or is minimized, and sets `navigator.setAppBadge` to new messages + notifications.

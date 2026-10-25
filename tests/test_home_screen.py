@@ -52,12 +52,18 @@ def test_a_screen_never_arranged_starts_with_the_starred_apps_and_keeps_its_orde
     star = f"app:{MAKER}:little-app"
     assert app.post("/account/favorites", headers=EDGE, json={"key": star, "on": True}).status_code == 200
     first = app.get("/account/homeapps", headers=EDGE).json()
-    assert first == {"apps": None, "starred": [star], "saved": True}, "never arranged: the page seeds it"
+    assert first == {"pages": None, "starred": [star], "saved": True}, "never arranged: the page seeds it"
     order = [star, "tab:/me/messages", "store", "tab:/feed"]
-    assert app.post("/account/homeapps", headers=EDGE, json={"apps": order}).json() == {"apps": order, "saved": True}
-    assert app.get("/account/homeapps", headers=EDGE).json()["apps"] == order
+    assert app.post("/account/homeapps", headers=EDGE, json={"apps": order}).json() == {"pages": [order], "saved": True}, \
+        "a flat list (before pages) is one page"
+    two = [[star, {"id": "f1", "folder": "Games", "apps": ["tab:/feed", f"app:{MAKER}:other"]}], ["store"]]
+    assert app.post("/account/homeapps", headers=EDGE, json={"pages": two}).json()["pages"] == two
+    assert app.get("/account/homeapps", headers=EDGE).json()["pages"] == two
     assert app.post("/account/homeapps", headers=EDGE, json={"apps": ["https://elsewhere"]}).status_code == 400
     assert app.post("/account/homeapps", headers=EDGE, json={"apps": ["store"] * 200}).status_code == 400
+    assert app.post("/account/homeapps", headers=EDGE, json={"pages": [["store"], ["store"]]}).status_code == 400, "once each"
+    assert app.post("/account/homeapps", headers=EDGE,
+                    json={"pages": [[{"id": "bad id!", "folder": "x", "apps": ["store"]}]]}).status_code == 400
     assert state.setting("homeapps:node") is None, "an account's screen is its own"
 
 
@@ -66,7 +72,7 @@ def test_a_stranger_keeps_the_screen_in_the_browser_and_the_operator_on_the_node
     assert app.get("/account/homeapps", headers=EDGE).json()["saved"] is False
     assert app.post("/account/homeapps", headers=EDGE, json={"apps": ["store"]}).status_code == 403
     assert app.post("/account/homeapps", headers=LOCAL, json={"apps": ["store"]}).status_code == 200
-    assert state.setting("homeapps:node") == ["store"]
+    assert state.setting("homeapps:node") == [["store"]]
 
 
 def test_only_the_installed_app_is_sent_to_the_home_screen():
@@ -148,3 +154,15 @@ def test_the_red_counts_stay_fresh_on_the_home_screen(public):
     assert {"/me/messages", "/me/notifications", "/feed"} <= set(by) and all(isinstance(v, int) for v in by.values())
     home = (TEMPLATES / "home.html").read_text()
     assert "fetch('/account/badges'" in home and "navigator.setAppBadge" in home
+
+
+def test_pages_folders_and_back_on_the_home_screen():
+    """2026-10-24: "several pages of apps ... put apps inside of a folder and just like on the homepage of an
+    Apple phone"; "If you swipe back, you should go back to the last page you were on and your app should be minimized
+    unless it's a page then it should just close"."""
+    home = (TEMPLATES / "home.html").read_text()
+    assert 'id="hs-pager"' in home and "scroll-snap-type: x mandatory" in home
+    assert "function fold(id, ontoId)" in home and 'id="hs-folder"' in home
+    assert "window.addEventListener('popstate'" in home and "history.pushState({hs: kind}" in home
+    assert "if (w.item && w.item.kind === 'app') minimize(); else closeWin(w);" in home
+    assert 'id="hs-edge"' in home, "an iPhone's installed app has no back swipe of its own"

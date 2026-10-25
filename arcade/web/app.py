@@ -9985,19 +9985,52 @@ def create_app(state: AppState) -> FastAPI:
     # already starred").
     HOME_KEY = re.compile(r"tab:/[a-z/-]{0,40}|store|app:[A-Za-z0-9]{20,90}:[a-z0-9-]{1,80}")
     HOME_MOST = 120
+    # Pages of icons, and folders on them (2026-10-24: "several pages of apps ... put apps inside of a folder and
+    # just like on the homepage of an Apple phone"): [[key | {"id", "folder", "apps": [key, ...]}, ...], ...].
+    HOME_PAGES = 15
+    HOME_FOLDER = 60
 
-    def _home_apps(owner: str) -> list[str] | None:
-        said = state.setting(f"homeapps:{owner}")
-        if not isinstance(said, list):
+    def _home_pages(said: Any) -> list | None:
+        """A screen as the page sent it, cleaned, or None when it is not one. A flat list is one page (before pages)."""
+        if isinstance(said, list) and all(isinstance(k, str) for k in said):
+            said = [said]
+        if not isinstance(said, list) or not said or len(said) > HOME_PAGES:
             return None
-        return [k for k in said if isinstance(k, str) and HOME_KEY.fullmatch(k)]
+        out, count, seen = [], 0, set()
+        for page in said:
+            if not isinstance(page, list):
+                return None
+            kept = []
+            for it in page:
+                if isinstance(it, str):
+                    if not HOME_KEY.fullmatch(it) or it in seen:
+                        return None
+                    seen.add(it); kept.append(it); count += 1
+                elif isinstance(it, dict):
+                    apps, fid = it.get("apps"), str(it.get("id", ""))
+                    if (not isinstance(apps, list) or not apps or len(apps) > HOME_FOLDER
+                            or not re.fullmatch(r"[A-Za-z0-9_-]{1,20}", fid)):
+                        return None
+                    for k in apps:
+                        if not isinstance(k, str) or not HOME_KEY.fullmatch(k) or k in seen:
+                            return None
+                        seen.add(k); count += 1
+                    kept.append({"id": fid, "folder": " ".join(str(it.get("folder") or "Folder").split())[:30] or "Folder",
+                                 "apps": list(apps)})
+                else:
+                    return None
+            out.append(kept)
+        return out if count <= HOME_MOST else None
+
+    def _home_apps(owner: str) -> list | None:
+        return _home_pages(state.setting(f"homeapps:{owner}"))
 
     @app.get("/account/homeapps")
     def homeapps_get(request: Request):
         owner = _favorites_owner(request)
         if owner is None:
-            return JSONResponse({"apps": None, "starred": [], "saved": False}, headers={"Cache-Control": "no-store"})
-        return JSONResponse({"apps": _home_apps(owner),
+            return JSONResponse({"pages": None, "starred": [], "saved": False}, headers={"Cache-Control": "no-store"})
+        return JSONResponse({"pages": _home_apps(owner),
                              "starred": [k for k in _favorites(owner) if k.startswith("app:")], "saved": True},
                             headers={"Cache-Control": "no-store"})
 
@@ -10007,17 +10040,12 @@ def create_app(state: AppState) -> FastAPI:
         if owner is None:
             raise HTTPException(403, "sign in first")
         said = payload if isinstance(payload, dict) else {}
-        apps = said.get("apps")
-        if not isinstance(apps, list) or len(apps) > HOME_MOST:
-            return JSONResponse({"detail": f"a list of at most {HOME_MOST} icons"}, status_code=400)
-        keep: list[str] = []
-        for k in apps:
-            if not isinstance(k, str) or not HOME_KEY.fullmatch(k):
-                return JSONResponse({"detail": "that is not an icon"}, status_code=400)
-            if k not in keep:
-                keep.append(k)
-        state.set_setting(f"homeapps:{owner}", keep)
-        return JSONResponse({"apps": keep, "saved": True})
+        pages = _home_pages(said.get("pages", said.get("apps")))
+        if pages is None:
+            return JSONResponse({"detail": f"pages of icons and folders, at most {HOME_MOST} icons on "
+                                           f"{HOME_PAGES} pages"}, status_code=400)
+        state.set_setting(f"homeapps:{owner}", pages)
+        return JSONResponse({"pages": pages, "saved": True})
 
     @app.get("/account/badges")
     def account_badges(request: Request):

@@ -27,12 +27,8 @@
     <button type="button" class="hs-done" id="hs-done" hidden>Done</button>
   </div>
   <p class="hs-hint" id="hs-hint"></p>
-  <div class="hs-scroll" id="hs-scroll"><div class="hs-grid" id="hs-grid"></div></div>
-  <div class="hs-mini" id="hs-mini" hidden>
-    <button type="button" class="hs-mini-back" id="hs-mini-back"><span class="hs-mini-icon" id="hs-mini-icon"></span>
-      <span class="hs-mini-text"><strong id="hs-mini-name"></strong><span id="hs-mini-left">Running · tap to go back</span></span></button>
-    <button type="button" class="hs-mini-x" id="hs-mini-x" aria-label="Close it">&#x2715;</button>
-  </div>
+  <div class="hs-pager" id="hs-pager"></div>
+  <div class="hs-dots" id="hs-dots" aria-hidden="true"></div>
   <div class="hs-dock" id="hs-dock"></div>
 </div>
 
@@ -64,6 +60,14 @@
   </div>
 </div>
 
+<div id="hs-folder" class="hs-folder" hidden>
+  <div class="hs-folder-box" role="dialog" aria-modal="true" aria-label="Folder">
+    <label class="hs-sr" for="hs-fname">Folder name</label>
+    <input id="hs-fname" class="hs-fname" maxlength="30" autocomplete="off">
+    <div class="hs-fgrid" id="hs-fgrid"></div>
+  </div>
+</div>
+<div class="hs-edge" id="hs-edge" hidden></div>
 <div id="hs-wins"></div>
 <div class="hs-pull" id="hs-pull" hidden><span></span></div>
 <div class="hs-bar" id="hs-bar" hidden>
@@ -88,8 +92,34 @@ header, footer.version, .notice, #appbar, #newposts { display: none !important; 
 .hs-name { font-size: 1.35rem; font-weight: 750; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hs-done { border-radius: 999px; padding: 8px 18px; min-height: 40px; }
 .hs-hint { margin: 2px 16px 6px; min-height: 1.1em; font-size: .8rem; color: var(--muted); }
-.hs-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; padding-bottom: 12px; }
-.hs-grid { position: relative; }
+.hs-pager { flex: 1; min-height: 0; display: flex; overflow-x: auto; overflow-y: hidden; scroll-snap-type: x mandatory;
+  scrollbar-width: none; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; }
+.hs-pager::-webkit-scrollbar { display: none; }
+.hs.dragging .hs-pager { overflow-x: hidden; scroll-snap-type: none; }
+.hs-page { flex: 0 0 100%; height: 100%; scroll-snap-align: start; scroll-snap-stop: always; overflow: hidden; }
+.hs-grid { position: relative; height: 100%; }
+.hs-dots { display: flex; justify-content: center; gap: 7px; min-height: 14px; padding: 2px 0 8px; }
+.hs-dots span { width: 7px; height: 7px; border-radius: 50%; background: var(--line); }
+.hs-dots span.on { background: var(--fg); }
+.hs-tile.ghosted { visibility: hidden; }
+.hs-ghost { position: fixed; z-index: 50; pointer-events: none; transition: none !important; width: 90px; }
+.hs-ghost .hs-icon { transform: scale(1.14); box-shadow: 0 12px 26px rgba(0,0,0,.45); }
+.hs-tile.fold-target .hs-icon { transform: scale(1.18); box-shadow: 0 0 0 4px color-mix(in srgb, var(--fg) 25%, transparent); }
+.hs-ficon { background: color-mix(in srgb, var(--fg) 16%, transparent) !important; display: grid !important;
+  grid-template-columns: repeat(3, 1fr); gap: 3px; padding: 6px; box-sizing: border-box; align-content: start; }
+.hs-ficon span { aspect-ratio: 1; border-radius: 3px; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+.hs-ficon span img { width: 100%; height: 100%; object-fit: cover; }
+.hs-ficon span svg { width: 80%; height: 80%; }
+.hs-folder { position: fixed; inset: 0; z-index: 18; background: rgba(0,0,0,.45); backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px); display: flex; align-items: center; justify-content: center; }
+.hs-folder-box { width: min(88vw, 360px); }
+.hs-fname { width: 100%; text-align: center; font-size: 1.4rem; font-weight: 750; background: none; border: 0;
+  color: #fff; margin-bottom: 14px; box-shadow: none; }
+.hs-fgrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 14px; padding: 18px 8px; border-radius: 28px;
+  background: color-mix(in srgb, var(--bg) 82%, transparent); }
+.hs-fgrid .hs-tile { position: relative; transition: none; touch-action: none; }
+.hs-fgrid .hs-label, .hs-fgrid .hs-dot { display: block; }
+.hs-edge { position: fixed; left: 0; top: 0; bottom: 0; width: 12px; z-index: 33; touch-action: none; }
 .hs-tile { position: absolute; display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 6px 0 0;
   border: 0; background: none; color: var(--fg); font: inherit; box-shadow: none; border-radius: 0; cursor: pointer;
   -webkit-touch-callout: none; touch-action: pan-y; transition: left .3s cubic-bezier(.2,.8,.2,1), top .3s cubic-bezier(.2,.8,.2,1); }
@@ -100,7 +130,9 @@ header, footer.version, .notice, #appbar, #newposts { display: none !important; 
 .hs-icon .hs-letter { color: #fff; font-weight: 800; font-size: 1.3rem; }
 .hs-tile.drag .hs-icon { transform: scale(1.14); box-shadow: 0 12px 26px rgba(0,0,0,.45); }
 .hs-label { font-size: .72rem; max-width: 80px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.hs-dot { width: 5px; height: 5px; border-radius: 50%; margin-top: -2px; background: transparent; }
+/* Running (2026-10-24: "his little green dots are a better idea" than the bar; "Put the green dot above the app
+   that is running"). */
+.hs-dot { position: absolute; top: -4px; left: 50%; width: 7px; height: 7px; margin-left: -3.5px; border-radius: 50%; background: transparent; }
 .hs-dot.on { background: var(--ok); }
 .hs-badge { position: absolute; top: -2px; left: calc(50% + 20px); min-width: 22px; height: 22px; padding: 0 6px;
   box-sizing: border-box; border-radius: 11px; background: #e5484d; color: #fff; font-size: .72rem; font-weight: 700;
@@ -118,18 +150,6 @@ header, footer.version, .notice, #appbar, #newposts { display: none !important; 
   background: color-mix(in srgb, var(--fg) 7%, transparent); display: flex; justify-content: space-around; }
 .hs-dock .hs-tile { position: relative; padding: 0; transition: none; }
 .hs-dock .hs-label, .hs-dock .hs-dot { display: none; }
-.hs-mini { margin: 0 12px 8px; display: flex; align-items: center; gap: 8px; padding: 6px; border-radius: 16px;
-  background: var(--panel); border: 1px solid var(--line); box-shadow: 0 6px 20px rgba(0,0,0,.25); }
-.hs-mini-back { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 0; border: 0;
-  background: none; color: var(--fg); box-shadow: none; text-align: left; font: inherit; }
-.hs-mini-icon { width: 40px; height: 40px; border-radius: 10px; overflow: hidden; flex: none; display: flex;
-  align-items: center; justify-content: center; }
-.hs-mini-icon img { width: 100%; height: 100%; object-fit: cover; }
-.hs-mini-text { min-width: 0; display: flex; flex-direction: column; }
-.hs-mini-text strong { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: .92rem; }
-.hs-mini-text span { font-size: .76rem; color: var(--ok); }
-.hs-mini-x { width: 44px; height: 44px; border-radius: 12px; padding: 0; background: none; color: var(--muted);
-  border: 0; box-shadow: none; font-size: 1rem; }
 .hs-win { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; background: var(--bg); z-index: 20; }
 .hs-pull { position: fixed; left: 0; right: 0; top: 0; height: calc(18px + env(safe-area-inset-top, 0px)); z-index: 31;
   display: flex; justify-content: center; align-items: flex-end; padding-bottom: 9px; box-sizing: border-box;
@@ -246,8 +266,8 @@ header, footer.version, .notice, #appbar, #newposts { display: none !important; 
   APPS.forEach(function (a) { byKey[a.key] = {key: a.key, kind: 'app', name: a.name, img: a.cover, app: a}; });
 
   var $ = function (id) { return document.getElementById(id); };
-  var home = $('home'), grid = $('hs-grid'), scroller = $('hs-scroll');
-  var saved = false, keys = [];
+  var home = $('home');
+  var saved = false;
   function say(t) {
     var el = $('hs-toast'); el.textContent = t; el.hidden = false;
     clearTimeout(say.t); say.t = setTimeout(function () { el.hidden = true; }, 2600);
@@ -261,100 +281,219 @@ header, footer.version, .notice, #appbar, #newposts { display: none !important; 
   function iconBg(it) { return it.glyph ? it.glyph[0] : (it.img ? '#111' : '#6b4fa0'); }
   function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]; }); }
 
-  // ---------- the icons and their order ----------
-  function seed(starred) {
-    return TABS.filter(function (t) { return dockKeys.indexOf(t.key) < 0; }).map(function (t) { return t.key; })
-      .concat(['store']).concat((starred || []).filter(function (k) { return byKey[k]; }));
+  // ---------- the icons: pages of them, and folders (2026-10-24: "you should be able to have several pages of
+  // apps also ... put apps inside of a folder and just like on the homepage of an Apple phone") ----------
+  // pages: [[item, ...], ...]; an item is a key ("tab:/feed", "store", "app:...") or a folder {id, folder, apps: [keys]}.
+  var pages = [[]];
+  function isFolder(it) { return it && typeof it === 'object'; }
+  function idOf(it) { return isFolder(it) ? it.id : it; }
+  function liveApps(f) { return f.apps.filter(function (k) { return byKey[k]; }); }
+  function visible(it) { return isFolder(it) ? liveApps(it).length > 0 : !!byKey[it]; }
+  function everyKey() {
+    var out = [];
+    pages.forEach(function (pg) { pg.forEach(function (it) { if (isFolder(it)) out = out.concat(it.apps); else out.push(it); }); });
+    return out;
   }
-  function complete(list) {
-    // Tabs a later release adds join the end; the App Store is always there.
-    var out = list.filter(function (k, i) { return list.indexOf(k) === i && dockKeys.indexOf(k) < 0; });
-    TABS.forEach(function (t) { if (dockKeys.indexOf(t.key) < 0 && out.indexOf(t.key) < 0) out.push(t.key); });
-    if (out.indexOf('store') < 0) out.push('store');
-    return out.filter(function (k) { return k.indexOf('tab:') !== 0 || byKey[k]; });
+  function hasKey(k) { return everyKey().indexOf(k) >= 0; }
+  function find(id) {
+    for (var p = 0; p < pages.length; p++) for (var i = 0; i < pages[p].length; i++) {
+      var it = pages[p][i];
+      if (idOf(it) === id) return {page: p, index: i, item: it};
+      if (isFolder(it) && it.apps.indexOf(id) >= 0) return {page: p, index: i, item: it, inFolder: it};
+    }
+    return null;
+  }
+  function newId() { return 'f' + Math.random().toString(36).slice(2, 9); }
+  function seed(starred) {
+    return [TABS.filter(function (t) { return dockKeys.indexOf(t.key) < 0; }).map(function (t) { return t.key; })
+      .concat(['store']).concat((starred || []).filter(function (k) { return byKey[k]; }))];
+  }
+  // Older saves are one flat list (one page). Tabs a later release adds join the last page; the App Store is always there.
+  function complete(said) {
+    var out = Array.isArray(said) && said.length && Array.isArray(said[0]) ? said : [Array.isArray(said) ? said : []];
+    var seen = {};
+    out = out.map(function (pg) {
+      return (Array.isArray(pg) ? pg : []).map(function (it) {
+        if (isFolder(it)) {
+          var apps = (Array.isArray(it.apps) ? it.apps : []).filter(function (k) {
+            if (typeof k !== 'string' || seen[k] || dockKeys.indexOf(k) >= 0) return false; seen[k] = 1; return true;
+          });
+          return apps.length ? {id: typeof it.id === 'string' ? it.id : newId(), folder: String(it.folder || 'Folder').slice(0, 30), apps: apps} : null;
+        }
+        if (typeof it !== 'string' || seen[it] || dockKeys.indexOf(it) >= 0) return null;
+        seen[it] = 1; return it;
+      }).filter(Boolean);
+    });
+    if (!out.length) out = [[]];
+    TABS.forEach(function (t) { if (dockKeys.indexOf(t.key) < 0 && !seen[t.key]) out[out.length - 1].push(t.key); });
+    if (!seen.store) out[out.length - 1].push('store');
+    return out;
   }
   function persist() {
-    if (!saved) { try { localStorage.setItem(SAVE_LS, JSON.stringify(keys)); } catch (e) {} return; }
+    var body = pages.filter(function (pg) { return pg.length; });
+    if (!saved) { try { localStorage.setItem(SAVE_LS, JSON.stringify(body)); } catch (e) {} return; }
     fetch('/account/homeapps', {method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({apps: keys})}).catch(function () {});
+      body: JSON.stringify({pages: body})}).catch(function () {});
   }
-  function shown() { return keys.filter(function (k) { return byKey[k]; }); }
+  // Each page holds what fits the screen; what does not spills onto the next one. Empty pages go.
+  function settle() {
+    for (var p = 0; p < pages.length; p++) {
+      var shownHere = 0, keep = [], spill = [];
+      pages[p].forEach(function (it) {
+        if (!visible(it)) { keep.push(it); return; }
+        if (shownHere < PER) { keep.push(it); shownHere++; } else spill.push(it);
+      });
+      pages[p] = keep;
+      if (spill.length) { if (!pages[p + 1]) pages.push([]); pages[p + 1] = spill.concat(pages[p + 1]); }
+    }
+    var kept = pages.filter(function (pg) { return pg.some(visible); });
+    pages = kept.length ? kept : [[]];
+    if (pageNow > pages.length - 1) pageNow = pages.length - 1;
+  }
+  function addKey(k) {
+    if (hasKey(k)) return;
+    settle();
+    var last = pages[pages.length - 1];
+    if (last.filter(visible).length >= PER) pages.push([k]); else last.push(k);
+  }
 
   // ---------- drawing ----------
-  var COLS = 4, CW = 0, RH = 100, PAD = 8;
+  var COLS = 4, ROWS = 5, PER = 20, CW = 0, RH = 100, PAD = 8, pageNow = 0;
+  var pager = $('hs-pager'), dots = $('hs-dots');
   function geometry() {
-    var w = scroller.clientWidth || window.innerWidth;
+    var w = pager.clientWidth || window.innerWidth, h = pager.clientHeight || (window.innerHeight - 260);
     COLS = Math.max(4, Math.min(8, Math.floor((w - 2 * PAD) / 92)));
     CW = (w - 2 * PAD) / COLS;
+    ROWS = Math.max(2, Math.floor((h - 18) / RH));
+    PER = COLS * ROWS;
   }
-  function pos(i) { return {x: PAD + (i % COLS) * CW, y: Math.floor(i / COLS) * RH}; }
+  var TOP = 8;      // room above the first row for the running dot
+  function pos(i) { return {x: PAD + (i % COLS) * CW, y: TOP + Math.floor(i / COLS) * RH}; }
+  function folderIcon(f) {
+    return '<span class="hs-icon hs-ficon">' + liveApps(f).slice(0, 9).map(function (k) {
+      var it = byKey[k];
+      return '<span style="background:' + iconBg(it) + '">' + (it.img ? '<img src="' + esc(it.img) + '" alt="" draggable="false">'
+        : it.glyph ? '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="' + it.glyph[2] + '" stroke="' + it.glyph[1]
+          + '" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>' : '') + '</span>';
+    }).join('') + '</span>';
+  }
   function tileFor(it, inDock) {
     var b = document.createElement('button');
-    b.type = 'button'; b.className = 'hs-tile'; b.dataset.key = it.key;
-    b.setAttribute('aria-label', it.name + (it.badge ? ', ' + it.badge + ' new' : ''));
-    b.innerHTML = '<span class="hs-icon" style="background:' + iconBg(it) + '">' + iconHtml(it) + '</span>'
-      + (it.badge ? '<span class="hs-badge">' + (it.badge > 99 ? '99+' : it.badge) + '</span>' : '')
-      + '<span class="hs-label">' + esc(it.name) + '</span><span class="hs-dot"></span>';
+    b.type = 'button'; b.className = 'hs-tile';
+    if (isFolder(it)) {
+      var n = liveApps(it).reduce(function (a, k) { return a + (byKey[k].badge || 0); }, 0);
+      b.dataset.key = it.id; b.dataset.folder = '1';
+      b.setAttribute('aria-label', 'Folder ' + it.folder + ', ' + liveApps(it).length + ' apps');
+      b.innerHTML = '<span class="hs-dot"></span>' + folderIcon(it) + (n ? '<span class="hs-badge">' + (n > 99 ? '99+' : n) + '</span>' : '')
+        + '<span class="hs-label">' + esc(it.folder) + '</span>';
+    } else {
+      var one = byKey[it]; b.dataset.key = it;
+      b.setAttribute('aria-label', one.name + (one.badge ? ', ' + one.badge + ' new' : ''));
+      b.innerHTML = '<span class="hs-dot"></span><span class="hs-icon" style="background:' + iconBg(one) + '">' + iconHtml(one) + '</span>'
+        + (one.badge ? '<span class="hs-badge">' + (one.badge > 99 ? '99+' : one.badge) + '</span>' : '')
+        + '<span class="hs-label">' + esc(one.name) + '</span>';
+    }
     if (!inDock) b.style.width = CW + 'px';
     return b;
   }
+  function minus(b, it) {
+    if (isFolder(it) || byKey[it].kind !== 'app') return;
+    var m = document.createElement('button');
+    m.type = 'button'; m.className = 'hs-minus'; m.textContent = '−';
+    m.setAttribute('aria-label', 'Remove ' + byKey[it].name + ' from your home screen');
+    m.dataset.remove = it;
+    b.appendChild(m);
+  }
   function draw() {
     geometry();
-    grid.innerHTML = '';
-    var list = shown();
-    list.forEach(function (k, i) {
-      var it = byKey[k], b = tileFor(it, false), p = pos(i);
-      b.style.left = p.x + 'px'; b.style.top = p.y + 'px';
-      if (editing && it.kind === 'app') {
-        var m = document.createElement('button');
-        m.type = 'button'; m.className = 'hs-minus'; m.textContent = '−';
-        m.setAttribute('aria-label', 'Remove ' + it.name + ' from your home screen');
-        m.dataset.remove = k;
-        b.appendChild(m);
+    settle();
+    pager.innerHTML = '';
+    pages.forEach(function (pg, p) {
+      var page = document.createElement('div'); page.className = 'hs-page';
+      var g = document.createElement('div'); g.className = 'hs-grid'; g.dataset.page = p;
+      pg.filter(visible).forEach(function (it, i) {
+        var b = tileFor(it, false), q = pos(i);
+        b.style.left = q.x + 'px'; b.style.top = q.y + 'px';
+        if (drag && idOf(it) === drag.id) b.classList.add('ghosted');
+        if (editing) minus(b, it);
+        g.appendChild(b);
+      });
+      if (p === 0 && !everyKey().some(function (k) { return byKey[k] && byKey[k].kind === 'app'; }) && !editing) {
+        var e = document.createElement('div');
+        e.className = 'hs-empty'; e.style.top = (Math.ceil(pg.filter(visible).length / COLS) * RH + 8) + 'px';
+        e.innerHTML = '<strong style="color:var(--fg)">Your apps go here</strong><br>Open the App Store to add games, calls and other apps.';
+        g.appendChild(e);
       }
-      grid.appendChild(b);
+      page.appendChild(g); pager.appendChild(page);
     });
-    var rows = Math.ceil(list.length / COLS);
-    grid.style.height = (rows * RH + 10) + 'px';
-    var apps = list.filter(function (k) { return byKey[k].kind === 'app'; }).length;
-    if (!apps && !editing) {
-      var e = document.createElement('div');
-      e.className = 'hs-empty'; e.style.top = (rows * RH + 8) + 'px';
-      e.innerHTML = '<strong style="color:var(--fg)">Your apps go here</strong><br>Open the App Store to add games, calls and other apps.';
-      grid.appendChild(e);
-      grid.style.height = (rows * RH + 110) + 'px';
-    }
+    dots.innerHTML = pages.length > 1 ? pages.map(function (pg, p) {
+      return '<span class="' + (p === pageNow ? 'on' : '') + '"></span>';
+    }).join('') : '';
+    pager.scrollLeft = pageNow * pager.clientWidth;
     var dock = $('hs-dock'); dock.innerHTML = '';
-    dockTabs.forEach(function (t) { dock.appendChild(tileFor(byKey[t.key], true)); });
+    dockTabs.forEach(function (t) { dock.appendChild(tileFor(t.key, true)); });
     dock.hidden = !dockTabs.length;
     $('hs-done').hidden = !editing;
     home.classList.toggle('editing', editing);
-    $('hs-hint').textContent = editing ? 'Drag to move. Tap Done when finished.' : 'Touch and hold an icon to move it.';
+    $('hs-hint').textContent = editing ? 'Drag to move, onto another to make a folder, to the edge for the next page.'
+                                       : 'Touch and hold an icon to move it.';
     paintRunning();
   }
-  function placeAll(dragKey) {
-    shown().forEach(function (k, i) {
-      if (k === dragKey) return;
-      var b = grid.querySelector('.hs-tile[data-key="' + CSS.escape(k) + '"]');
-      if (b) { var p = pos(i); b.style.left = p.x + 'px'; b.style.top = p.y + 'px'; }
+  function placePage(p) {
+    var g = pager.querySelector('.hs-grid[data-page="' + p + '"]'); if (!g) return;
+    pages[p].filter(visible).forEach(function (it, i) {
+      var b = g.querySelector('.hs-tile[data-key="' + CSS.escape(idOf(it)) + '"]');
+      if (b) { var q = pos(i); b.style.left = q.x + 'px'; b.style.top = q.y + 'px'; }
     });
   }
+  function goPage(p, smooth) {
+    pageNow = Math.max(0, Math.min(pages.length - 1, p));
+    pager.scrollTo({left: pageNow * pager.clientWidth, behavior: smooth === false ? 'auto' : 'smooth'});
+    paintDots();
+  }
+  function paintDots() {
+    dots.querySelectorAll('span').forEach(function (d, i) { d.classList.toggle('on', i === pageNow); });
+  }
+  pager.addEventListener('scroll', function () {
+    if (drag) return;
+    clearTimeout(pager.t);
+    pager.t = setTimeout(function () {
+      var p = Math.round(pager.scrollLeft / (pager.clientWidth || 1));
+      if (p !== pageNow) { pageNow = p; paintDots(); onPageSettled(); }
+    }, 90);
+  });
 
-  // ---------- long press, drag, auto-shuffle ----------
-  var editing = false, press = null, drag = null, swallowClick = false;
-  grid.addEventListener('pointerdown', function (e) {
-    var b = e.target.closest('.hs-tile'); if (!b || e.target.closest('.hs-minus') || e.button > 0) return;
-    press = {key: b.dataset.key, el: b, x0: e.clientX, y0: e.clientY, id: e.pointerId};
+  // ---------- long press, drag, auto-shuffle, folders, pages ----------
+  var editing = false, press = null, drag = null, swallowClick = false, ghost = null;
+  function startPress(e, id, fromFolder) {
+    press = {id: id, x0: e.clientX, y0: e.clientY, pid: e.pointerId, el: e.target.closest('.hs-tile'), fromFolder: fromFolder};
     clearTimeout(press.t);
-    if (editing) begin(); else press.t = setTimeout(begin, 450);
+    if (editing && !fromFolder) begin(); else press.t = setTimeout(begin, 450);
+  }
+  pager.addEventListener('pointerdown', function (e) {
+    var b = e.target.closest('.hs-tile'); if (!b || e.target.closest('.hs-minus') || e.button > 0) return;
+    startPress(e, b.dataset.key, null);
   });
   function begin() {
     if (!press) return;
-    var r = press.el.getBoundingClientRect(), g = grid.getBoundingClientRect();
-    if (!editing) { editing = true; draw(); press.el = grid.querySelector('.hs-tile[data-key="' + CSS.escape(press.key) + '"]'); }
-    try { press.el.setPointerCapture(press.id); } catch (err) {}
-    drag = {key: press.key, el: press.el, bx: r.left - g.left, by: r.top - g.top};
-    drag.el.classList.add('drag');
+    var r = press.el.getBoundingClientRect();
+    if (press.fromFolder) {
+      // Out of the folder: onto this page, then dragged like any icon.
+      var f = press.fromFolder;
+      f.apps = f.apps.filter(function (k) { return k !== press.id; });
+      var at = find(f.id);
+      if (liveApps(f).length <= 1 && at) pages[at.page].splice(at.index, 1, ...(f.apps.length ? [f.apps[0]] : []));
+      pages[pageNow].push(press.id);
+      closeFolder(true);
+    }
+    editing = true;
+    drag = {id: press.id, dx: press.x0 - r.left, dy: press.y0 - r.top, over: null};
+    ghost = press.el.cloneNode(true);
+    ghost.classList.add('hs-ghost'); ghost.style.left = r.left + 'px'; ghost.style.top = r.top + 'px';
+    ghost.querySelectorAll('.hs-minus').forEach(function (m) { m.remove(); });
+    document.body.appendChild(ghost);
+    home.classList.add('dragging');
+    draw();
     swallowClick = true;
     if (navigator.vibrate) { try { navigator.vibrate(12); } catch (err) {} }
   }
@@ -364,45 +503,185 @@ header, footer.version, .notice, #appbar, #newposts { display: none !important; 
     if (!press) return;
     var dx = e.clientX - press.x0, dy = e.clientY - press.y0;
     if (!drag) { if (Math.abs(dx) + Math.abs(dy) > 10) { clearTimeout(press.t); press = null; } return; }
-    var x = drag.bx + dx, y = drag.by + dy;
-    drag.el.style.left = x + 'px'; drag.el.style.top = y + 'px';
-    var list = shown(), n = list.length;
-    var col = Math.max(0, Math.min(COLS - 1, Math.floor((x + CW / 2 - PAD) / CW)));
-    var row = Math.max(0, Math.min(Math.ceil(n / COLS) - 1, Math.floor((y + RH / 2) / RH)));
-    var to = Math.min(n - 1, row * COLS + col), from = list.indexOf(drag.key);
-    if (to !== from && from >= 0) {
-      var target = list[to], ki = keys.indexOf(drag.key);
-      keys.splice(ki, 1);
-      keys.splice(keys.indexOf(target) + (to > from ? 1 : 0), 0, drag.key);
-      placeAll(drag.key);
+    ghost.style.left = (e.clientX - drag.dx) + 'px'; ghost.style.top = (e.clientY - drag.dy) + 'px';
+    var W = window.innerWidth;
+    // At an edge for a moment: the next (or a new) page, or the one before.
+    var edge = e.clientX < 26 ? -1 : e.clientX > W - 26 ? 1 : 0;
+    if (edge !== drag.edge) { drag.edge = edge; clearTimeout(drag.et); if (edge) drag.et = setTimeout(function () { flip(edge); }, 650); }
+    var g = pager.querySelector('.hs-grid[data-page="' + pageNow + '"]'); if (!g) return;
+    var gr = g.getBoundingClientRect(), x = e.clientX - gr.left, y = e.clientY - gr.top;
+    var here = pages[pageNow].filter(visible), at = find(drag.id);
+    var col = Math.max(0, Math.min(COLS - 1, Math.floor((x - PAD) / CW)));
+    var row = Math.max(0, Math.min(ROWS - 1, Math.floor((y - TOP) / RH)));
+    var cell = row * COLS + col, target = here[cell];
+    // Right over another icon's middle: a folder after a moment (never a folder into a folder).
+    var cx = PAD + col * CW + CW / 2, cy = TOP + row * RH + 37;
+    var onTop = target && idOf(target) !== drag.id && Math.abs(x - cx) < 22 && Math.abs(y - cy) < 22 && !isFolder(at && !at.inFolder ? at.item : null);
+    if (onTop) {
+      clearTimeout(drag.rt);
+      if (drag.over !== idOf(target)) {
+        clearOver(); drag.over = idOf(target);
+        drag.ot = setTimeout(function () {
+          var t = g.querySelector('.hs-tile[data-key="' + CSS.escape(drag.over) + '"]');
+          if (t) t.classList.add('fold-target'); drag.fold = drag.over;
+        }, 420);
+      }
+      return;
     }
+    clearOver();
+    if (!at) return;
+    // Between icons, the others make room only once the finger rests there a moment, as a phone does, so passing
+    // over an icon on the way to another's middle does not shuffle it away.
+    clearTimeout(drag.rt);
+    drag.rt = setTimeout(function () { shuffle(cell); }, 350);
   });
+  function shuffle(cell) {
+    if (!drag) return;
+    var at = find(drag.id); if (!at) return;
+    var here = pages[pageNow].filter(visible);
+    var to = Math.min(cell, here.length - (at.page === pageNow ? 1 : 0));
+    var from = at.page === pageNow ? here.indexOf(at.item) : -1;
+    if (to === from) return;
+    pages[at.page].splice(pages[at.page].indexOf(at.item), 1);
+    var list = pages[pageNow], vis = list.filter(visible);
+    var before = vis[to];
+    list.splice(before ? list.indexOf(before) : list.length, 0, at.item);
+    if (at.page === pageNow) placePage(pageNow); else draw();
+  }
+  function clearOver() {
+    if (!drag) return;
+    clearTimeout(drag.ot); drag.over = null; drag.fold = null;
+    pager.querySelectorAll('.fold-target').forEach(function (t) { t.classList.remove('fold-target'); });
+  }
+  function flip(dir) {
+    if (!drag) return;
+    var at = find(drag.id); if (!at) return;
+    var next = pageNow + dir;
+    if (next < 0) return;
+    if (next > pages.length - 1) { if (pages[pageNow].filter(visible).length <= 1) return; pages.push([]); }
+    pages[at.page].splice(pages[at.page].indexOf(at.item), 1);
+    pages[next].push(at.item);
+    pageNow = next; draw(); goPage(next);
+    drag.edge = 0;
+  }
   function endPress() {
     if (press) clearTimeout(press.t);
     press = null;
-    if (drag) {
-      drag.el.classList.remove('drag');
-      var p = pos(shown().indexOf(drag.key));
-      drag.el.style.left = p.x + 'px'; drag.el.style.top = p.y + 'px';
-      drag = null; persist();
-      setTimeout(function () { swallowClick = false; }, 60);
-    }
+    if (!drag) return;
+    clearTimeout(drag.et); clearTimeout(drag.rt);
+    if (drag.fold) fold(drag.id, drag.fold);
+    clearOver();
+    drag = null;
+    if (ghost) { ghost.remove(); ghost = null; }
+    home.classList.remove('dragging');
+    draw(); persist();
+    setTimeout(function () { swallowClick = false; }, 60);
+  }
+  // One icon dropped on another: a folder of the two, named for what they share; or into a folder.
+  function fold(id, ontoId) {
+    var a = find(id), b = find(ontoId); if (!a || !b || a.inFolder) return;
+    pages[a.page].splice(pages[a.page].indexOf(a.item), 1);
+    b = find(ontoId);
+    if (isFolder(b.item)) { b.item.apps.push(id); return; }
+    var ga = byKey[id] && byKey[id].app, gb = byKey[ontoId] && byKey[ontoId].app;
+    var name = ga && gb && ga.genre && ga.genre === gb.genre ? ga.genre.charAt(0).toUpperCase() + ga.genre.slice(1)
+             : (byKey[id].kind === 'tab' && byKey[ontoId].kind === 'tab') ? 'Arcade' : (ga && gb ? 'Apps' : 'Folder');
+    pages[b.page].splice(b.index, 1, {id: newId(), folder: name, apps: [ontoId, id]});
   }
   document.addEventListener('pointerup', endPress);
   document.addEventListener('pointercancel', endPress);
-  grid.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+  pager.addEventListener('contextmenu', function (e) { e.preventDefault(); });
   $('hs-done').addEventListener('click', function () { editing = false; draw(); });
   home.addEventListener('click', function (e) {
     var m = e.target.closest('.hs-minus');
     if (m) {
-      var k = m.dataset.remove; keys = keys.filter(function (x) { return x !== k; });
+      var k = m.dataset.remove, at = find(k);
+      if (at) pages[at.page].splice(at.index, 1);
       persist(); draw(); say(byKey[k].name + ' removed. It is still in the App Store.'); return;
     }
     var b = e.target.closest('.hs-tile'); if (!b) return;
     if (swallowClick) { swallowClick = false; return; }
     if (editing) return;
+    if (b.dataset.folder) { openFolder(b.dataset.key); return; }
     openKey(b.dataset.key);
   });
+
+  // ---------- a folder, open ----------
+  var folderOpen = null;
+  function openFolder(id) {
+    var at = find(id); if (!at || !isFolder(at.item)) return;
+    folderOpen = at.item;
+    $('hs-fname').value = folderOpen.folder;
+    var g = $('hs-fgrid'); g.innerHTML = '';
+    liveApps(folderOpen).forEach(function (k) {
+      var t = tileFor(k, true); t.dataset.infolder = '1'; g.appendChild(t);
+    });
+    $('hs-folder').hidden = false;
+    paintRunning();
+    remember('folder');
+  }
+  function closeFolder(quiet) {
+    if (!folderOpen) return;
+    folderOpen = null; $('hs-folder').hidden = true;
+    if (!quiet) draw();
+  }
+  $('hs-folder').addEventListener('click', function (e) {
+    if (e.target === $('hs-folder')) { closeFolder(); forget('folder'); return; }
+    var b = e.target.closest('.hs-tile'); if (!b) return;
+    if (swallowClick) { swallowClick = false; return; }
+    var k = b.dataset.key; closeFolder(); forget('folder'); openKey(k);
+  });
+  $('hs-fgrid').addEventListener('pointerdown', function (e) {
+    var b = e.target.closest('.hs-tile'); if (!b || e.button > 0) return;
+    startPress(e, b.dataset.key, folderOpen);
+  });
+  $('hs-fname').addEventListener('change', function () {
+    if (!folderOpen) return;
+    folderOpen.folder = ($('hs-fname').value || 'Folder').trim().slice(0, 30) || 'Folder';
+    persist();
+  });
+
+  // ---------- back (2026-10-24: "If you swipe back, you should go back to the last page you were on and your app
+  // should be minimized unless it's a page then it should just close"; "a back swipe should bring you to the previous
+  // app page") ----------
+  // Each thing opened over the home screen leaves one step in the browser's history, so the phone's own back (Android's
+  // swipe, or the left-edge swipe below on an iPhone, whose installed apps have none) undoes it: first the pages visited
+  // inside a window, then the window itself (an app minimized, a page closed), the App Store, a folder, then the pages
+  // of apps one by one back to the first.
+  var ignorePops = 0, pageGuard = false;
+  function remember(kind) { try { history.pushState({hs: kind}, ''); } catch (e) {} return history.length; }
+  // Closed some other way (a button): take its step back out of the history, if nothing was added after it.
+  function forget(kind, len) {
+    try {
+      if (history.state && history.state.hs === kind && (!len || history.length === len)) { ignorePops++; history.back(); }
+    } catch (e) {}
+  }
+  function onPageSettled() {
+    if (pageNow > 0 && !pageGuard) { remember('page'); pageGuard = true; }
+  }
+  window.addEventListener('popstate', function () {
+    if (ignorePops > 0) { ignorePops--; return; }
+    if (front) { var w = front; if (w.item && w.item.kind === 'app') minimize(); else closeWin(w); return; }
+    if (!$('hs-sheet').hidden) { $('hs-sheet').hidden = true; sheetApp = null; return; }
+    if (!store.hidden) { store.hidden = true; draw(); return; }
+    if (folderOpen) { closeFolder(); return; }
+    if (pageNow > 0) {
+      goPage(pageNow - 1); pageGuard = false;
+      if (pageNow > 0) { remember('page'); pageGuard = true; }
+    }
+  });
+  var IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  function paintEdge() { $('hs-edge').hidden = !IOS || !(front || !store.hidden || folderOpen); }
+  (function () {
+    var edge = $('hs-edge'), st = null;
+    edge.addEventListener('pointerdown', function (e) { st = {x: e.clientX, y: e.clientY}; try { edge.setPointerCapture(e.pointerId); } catch (err) {} });
+    edge.addEventListener('pointermove', function (e) {
+      if (!st) return;
+      if (e.clientX - st.x > 50 && Math.abs(e.clientY - st.y) < 60) { st = null; history.back(); }
+    });
+    edge.addEventListener('pointerup', function () { st = null; });
+    edge.addEventListener('pointercancel', function () { st = null; });
+  })();
 
   // ---------- windows: everything opens full screen and keeps running when minimized ----------
   var wins = [], front = null, MOST = 4;
@@ -466,6 +745,7 @@ header, footer.version, .notice, #appbar, #newposts { display: none !important; 
     wins.forEach(function (x) { if (x !== w && !x.frame.hidden) { x.frame.hidden = true; minimized(x); } });
     w.frame.hidden = false;
     if (w.min) { w.min = false; w.until = null; clearTimeout(w.timer); tell(w, 'restored'); }
+    if (front !== w) w.hlen = remember('win');
     front = w;
     $('hs-pull').hidden = false;
     hideBar();
@@ -473,9 +753,10 @@ header, footer.version, .notice, #appbar, #newposts { display: none !important; 
     if (!hinted[w.key]) { hinted[w.key] = true; say('Pull down from the top for Minimize and Close'); }
   }
   var hinted = {};
-  function minimize() {
+  function minimize(byButton) {
     if (!front) return;
     var w = front;
+    if (byButton) forget('win', w.hlen);
     front.frame.hidden = true; front = null;
     minimized(w);
     $('hs-pull').hidden = true; hideBar(); paintRunning(); badges();
@@ -493,33 +774,15 @@ header, footer.version, .notice, #appbar, #newposts { display: none !important; 
     paintRunning();
   }
   function paintRunning() {
+    paintEdge();
     var open = {};
     wins.forEach(function (w) { open[w.key] = true; });
     document.querySelectorAll('.hs-tile').forEach(function (b) {
-      var d = b.querySelector('.hs-dot'); if (d) d.classList.toggle('on', !!open[b.dataset.key]);
+      var d = b.querySelector('.hs-dot'); if (!d) return;
+      var f = b.dataset.folder && find(b.dataset.key);
+      d.classList.toggle('on', f ? f.item.apps.some(function (k) { return open[k]; }) : !!open[b.dataset.key]);
     });
-    var waiting = wins.filter(function (w) { return w !== front; });
-    var last = waiting[waiting.length - 1];
-    $('hs-mini').hidden = !last;
-    if (last) {
-      $('hs-mini-name').textContent = last.name;
-      $('hs-mini-left').textContent = last.until ? 'Closes in ' + left(last.until) + ' \u00b7 tap to go back'
-                                                 : 'Running \u00b7 tap to go back';
-      var ic = $('hs-mini-icon'); ic.style.background = iconBg(last.item); ic.innerHTML = iconHtml(last.item);
-      $('hs-mini').dataset.key = last.key;
-    }
   }
-  function left(until) {
-    var s = Math.max(0, Math.round((until - Date.now()) / 1000));
-    return Math.floor(s / 60) + ':' + ('0' + s % 60).slice(-2);
-  }
-  setInterval(function () { if (!$('hs-mini').hidden && wins.some(function (w) { return w.until; })) paintRunning(); }, 1000);
-  $('hs-mini-back').addEventListener('click', function () {
-    var w = wins.filter(function (x) { return x.key === $('hs-mini').dataset.key; })[0]; if (w) show(w);
-  });
-  $('hs-mini-x').addEventListener('click', function () {
-    closeWin(wins.filter(function (x) { return x.key === $('hs-mini').dataset.key; })[0]);
-  });
   // The pages inside ask for these (base.html, IN THE HOME SCREEN): an app link opens its own window, Home goes home.
   window.arcadeShell = {
     open: function (url, name) {
@@ -528,11 +791,12 @@ header, footer.version, .notice, #appbar, #newposts { display: none !important; 
       if (app) openWin({key: app.key, url: path, name: app.name, item: byKey[app.key]});
       else openWin({key: 'url:' + path, url: path, name: name || 'Page', item: {name: name || 'Page'}});
     },
-    home: function () { minimize(); },
+    home: function () { minimize(true); },
     // A page's "‹ Home" link (base.html): an app is minimized, a page is closed (as the back swipe does).
     leave: function (win) {
       var w = wins.filter(function (x) { return x.frame.contentWindow === win; })[0] || front;
       if (!w) return;
+      if (w === front) forget('win', w.hlen);
       if (w.item && w.item.kind === 'app') { if (w === front) minimize(); else minimized(w); } else closeWin(w);
     }
   };
@@ -570,8 +834,8 @@ header, footer.version, .notice, #appbar, #newposts { display: none !important; 
   $('hs-pull').addEventListener('pointerup', pullEnd);
   $('hs-pull').addEventListener('pointercancel', pullEnd);
   $('hs-reveal').addEventListener('click', revealBar);
-  $('hs-bar-min').addEventListener('click', minimize);
-  $('hs-bar-close').addEventListener('click', function () { closeWin(front); });
+  $('hs-bar-min').addEventListener('click', function () { minimize(true); });
+  $('hs-bar-close').addEventListener('click', function () { if (front) forget('win', front.hlen); closeWin(front); });
 
   // ---------- the App Store ----------
   var store = $('hs-store'), q = $('hs-q'), type = 'all';
@@ -597,7 +861,7 @@ header, footer.version, .notice, #appbar, #newposts { display: none !important; 
     $('hs-sec').textContent = s ? 'Results' : (type === 'all' ? 'Popular' : 'Popular in ' + label);
     $('hs-count').textContent = got.length + (got.length === 1 ? ' app' : ' apps');
     $('hs-cards').innerHTML = got.length ? got.map(function (a) {
-      var on = keys.indexOf(a.key) >= 0;
+      var on = hasKey(a.key);
       var meta = ['by ' + a.by, a.version ? 'v' + a.version : '', a.players].filter(Boolean).join(' · ');
       var bg = a.timeout === null ? 'Keeps running when minimized, no time limit'
              : 'Keeps running ' + (a.timeout >= 60 ? Math.round(a.timeout / 60) + ' min' : a.timeout + ' s') + ' when minimized';
@@ -614,8 +878,10 @@ header, footer.version, .notice, #appbar, #newposts { display: none !important; 
         + '<a href="/inscriptions/' + esc(a.page) + '/view" data-page="' + esc(a.page) + '">Details</a></div></div></div>';
     }).join('') : '<div class="hs-empty" style="position:static">No apps match that. Try another word, or pick All.</div>';
   }
-  function openStore() { chips(); cards(); store.hidden = false; store.scrollTop = 0; }
-  $('hs-store-back').addEventListener('click', function () { store.hidden = true; $('hs-sheet').hidden = true; sheetApp = null; draw(); });
+  function openStore() { chips(); cards(); store.hidden = false; store.scrollTop = 0; remember('store'); paintEdge(); }
+  $('hs-store-back').addEventListener('click', function () {
+    store.hidden = true; $('hs-sheet').hidden = true; sheetApp = null; forget('store'); draw();
+  });
   q.addEventListener('input', cards);
   $('hs-chips').addEventListener('click', function (e) {
     var b = e.target.closest('[data-type]'); if (!b) return;
@@ -682,7 +948,7 @@ header, footer.version, .notice, #appbar, #newposts { display: none !important; 
     finishAdd(a);
   });
   function finishAdd(a) {
-    if (keys.indexOf(a.key) < 0) keys.push(a.key);
+    addKey(a.key);
     persist(); cards(); say(a.name + ' added to your home screen');
   }
 
@@ -723,7 +989,7 @@ header, footer.version, .notice, #appbar, #newposts { display: none !important; 
 
   // ---------- start ----------
   function start(list, starred) {
-    keys = complete(list || seed(starred));
+    pages = complete(list || seed(starred));
     if (!list) persist();
     draw();
     var m = /^#open=(.+)$/.exec(location.hash);
@@ -742,7 +1008,7 @@ header, footer.version, .notice, #appbar, #newposts { display: none !important; 
       .catch(function () { return {saved: false}; })
       .then(function (d) {
         saved = !!d.saved;
-        if (saved) { start(d.apps, d.starred); return; }
+        if (saved) { start(d.pages || d.apps, d.starred); return; }
         var local = null;
         try { local = JSON.parse(localStorage.getItem(SAVE_LS) || 'null'); } catch (e) {}
         start(Array.isArray(local) ? local : null, []);
