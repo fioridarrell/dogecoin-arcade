@@ -88,6 +88,23 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-24 Home screen for the installed app (PWA only), App Store, theme switch (Claude)
+The operator: "When in PWA the apps page should be the only page you use and each one of the existing tabs should be turned
+into an icon"; "All of this apps, running in the background, minimize and close stuff should only be for the PWA";
+"if I have my PWA open, my phone should not go to sleep"; "the arcade a dark mode, light mode". Branch `claude/pwa-home`.
+- `/home` (home.html): every tab an icon (Your arcade = gear), a dock, the App Store (search, type chips, Popular; Add asks
+  for wallet / contacts / camera & mic / notifications in one sheet, writing the same per-page switches the app cards use),
+  long-press to arrange. Tabs and apps open full screen in windows over it that keep running when minimized (4 at most);
+  pull down from the top edge (18 px strip) for Minimize / Close. Screen wake lock while it is open.
+- `/account/homeapps` GET/POST: the icons in order, per account on the node like `/account/favorites` (door lists updated);
+  a screen never arranged starts with the tabs, the App Store and the account's starred apps.
+- base.html head: only the INSTALLED app (display-mode: standalone, top window) is sent to /home (#open=<path> for deep
+  links); a page inside a home-screen window hides its tab strip and sends app links / Home to the shell. Browser tabs: no change.
+- Theme: `<html data-theme=light|dark>` from localStorage `arcade.theme` (Auto by default). Every dark rule (base_css.css,
+  brand.py faces, _exui.html) is now written twice: device dark unless light was picked, and picked dark. Footer link +
+  home-screen button. **Your faces/CSS:** add a `:root[data-theme=dark]` copy beside any new `prefers-color-scheme:dark` rule.
+- tests/test_home_screen.py. Not yet: lifecycle messages to apps (minimized/restored), the browser Apps tab redesign.
+
 ### 2026-10-24 Admin -> Meshtastic flasher: only T-Decks in the port picker, the port asked for first, no tracing, the right steps (Claude)
 The operator: "make the fixes first" (before flashing a T-Deck from the page), and "You have to hold the Meshtastic ball down, plug it
 in and then turn it on and wait for two seconds ... The on position is with the switch down". Branch `claude/flasher-fixes`.

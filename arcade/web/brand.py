@@ -68,11 +68,16 @@ PEPECOIN = Brand(
   --shadow:0 1px 2px rgba(12,40,16,.05),0 4px 14px rgba(12,40,16,.06);
 }
 @media (prefers-color-scheme:dark){
-  :root{
+  :root:not([data-theme=light]){
     --bg:#0d140e; --panel:#131c14; --fg:#e4efe0; --muted:#8ea486; --line:#223024;
     --accent:#5fcb5a; --accent-fg:#0d140e; --ok:#4cc29a; --code:#162017;
     --shadow:0 1px 2px rgba(0,0,0,.3),0 4px 14px rgba(0,0,0,.22);
   }
+}
+:root[data-theme=dark]{
+    --bg:#0d140e; --panel:#131c14; --fg:#e4efe0; --muted:#8ea486; --line:#223024;
+    --accent:#5fcb5a; --accent-fg:#0d140e; --ok:#4cc29a; --code:#162017;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 4px 14px rgba(0,0,0,.22);
 }
 .tile:hover{box-shadow:0 2px 4px rgba(12,40,16,.06),0 10px 24px rgba(12,40,16,.1)}
 """)
@@ -91,11 +96,16 @@ LITECOIN = Brand(
   --shadow:0 1px 2px rgba(16,28,52,.05),0 4px 14px rgba(16,28,52,.06);
 }
 @media (prefers-color-scheme:dark){
-  :root{
+  :root:not([data-theme=light]){
     --bg:#0d1118; --panel:#131924; --fg:#e3e8f1; --muted:#8b95a8; --line:#222b3a;
     --accent:#7fa3dc; --accent-fg:#0d1118; --ok:#4cc29a; --code:#161d2a;
     --shadow:0 1px 2px rgba(0,0,0,.3),0 4px 14px rgba(0,0,0,.22);
   }
+}
+:root[data-theme=dark]{
+    --bg:#0d1118; --panel:#131924; --fg:#e3e8f1; --muted:#8b95a8; --line:#222b3a;
+    --accent:#7fa3dc; --accent-fg:#0d1118; --ok:#4cc29a; --code:#161d2a;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 4px 14px rgba(0,0,0,.22);
 }
 .tile:hover{box-shadow:0 2px 4px rgba(16,28,52,.06),0 10px 24px rgba(16,28,52,.1)}
 """)

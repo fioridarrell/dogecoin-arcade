@@ -9853,6 +9853,13 @@ def create_app(state: AppState) -> FastAPI:
     # {network: icon} for pages that draw chains in script (the Wallet's chain picker, 2026-10-18).
     TEMPLATES.env.globals["coin_icons"] = lambda: {n: _coin_icon(n) for n in NETWORKS if _coin_icon(n)}
 
+    # The App Store's icon on the home screen (home.html; 2026-10-24: made by the local image model, "clearly an
+    # App Store", a full square the page rounds).
+    @app.get("/apps/store-icon.png")
+    def store_icon():
+        return Response((TEMPLATE_DIR / "appstore-icon.png").read_bytes(), media_type="image/png",
+                        headers={"Cache-Control": "public, max-age=86400"})
+
     @app.get("/icon-32.png")
     @app.get("/icon-180.png")
     @app.get("/icon-192.png")
@@ -9957,6 +9964,74 @@ def create_app(state: AppState) -> FastAPI:
             now.insert(0, key)
         state.set_setting(f"favorites:{owner}", now)
         return JSONResponse({"favorites": now, "saved": True})
+
+    # THE HOME SCREEN (PWA only; 2026-10-24: "When in PWA the apps page should be the only page you use and each
+    # one of the existing tabs should be turned into an icon"). Its icons, in the order the account arranged them, kept
+    # per account on this node like the stars, so they survive updates and follow the account to its other phones.
+    # A key is a tab ("tab:/feed"), the App Store ("store"), or an app by its maker and name ("app:<creator>:<slug>",
+    # gameslib.app_key) so an app stays on the screen across its versions. A screen never arranged starts with the
+    # tabs, the App Store and the apps the account already starred (2026-10-24: "pre-add apps that they've
+    # already starred").
+    HOME_KEY = re.compile(r"tab:/[a-z/-]{0,40}|store|app:[A-Za-z0-9]{20,90}:[a-z0-9-]{1,80}")
+    HOME_MOST = 120
+
+    def _home_apps(owner: str) -> list[str] | None:
+        said = state.setting(f"homeapps:{owner}")
+        if not isinstance(said, list):
+            return None
+        return [k for k in said if isinstance(k, str) and HOME_KEY.fullmatch(k)]
+
+    @app.get("/account/homeapps")
+    def homeapps_get(request: Request):
+        owner = _favorites_owner(request)
+        if owner is None:
+            return JSONResponse({"apps": None, "starred": [], "saved": False}, headers={"Cache-Control": "no-store"})
+        return JSONResponse({"apps": _home_apps(owner),
+                             "starred": [k for k in _favorites(owner) if k.startswith("app:")], "saved": True},
+                            headers={"Cache-Control": "no-store"})
+
+    @app.post("/account/homeapps")
+    def homeapps_set(request: Request, payload: Any = Body(None)):
+        owner = _favorites_owner(request)
+        if owner is None:
+            raise HTTPException(403, "sign in first")
+        said = payload if isinstance(payload, dict) else {}
+        apps = said.get("apps")
+        if not isinstance(apps, list) or len(apps) > HOME_MOST:
+            return JSONResponse({"detail": f"a list of at most {HOME_MOST} icons"}, status_code=400)
+        keep: list[str] = []
+        for k in apps:
+            if not isinstance(k, str) or not HOME_KEY.fullmatch(k):
+                return JSONResponse({"detail": "that is not an icon"}, status_code=400)
+            if k not in keep:
+                keep.append(k)
+        state.set_setting(f"homeapps:{owner}", keep)
+        return JSONResponse({"apps": keep, "saved": True})
+
+    @app.get("/home", response_class=HTMLResponse)
+    def home_screen(request: Request):
+        """The installed app's one page (PWA only): the tabs and the apps as icons, each opened full screen over it
+        and kept running when minimized. A browser tab never comes here by itself (base.html sends only the
+        installed app), and still works if it does."""
+        rows = _games_ranked(request, "popular")
+        apps = []
+        for it in rows:
+            g = it["game"]
+            page = g.get("opens") or it["txid"]
+            who = _name_of(it["creator"])
+            apps.append({
+                "key": gameslib.app_key(it["creator"], g["name"]), "name": str(g["name"])[:60],
+                "page": page, "open": f"/inscriptions/{page}/full",
+                "cover": f"/content/{g['cover']}" if g.get("cover") else None,
+                "genre": str(g.get("genre") or "")[:24].lower(), "mp": bool(g.get("multiplayer")),
+                "desc": str(g.get("description") or "")[:400],
+                "by": ("@" + who) if who else it["creator"][:12] + "…", "address": it["creator"],
+                "version": str(g.get("version") or "")[:24], "players": str(g.get("players") or "")[:40],
+                "likes": it.get("likes", 0), "comments": it.get("comments", 0),
+                "perms": [p for p in ("wallet", "contacts", "media", "notify") if g.get(p)],
+            })
+        return render(request, "home.html", fullscreen=True, apps=apps,
+                      operator_view=not _account_view(request))
 
     @app.post("/account/push/subscribe")
     def push_subscribe(request: Request, payload: Any = Body(None)):

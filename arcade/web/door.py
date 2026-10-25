@@ -70,6 +70,8 @@ PUBLIC_PAGES = frozenset({
     "/exchange/token20/search",       # DRC-20 / PRC-20 ticks as they are typed into the exchange's search boxes
     "/exchange/pairs",            # the "open a pair" box: two token ids to a token/token pair's page
     "/apps",                  # every inscribed app (arcade/games.py; the Apps tab since 2026-10-23)
+    "/home",                  # the installed app's home screen (home.html, PWA only, 2026-10-24)
+    "/apps/store-icon.png",   # the App Store's icon on it
     "/games",                 # the old name: redirects to /apps
     "/account/escrows",       # an account's own escrows (needs a session)
     "/account/doginals",      # this account's own Doginals on Dogecoin, to list (needs a session)
@@ -144,6 +146,7 @@ PUBLIC_PAGES = frozenset({
     "/account/ord/chains",            # the chains an ord is inscribed on here, each with its rules
     "/account/arcades",               # the arcades on the mesh, for the Your arcade page's Arcades card
     "/account/favorites",             # the markets this account starred (Exchange, 2026-10-17)
+    "/account/homeapps",              # the icons on this account's home screen, in its order (PWA, 2026-10-24)
     "/account/orders/delegated",      # where this account's node-filled orders stand (2026-10-17)
     "/account/talk/inbox",            # sealed swap messages the mesh brought this page (talk_relay)
     "/account/activity",              # this account's own coin history (signed in)
@@ -481,6 +484,8 @@ PUBLIC_POST = ("/auth/challenge", "/auth/login", "/auth/logout",
                "/account/trade/lock20",
                # starring a market: the caller's own list of favorites, nothing else
                "/account/favorites",
+               # arranging the home screen: the caller's own list of icons, nothing else
+               "/account/homeapps",
                # the page holding this account's listed swaps is open (order_presence)
                "/account/orders/alive",
                "/account/orders/cancel",

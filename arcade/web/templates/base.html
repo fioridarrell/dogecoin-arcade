@@ -19,7 +19,66 @@
 /* The one rule that must hold before the shared stylesheet arrives (2026-10-20: the rest moved to /base.css, kept by
    the browser): without it, anything marked hidden would flash into view while the page loads. */
 [hidden]{display:none !important}
+/* A page in a window of the home screen (below): the icons are its tabs, so no tab strip; room for the pull strip. */
+html.inshell header{display:none !important}
+html.inshell body:not(.fullscreen){padding-top:18px}
 </style>
+{#- THE HOME SCREEN (PWA only, home.html; 2026-10-24). The installed app lives on /home: opened anywhere else (its
+    start page, a notification, a link) it goes there and opens that page in a window. A page inside one of its windows
+    hides its tabs, and an app link or Home goes back to the home screen instead of a new browser tab. A browser tab is
+    never sent there: it already has tabs of its own. -#}
+<script>
+/* LIGHT OR DARK (2026-10-24: "the arcade a dark mode, light mode"): the device's own unless this browser picked
+   one; kept here, so every page and every window of the home screen follows at once. */
+(function () {
+  var KEY = 'arcade.theme', root = document.documentElement;
+  function apply(t) {
+    if (t === 'light' || t === 'dark') root.setAttribute('data-theme', t); else root.removeAttribute('data-theme');
+    var metas = document.querySelectorAll('meta[name=theme-color]');
+    for (var i = 0; i < metas.length; i++) {
+      var m = metas[i], own = m.getAttribute('data-own') || m.getAttribute('content');
+      m.setAttribute('data-own', own);
+      m.setAttribute('content', t === 'light' ? '{{ brand.light_bg }}' : t === 'dark' ? '{{ brand.dark_bg }}' : own);
+    }
+  }
+  function read() { try { return localStorage.getItem(KEY) || 'auto'; } catch (e) { return 'auto'; } }
+  apply(read());
+  window.addEventListener('storage', function (e) { if (e.key === KEY) apply(read()); });
+  window.arcadeTheme = function (t) {
+    if (t === undefined) return read();
+    try { if (t === 'auto') localStorage.removeItem(KEY); else localStorage.setItem(KEY, t); } catch (e) {}
+    apply(t);
+    return t;
+  };
+})();
+(function () {
+  var shell = null;
+  try { if (window.top !== window && window.top.location.pathname === '/home') shell = window.top; } catch (e) {}
+  if (shell) {
+    document.documentElement.classList.add('inshell');
+    document.addEventListener('click', function (e) {
+      var a = e.target.closest && e.target.closest('a[href]');
+      if (!a || e.defaultPrevented || !shell.arcadeShell) return;
+      var u; try { u = new URL(a.getAttribute('href'), location.href); } catch (err) { return; }
+      if (u.origin !== location.origin) return;
+      if (/^\/inscriptions\/[^/]+\/full$/.test(u.pathname)) {
+        e.preventDefault(); shell.arcadeShell.open(u.pathname + u.search, a.title || a.textContent.trim().slice(0, 40));
+      } else if (u.pathname === '/home' || (u.pathname === '/apps' && !u.search && !u.hash)) {
+        e.preventDefault(); shell.arcadeShell.home();
+      } else if (a.target === '_blank') {
+        e.preventDefault(); shell.arcadeShell.open(u.pathname + u.search + u.hash, a.title || a.textContent.trim().slice(0, 40));
+      }
+    }, true);
+    return;
+  }
+  var installed = window.navigator.standalone === true ||
+    (window.matchMedia && matchMedia('(display-mode: standalone)').matches);
+  if (!installed || window.top !== window || location.pathname === '/home') return;
+  if (/^\/(join|restore|signin|offline|clone)(\/|$)/.test(location.pathname)) return;
+  var here = location.pathname + location.search + location.hash;
+  location.replace(here === '/' ? '/home' : '/home#open=' + encodeURIComponent(here));
+})();
+</script>
 <link rel="stylesheet" href="/base.css">
 {% if brand.css %}<style>/* this node's face (arcade/web/brand.py) */{{ brand.css | safe }}</style>{% endif %}
 </head>
@@ -2284,7 +2343,21 @@ if ('serviceWorker' in navigator && window.isSecureContext) {
   {% else %}
   &middot; <a href="/backup">back up your wallet</a>
   {% endif %}
+  &middot; <a href="#" id="theme-pick" title="Light, dark, or as this device is set">Theme: Auto</a>
 </footer>
+<script>
+(function () {
+  var a = document.getElementById('theme-pick'), NAMES = {auto: 'Auto', light: 'Light', dark: 'Dark'};
+  function label() { a.textContent = 'Theme: ' + NAMES[window.arcadeTheme()]; }
+  a.addEventListener('click', function (e) {
+    e.preventDefault();
+    var now = window.arcadeTheme();
+    window.arcadeTheme(now === 'auto' ? 'light' : now === 'light' ? 'dark' : 'auto');
+    label();
+  });
+  label();
+})();
+</script>
 {% endif %}
 {% if not embed and not fullscreen %}
 <script>

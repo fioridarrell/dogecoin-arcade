@@ -16,13 +16,24 @@
 ::-webkit-scrollbar-thumb{background:var(--line);border-radius:6px}
 :root{color-scheme:light dark}   /* native scrollbars and form parts follow the theme:
    a white overflow strip under a table in dark mode (filming, 2026-09-25) */
+/* Light or dark by the device, unless the player picked one (2026-10-24: "the arcade a dark mode, light mode"):
+   <html data-theme="light|dark">, set in base.html's head from this browser's choice. Every dark rule is written
+   twice: under the device's dark (unless light was picked) and under a picked dark. */
+:root[data-theme=light]{color-scheme:light}
+:root[data-theme=dark]{color-scheme:dark}
 @media (prefers-color-scheme:dark){
-  :root{
+  :root:not([data-theme=light]){
     --bg:#141310; --panel:#1a1815; --fg:#ece8e0; --muted:#9b948a; --line:#2c2a25;
     --accent:#d9a520; --accent-fg:#141310; --ok:#5bbd85; --warn:#d99a3e; --bad:#e07070;
     --code:#1d1b17;
     --sent:#0b84ff; --sent-fg:#fff;
   }
+}
+:root[data-theme=dark]{
+    --bg:#141310; --panel:#1a1815; --fg:#ece8e0; --muted:#9b948a; --line:#2c2a25;
+    --accent:#d9a520; --accent-fg:#141310; --ok:#5bbd85; --warn:#d99a3e; --bad:#e07070;
+    --code:#1d1b17;
+    --sent:#0b84ff; --sent-fg:#fff;
 }
 *{box-sizing:border-box}
 /* The `hidden` attribute needs `!important` to be reliable here.
@@ -142,7 +153,8 @@ button.danger{background:var(--bad);border-color:var(--bad);color:#fff}
 :root{--net-test:#22a35a;--net-main:#22a35a;--net-doge:#d4a106;--net-ltc:#345d9d;
   --net-bel:#b83280;--net-lky:#0f8a8a;      /* Bellscoin, Luckycoin (2026-10-22) */
   --net-kot:#c2410c}                        /* Kotia (2026-10-23) */
-@media (prefers-color-scheme:dark){:root{--net-ltc:#7fa3dc;--net-bel:#e27bb6;--net-lky:#4cc3c3;--net-kot:#fb8c55}}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--net-ltc:#7fa3dc;--net-bel:#e27bb6;--net-lky:#4cc3c3;--net-kot:#fb8c55}}
+:root[data-theme=dark]{--net-ltc:#7fa3dc;--net-bel:#e27bb6;--net-lky:#4cc3c3;--net-kot:#fb8c55}
 .tag.testnet{background:color-mix(in srgb,var(--net-test) 20%,transparent);color:var(--net-test)}
 .tag.mainnet{background:color-mix(in srgb,var(--net-main) 22%,transparent);color:var(--net-main)}
 .tag.dogecoin{background:color-mix(in srgb,var(--net-doge) 24%,transparent);color:var(--net-doge)}
@@ -684,7 +696,8 @@ form.composer button[type=submit]{background:var(--sent);border-color:var(--sent
 @font-face{font-family:"Arcade Pixel";font-display:swap;
   src:url(data:font/woff2;base64,d09GMgABAAAAAAOkAAwAAAAACXAAAANVAAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHCoGYACBHBEICohshiMBNgIkAzALMAAEIAWECgcgGyQHAC4HeDI7khyEid2yKIJ3+JyRykWjWeWfFg//v9bu+28X1caZRqME8ZBEs2jdqVjPJJpY2oa08c29+p7lLEn+zkLZKBvAXAhdcHcD0isvQNAA5WJuP2tYE/0jmXrcEPFObVYibQdpjA7e/A1POKzCoQjG/YTskoUaKqTcmVW9/K8FcBs766tDix9F/7umNmnZMVsUsqrG16i7X/olTkpDVrOI7pSeAlLzM4Ken9LTTWD4l0DUk6tz/gF9qQAD5rTI5dXjKsHp8fcuCRpoAKCVJcRAeSxdYGu9Gwfs8YO2lRr+zNL2uddH5ZAF8jsAAijdHBUKFJBgCoVgCu0fmCNCqczEpOSUVTWxhsamNnYODTA0SYu0Ie8rVv9F8+Lr7Z01WgkTQgT5ncCGUcAswAJQgVgEcQJACwBFwGct7MpB8t4Ux/p48pDX+1NKj/oE0RdWsiuqetTYjE2xZhRdgsW2lA4Zpq5Ao5HjWNyGC4yJcnyuQyBx2SGspszQluHQazGBO4SlwesqNB0NU8/SRGUpc4v9mPhhrBhS+N7HDGNwpI5rF8DJKFbjjyNEidgyqpL5TiVaPauWkp0WH/iesUMranT1Nwxv19qRgoFtZpeKh8wJ8aKQLTvtFvrnIPRlq1lC85qcTUOY/V3ZaOXEBiFhST1PsoPnxUMyuLBTcUBM1aPjLcfzECMzi0kxAUyDhUbsqSSowAUhQ8SCjEipsbnI9q47MlunzrTD0QyHYLGX6/PKDRm00GpHpgPrrZatbWbi/1MHPNCBTztOWBLfnBhf87NQtTO4nlfDJo3ChKoB8gZ0EWXuQdCeLvWiizo3SRHjNKmfC5Bw+yE+Hm67n76UAk/z+ILP/7qAPMmCXgEQ8AdxH9T5iSARkUXtbO0nBcBQYjJL0eUA81GvMwpbLcAzM0wj/3BQeYXFPuhwtI14uGYQq++uW8ZLwtrG1c7U2MQBsrOysUNNE0Ooamdobw81HLB26EoVwdZmUupnWMxx4CRe2lUxrb6/feAq6qaJK0MOXuZnHegYobNp5QDV+20f2jkZfjhKD+BfLWMtz3VpzcmOgIAuq2NHi8yqg5nVLgck9KY0JcCRV9BzTHKU32cvvqGtdFea3ukUdj+eji2KSdecHQA=) format("woff2")}
 :root{--shadow:0 1px 2px rgba(40,30,10,.05),0 4px 14px rgba(40,30,10,.06);--radius:14px}
-@media (prefers-color-scheme:dark){:root{--shadow:0 1px 2px rgba(0,0,0,.3),0 4px 14px rgba(0,0,0,.22)}}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--shadow:0 1px 2px rgba(0,0,0,.3),0 4px 14px rgba(0,0,0,.22)}}
+:root[data-theme=dark]{--shadow:0 1px 2px rgba(0,0,0,.3),0 4px 14px rgba(0,0,0,.22)}
 body{font-size:16px;-webkit-font-smoothing:antialiased}
 /* Always there (2026-09-26: "the navigation bar at the top needs to be always
    visible"): sticky above the page, under the cards and the picture viewer (50+). A

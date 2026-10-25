@@ -1,0 +1,696 @@
+{% extends "base.html" %}
+{% block title %}{{ brand.name }}{% endblock %}
+{% block body %}
+{#- THE HOME SCREEN, the installed app's one page (PWA only; 2026-10-24: "When in PWA the apps page should be the
+    only page you use and each one of the existing tabs should be turned into an icon that opens when you open the
+    app. 'Your arcade' should have a gear as its icon"; "All of this apps, running in the background, minimize and
+    close stuff should only be for the PWA because when they log on using a web browser, they already can have
+    multiple tabs open"). Every tab and every app opens full screen in a window over this page, which never reloads:
+    minimized, a window keeps running (a green dot under its icon, a bar above the dock). Pull down from the top edge
+    for Minimize and Close ("they might block existing apps button interface ... drag down from the top of their
+    screen for those buttons to appear"). The App Store adds apps, asking for what they need as they are added;
+    long-press an icon to move it. The icons and their order are kept per account on this node (/account/homeapps).
+    The screen stays awake while the app is open ("if I have my PWA open, my phone should not go to sleep"). -#}
+{%- set counts = {'/approvals': approvals_waiting, '/messages': unread_messages, '/me/notifications': notif_count,
+                  '/notifications': notif_count, '/me/messages': mail_count, '/feed': unread_board,
+                  '/exchange': offers_waiting} %}
+{%- set tabs = [] %}
+{%- for href, label, chain, built in nav if built and href != '/apps' %}
+{%- set _ = tabs.append({'key': 'tab:' ~ href, 'href': href, 'name': label, 'badge': counts.get(href) or 0}) %}
+{%- endfor %}
+<div id="home" class="hs">
+  <div class="hs-top">
+    <div class="hs-who">
+      <div class="hs-brand">{{ brand.name }}</div>
+      <div class="hs-name">{% if account_name %}@{{ account_name }}{% elif operator_view %}This arcade{% else %}Welcome{% endif %}</div>
+    </div>
+    <button type="button" class="hs-theme" id="hs-theme" aria-label="Light or dark"></button>
+    <button type="button" class="hs-done" id="hs-done" hidden>Done</button>
+  </div>
+  <p class="hs-hint" id="hs-hint"></p>
+  <div class="hs-scroll" id="hs-scroll"><div class="hs-grid" id="hs-grid"></div></div>
+  <div class="hs-mini" id="hs-mini" hidden>
+    <button type="button" class="hs-mini-back" id="hs-mini-back"><span class="hs-mini-icon" id="hs-mini-icon"></span>
+      <span class="hs-mini-text"><strong id="hs-mini-name"></strong><span>Running · tap to go back</span></span></button>
+    <button type="button" class="hs-mini-x" id="hs-mini-x" aria-label="Close it">&#x2715;</button>
+  </div>
+  <div class="hs-dock" id="hs-dock"></div>
+</div>
+
+<div id="hs-store" class="hs-store" hidden>
+  <div class="hs-store-head">
+    <button type="button" class="hs-back" id="hs-store-back">&#x2039; Home</button>
+    <div class="hs-store-title"><img src="/apps/store-icon.png" alt=""><h1>App Store</h1></div>
+    <label class="hs-sr" for="hs-q">Search apps</label>
+    <div class="hs-search"><input id="hs-q" type="search" autocomplete="off" placeholder="Search games, calls, tools…"></div>
+    <div class="hs-chips" id="hs-chips"></div>
+  </div>
+  <div class="hs-store-list">
+    <div class="hs-store-sec"><h2 id="hs-sec">Popular</h2><span id="hs-count"></span></div>
+    <div id="hs-cards"></div>
+  </div>
+</div>
+
+<div id="hs-sheet" class="hs-sheet" hidden>
+  <div class="hs-sheet-box" role="dialog" aria-modal="true" aria-labelledby="hs-sheet-title">
+    <div class="hs-sheet-grab"></div>
+    <div class="hs-sheet-who"><span class="hs-sheet-icon" id="hs-sheet-icon"></span>
+      <div><h2 id="hs-sheet-title"></h2><div class="hs-sheet-by" id="hs-sheet-by"></div></div></div>
+    <p>It asks for these before it goes on your home screen. You can change them later on its card in the App Store
+      or under Game access.</p>
+    <div id="hs-perms"></div>
+    <p class="hs-sheet-warn" id="hs-sheet-warn"></p>
+    <button type="button" class="hs-sheet-go" id="hs-sheet-go">Allow and add</button>
+    <button type="button" class="hs-sheet-no" id="hs-sheet-no">Cancel</button>
+  </div>
+</div>
+
+<div id="hs-wins"></div>
+<div class="hs-pull" id="hs-pull" hidden><span></span></div>
+<div class="hs-bar" id="hs-bar" hidden>
+  <button type="button" id="hs-bar-min"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Minimize</button>
+  <span id="hs-bar-name"></span>
+  <button type="button" id="hs-bar-close"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg>Close</button>
+</div>
+<button type="button" class="hs-sr" id="hs-reveal">Show Minimize and Close</button>
+<div class="hs-toast" id="hs-toast" role="status" hidden></div>
+
+<style>
+html, body.fullscreen { margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none; }
+body.fullscreen main { max-width: none !important; padding: 0 !important; margin: 0 !important; }
+header, footer.version, .notice, #appbar, #newposts { display: none !important; }
+.hs h1, .hs h2, .hs-store h1, .hs-store h2, .hs-sheet h2 { font-family: inherit; text-transform: none; letter-spacing: normal; }
+.hs-sr { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); padding: 0; border: 0; }
+.hs { position: fixed; inset: 0; display: flex; flex-direction: column; background: var(--bg); color: var(--fg);
+  padding-top: env(safe-area-inset-top, 0px); -webkit-user-select: none; user-select: none; }
+.hs-top { display: flex; align-items: center; gap: 10px; padding: 18px 16px 2px; }
+.hs-who { flex: 1; min-width: 0; }
+.hs-brand { font-weight: 800; letter-spacing: .08em; font-size: .72rem; color: var(--accent); text-transform: uppercase; }
+.hs-name { font-size: 1.35rem; font-weight: 750; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hs-theme { width: 44px; height: 44px; border-radius: 50%; padding: 0; display: flex; align-items: center;
+  justify-content: center; background: var(--panel); color: var(--fg); border: 1px solid var(--line); box-shadow: none; }
+.hs-done { border-radius: 999px; padding: 8px 18px; min-height: 40px; }
+.hs-hint { margin: 2px 16px 6px; min-height: 1.1em; font-size: .8rem; color: var(--muted); }
+.hs-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; padding-bottom: 12px; }
+.hs-grid { position: relative; }
+.hs-tile { position: absolute; display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 6px 0 0;
+  border: 0; background: none; color: var(--fg); font: inherit; box-shadow: none; border-radius: 0; cursor: pointer;
+  -webkit-touch-callout: none; touch-action: pan-y; transition: left .3s cubic-bezier(.2,.8,.2,1), top .3s cubic-bezier(.2,.8,.2,1); }
+.hs-tile.drag { transition: none; z-index: 5; }
+.hs-icon { position: relative; width: 62px; height: 62px; border-radius: 14px; overflow: hidden; display: flex;
+  align-items: center; justify-content: center; box-shadow: 0 1px 3px rgba(0,0,0,.28); transition: transform .15s; }
+.hs-icon img { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
+.hs-icon .hs-letter { color: #fff; font-weight: 800; font-size: 1.3rem; }
+.hs-tile.drag .hs-icon { transform: scale(1.14); box-shadow: 0 12px 26px rgba(0,0,0,.45); }
+.hs-label { font-size: .72rem; max-width: 80px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hs-dot { width: 5px; height: 5px; border-radius: 50%; margin-top: -2px; background: transparent; }
+.hs-dot.on { background: var(--ok); }
+.hs-badge { position: absolute; top: -2px; left: calc(50% + 20px); min-width: 22px; height: 22px; padding: 0 6px;
+  box-sizing: border-box; border-radius: 11px; background: #e5484d; color: #fff; font-size: .72rem; font-weight: 700;
+  display: flex; align-items: center; justify-content: center; border: 2px solid var(--bg); }
+.hs-minus { position: absolute; top: -2px; left: calc(50% - 38px); width: 26px; height: 26px; border-radius: 50%;
+  border: 0; padding: 0; background: var(--line); color: var(--fg); font-size: 1rem; font-weight: 800; line-height: 26px;
+  box-shadow: 0 1px 4px rgba(0,0,0,.35); z-index: 2; }
+.hs.editing #hs-grid .hs-tile:not(.drag) .hs-icon { animation: hs-jiggle .24s ease-in-out infinite alternate; }
+.hs.editing #hs-grid .hs-tile:nth-child(3n+1) .hs-icon { animation-delay: -.08s; }
+.hs.editing #hs-grid .hs-tile:nth-child(3n+2) .hs-icon { animation-delay: -.16s; }
+@keyframes hs-jiggle { from { transform: rotate(-2.2deg); } to { transform: rotate(2.2deg); } }
+.hs-empty { position: absolute; left: 16px; right: 16px; text-align: center; padding: 18px; border: 1px dashed var(--line);
+  border-radius: 16px; color: var(--muted); font-size: .86rem; }
+.hs-dock { margin: 0 12px calc(12px + env(safe-area-inset-bottom, 0px)); padding: 10px 6px; border-radius: 26px;
+  background: color-mix(in srgb, var(--fg) 7%, transparent); display: flex; justify-content: space-around; }
+.hs-dock .hs-tile { position: relative; padding: 0; transition: none; }
+.hs-dock .hs-label, .hs-dock .hs-dot { display: none; }
+.hs-mini { margin: 0 12px 8px; display: flex; align-items: center; gap: 8px; padding: 6px; border-radius: 16px;
+  background: var(--panel); border: 1px solid var(--line); box-shadow: 0 6px 20px rgba(0,0,0,.25); }
+.hs-mini-back { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 0; border: 0;
+  background: none; color: var(--fg); box-shadow: none; text-align: left; font: inherit; }
+.hs-mini-icon { width: 40px; height: 40px; border-radius: 10px; overflow: hidden; flex: none; display: flex;
+  align-items: center; justify-content: center; }
+.hs-mini-icon img { width: 100%; height: 100%; object-fit: cover; }
+.hs-mini-text { min-width: 0; display: flex; flex-direction: column; }
+.hs-mini-text strong { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: .92rem; }
+.hs-mini-text span { font-size: .76rem; color: var(--ok); }
+.hs-mini-x { width: 44px; height: 44px; border-radius: 12px; padding: 0; background: none; color: var(--muted);
+  border: 0; box-shadow: none; font-size: 1rem; }
+.hs-win { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; background: var(--bg); z-index: 20; }
+.hs-pull { position: fixed; left: 0; right: 0; top: 0; height: calc(18px + env(safe-area-inset-top, 0px)); z-index: 31;
+  display: flex; justify-content: center; align-items: flex-end; padding-bottom: 9px; box-sizing: border-box;
+  touch-action: none; -webkit-touch-callout: none; cursor: grab; }
+.hs-pull span { width: 38px; height: 4px; border-radius: 2px; background: rgba(128,128,128,.45); pointer-events: none; }
+.hs-bar { position: fixed; left: 10px; right: 10px; top: calc(12px + env(safe-area-inset-top, 0px)); z-index: 32;
+  display: flex; align-items: center; gap: 8px; padding: 6px; border-radius: 18px; background: rgba(20,19,16,.94);
+  border: 1px solid #3a3732; box-shadow: 0 10px 28px rgba(0,0,0,.5); color: #ece8e0; transition: transform .2s, opacity .2s; }
+.hs-bar button { min-height: 44px; padding: 0 14px 0 10px; border-radius: 12px; border: 0; background: #2a2723;
+  color: #fff; font-size: .9rem; font-weight: 650; display: flex; align-items: center; gap: 6px; box-shadow: none; }
+.hs-bar span { flex: 1; min-width: 0; text-align: center; font-size: .82rem; font-weight: 600; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+.hs-toast { position: fixed; left: 50%; top: calc(70px + env(safe-area-inset-top, 0px)); transform: translateX(-50%);
+  z-index: 40; max-width: 88vw; padding: 10px 16px; border-radius: 14px; background: var(--fg); color: var(--bg);
+  font-size: .86rem; font-weight: 600; text-align: center; box-shadow: 0 6px 20px rgba(0,0,0,.3); }
+.hs-store { position: fixed; inset: 0; z-index: 15; background: var(--bg); color: var(--fg); overflow-y: auto;
+  padding-top: env(safe-area-inset-top, 0px); -webkit-overflow-scrolling: touch; }
+.hs-store-head { padding: 12px 16px 0; }
+.hs-back { background: none; border: 0; box-shadow: none; color: var(--accent); padding: 8px 8px 8px 0; font-weight: 650; }
+.hs-store-title { display: flex; align-items: center; gap: 12px; margin: 4px 0 12px; }
+.hs-store-title img { width: 40px; height: 40px; border-radius: 10px; }
+.hs-store-title h1 { margin: 0; font-size: 1.7rem; }
+.hs-search input { width: 100%; height: 44px; font-size: 16px; border-radius: 12px; }
+.hs-chips { display: flex; gap: 8px; overflow-x: auto; padding: 12px 0 4px; scrollbar-width: none; }
+.hs-chips::-webkit-scrollbar { display: none; }
+.hs-chips button { flex: none; border-radius: 999px; padding: 6px 14px; min-height: 36px; font-size: .84rem;
+  background: none; color: var(--fg); border: 1px solid var(--line); box-shadow: none; }
+.hs-chips button[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.hs-store-list { padding: 0 16px calc(40px + env(safe-area-inset-bottom, 0px)); }
+.hs-store-sec { display: flex; align-items: baseline; gap: 8px; margin: 14px 0 10px; }
+.hs-store-sec h2 { margin: 0; flex: 1; font-size: 1.2rem; }
+.hs-store-sec span { color: var(--muted); font-size: .82rem; }
+.hs-card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; margin-bottom: 14px; }
+.hs-card-cover { height: 150px; display: flex; align-items: center; justify-content: center; background: #111;
+  color: #fff; font-weight: 800; font-size: 1.4rem; text-align: center; padding: 0 10px; }
+.hs-card-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.hs-card-body { padding: 12px 14px 14px; -webkit-user-select: text; user-select: text; }
+.hs-card-name { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 4px; }
+.hs-card-name strong { font-size: 1.02rem; }
+.hs-card-by { font-size: .8rem; color: var(--muted); }
+.hs-card-desc { margin: 6px 0 0; font-size: .88rem; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.hs-card-acts { display: flex; align-items: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.hs-card-acts .hs-add { border-radius: 999px; padding: 8px 20px; min-height: 40px; font-weight: 700; }
+.hs-card-acts .hs-added { border-radius: 999px; padding: 8px 14px; border: 1px solid var(--ok); color: var(--ok); font-weight: 650; font-size: .86rem; }
+.hs-card-acts a { margin-left: auto; font-size: .86rem; }
+.hs-sheet { position: fixed; inset: 0; z-index: 25; background: rgba(0,0,0,.55); display: flex; flex-direction: column; justify-content: flex-end; }
+.hs-sheet-box { background: var(--panel); color: var(--fg); border-radius: 22px 22px 0 0; padding: 10px 18px calc(24px + env(safe-area-inset-bottom, 0px));
+  max-height: 88vh; overflow-y: auto; }
+.hs-sheet-grab { width: 40px; height: 5px; border-radius: 3px; background: var(--line); margin: 0 auto 14px; }
+.hs-sheet-who { display: flex; align-items: center; gap: 12px; }
+.hs-sheet-who h2 { margin: 0; font-size: 1.15rem; }
+.hs-sheet-icon { width: 56px; height: 56px; border-radius: 13px; overflow: hidden; flex: none; display: flex; align-items: center; justify-content: center; }
+.hs-sheet-icon img { width: 100%; height: 100%; object-fit: cover; }
+.hs-sheet-by { font-size: .8rem; color: var(--muted); word-break: break-all; }
+.hs-sheet-box p { font-size: .88rem; }
+.hs-perm { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.hs-perm div { flex: 1; min-width: 0; }
+.hs-perm strong { display: block; font-size: .95rem; }
+.hs-perm span { font-size: .8rem; color: var(--muted); }
+.hs-perm button { width: 50px; height: 30px; flex: none; border-radius: 999px; border: 0; padding: 0; position: relative;
+  background: var(--line); box-shadow: none; }
+.hs-perm button::after { content: ""; position: absolute; top: 3px; left: 3px; width: 24px; height: 24px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.3); transition: left .15s; }
+.hs-perm button[aria-checked="true"] { background: var(--ok); }
+.hs-perm button[aria-checked="true"]::after { left: 23px; }
+.hs-sheet-warn { color: var(--muted); font-size: .8rem !important; }
+.hs-sheet-go { width: 100%; min-height: 50px; border-radius: 14px; font-size: 1rem; }
+.hs-sheet-no { width: 100%; min-height: 46px; margin-top: 8px; background: none; color: var(--fg); border: 0; box-shadow: none; }
+</style>
+
+<script>
+(function () {
+  var TABS = {{ tabs|tojson }};
+  var APPS = {{ apps|tojson }};
+  var OPERATOR = {{ 'true' if operator_view else 'false' }};
+  var SAVE_LS = 'arcade.homeapps';
+  var STORE_ICON = '/apps/store-icon.png';
+  // Each tab's icon (2026-10-24: "'Your arcade' should have a gear as its icon. I think you can come up with the
+  // idea for the icon for the rest"): a white symbol on its own colour; the page rounds the square.
+  var GEAR = 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z';
+  var GLYPH = {
+    me: ['#636870', '#fff', GEAR],
+    overview: ['#636870', '#fff', OPERATOR ? GEAR : 'M3 11l9-7 9 7M5 10v10h14V10M10 20v-6h4v6'],
+    messages: ['#1f9d55', '#fff', 'M21 11.5a8.4 8.4 0 0 1-9 8.4 9 9 0 0 1-3.6-.8L3 21l1.9-5A8.4 8.4 0 0 1 12 3a8.4 8.4 0 0 1 9 8.5z'],
+    notifications: ['#e5484d', '#fff', 'M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0'],
+    feed: ['#f08c00', '#fff', 'M5 4h14a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zM5 14h14a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-4a1 1 0 0 1 1-1z'],
+    contacts: ['#9a6b3f', '#fff', 'M6 3h12a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM12 11a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM8.5 16.5a3.5 3.5 0 0 1 7 0M3 7h2M3 12h2M3 17h2'],
+    wallet: ['#d9a520', '#141310', 'M3 7a2 2 0 0 1 2-2h11v4M3 7v11a2 2 0 0 0 2 2h14a1 1 0 0 0 1-1v-9a1 1 0 0 0-1-1H5a2 2 0 0 1-2-2zM16 14.5h.5'],
+    backup: ['#2d7a4f', '#fff', 'M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3zM8.5 12l2.5 2.5 4.5-5'],
+    create: ['#7a5af5', '#fff', 'M12 3l1.8 4.2L18 9l-4.2 1.8L12 15l-1.8-4.2L6 9l4.2-1.8L12 3zM19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15zM5 15l.6 1.4L7 17l-1.4.6L5 19l-.6-1.4L3 17l1.4-.6L5 15z'],
+    exchange: ['#0f8a8a', '#fff', 'M7 4L3 8l4 4M3 8h14M17 12l4 4-4 4M21 16H7'],
+    affiliates: ['#345d9d', '#fff', 'M12 7a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM5 21a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM19 21a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM12 7v4M12 11l-5.2 5.2M12 11l5.2 5.2'],
+    approvals: ['#a8620a', '#fff', 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM8 12l3 3 5-6'],
+    docs: ['#4b5563', '#fff', 'M2 5h6a4 4 0 0 1 4 4v12a3 3 0 0 0-3-3H2zM22 5h-6a4 4 0 0 0-4 4v12a3 3 0 0 1 3-3h7z'],
+    accounts: ['#be185d', '#fff', 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM2 21a7 7 0 0 1 14 0M16 3.5a4 4 0 0 1 0 7.5M22 21a7 7 0 0 0-4-6.3'],
+    admin: ['#3a3f47', '#fff', 'M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0M14 4v4M8 10v4M16 16v4']
+  };
+  function glyphOf(href) {
+    var k = href === '/me' ? 'me' : (href.replace(/^\/me(?=\/|$)/, '').replace(/^\//, '').split('/')[0] || 'overview');
+    if (k === 'create' || k === 'nfts' || k === 'tokens') k = 'create';
+    return GLYPH[k] || null;
+  }
+  var DOCK_WANT = ['/me', '/', '/messages', '/me/messages', '/feed', '/wallet', '/me/wallet'];
+  var dockTabs = [];
+  DOCK_WANT.forEach(function (h) {
+    if (dockTabs.length >= 4) return;
+    var t = TABS.filter(function (x) { return x.href === h; })[0];
+    if (t && !(h === '/' && !OPERATOR && TABS.some(function (x) { return x.href === '/me'; }))) dockTabs.push(t);
+  });
+  var dockKeys = dockTabs.map(function (t) { return t.key; });
+  var byKey = {};
+  TABS.forEach(function (t) { byKey[t.key] = {key: t.key, kind: 'tab', name: t.name, href: t.href, badge: t.badge, glyph: glyphOf(t.href)}; });
+  byKey.store = {key: 'store', kind: 'store', name: 'App Store', img: STORE_ICON};
+  APPS.forEach(function (a) { byKey[a.key] = {key: a.key, kind: 'app', name: a.name, img: a.cover, app: a}; });
+
+  var $ = function (id) { return document.getElementById(id); };
+  var home = $('home'), grid = $('hs-grid'), scroller = $('hs-scroll');
+  var saved = false, keys = [];
+  function say(t) {
+    var el = $('hs-toast'); el.textContent = t; el.hidden = false;
+    clearTimeout(say.t); say.t = setTimeout(function () { el.hidden = true; }, 2600);
+  }
+  function iconHtml(it) {
+    if (it.img) return '<img src="' + esc(it.img) + '" alt="" draggable="false">';
+    if (it.glyph) return '<svg width="32" height="32" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="' + it.glyph[2]
+      + '" stroke="' + it.glyph[1] + '" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    return '<span class="hs-letter">' + esc((it.name || '?').slice(0, 2)) + '</span>';
+  }
+  function iconBg(it) { return it.glyph ? it.glyph[0] : (it.img ? '#111' : '#6b4fa0'); }
+  function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]; }); }
+
+  // ---------- the icons and their order ----------
+  function seed(starred) {
+    return TABS.filter(function (t) { return dockKeys.indexOf(t.key) < 0; }).map(function (t) { return t.key; })
+      .concat(['store']).concat((starred || []).filter(function (k) { return byKey[k]; }));
+  }
+  function complete(list) {
+    // Tabs a later release adds join the end; the App Store is always there.
+    var out = list.filter(function (k, i) { return list.indexOf(k) === i && dockKeys.indexOf(k) < 0; });
+    TABS.forEach(function (t) { if (dockKeys.indexOf(t.key) < 0 && out.indexOf(t.key) < 0) out.push(t.key); });
+    if (out.indexOf('store') < 0) out.push('store');
+    return out.filter(function (k) { return k.indexOf('tab:') !== 0 || byKey[k]; });
+  }
+  function persist() {
+    if (!saved) { try { localStorage.setItem(SAVE_LS, JSON.stringify(keys)); } catch (e) {} return; }
+    fetch('/account/homeapps', {method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({apps: keys})}).catch(function () {});
+  }
+  function shown() { return keys.filter(function (k) { return byKey[k]; }); }
+
+  // ---------- drawing ----------
+  var COLS = 4, CW = 0, RH = 100, PAD = 8;
+  function geometry() {
+    var w = scroller.clientWidth || window.innerWidth;
+    COLS = Math.max(4, Math.min(8, Math.floor((w - 2 * PAD) / 92)));
+    CW = (w - 2 * PAD) / COLS;
+  }
+  function pos(i) { return {x: PAD + (i % COLS) * CW, y: Math.floor(i / COLS) * RH}; }
+  function tileFor(it, inDock) {
+    var b = document.createElement('button');
+    b.type = 'button'; b.className = 'hs-tile'; b.dataset.key = it.key;
+    b.setAttribute('aria-label', it.name + (it.badge ? ', ' + it.badge + ' new' : ''));
+    b.innerHTML = '<span class="hs-icon" style="background:' + iconBg(it) + '">' + iconHtml(it) + '</span>'
+      + (it.badge ? '<span class="hs-badge">' + (it.badge > 99 ? '99+' : it.badge) + '</span>' : '')
+      + '<span class="hs-label">' + esc(it.name) + '</span><span class="hs-dot"></span>';
+    if (!inDock) b.style.width = CW + 'px';
+    return b;
+  }
+  function draw() {
+    geometry();
+    grid.innerHTML = '';
+    var list = shown();
+    list.forEach(function (k, i) {
+      var it = byKey[k], b = tileFor(it, false), p = pos(i);
+      b.style.left = p.x + 'px'; b.style.top = p.y + 'px';
+      if (editing && it.kind === 'app') {
+        var m = document.createElement('button');
+        m.type = 'button'; m.className = 'hs-minus'; m.textContent = '−';
+        m.setAttribute('aria-label', 'Remove ' + it.name + ' from your home screen');
+        m.dataset.remove = k;
+        b.appendChild(m);
+      }
+      grid.appendChild(b);
+    });
+    var rows = Math.ceil(list.length / COLS);
+    grid.style.height = (rows * RH + 10) + 'px';
+    var apps = list.filter(function (k) { return byKey[k].kind === 'app'; }).length;
+    if (!apps && !editing) {
+      var e = document.createElement('div');
+      e.className = 'hs-empty'; e.style.top = (rows * RH + 8) + 'px';
+      e.innerHTML = '<strong style="color:var(--fg)">Your apps go here</strong><br>Open the App Store to add games, calls and other apps.';
+      grid.appendChild(e);
+      grid.style.height = (rows * RH + 110) + 'px';
+    }
+    var dock = $('hs-dock'); dock.innerHTML = '';
+    dockTabs.forEach(function (t) { dock.appendChild(tileFor(byKey[t.key], true)); });
+    dock.hidden = !dockTabs.length;
+    $('hs-done').hidden = !editing;
+    home.classList.toggle('editing', editing);
+    $('hs-hint').textContent = editing ? 'Drag to move. Tap Done when finished.' : 'Touch and hold an icon to move it.';
+    paintRunning();
+  }
+  function placeAll(dragKey) {
+    shown().forEach(function (k, i) {
+      if (k === dragKey) return;
+      var b = grid.querySelector('.hs-tile[data-key="' + CSS.escape(k) + '"]');
+      if (b) { var p = pos(i); b.style.left = p.x + 'px'; b.style.top = p.y + 'px'; }
+    });
+  }
+
+  // ---------- long press, drag, auto-shuffle ----------
+  var editing = false, press = null, drag = null, swallowClick = false;
+  grid.addEventListener('pointerdown', function (e) {
+    var b = e.target.closest('.hs-tile'); if (!b || e.target.closest('.hs-minus') || e.button > 0) return;
+    press = {key: b.dataset.key, el: b, x0: e.clientX, y0: e.clientY, id: e.pointerId};
+    clearTimeout(press.t);
+    if (editing) begin(); else press.t = setTimeout(begin, 450);
+  });
+  function begin() {
+    if (!press) return;
+    var r = press.el.getBoundingClientRect(), g = grid.getBoundingClientRect();
+    if (!editing) { editing = true; draw(); press.el = grid.querySelector('.hs-tile[data-key="' + CSS.escape(press.key) + '"]'); }
+    try { press.el.setPointerCapture(press.id); } catch (err) {}
+    drag = {key: press.key, el: press.el, bx: r.left - g.left, by: r.top - g.top};
+    drag.el.classList.add('drag');
+    swallowClick = true;
+    if (navigator.vibrate) { try { navigator.vibrate(12); } catch (err) {} }
+  }
+  // While dragging, the page must not scroll under the finger (touch-action was decided when the touch began).
+  document.addEventListener('touchmove', function (e) { if (drag) e.preventDefault(); }, {passive: false});
+  document.addEventListener('pointermove', function (e) {
+    if (!press) return;
+    var dx = e.clientX - press.x0, dy = e.clientY - press.y0;
+    if (!drag) { if (Math.abs(dx) + Math.abs(dy) > 10) { clearTimeout(press.t); press = null; } return; }
+    var x = drag.bx + dx, y = drag.by + dy;
+    drag.el.style.left = x + 'px'; drag.el.style.top = y + 'px';
+    var list = shown(), n = list.length;
+    var col = Math.max(0, Math.min(COLS - 1, Math.floor((x + CW / 2 - PAD) / CW)));
+    var row = Math.max(0, Math.min(Math.ceil(n / COLS) - 1, Math.floor((y + RH / 2) / RH)));
+    var to = Math.min(n - 1, row * COLS + col), from = list.indexOf(drag.key);
+    if (to !== from && from >= 0) {
+      var target = list[to], ki = keys.indexOf(drag.key);
+      keys.splice(ki, 1);
+      keys.splice(keys.indexOf(target) + (to > from ? 1 : 0), 0, drag.key);
+      placeAll(drag.key);
+    }
+  });
+  function endPress() {
+    if (press) clearTimeout(press.t);
+    press = null;
+    if (drag) {
+      drag.el.classList.remove('drag');
+      var p = pos(shown().indexOf(drag.key));
+      drag.el.style.left = p.x + 'px'; drag.el.style.top = p.y + 'px';
+      drag = null; persist();
+      setTimeout(function () { swallowClick = false; }, 60);
+    }
+  }
+  document.addEventListener('pointerup', endPress);
+  document.addEventListener('pointercancel', endPress);
+  grid.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+  $('hs-done').addEventListener('click', function () { editing = false; draw(); });
+  home.addEventListener('click', function (e) {
+    var m = e.target.closest('.hs-minus');
+    if (m) {
+      var k = m.dataset.remove; keys = keys.filter(function (x) { return x !== k; });
+      persist(); draw(); say(byKey[k].name + ' removed. It is still in the App Store.'); return;
+    }
+    var b = e.target.closest('.hs-tile'); if (!b) return;
+    if (swallowClick) { swallowClick = false; return; }
+    if (editing) return;
+    openKey(b.dataset.key);
+  });
+
+  // ---------- windows: everything opens full screen and keeps running when minimized ----------
+  var wins = [], front = null, MOST = 4;
+  function openKey(k) {
+    var it = byKey[k]; if (!it) return;
+    if (it.kind === 'store') { openStore(); return; }
+    if (it.kind === 'tab') openWin({key: k, url: it.href, name: it.name, item: it});
+    else openWin({key: k, url: it.app.open, name: it.name, item: it});
+  }
+  function openWin(o) {
+    var w = wins.filter(function (x) { return x.key === o.key; })[0];
+    if (!w) {
+      var f = document.createElement('iframe');
+      f.className = 'hs-win'; f.src = o.url; f.title = o.name;
+      f.setAttribute('allow', 'camera; microphone; autoplay; fullscreen; clipboard-write; screen-wake-lock');
+      $('hs-wins').appendChild(f);
+      w = {key: o.key, frame: f, name: o.name, item: o.item || {name: o.name}};
+      wins.push(w);
+      if (wins.length > MOST) {
+        var old = wins.filter(function (x) { return x !== w; })[0];
+        closeWin(old, true);
+        say(old.name + ' was closed to make room (' + MOST + ' at most).');
+      }
+    }
+    wins = wins.filter(function (x) { return x !== w; }).concat([w]);
+    show(w);
+  }
+  function show(w) {
+    wins.forEach(function (x) { x.frame.hidden = x !== w; });
+    front = w;
+    $('hs-pull').hidden = false;
+    hideBar();
+    paintRunning();
+    if (!hinted[w.key]) { hinted[w.key] = true; say('Pull down from the top for Minimize and Close'); }
+  }
+  var hinted = {};
+  function minimize() {
+    if (!front) return;
+    front.frame.hidden = true; front = null;
+    $('hs-pull').hidden = true; hideBar(); paintRunning();
+  }
+  function closeWin(w, quiet) {
+    if (!w) return;
+    w.frame.remove();
+    wins = wins.filter(function (x) { return x !== w; });
+    if (front === w) { front = null; $('hs-pull').hidden = true; hideBar(); }
+    paintRunning();
+  }
+  function paintRunning() {
+    var open = {};
+    wins.forEach(function (w) { open[w.key] = true; });
+    document.querySelectorAll('.hs-tile').forEach(function (b) {
+      var d = b.querySelector('.hs-dot'); if (d) d.classList.toggle('on', !!open[b.dataset.key]);
+    });
+    var waiting = wins.filter(function (w) { return w !== front; });
+    var last = waiting[waiting.length - 1];
+    $('hs-mini').hidden = !last;
+    if (last) {
+      $('hs-mini-name').textContent = last.name;
+      var ic = $('hs-mini-icon'); ic.style.background = iconBg(last.item); ic.innerHTML = iconHtml(last.item);
+      $('hs-mini').dataset.key = last.key;
+    }
+  }
+  $('hs-mini-back').addEventListener('click', function () {
+    var w = wins.filter(function (x) { return x.key === $('hs-mini').dataset.key; })[0]; if (w) show(w);
+  });
+  $('hs-mini-x').addEventListener('click', function () {
+    closeWin(wins.filter(function (x) { return x.key === $('hs-mini').dataset.key; })[0]);
+  });
+  // The pages inside ask for these (base.html, IN THE HOME SCREEN): an app link opens its own window, Home goes home.
+  window.arcadeShell = {
+    open: function (url, name) {
+      var u = new URL(url, location.href), path = u.pathname + u.search;
+      var app = APPS.filter(function (a) { return a.open === u.pathname; })[0];
+      if (app) openWin({key: app.key, url: path, name: app.name, item: byKey[app.key]});
+      else openWin({key: 'url:' + path, url: path, name: name || 'Page', item: {name: name || 'Page'}});
+    },
+    home: function () { minimize(); }
+  };
+
+  // ---------- pull down from the top edge for Minimize / Close ----------
+  var pull = null, bar = $('hs-bar'), BAR_H = 70;
+  function hideBar() { bar.hidden = true; clearTimeout(hideBar.t); }
+  function revealBar() {
+    if (!front) return;
+    $('hs-bar-name').textContent = front.name;
+    bar.hidden = false; bar.style.transform = ''; bar.style.opacity = '';
+    clearTimeout(hideBar.t); hideBar.t = setTimeout(hideBar, 4000);
+  }
+  $('hs-pull').addEventListener('pointerdown', function (e) {
+    if (!front || e.button > 0) return;
+    try { e.target.setPointerCapture(e.pointerId); } catch (err) {}
+    pull = {y0: e.clientY}; clearTimeout(hideBar.t);
+    $('hs-bar-name').textContent = front.name;
+  });
+  $('hs-pull').addEventListener('pointermove', function (e) {
+    if (!pull) return;
+    var y = Math.max(0, Math.min(90, e.clientY - pull.y0));
+    bar.hidden = y < 3;
+    bar.style.transition = 'none';
+    bar.style.transform = 'translateY(' + (y * 0.87 - BAR_H - 12) + 'px)';
+    bar.style.opacity = Math.min(1, y / 40);
+    pull.y = y;
+  });
+  function pullEnd() {
+    if (!pull) return;
+    var far = (pull.y || 0) > 40; pull = null;
+    bar.style.transition = '';
+    if (far) revealBar(); else hideBar();
+  }
+  $('hs-pull').addEventListener('pointerup', pullEnd);
+  $('hs-pull').addEventListener('pointercancel', pullEnd);
+  $('hs-reveal').addEventListener('click', revealBar);
+  $('hs-bar-min').addEventListener('click', minimize);
+  $('hs-bar-close').addEventListener('click', function () { closeWin(front); });
+
+  // ---------- the App Store ----------
+  var store = $('hs-store'), q = $('hs-q'), type = 'all';
+  var GAMES = {rpg: 1, shooter: 1, racing: 1, puzzle: 1, arcade: 1, strategy: 1, sports: 1, card: 1, board: 1};
+  function chips() {
+    var seen = {}, list = [['All', 'all'], ['Games', 'games']];
+    APPS.forEach(function (a) { if (a.genre && !seen[a.genre]) { seen[a.genre] = 1; } });
+    Object.keys(seen).sort().forEach(function (g) { list.push([g.charAt(0).toUpperCase() + g.slice(1), g]); });
+    if (APPS.some(function (a) { return a.mp; })) list.push(['Multiplayer', 'mp']);
+    $('hs-chips').innerHTML = list.map(function (c) {
+      return '<button type="button" data-type="' + esc(c[1]) + '" aria-pressed="' + (type === c[1]) + '">' + esc(c[0]) + '</button>';
+    }).join('');
+  }
+  function cards() {
+    var s = q.value.trim().toLowerCase();
+    var got = APPS.filter(function (a) {
+      if (type === 'games' && !GAMES[a.genre]) return false;
+      if (type === 'mp' && !a.mp) return false;
+      if (type !== 'all' && type !== 'games' && type !== 'mp' && a.genre !== type) return false;
+      return !s || (a.name + ' ' + a.genre + ' ' + a.by + ' ' + a.desc).toLowerCase().indexOf(s) >= 0;
+    });
+    var label = ($('hs-chips').querySelector('[aria-pressed="true"]') || {}).textContent || 'All';
+    $('hs-sec').textContent = s ? 'Results' : (type === 'all' ? 'Popular' : 'Popular in ' + label);
+    $('hs-count').textContent = got.length + (got.length === 1 ? ' app' : ' apps');
+    $('hs-cards').innerHTML = got.length ? got.map(function (a) {
+      var on = keys.indexOf(a.key) >= 0;
+      var meta = ['by ' + a.by, a.version ? 'v' + a.version : '', a.players].filter(Boolean).join(' · ');
+      return '<div class="hs-card"><div class="hs-card-cover"' + (a.cover ? '' : ' style="background:#6b4fa0"') + '>'
+        + (a.cover ? '<img src="' + esc(a.cover) + '" alt="" loading="lazy">' : esc(a.name)) + '</div>'
+        + '<div class="hs-card-body"><div class="hs-card-name"><strong>' + esc(a.name) + '</strong>'
+        + (a.mp ? '<span class="pill">multiplayer</span>' : '') + (a.genre ? '<span class="pill">' + esc(a.genre) + '</span>' : '') + '</div>'
+        + '<div class="hs-card-by">' + esc(meta) + '</div>'
+        + (a.desc ? '<p class="hs-card-desc">' + esc(a.desc) + '</p>' : '')
+        + '<div class="hs-card-acts">'
+        + (on ? '<span class="hs-added">✓ On your home screen</span>'
+              : '<button type="button" class="hs-add" data-add="' + esc(a.key) + '">+ Add</button>')
+        + '<span class="pill">♥ ' + a.likes + '</span><span class="pill">' + a.comments + ' comments</span>'
+        + '<a href="/inscriptions/' + esc(a.page) + '/view" data-page="' + esc(a.page) + '">Details</a></div></div></div>';
+    }).join('') : '<div class="hs-empty" style="position:static">No apps match that. Try another word, or pick All.</div>';
+  }
+  function openStore() { chips(); cards(); store.hidden = false; store.scrollTop = 0; }
+  $('hs-store-back').addEventListener('click', function () { store.hidden = true; $('hs-sheet').hidden = true; sheetApp = null; draw(); });
+  q.addEventListener('input', cards);
+  $('hs-chips').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-type]'); if (!b) return;
+    type = b.dataset.type; chips(); cards();
+  });
+  $('hs-cards').addEventListener('click', function (e) {
+    var d = e.target.closest('a[data-page]');
+    if (d) { e.preventDefault(); window.arcadeShell.open(d.getAttribute('href'), 'Details'); return; }
+    var b = e.target.closest('[data-add]'); if (!b) return;
+    add(b.dataset.add);
+  });
+
+  // ---------- adding an app: one sheet for everything it needs ----------
+  var PERM = {
+    wallet: ['Wallet access', 'Ask your wallet to trade, pay and sign. Each payment still shows its cost first.'],
+    contacts: ['Contacts', 'The names and addresses in your address book, nothing else.'],
+    media: ['Camera & microphone', 'Only while the app is open. The arcade shows when they are on, with a Stop button.'],
+    notify: ['Notifications', 'People in your address book can ring you in it while it is closed.']
+  };
+  var sheetApp = null, grants = {};
+  function add(k) {
+    var a = byKey[k] && byKey[k].app; if (!a) return;
+    if (!a.perms.length) { finishAdd(a); return; }
+    sheetApp = a; grants = {};
+    a.perms.forEach(function (p) { grants[p] = true; });
+    var ic = $('hs-sheet-icon'); ic.style.background = iconBg(byKey[k]); ic.innerHTML = iconHtml(byKey[k]);
+    $('hs-sheet-title').textContent = 'Add ' + a.name + '?';
+    $('hs-sheet-by').textContent = 'published by ' + a.by + ' (' + a.address + ')';
+    $('hs-sheet-warn').textContent = 'Check that ' + a.by + ' is the app’s real publisher: anybody can publish a copy '
+      + 'of an app under a lookalike name. Anything you leave off, the app asks for again when it needs it.';
+    drawPerms();
+    $('hs-sheet').hidden = false;
+  }
+  function drawPerms() {
+    $('hs-perms').innerHTML = sheetApp.perms.map(function (p) {
+      return '<div class="hs-perm"><div><strong>' + PERM[p][0] + '</strong><span>' + PERM[p][1] + '</span></div>'
+        + '<button type="button" role="switch" aria-label="' + PERM[p][0] + '" aria-checked="' + !!grants[p] + '" data-perm="' + p + '"></button></div>';
+    }).join('');
+    var all = sheetApp.perms.every(function (p) { return grants[p]; });
+    $('hs-sheet-go').textContent = all ? 'Allow and add' : 'Add to my home screen';
+  }
+  $('hs-perms').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-perm]'); if (!b) return;
+    grants[b.dataset.perm] = !grants[b.dataset.perm]; drawPerms();
+  });
+  $('hs-sheet-no').addEventListener('click', function () { $('hs-sheet').hidden = true; sheetApp = null; });
+  $('hs-sheet-go').addEventListener('click', function () {
+    var a = sheetApp, page = a.page; $('hs-sheet').hidden = true; sheetApp = null;
+    // The same switches the app's card has (base.html: WALLET ACCESS, CAMERA & MICROPHONE, CONTACTS, NOTIFICATIONS),
+    // kept under the page the app opens, so its card, Game access and the app itself all agree.
+    if (grants.wallet) arcadeGameAllow(page, true);
+    if (grants.contacts) arcadeContactsAllow(page, true);
+    if (grants.media) arcadeMediaAllow(page, true);
+    if (grants.notify) {
+      arcadePushOn().then(function (why) {
+        if (why) { say(why); return; }
+        return _arcadeJson('/account/ring/apps', {app: page, on: true}).then(function (j) {
+          if (!j._ok) { say(j.detail || 'Notifications could not be turned on.'); return; }
+          try { localStorage.setItem(ARCADE_RING_ON, 'yes'); } catch (e) {}
+          return arcadeRingBook(true);
+        });
+      });
+    }
+    finishAdd(a);
+  });
+  function finishAdd(a) {
+    if (keys.indexOf(a.key) < 0) keys.push(a.key);
+    persist(); cards(); say(a.name + ' added to your home screen');
+  }
+
+  // ---------- light or dark (base.html, LIGHT OR DARK): Auto, then Light, then Dark ----------
+  var THEME_ICON = {
+    auto: 'M12 3a9 9 0 1 0 0 18zM12 3a9 9 0 0 1 0 18',
+    light: 'M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10zM12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4',
+    dark: 'M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z'
+  };
+  var THEME_NAME = {auto: 'Auto: as this phone is set', light: 'Light', dark: 'Dark'};
+  function themeIcon() {
+    var t = window.arcadeTheme();
+    $('hs-theme').innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="'
+      + THEME_ICON[t] + '" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    $('hs-theme').setAttribute('aria-label', 'Theme: ' + THEME_NAME[t] + '. Tap to change.');
+  }
+  $('hs-theme').addEventListener('click', function () {
+    var now = window.arcadeTheme(), next = now === 'auto' ? 'light' : now === 'light' ? 'dark' : 'auto';
+    window.arcadeTheme(next); themeIcon(); say('Theme: ' + THEME_NAME[next]);
+  });
+  themeIcon();
+
+  // ---------- the screen stays awake while the app is open ----------
+  var lock = null;
+  function wake() {
+    if (!('wakeLock' in navigator) || document.visibilityState !== 'visible' || lock) return;
+    navigator.wakeLock.request('screen').then(function (l) {
+      lock = l; l.addEventListener('release', function () { lock = null; });
+    }).catch(function () {});
+  }
+  document.addEventListener('visibilitychange', wake);
+  document.addEventListener('pointerdown', wake, true);     // some browsers grant it only after a touch
+
+  // ---------- start ----------
+  function start(list, starred) {
+    keys = complete(list || seed(starred));
+    if (!list) persist();
+    draw();
+    var m = /^#open=(.+)$/.exec(location.hash);
+    if (m) {
+      history.replaceState(null, '', '/home');
+      var url = decodeURIComponent(m[1]);
+      var tab = TABS.filter(function (t) { return t.href === url.split('?')[0]; })[0];
+      if (tab) openKey(tab.key); else window.arcadeShell.open(url);
+    }
+    wake();
+  }
+  window.addEventListener('resize', function () { if (!drag) draw(); });
+  function boot() {
+    fetch('/account/homeapps', {cache: 'no-store', credentials: 'same-origin'})
+      .then(function (r) { return r.ok ? r.json() : {saved: false}; })
+      .catch(function () { return {saved: false}; })
+      .then(function (d) {
+        saved = !!d.saved;
+        if (saved) { start(d.apps, d.starred); return; }
+        var local = null;
+        try { local = JSON.parse(localStorage.getItem(SAVE_LS) || 'null'); } catch (e) {}
+        start(Array.isArray(local) ? local : null, []);
+      });
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
+})();
+</script>
+{% endblock %}

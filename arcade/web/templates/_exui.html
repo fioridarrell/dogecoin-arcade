@@ -108,7 +108,8 @@
 .ex-steps li.done .dot{border-color:var(--ok);background:var(--ok);color:#fff}
 .ex-steps small{display:block;font-weight:400;color:var(--muted);font-size:.8rem}
 @keyframes exsp{to{transform:rotate(360deg)}}
-@media (prefers-color-scheme:dark){.ex-scrim{background:rgba(0,0,0,.6)}}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]) .ex-scrim{background:rgba(0,0,0,.6)}}
+:root[data-theme=dark] .ex-scrim{background:rgba(0,0,0,.6)}
 </style>
 <script>
 /* A bottom sheet: exSheet(title) -> {body, close}. Escape and a tap outside close it. */
