@@ -188,7 +188,8 @@ def test_a_wallet_imported_on_one_arcade_shows_on_another_with_its_balance(brows
         return rows
     _until(lambda: any(r.startswith("Wallet 1") and "5" in r for r in shown()),
            "the imported wallet shows on B by name, with its balance", seconds=60)
-    # Nothing about it is in B's public by-tag coins answer.
+    # The account's public coin list carries its imported wallets too (2026-10-25: "Wallet information is already
+    # public. There's no reason to hide it."); the older `chains` answer stays the main address only.
     import requests
     listed = requests.request("GET", f"{base_b}/signin/{TAG}/coins", timeout=10).json()
-    assert address not in json.dumps(listed)
+    assert address in json.dumps(listed["lists"]) and address not in json.dumps(listed["chains"])

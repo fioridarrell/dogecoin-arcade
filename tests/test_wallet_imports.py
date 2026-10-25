@@ -86,9 +86,12 @@ class _Rpc:
         return {"tx": []}
 
 
-def _ready(client, monkeypatch, *, online: bool = False, gate=None):
+def _ready(client, monkeypatch, *, online: bool = False, gate=None, walk: bool = False):
     app, state = client
     chain = _with_ltc_test(state, monkeypatch, ready=True)
+    # These tests read back the old ways (the Core's rescan, the read-back from the floor), kept as the fallback when
+    # the shared walk (2026-10-25, on by default) is switched off; the walk has its own tests (`walk=True`).
+    state.set_setting("import_walk:ltctest", walk)
     if online:
         from arcade.web.state import ChainContext
         real_status, real_rpc = ChainContext.status, ChainContext.rpc
@@ -655,3 +658,22 @@ def test_no_new_import_on_a_chain_with_fewer_than_two_nodes_on_the_network(clien
     assert "import_closed" in page and "not available" in page
     monkeypatch.setattr(webapp, "IMPORT_CORES_MIN", 1)          # a second node joins: open again
     assert "ltctest" not in app.get("/account/imported").json()["import_closed"]
+
+
+def test_an_import_is_found_by_the_shared_walk_and_is_ready(client, monkeypatch):
+    """2026-10-25: an imported wallet is found by the arcades walking the blocks (no Core rescan); the walk's
+    coins are checked here and the wallet says ready."""
+    from arcade import coinlist, coinwalk
+    app, state, chain, account = _ready(client, monkeypatch, online=True, walk=True)
+    _tip(state, chain, P.messaging_start_height + 40)
+    walked = []
+    monkeypatch.setattr(coinwalk.Reader, "read",
+                        lambda self, c, top, bottom, addresses, progress=None: walked.append((top, bottom)) or [])
+    first = _proof(account, 0x8101)
+    said = app.post("/account/imported/address", json=first)
+    assert said.status_code == 200, said.text
+    assert _wait_ready(app, first["address"])["state"] == "ready"
+    assert walked and walked[0][1] == 0, "walked from block 0"
+    with state.token_index(chain).open() as db:
+        assert coinlist.covers(coinlist.coverage(db, first["address"], P.messaging_start_height + 40), 0,
+                               P.messaging_start_height + 40)

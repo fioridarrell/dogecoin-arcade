@@ -560,11 +560,11 @@
       : '<p class="muted">The first pass runs by itself a few minutes after this release starts.</p>';
     var st = d.settings || {}, f = d.files || {};
     $('wim-settings').innerHTML = '<div class="toggle"><div><b>Shared walk for imports on ' + esc(d.title) + '</b><br><span class="muted" style="font-size:.84rem">Find an imported wallet\'s coins by walking the blocks with the other arcades (instead of a Core rescan).</span></div>'
-      + '<input type="checkbox" id="wim-walkon"' + (st.walk ? ' checked' : '') + '></div>'
+      + '<input autocomplete="off" type="checkbox" id="wim-walkon"' + (st.walk ? ' checked' : '') + '></div>'
       + '<div class="toggle"><div><b>Read for other arcades\' walks</b><br><span class="muted" style="font-size:.84rem">Lend this machine\'s disk and cores to walks other arcades start.</span></div>'
-      + '<input type="checkbox" id="wim-lend"' + (st.lend ? ' checked' : '') + '></div>'
+      + '<input autocomplete="off" type="checkbox" id="wim-lend"' + (st.lend ? ' checked' : '') + '></div>'
       + '<div class="toggle"><div><b>Most arcades in one walk</b><br><span class="muted" style="font-size:.84rem">More arcades finish sooner; every block is read by two whatever the number.</span></div>'
-      + '<input type="number" id="wim-most" min="2" max="32" value="' + esc(st.readers_max) + '" style="width:70px"></div>'
+      + '<input autocomplete="off" type="number" id="wim-most" min="2" max="32" value="' + esc(st.readers_max) + '" style="width:70px"></div>'
       + (f.borrowed ? '<div class="note">This arcade borrows ' + esc(d.title) + ' from another arcade: it reads its part of a walk over the mesh (slow); arcades with their own node read the rest.</div>'
         : !f.known ? '<div class="note">' + esc(d.title) + '\'s blocks are read through its node (the block-file reader does not know this chain\'s blocks).</div>'
         : !f.readable ? '<div class="note"><b>This arcade reads ' + esc(d.title) + ' over RPC (slow).</b> Its node\'s block files are not readable by the arcade. One command lets it read them directly (many times faster):'

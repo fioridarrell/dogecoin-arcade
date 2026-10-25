@@ -201,7 +201,7 @@ def test_notifications_are_a_bell_in_the_corner_and_nothing_is_selected():
     assert ".hs-bell.on #hs-bell-shape { fill: #e5484d; }" in home and "b.classList.toggle('on', n > 0);" in home
     assert "function outOfGrid(k) { return k === bellKey || dock.indexOf(k) >= 0; }" in home, "the Notifications icon leaves the grid"
     assert "body.fullscreen, body.fullscreen * { -webkit-user-select: none; user-select: none;" in home
-    assert "Math.abs(e.clientX - rest.x) + Math.abs(e.clientY - rest.y) < 14" in home, "a twitch is still resting"
+    assert "Math.abs(PX(e) - rest.x) + Math.abs(PY(e) - rest.y) < 14" in home, "a twitch is still resting"
     assert "if (drag || (press && press.menu)) e.preventDefault();" in home
 
 
@@ -223,3 +223,17 @@ def test_the_dock_is_kept_with_the_layout_and_the_helper_is_an_app(public):
     assert "body.fullscreen #arc-bot { display: none !important; }" in home
     base = (TEMPLATES / "base.html").read_text()
     assert "html.inshell body.fullscreen #arc-bot" in base and "html.inshell #arc-bot," not in base
+
+
+def test_the_home_screen_is_always_portrait():
+    """2026-10-25: "make it so the home screen on the PWA is always in portrait mode, regardless of the
+    orientation of the phone". Android locks it; an iPhone (no lock from a page) has the page turned back a quarter
+    while no app is in front, touches and boxes read in the turned frame; an app in front turns with the phone."""
+    home = (TEMPLATES / "home.html").read_text()
+    assert "so.lock('portrait')" in home and "if (front) {" in home and "so.unlock()" in home
+    assert "html.turn90 body { transform: rotate(90deg) translateY(-100%); }" in home
+    assert "html.turn-90 body { transform: rotate(-90deg) translateX(-100%); }" in home
+    assert "want = a === 90 ? -90 : a === -90 ? 90 : 0;" in home
+    assert "e.clientX" not in home.replace("loc(e.clientX, e.clientY)", ""), "every touch is read through loc()"
+    assert ".getBoundingClientRect()" not in home.replace("var r = el.getBoundingClientRect();", ""), "every box through R()"
+    assert "function paintRunning() {\n    orient();" in home
