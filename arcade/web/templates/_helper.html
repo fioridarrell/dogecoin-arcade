@@ -19,6 +19,12 @@
 #arc-bot-box header b{display:block;font-size:.95rem}#arc-bot-box header small{color:var(--muted);font-size:.75rem}
 #arc-bot-box header button{font:inherit;border:0;background:transparent;color:var(--muted);cursor:pointer;height:34px;padding:0 8px;border-radius:8px}
 #arc-bot-box header button:hover{background:var(--code)}
+/* The home screen and the windows inside it hide every page header (home.html, base.html html.inshell); not this one,
+   which holds the only close (2026-10-25: "There's no way to close the helper robot on the homepage add a little
+   red X at the top right corner"). */
+#arc-bot-box > header{display:flex !important}
+#arc-bot-box header #arc-bot-x{color:#e5484d;font-size:1.6rem;font-weight:700;line-height:1;width:38px;padding:0}
+#arc-bot-box header #arc-bot-x:hover{background:color-mix(in srgb,#e5484d 14%,transparent)}
 #arc-bot-msgs{flex:1 1 auto;overflow:auto;padding:12px;display:flex;flex-direction:column;gap:10px;font-size:.9rem}
 #arc-bot-msgs .me{align-self:flex-end;max-width:85%;background:var(--accent);color:var(--accent-fg);border-radius:14px 14px 4px 14px;padding:8px 11px;white-space:pre-wrap;overflow-wrap:anywhere}
 #arc-bot-msgs .it{align-self:flex-start;max-width:90%;background:var(--bg);border:1px solid var(--line);border-radius:14px 14px 14px 4px;padding:8px 11px;white-space:pre-wrap;overflow-wrap:anywhere}

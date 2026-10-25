@@ -179,7 +179,10 @@ body.fullscreen #arc-bot { display: none !important; }
 .hs-dock { margin: 0 12px calc(12px + env(safe-area-inset-bottom, 0px)); padding: 10px 6px; border-radius: 26px;
   background: color-mix(in srgb, var(--fg) 7%, transparent); display: flex; justify-content: space-around; }
 .hs-dock .hs-tile { position: relative; padding: 0; transition: none; }
-.hs-dock .hs-label, .hs-dock .hs-dot { display: none; }
+/* The dock keeps the running dot (2026-10-25: "There is no green dot if the app is minimize and still running
+   there needs to be a green dot down there as well"); only the label goes. */
+.hs-dock .hs-label { display: none; }
+.hs-dock .hs-dot { top: -7px; }
 .hs-win { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; background: var(--bg); z-index: 20; }
 .hs-pull { position: fixed; left: 0; right: 0; top: 0; height: calc(18px + env(safe-area-inset-top, 0px)); z-index: 31;
   display: flex; justify-content: center; align-items: flex-end; padding-bottom: 9px; box-sizing: border-box;
