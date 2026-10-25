@@ -478,7 +478,7 @@ header, footer.version, .notice, #appbar, #newposts { display: none !important; 
     var w = front;
     front.frame.hidden = true; front = null;
     minimized(w);
-    $('hs-pull').hidden = true; hideBar(); paintRunning();
+    $('hs-pull').hidden = true; hideBar(); paintRunning(); badges();
   }
   function closeWin(w, quiet) {
     if (!w || wins.indexOf(w) < 0) return;
@@ -489,6 +489,7 @@ header, footer.version, .notice, #appbar, #newposts { display: none !important; 
     setTimeout(function () { w.frame.remove(); }, 800);
     wins = wins.filter(function (x) { return x !== w; });
     if (front === w) { front = null; $('hs-pull').hidden = true; hideBar(); }
+    setTimeout(badges, 900);
     paintRunning();
   }
   function paintRunning() {
@@ -684,6 +685,30 @@ header, footer.version, .notice, #appbar, #newposts { display: none !important; 
     if (keys.indexOf(a.key) < 0) keys.push(a.key);
     persist(); cards(); say(a.name + ' added to your home screen');
   }
+
+  // ---------- the red counts, kept fresh (the page never reloads) and on the phone's own app icon ----------
+  function badges() {
+    fetch('/account/badges', {cache: 'no-store', credentials: 'same-origin'})
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (by) {
+        if (!by) return;
+        var total = 0;
+        TABS.forEach(function (t) {
+          var n = by[t.href]; if (typeof n !== 'number') return;
+          byKey[t.key].badge = n;
+          if (/messages|notifications/.test(t.href)) total += n;
+        });
+        // Notifications already counts new messages for an account: count them once.
+        if (typeof by['/me/messages'] === 'number' && TABS.some(function (t) { return t.href === '/me/notifications'; })) total -= by['/me/messages'];
+        if (!drag && !editing) draw();
+        try {
+          if (total > 0 && navigator.setAppBadge) navigator.setAppBadge(total);
+          else if (navigator.clearAppBadge) navigator.clearAppBadge();
+        } catch (e) {}
+      }).catch(function () {});
+  }
+  setInterval(function () { if (document.visibilityState === 'visible') badges(); }, 30000);
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') badges(); });
 
   // ---------- the screen stays awake while the app is open ----------
   var lock = null;

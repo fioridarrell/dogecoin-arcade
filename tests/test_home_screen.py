@@ -137,3 +137,14 @@ def test_a_picked_dark_theme_makes_the_iphone_status_bar_black(client):
     assert bar.search(app.get("/feed").text).group(1) == "black"
     app.cookies.set("arcade_theme", "light")
     assert bar.search(app.get("/feed").text).group(1) == "default"
+
+
+def test_the_red_counts_stay_fresh_on_the_home_screen(public):
+    """2026-10-24: "Do we get a little red notification with the number for notifications and new messages?"."""
+    app, _state = public
+    assert door.public_path("/account/badges")
+    assert _sign_in(app, SigningKey.generate(), headers=EDGE).status_code == 200
+    by = app.get("/account/badges", headers=EDGE).json()
+    assert {"/me/messages", "/me/notifications", "/feed"} <= set(by) and all(isinstance(v, int) for v in by.values())
+    home = (TEMPLATES / "home.html").read_text()
+    assert "fetch('/account/badges'" in home and "navigator.setAppBadge" in home

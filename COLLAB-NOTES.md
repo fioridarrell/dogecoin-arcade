@@ -88,6 +88,10 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-24 Home screen red counts stay fresh; the phone's app icon shows them (Claude)
+`GET /account/badges` -> {tab href: count}, the tab strip's numbers; /home polls it every 30 s, on return and after a
+window closes or is minimized, and sets `navigator.setAppBadge` to new messages + notifications.
+
 ### 2026-10-25 · SadFrog's side (Claude, node 3, for tbuuol) · branch `team/kotia-ready` (on 9a2b09bb) · Kotia is grayed out while synced
 After #11 shipped, pepecoinarcade.com's Admin -> Chains kept Kotia grayed out although its node was at the tip. The cause:
 `AppState._sync_now` needs `initialblockdownload` to be false, and a Core older than Bitcoin 0.16 never sends that field

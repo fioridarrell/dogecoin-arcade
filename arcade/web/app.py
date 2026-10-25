@@ -10019,6 +10019,20 @@ def create_app(state: AppState) -> FastAPI:
         state.set_setting(f"homeapps:{owner}", keep)
         return JSONResponse({"apps": keep, "saved": True})
 
+    @app.get("/account/badges")
+    def account_badges(request: Request):
+        """The red counts of the tabs, by tab, for the home screen to keep fresh without reloading (2026-10-24:
+        "Do we get a little red notification with the number for notifications and new messages?"); the same numbers
+        the tab strip shows (render, base.html)."""
+        counts = _account_counts(request)
+        notif, mail = counts.get("notif_count", 0), counts.get("mail_count", 0)
+        out = {"/approvals": 0 if _account_view(request) else _approvals_waiting(),
+               "/messages": 0 if _account_view(request) else _unread_messages(),
+               "/notifications": notif, "/me/notifications": notif, "/me/messages": mail,
+               "/feed": _unread_board(),
+               "/exchange": 0 if _account_view(request) else _offers_waiting()}
+        return JSONResponse({k: int(v or 0) for k, v in out.items()}, headers={"Cache-Control": "no-store"})
+
     @app.get("/home", response_class=HTMLResponse)
     def home_screen(request: Request):
         """The installed app's one page (PWA only): the tabs and the apps as icons, each opened full screen over it

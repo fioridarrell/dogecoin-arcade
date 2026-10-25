@@ -147,6 +147,7 @@ PUBLIC_PAGES = frozenset({
     "/account/arcades",               # the arcades on the mesh, for the Your arcade page's Arcades card
     "/account/favorites",             # the markets this account starred (Exchange, 2026-10-17)
     "/account/homeapps",              # the icons on this account's home screen, in its order (PWA, 2026-10-24)
+    "/account/badges",                # the red counts of its tabs, for the home screen (PWA, 2026-10-24)
     "/account/orders/delegated",      # where this account's node-filled orders stand (2026-10-17)
     "/account/talk/inbox",            # sealed swap messages the mesh brought this page (talk_relay)
     "/account/activity",              # this account's own coin history (signed in)
