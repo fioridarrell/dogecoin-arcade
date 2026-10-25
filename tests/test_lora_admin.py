@@ -185,6 +185,14 @@ def test_admin_routes_need_the_admin_and_save_the_settings(client, radio, monkey
     assert flasher.split("await navigator.serial.requestPort(")[0].count("await ") == 0, \
         "nothing is awaited before the picker opens"
     assert "new Transport(port, false)" in flasher and "new Transport(port, true)" not in flasher
+    # When the T-Deck can't be reached, a help box says why for the visitor's own system (the operator: "How will the average
+    # user be able to figure this out?"): snap Firefox can't reach USB at all, snap Chromium needs raw-usb, a listed
+    # port that won't open on Linux needs dialout.
+    assert 'id="lora-flash-help"' in page
+    for words in ("sudo snap connect chromium:raw-usb", "sudo usermod -aG dialout $USER",
+                  "can't reach USB devices at all", "Device Manager", 'flashHelp("noport")', 'flashHelp("noopen")',
+                  'flashHelp("nowebserial")'):
+        assert words in page, words
     steps = page[page.index("The first flash"):page.index("lora-flash-full")]
     assert steps.index("Hold the trackball down") < steps.index("switch it on (switch down)") < steps.index("wait 2 seconds")
 

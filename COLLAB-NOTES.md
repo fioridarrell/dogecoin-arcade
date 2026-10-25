@@ -88,6 +88,16 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-24 Admin -> Meshtastic flasher: a help box when the T-Deck can't be reached, said for the visitor's system (Claude)
+The operator, flashing from .55 in snap Firefox, picker empty: "How will the average user be able to figure this out?" Branch
+`claude/flasher-fixes`. admin.html `flashHelp(kind)` under the buttons, from the user agent (OS, browser):
+- `noport` (an empty picker and a cancel are the same NotFoundError): flash-mode steps, a data cable not a hub; Linux Firefox:
+  snap Firefox can't reach USB at all (the snap has no raw-usb or serial-port plug), use Chrome or Chromium; Linux Chromium:
+  `sudo snap connect chromium:raw-usb` and a full restart; Windows: Device Manager -> Ports; macOS: System Information -> USB.
+- `noopen` (open fails: NetworkError / InvalidState / Security): close other serial programs; Linux: `usermod -aG dialout`.
+- `noconnect` (esptool can't sync): flash mode again, press Install straight away. `nowebserial`: Chrome or Edge on a computer.
+- Commands have Copy buttons. Tests: test_lora_admin; checked in Firefox as Linux Firefox, Linux Chromium and Windows Chrome.
+
 ### 2026-10-24 Home screen for the installed app (PWA only), App Store, theme switch (Claude)
 The operator: "When in PWA the apps page should be the only page you use and each one of the existing tabs should be turned
 into an icon"; "All of this apps, running in the background, minimize and close stuff should only be for the PWA";

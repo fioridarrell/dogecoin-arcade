@@ -976,6 +976,12 @@
 .lora label.f{display:flex;flex-direction:column;gap:5px;font-size:.82rem;font-weight:650;min-width:0}
 .lora label.f input,.lora label.f select{font:inherit;font-weight:400;width:100%;box-sizing:border-box;height:42px;padding:0 11px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--fg)}
 .lora .h{font-weight:400;color:var(--muted);font-size:.8rem}
+.lora .flashhelp{margin:10px 0 0;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--code);font-size:.88rem;line-height:1.45}
+.lora .flashhelp b.t{display:block;margin:0 0 6px;font-size:.92rem}
+.lora .flashhelp ol,.lora .flashhelp ul{margin:4px 0 0;padding-left:20px;display:grid;gap:6px}
+.lora .flashhelp .cmd{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:4px}
+.lora .flashhelp code{font-family:var(--mono,ui-monospace,monospace);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:2px 6px;overflow-wrap:anywhere;user-select:all}
+.lora .flashhelp button{padding:2px 10px;font-size:.78rem}
 .lora .onoff{display:inline-flex;gap:8px;align-items:center;font-weight:650;font-size:.85rem;padding:5px 12px;border-radius:999px;background:var(--code);color:var(--muted)}
 .lora .onoff.on{background:color-mix(in srgb,var(--ok) 14%,var(--panel));color:var(--ok)}
 .lora .onoff.bad{background:color-mix(in srgb,var(--bad) 12%,var(--panel));color:var(--bad)}
@@ -1064,6 +1070,7 @@
     <button type="button" class="ghost" id="lora-flash-app">Update only (faster)</button>
   </div>
   <p class="muted" id="lora-flash-said" style="margin:8px 0 0"></p>
+  <div class="flashhelp" id="lora-flash-help" role="note" hidden></div>
   <div class="bar" id="lora-flash-bar" hidden><span></span></div>
   <pre class="log" id="lora-flash-log" hidden></pre>
   <p class="muted" style="font-size:.82rem;margin:12px 0 0" id="lora-fw-src"></p>
@@ -1159,10 +1166,59 @@ async function loadFirmware() {
     $("lora-fw-src").innerHTML = `${esc(fw.license || "GPL-3.0")}. Source: ` + (fw.source || []).map((u) => `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(u.replace("https://github.com/", ""))}</a>`).join(" · ");
   } catch (e) { $("lora-fw").innerHTML = `<div class="muted">${esc(e.message)}</div>`; }
 }
+/* What to do when the flasher cannot reach the T-Deck, said for the visitor's own system (2026-10-24: "How will
+   the average user be able to figure this out?"). The picker reports an empty list and a cancel the same way
+   (NotFoundError), so "noport" covers both. Linux is where it goes wrong quietly: Ubuntu's Firefox and Chromium are snaps;
+   snap Firefox cannot reach USB at all, snap Chromium only after `snap connect chromium:raw-usb`; and a new account is
+   not in `dialout`, so a listed port will not open. */
+const UA = navigator.userAgent;
+const OS = /Android|iPhone|iPad/.test(UA) ? "phone" : /Windows/.test(UA) ? "win" : /Macintosh|Mac OS X/.test(UA) ? "mac"
+  : /CrOS/.test(UA) ? "cros" : /Linux|X11/.test(UA) ? "linux" : "other";
+const BROWSER = /Firefox\//.test(UA) ? "firefox" : /Edg\//.test(UA) ? "edge" : /Chrome\//.test(UA) ? "chrome" : "other";
+const cmd = (c) => `<div class="cmd"><code>${esc(c)}</code><button type="button" class="ghost" data-copy="${esc(c)}">Copy</button></div>`;
+const STEPS = "<li>Put it in flash mode: switched off (switch up), hold the trackball, plug in the USB cable, switch it on (switch down), wait 2 seconds, let go. The screen stays dark.</li>";
+function flashHelp(kind) {
+  const box = $("lora-flash-help");
+  if (!kind) { box.hidden = true; box.innerHTML = ""; return; }
+  const linux = OS === "linux", L = [];
+  let title = "";
+  if (kind === "nowebserial") {
+    title = "This browser can't reach USB devices";
+    if (OS === "phone") L.push("<li>Phones and tablets can't flash over USB from a browser. Use a computer.</li>");
+    else L.push("<li>Open this page in <b>Google Chrome</b> or <b>Microsoft Edge</b> on a computer.</li>");
+    if (linux) L.push("<li>On Linux, Firefox and Chromium installed from Ubuntu's App Center can't reach USB either. Google Chrome from google.com works.</li>");
+  } else if (kind === "noport") {
+    title = "No T-Deck in the list?";
+    L.push(STEPS, "<li>Use a cable that carries data. Many USB-C cables only charge. Plug straight into the computer, not into a hub.</li>");
+    if (linux && BROWSER === "firefox") L.push("<li><b>Firefox from Ubuntu's App Center (a snap) can't reach USB devices at all</b>, and no setting changes that. Use Google Chrome or Chromium instead.</li>");
+    else if (linux) L.push("<li>If this is Chromium from Ubuntu's App Center (a snap), let it reach USB, then quit it completely (every window) and open it again:" + cmd("sudo snap connect chromium:raw-usb") + "Google Chrome from google.com needs nothing.</li>");
+    if (OS === "win") L.push("<li>With it plugged in, Device Manager &rarr; Ports (COM &amp; LPT) should show a USB Serial Device. If nothing appears, try another cable or port.</li>");
+    if (OS === "mac") L.push("<li>With it plugged in, System Information &rarr; USB should list <span class=\"mono\">USB JTAG/serial debug unit</span>. If not, try another cable or port.</li>");
+  } else if (kind === "noopen") {
+    title = "The T-Deck is there, but its port wouldn't open";
+    L.push("<li>Another program may be using it. Close any Meshtastic app, Meshtastic web page or serial monitor, then try again.</li>");
+    if (linux) L.push("<li>Your account may not be allowed to use serial ports. Run this, then log out and back in:" + cmd("sudo usermod -aG dialout $USER") + "</li>");
+    L.push("<li>Unplug it, plug it in again, and try once more.</li>");
+  } else if (kind === "noconnect") {
+    title = "The T-Deck answered but didn't start flashing";
+    L.push(STEPS, "<li>Then press <b>Install the firmware</b> straight away. Flash mode doesn't wait for ever.</li>",
+           "<li>Use a cable that carries data, plugged straight into the computer.</li>");
+  }
+  box.innerHTML = `<b class="t">${esc(title)}</b><ul>${L.join("")}</ul>`;
+  box.hidden = false;
+}
+$("lora-flash-help").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-copy]"); if (!b) return;
+  const done = () => { b.textContent = "Copied"; setTimeout(() => { b.textContent = "Copy"; }, 1500); };
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(b.dataset.copy).then(done, () => {});
+  const code = b.previousElementSibling, r = document.createRange(); r.selectNodeContents(code);
+  const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+});
 const flashLog = (t) => { const l = $("lora-flash-log"); l.hidden = false; l.textContent += t + "\n"; l.scrollTop = l.scrollHeight; };
 async function flash(which) {
   const said = $("lora-flash-said");
-  if (!("serial" in navigator)) { said.textContent = "This browser has no Web Serial: use Chrome or Edge on a computer."; return; }
+  flashHelp(null);
+  if (!("serial" in navigator)) { said.textContent = "This browser can't reach USB devices."; flashHelp("nowebserial"); return; }
   if (!fw) { said.textContent = "The firmware release is not read yet."; return; }
   const part = fw[which];
   if (!part) { said.textContent = `This release has no ${which} image.`; return; }
@@ -1174,9 +1230,8 @@ async function flash(which) {
   let port;
   try { port = await navigator.serial.requestPort({filters: [{usbVendorId: 0x303a}]}); }
   catch (e) {
-    said.textContent = e && e.name === "NotFoundError"
-      ? "No T-Deck picked. If none was listed, it is not in flash mode or not plugged in: see the steps above."
-      : `Not flashed: ${e.message || e}`;
+    if (e && e.name === "NotFoundError") { said.textContent = "No T-Deck picked."; flashHelp("noport"); }
+    else said.textContent = `Not flashed: ${e.message || e}`;
     return;
   }
   buttons.forEach((b) => b.disabled = true);
@@ -1207,7 +1262,10 @@ async function flash(which) {
     await loader.after("hard_reset");
     said.textContent = `Done: ${fw.version} is on the T-Deck. It restarts by itself; if not, unplug it and plug it in again.`;
   } catch (e) {
-    said.textContent = `Not flashed: ${e.message || e}`;
+    const m = String((e && e.message) || e);
+    said.textContent = `Not flashed: ${m}`;
+    if ((e && (e.name === "NetworkError" || e.name === "InvalidStateError" || e.name === "SecurityError")) || /open|access denied|permission|busy/i.test(m)) flashHelp("noopen");
+    else if (/connect|sync|timed? ?out|boot mode|no serial data/i.test(m)) flashHelp("noconnect");
   } finally {
     try { if (transport) await transport.disconnect(); } catch (e) {}
     buttons.forEach((b) => b.disabled = false);
