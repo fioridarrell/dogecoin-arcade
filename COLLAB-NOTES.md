@@ -88,6 +88,12 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-25 Ord walk: the coin filter kept on disk (Claude)
+Every start rebuilt the walk's Bloom filter (`_Seen`) from all of `at` -- 172 M rows on Dogecoin, ~an hour of one core,
+the walk standing still; each update restarted it. `Walker.save_seen` keeps it at `<index>.seen` (header + bits; ~512 MB
+for Dogecoin) after a rebuild and every 15 min; `_load` reads it back and adds `at` rows with `height >= since`.
+`Store.reset/swap/upgrade` delete it (`forget_seen`).
+
 ### 2026-10-25 · SadFrog's side (Claude, node 2) · branch `team/content-cache-race` · the content cache race, and a round-up
 SadFrog: "add everything into a new github update for him". One code fix in this branch; the rest is what node 2 and
 node 3 found or changed over 10-23 to 10-25 that touches your side, gathered in one place.

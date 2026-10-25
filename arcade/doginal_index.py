@@ -511,10 +511,20 @@ class Store:
             db.close()
             self._readers.db = None
 
+    def forget_seen(self) -> None:
+        """The walk's coin filter kept beside this file (Walker.save_seen) no longer matches it: let go of, so the next
+        start makes it from this file's own rows."""
+        for tail in (".seen", ".seen.tmp"):
+            try:
+                Path(str(self.path) + tail).unlink()
+            except FileNotFoundError:
+                pass
+
     def swap(self, other: Path) -> None:
         """Put another index file in this one's place (a snapshot fetched from peers), and read from it from now on:
         the writer reopens at once, every thread's reader on its next read."""
         import os
+        self.forget_seen()
         with self._lock:
             self._db.close()
             for tail in ("-wal", "-shm"):
@@ -537,6 +547,7 @@ class Store:
         bytes and content types by number; bodies still arriving as their envelope's state; every undo packed and
         converted the same way -- then swapped in as a fetched snapshot is. The walk waits meanwhile (the index thread
         does this, never a page); nothing else changes, and nothing is walked again."""
+        self.forget_seen()
         import os
         new = self.path.with_name(self.path.name + ".upgrade")
         for tail in ("", "-wal", "-shm", "-journal"):
@@ -726,6 +737,7 @@ class Store:
 
     def reset(self) -> None:
         """Start the index again from the chain's first block (its words kept)."""
+        self.forget_seen()
         with self.tx() as db:
             for table in self.BUILT:
                 db.execute(f"DELETE FROM {table}")
@@ -905,10 +917,70 @@ class Walker:
             ct = kept[1][ctype] = db.execute("SELECT ct FROM ctypes WHERE ctype=?", (ctype,)).fetchone()[0]
         return ct
 
+    #: The filter kept on disk beside the index (2026-10-25: rebuilt from `at` at every start -- 172 million rows on
+    #: Dogecoin, read a row at a time in Python, about an hour of one core -- and the walk stood still meanwhile; every
+    #: restart of an update began it again). Read back in a moment; only the rows placed since it was kept are added.
+    SEEN_MAGIC = b"ARCSEEN1"
+
+    def _seen_path(self) -> Path:
+        return Path(str(self.store.path) + ".seen")
+
+    def _read_seen(self, n: int) -> tuple[_Seen, int] | None:
+        """(the filter as kept, the height to add rows from), or None when there is none usable."""
+        import struct
+        try:
+            with open(self._seen_path(), "rb") as f:
+                head = f.read(8 + 32)
+                if len(head) != 40 or head[:8] != self.SEEN_MAGIC:
+                    return None
+                m, capacity, added, since = struct.unpack("<QQQQ", head[8:])
+                if capacity < n or m % 8 or m < (1 << 20):
+                    return None                          # made for fewer coins than there are now: made again
+                seen = _Seen.__new__(_Seen)
+                seen.capacity, seen.m, seen.added = capacity, m, added
+                seen.bits = bytearray(m >> 3)
+                if f.readinto(seen.bits) != m >> 3:
+                    return None
+            return seen, since
+        except OSError:
+            return None
+
+    def save_seen(self) -> bool:
+        """Keep the filter on disk (written beside, then put in place): everything the walk has placed is in it, so
+        the rows placed from the block before the walk's next one on are what a later start adds."""
+        import os
+        import struct
+        seen = self.tracked
+        if seen is None:
+            return False
+        since = max(0, self.next_height() - 2)
+        path, tmp = self._seen_path(), Path(str(self._seen_path()) + ".tmp")
+        try:
+            with open(tmp, "wb") as f:
+                f.write(self.SEEN_MAGIC + struct.pack("<QQQQ", seen.m, seen.capacity, seen.added, since))
+                f.write(seen.bits)
+            os.replace(tmp, path)
+            return True
+        except OSError:
+            log.warning("ord index: the coin filter could not be kept on disk", exc_info=True)
+            return False
+
     def _load(self) -> None:
         """The filter of coins inscriptions sit on, from `at` (made for twice as many, so it rarely needs making
-        again)."""
+        again): the one kept on disk and the rows placed since, or -- none kept, or too small now -- made from all
+        of `at`, then kept."""
         n = int(self.store.q("SELECT COUNT(*) FROM at")[0][0])
+        kept = self._read_seen(n)
+        if kept is not None and not kept[0].full():
+            seen, since = kept
+            db = sqlite3.connect(self.store.path, timeout=60)
+            try:
+                for tx, vout in db.execute("SELECT tx, vout FROM at WHERE height >= ?", (since,)):
+                    seen.add(bytes(tx) + vout.to_bytes(4, "little"))
+            finally:
+                db.close()
+            self.tracked = seen
+            return
         seen = _Seen(2 * n + 100_000)
         # Read a row at a time on a connection of its own: a list of 22 million rows was itself gigabytes.
         db = sqlite3.connect(self.store.path, timeout=60)
@@ -918,6 +990,7 @@ class Walker:
         finally:
             db.close()
         self.tracked = seen
+        self.save_seen()
 
     @staticmethod
     def _on(db, txid: str, vout: int) -> list[tuple[int, int]]:
@@ -1522,6 +1595,9 @@ class DoginalIndex:
         self._tell_new_chunks()
         if mode == "walk":
             self._note_pace()
+            if time.monotonic() - getattr(self, "_seen_saved", 0.0) > self.SEEN_EVERY and self.walker.tracked is not None:
+                self._seen_saved = time.monotonic()
+                self.walker.save_seen()
         took = time.monotonic() - started
         # Paced by the share of the machine the operator gives the walk (2026-10-21): work `took`, rest so that
         # the work is that share of the time. All of it: straight on (2026-10-20: a test machine "shouldn't be pacing").
@@ -1537,6 +1613,9 @@ class DoginalIndex:
     def _big() -> bool:
         import os
         return (os.cpu_count() or 1) >= BIG_FROM_CORES
+
+    #: How often the walk's coin filter is kept on disk (Walker.save_seen): a start adds only what came after.
+    SEEN_EVERY = 900.0
 
     #: The window the walk's pace is measured over (seconds of wall time, its rests and waits for notes included).
     PACE_WINDOW = 120.0

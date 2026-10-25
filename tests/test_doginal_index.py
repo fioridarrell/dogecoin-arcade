@@ -1454,3 +1454,25 @@ def test_a_walk_fetches_a_blocks_earlier_transactions_in_batches_over_the_lender
     assert all(l.batched > 0 for l in lenders.values()), "split over both lenders, in batches"
     assert sum(l.singles for l in lenders.values()) == 0, "not one lookup at a time"
     assert all(index.walker.values.get(dx._outpoint(a[n][1], 0)) == 5 * 10 ** 8 + n for n in range(5))
+
+
+def test_the_coin_filter_is_kept_on_disk_and_a_start_adds_only_what_came_since(tmp_path, monkeypatch):
+    """2026-10-25: at every start the walk rebuilt its coin filter from every row of `at` -- 172 million on Dogecoin,
+    about an hour -- and stood still meanwhile. It is kept beside the index and read back; only rows placed since are
+    added; a reset (or a swapped-in snapshot) lets it go."""
+    chain = _story_chain()
+    first = _walker(tmp_path, chain)
+    first.walker.step(chain, dx.BASE + 5, budget=60)
+    path = first.walker._seen_path()
+    assert path.exists(), "made from `at` once, then kept"
+    first.walker.step(chain, dx.BASE + 11, budget=60)               # more placed after it was kept
+    built = []
+    real = dx._Seen.__init__
+    monkeypatch.setattr(dx._Seen, "__init__", lambda self, expect: (built.append(expect), real(self, expect))[1])
+    again = dx.DoginalIndex(tmp_path / "walk.sqlite", lambda: chain, lambda: "walk")
+    again.walker._load()
+    assert built == [], "read back, not made again"
+    for tx, vout in again.store.q("SELECT tx, vout FROM at"):
+        assert bytes(tx) + vout.to_bytes(4, "little") in again.walker.tracked, "every coin an inscription sits on"
+    again.store.reset()
+    assert not path.exists(), "a reset lets the kept filter go"
