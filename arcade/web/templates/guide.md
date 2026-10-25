@@ -17,7 +17,7 @@ installations reading the same chain agree without talking to each other.
 | | |
 |---|---|
 | Interface | `http://127.0.0.1:8420`, bound to loopback because it can spend |
-| Chains | Pepecoin main and Pepecoin test — the two this arcade moves coins on, and the only two |
+| Chains | Pepecoin main, Pepecoin test and Dogecoin main; Litecoin, Bellscoin, Luckycoin, Kotia and Wojakcoin as add-on chains, turned on in **Admin → Coins & chains**, each run on this machine or borrowed from another arcade that shares its Core |
 | Messaging | **Pepecoin test only**, by design |
 | Tokens, inscriptions, @tags | Pepecoin main and Pepecoin test |
 | Storage | your node's datadir for the chain; `~/.dogecoinarcade` for what the app remembers |
@@ -163,6 +163,19 @@ it updates every post you have ever made.
 inscriptions on both chains, read from the chain for the addresses their tag
 names. Nothing there is private — a chain is public — and nothing there can
 be spent.
+
+## Notifications
+
+What happened to you, newest first, loaded as you scroll. The **Notifications**
+tab carries a red count of what you have not seen.
+
+* **On your posts**: likes, replies, shares and tips, and posts and comments
+  that mention your @name. Replies on posts you follow too. A notification about
+  a comment opens the post with that comment shown.
+* **Your sales and swaps**: a piece sold, and both sides of a finished swap
+  between chains ("You sold 1,000 GOLD for 1.14 DOGE to @x").
+* **For an account**, new messages as well. **For the operator**, game cards the
+  card watch hid, with a link to them on Admin.
 
 ## Tokens
 
@@ -325,7 +338,10 @@ bytes — a gallery answering strangers — can say so.
 ## Collections
 
 A set of inscriptions that belong together — a HashLips build, or anything that
-names itself the same way.
+names itself the same way. *Collections: putting a set of inscriptions on the
+arcade* is the step-by-step guide: a build on the arcade's own chain, a set
+inscribed as ords, or an index of ords that are already inscribed. This section
+is the rules every node files them by.
 
 * **Filed from the chain, not from a form.** An inscription whose JSON has a
   `name` like `Doge Punks #12` is filed under the collection *Doge Punks* as
@@ -514,19 +530,25 @@ JSON names a shop, so any node can read it and buying is one swap carrying
 both sides; it is written from the address that holds the tokens, and it runs
 out when that address no longer holds a lot to sell. **Previewed before it is
 inscribed**, with the token's own icon and the price you typed, so what you
-pay for is what you already looked at. It appears under Mintpads in the
+pay for is what you already looked at. It appears under **Launchpad** in the
 Exchange by itself.
 
 
 ## The exchange
 
-Everything for sale on a chain, read from the chain itself. Four tabs, four
-questions.
+Everything for sale on a chain, read from the chain itself. The tabs are
+**LLMs**, **Tokens**, **NFTs**, **Launchpad**, **Doginals**, **Pepinals** and
+**Offers**.
 
+* **LLMs** — the model exchange: AI models other arcades sell or give away.
+  See *AI models and the arcade helper* below.
+* **Doginals** and **Pepinals** — ord inscriptions on Dogecoin and on Pepecoin
+  main, each on a tab of its own. A tab is grayed out until its chain's node has
+  synced, and says how far it is.
 * **Offers** — what somebody has offered for an NFT of yours, and what you
   have offered for somebody else's. Accept or refuse; accepting builds the
   seller's half of one transaction and the buyer's wallet signs the other.
-* **Mintpads** — every mintpad with pieces left. A pad appears because it is
+* **Launchpad** — every mintpad with pieces left, **Popular** or **Latest**. A pad appears because it is
   on the chain, not because anybody listed it, and disappears when it mints
   out.
 * **Tokens** — the markets: every token paired against the chain's coin, with
@@ -575,6 +597,14 @@ questions.
   *Make offer* box on every one of them. Shops selling a single NFT are
   listed under the table. An NFT that has moved drops off by itself: the
   listing is read from the chain every time, so there is nothing to un-list.
+
+**Swaps between chains.** A trade of PEP for DOGE, or a token or an NFT on one
+chain for coins on another, is settled by lock scripts on both chains: either
+both sides get paid or both get their own coins back. It normally takes
+seconds, nobody holds your coins, and you do not have to keep the page open.
+No swap is offered on a chain that does not enforce `OP_CHECKLOCKTIMEVERIFY`
+(Wojakcoin), because there a lock could be refunded at once. See *Swaps
+between chains*.
 
 **Charts of what actually traded.** Tokens and NFTs both get candles, built
 from the swaps on the chain — there is no order book to draw, so what is
@@ -657,6 +687,30 @@ without you.
 
 ---
 
+## AI models and the arcade helper
+
+Any arcade can sell, or give away, the AI models its operator runs on their own
+machine: language models and picture models. The *AI models and pictures*
+guide has the details.
+
+* **Exchange → LLMs** lists every model shared with this arcade, with its
+  price, speed, how busy it is and your credit with its seller. Tap one for its
+  own page: a chat for a words model, **Make a picture** for a picture model.
+* **Paid by prepaid credit.** A top-up goes straight to the seller's address
+  and counts as soon as their node sees it. A model with no prices is free.
+* **An OpenAI-compatible API** on your own arcade (`/v1`), with keys made on a
+  model's page, for chat apps, coding assistants and scripts.
+* **The arcade helper** is the robot in the corner of every page. It answers
+  questions about the arcade from these docs, knows which page and tab you are
+  on, and costs you nothing: it runs on a model shared with this arcade's
+  operator, free. 40 questions an hour each, 15 for a guest. Turn it off on
+  **Your arcade**.
+* **Operators** share models on **Admin → LLM**: find the model servers on the
+  machine, set prices per coin, name other operators who use them free, and
+  choose which models the helper may use.
+
+---
+
 ## Prize pools
 
 How a game, a puzzle or any other page pays out tokens to whoever wins,
@@ -678,17 +732,22 @@ without its owner being there. The Prize pools guide has the details.
 
 ---
 
-## Games
+## Apps
 
-The **Games** tab, between *Your arcade* and *Messages*, lists every game on the
-chain, and everything a game needs from the arcade is built for any game, not
-one in particular. Each piece has its own guide.
+The **Apps** tab (it was called *Games* until 2026-10-23) lists every app on every chain the arcade reads: games,
+video calls, voice rooms, shops, tools. Everything an app needs from the arcade is built for any app, not one in
+particular. Each piece has its own guide.
 
-* **Listing a game.** An inscription whose JSON carries `"game": {...}` is a
-  game: it appears on the Games tab, sorted like collections, with comments,
-  likes and tips. A new version by the same maker under the same name replaces
-  the old card, and the maker can remove the card the way a feed post is removed.
-  See *Games: listing yours on the Games tab*.
+* **Making and listing an app.** An HTML page inscribed with `"app": {...}` (or `"game": {...}`, as older cards
+  say) in its JSON is an app: it appears on the Apps tab, sorted like collections, with stars, comments, likes and
+  tips. A new version by the same maker under the same name replaces the old card and keeps its reactions, and the
+  maker can remove the card the way a feed post is removed. *Apps: making one and listing it on the Apps tab* walks
+  through it step by step, from the first page to an app made of a launcher and parts.
+* **Switches on the card.** An app that uses the player's wallet, camera and microphone, address book or
+  notifications says so on its card, and the player turns each on, per app, after checking who published it.
+  *Game access* lists every app a player allowed.
+* **On the phone.** With the arcade installed, the home screen has an **App Store**: the same apps, each added as an
+  icon. Apps open full screen and can be minimized; the card says how long a minimized app keeps running.
 * **Multiplayer.** `arcade.realtime` puts players into rooms that span every
   node: nodes link to each other directly over the **realtime mesh**, with no
   server in the middle and no website to go down. A player is their chain
@@ -837,6 +896,14 @@ depend on one website staying up.
   the ledger index — public chain state, derived, and reproducible by
   anyone with a node.
 
+**Shared Cores.** An arcade does not have to run a Core for every chain. On
+**Admin → Coins & chains** each chain runs here, is borrowed from an arcade
+that shares its Core, or is off; a Core that runs here is shared unless you
+untick it. Pepecoin test always runs on your own machine. Every transaction
+sent is also passed to every arcade sharing that chain, and an arcade that is
+indexing ords reads from the Cores lent to it as well as its own. See
+*Shared Cores*.
+
 **The realtime mesh.** Nodes also link to each other directly, for game rooms.
 It is on by default and finds its peers on the chain: each node that can be
 reached announces where, and works that out by itself. A node behind a router
@@ -942,8 +1009,9 @@ forwarding. The mempool already gossips to every node in seconds.
 * **Signing up needs https, or localhost.** A browser hands out its
   cryptography only in a secure context, so over plain http on a network
   address the page says so instead of half working.
-* **What an account can do.** Its own pages: *Your arcade*, *Messages*, the
-  *address book* and the feed. From them it claims a @tag, publishes its
+* **What an account can do.** Its own tabs: *Your arcade*, *Apps*,
+  *Messages*, *Notifications*, the feed, the *address book*, *Wallet*,
+  *Creator*, *Exchange* and *Affiliates*. From them it claims a @tag, publishes its
   messaging key, takes the faucet's Pepecoin test coins once, sends coins, posts
   and likes, and writes sealed messages. Every one of those is a
   transaction the node builds, the browser signs with a key the node has
@@ -983,16 +1051,15 @@ forwarding. The mempool already gossips to every node in seconds.
   with Send and a price on each. Sending one cannot be undone by sending
   it back unless whoever receives it agrees to, so it is two steps and
   says so. Pricing one is an ask: nothing moves, nothing is held, and it
-  stands only while you still hold the piece. Inscribing is still the
-  node's -- it takes a chain of linked transactions and an account builds
-  one at a time -- and buying waits on both halves of a swap being
-  signable in a browser.
+  stands only while you still hold the piece. *Inscribe one thing* is on
+  the same page, and buying is one press on any listing: both signed in
+  the browser.
 * **Overview, Wallet and Backup match the operator's**, where an account
   has anything to match. Overview has the same chain card and contact
   code, built in the browser (`messaging.js:contactCode`), and says
   plainly why there is no auto-sell, auto-fill or update setting -- those
   run on the NODE's own key, and an account has no such automation to
-  configure. Wallet has the same three tabs: Coins (send moved here),
+  configure. Wallet has the same three tabs: Wallet (the coins, and Send),
   Tokens (a real Omni Simple Send, never wrapped in AnyData, unlike
   a tag claim), and NFTs. Backup explains that the twelve words are
   everything, and that the message history and address book are this
@@ -1005,10 +1072,9 @@ forwarding. The mempool already gossips to every node in seconds.
   reader and cannot be read back by the sender either. A message shows up
   **out of the mempool**, before its block, and says so; when the block
   lands the bubble says which one.
-* **What an account does not do yet.** It gates nothing else: the wallet's
-  own pages are still the wallet's own, and inscribing, tokens and the
-  exchange are the node's. The page says this rather than implying
-  otherwise.
+* **What stays the operator's.** *Admin* -- the chains, the trading
+  switches, the models shared, the LoRa gateway -- and the node's own
+  wallet. An account reaches neither.
 
 ## Wallets, keys and backup
 
@@ -1099,6 +1165,62 @@ blocks read, a store rebuilt, a sale answered, a release announced -- so
 than only of its complaints. `--log-level warning` quiets it; `debug` is for
 when something is wrong.
 
+
+## Affiliates
+
+The **Affiliates** tab lists projects this arcade works with, each a link to its
+own site. Strangers can open it. The operator keeps the list on
+**Admin → Affiliates**: the names the arcade is published under, sites they
+add, and sites linked arcades share, which show only once ticked. A shared site
+leaves the tab when its operator stops sharing it or is not heard from for 30
+days.
+
+---
+
+## The installed app
+
+Installed on a phone or a computer (*Add to Home Screen*), the arcade opens
+on a **home screen** of its own instead of a page with tabs. In a browser tab
+nothing changes.
+
+* **Every tab is an icon** (*Your arcade* is the gear), with a dock along the
+  bottom and the **App Store** for adding apps. Adding an app asks once for what
+  it needs: wallet access, contacts, camera and microphone, notifications.
+* **Signs in first.** With nobody signed in it opens on the join page, where you
+  sign in or join; signed in but locked, it asks for the wallet password as it
+  opens.
+* **Apps and tabs open full screen, in windows that keep running** when
+  minimized, four at most; a green dot marks a running one. Pull down from the
+  top edge for **Minimize** and **Close**. An app keeps running minimized for
+  as long as its card says, 15 minutes unless it says otherwise. Every page in a
+  window has a **‹ Home** link.
+* **Pages and folders**, like a phone's. Hold an icon for its menu: **Edit Home
+  Screen**, **Open** (or **Go back to it** while it runs), **Close**, and for an
+  app **Remove from Home Screen**. In edit mode, drag an icon to an edge for the
+  next page, or rest it on another to make a folder. The layout is kept per
+  account on this arcade.
+* **Back** minimizes an app, closes a page, a folder or the App Store, or goes
+  back a page of apps.
+* **Red counts stay fresh**, and the phone's own app icon shows new messages and
+  notifications. The screen stays awake while the app is open.
+
+**Light or dark.** Every page has a theme: **Auto** follows the device, or pick
+**Light** or **Dark** on **Your arcade** or with **Theme** in the footer. Kept
+in this browser, and every window of the home screen follows at once.
+
+---
+
+## LoRa
+
+An arcade can run a **LoRa gateway**: a Meshtastic radio on the arcade's
+machine, through which LilyGO T-Decks running the arcade firmware reach the
+arcade with no internet of their own. A T-Deck signs in with its own key, sees
+its coins, sends, and reads and writes sealed messages. The operator sets it up
+on **Admin → Meshtastic**, which also flashes T-Decks from the page over USB
+(Chrome or Edge on a computer). Linked arcades see a **LoRa** badge beside an
+arcade that runs one. See *LoRa: reaching an arcade by radio*.
+
+---
 
 ## What it does not do
 

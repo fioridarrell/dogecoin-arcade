@@ -51,15 +51,15 @@
     <code>"minimized": {"timeout": 300}</code> keeps it running five minutes after a player minimizes it on the
     installed app's home screen (0: no limit; left out: 15 minutes); it hears about it through
     <code>arcade.app</code>.
-    The full guide is in the <a href="/docs">docs</a>.</p>
+    The step-by-step guide is <a href="/docs/games.md">Apps: making one and listing it</a>.</p>
 </div>
 
 <p class="msg" id="games-news" hidden></p>
 
 {% if not games %}
 <div class="panel empty"><p>No apps are on any chain yet.</p>
-  <p class="muted" style="font-size:.86rem">Be the first: inscribe an HTML page with a
-    <code>game</code> in its JSON.</p></div>
+  <p class="muted" style="font-size:.86rem">Be the first: inscribe an HTML page with an
+    <code>app</code> in its JSON (<a href="/docs/games.md">how</a>).</p></div>
 {% endif %}
 
 {{ exui.fav_script() }}

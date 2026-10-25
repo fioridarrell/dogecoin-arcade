@@ -7,7 +7,7 @@ its node has synced, and nothing is paid, held or signed on it before then.
 
 **Status:**
 - **In the wallet,** on the same key as PEP, DOGE and LTC.
-- **Bellinals are indexed and shown.**
+- **Bellinals are indexed and shown,** and you can inscribe one from **Creator → Ords**.
 - **Swaps between chains and Bellinal sends from the arcade are not open yet.**
 
 ## Running the node
@@ -70,3 +70,5 @@ an ordinary input, and ord's Taproot witness kind. The arcade reads both.
   - The NFTs tab shows your Bellinals, for viewing only for now.
   - Sending, listing and swapping a Bellinal from the arcade come later.
   - An ordinary BEL send never spends a coin that carries one.
+- **Inscribing:** **Creator → Ords** inscribes a Bellinal from your own wallet, by the chain's own
+  rules (see *Inscribing ords from your wallet*).

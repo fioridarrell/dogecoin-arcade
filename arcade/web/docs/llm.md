@@ -56,6 +56,9 @@ own words and the reply. Under each reply you see the tokens in and out and what
 the model with nothing of the arcade's added. The conversation is kept in your browser, per model, until you press
 **New chat**.
 
+While a reply is being written, the chat follows it down only while you are at the bottom. Scroll up to read what it
+wrote before and the page stays where you are; scroll back to the bottom and it follows again.
+
 ### Pictures
 
 Arcades can also share a **picture model** (on ComfyUI). Pictures are priced in **credits**, by size: **1 credit for
@@ -83,8 +86,14 @@ library. Endpoints: `/v1/models`, `/v1/chat/completions` (streaming or not, with
 
 The **robot** in the lower right corner of every page answers questions about the arcade, using the documentation and
 knowing which page and tab you are on. It runs on a model shared with this arcade's operator, so you are not charged;
-each person may ask a few dozen times an hour. Its conversation is kept in your browser only. Turn it off on **Your
-arcade → Arcade helper**.
+each person may ask 40 times an hour (a guest who is not signed in, 15). It shows only while such a model is online,
+and appears within moments of one coming online. Its conversation is kept in your browser only.
+
+On a computer you can drag the robot anywhere on the screen; the chat opens beside it and the spot is kept.
+Double-click it to send it back to its corner. On a touch screen it stays in its corner.
+
+It is not shown where a password or recovery words are typed, over a game in full screen, or over an app open on the
+installed app's home screen. Turn it off with **Show the arcade helper** on **Your arcade**.
 
 ### Who you are to a seller, and what is safe
 
@@ -116,5 +125,7 @@ totals, replies and tokens over time, earnings by coin, by way in (this arcade, 
 by buyer, and the latest replies. Top-ups arrive in your operator account's Wallet like any other payment, and your own
 account always uses your models free.
 
-The **Arcade helper** panel shows which models the robot uses for your players: your own, or one another operator
-shares with you free (sign once with your wallet to use it). It never uses a paid model.
+The **Arcade helper** panel lists the models the robot may use for your players: your own, and any another operator
+shares with you free. Tick each one it may use. Your own are ticked unless you untick them; a model shared by another
+operator is used only once you tick it (and **Sign once to use it** with your wallet). It uses your own first, then the
+least busy, and marks the one in use now. It never uses a paid model.

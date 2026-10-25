@@ -7,7 +7,7 @@ until its node has synced.
 
 **Status:**
 - **In the wallet,** on the same key as PEP, DOGE and LTC.
-- **Luckinals are indexed and shown.**
+- **Luckinals are indexed and shown,** and you can inscribe one from **Creator → Ords**.
 - **Swaps between chains and Luckinal sends from the arcade are not open yet.**
 
 ## Running the node
@@ -57,3 +57,5 @@ the data rides in an ordinary input.
   - The NFTs tab shows your Luckinals, for viewing only for now.
   - Sending, listing and swapping one come later.
   - An ordinary LKY send never spends a coin that carries one.
+- **Inscribing:** **Creator → Ords** inscribes a Luckinal from your own wallet, by the chain's own
+  rules (see *Inscribing ords from your wallet*).

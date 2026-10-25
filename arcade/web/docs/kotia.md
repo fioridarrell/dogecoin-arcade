@@ -26,6 +26,13 @@ rpcport=46173
 port=46174
 ```
 
+- **`txindex=1` is needed.** Kotia's Core reads a block only as raw bytes or with its transaction
+  ids, so the arcade fetches each of its transactions on its own.
+- **Its Core is older than the others.** It takes `getblock` with `true` or `false` rather than a
+  verbosity number, and it does not report whether it is still downloading blocks. The arcade notices
+  both by itself: it asks for blocks the way Kotia takes them, and counts the chain as synced by its
+  verification progress.
+
 ## What is different about Kotia
 
 - **Every transaction carries a time.** It sits right after the version, and it is part of the

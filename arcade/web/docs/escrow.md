@@ -22,7 +22,8 @@ holds and moves.
 
 ## Setting it up: the game's JSON
 
-Name a referee and a judge in your game inscription's JSON, next to `game`:
+Name a referee and a judge in your game inscription's JSON, next to `game`
+(or `app`, for a card that says `{"app": {...}}`):
 
 ```json
 {
@@ -81,15 +82,19 @@ arcade.escrow.open({hours: 6}).then(function (e) {
 | Call | What it does |
 |---|---|
 | `open({hours})` | this player's escrow in this game; unlocks on the hour, no later than `unlock_hours`. Sends nothing |
-| `deposit(escrow, items)` | puts things in: one card for all of them, then one transaction each |
+| `deposit(escrow, items)` | puts things in: one card for all of them, then one transaction each. Up to 20 items a call. Resolves `{txids}` |
 | `status(escrow)` | `{inscriptions, tokens, coins, owner, unlock, open}` |
-| `release({escrow, owner, owner_pubkey, unlock, to, items, replay, coins})` | asks the referee; your judge decides |
+| `release({escrow, owner, owner_pubkey, unlock, to, items, replay, coins})` | asks the referee; your judge decides. Resolves `{txids, verdict}` |
 | `mine()` | this player's escrows in this game that still hold something |
 
 An item is `{inscription: id}` or `{token: id, amount: "50"}`.
 
 * **Only signed-in players** can open or deposit, and each deposit is
   confirmed on a card in their own viewer and signed in their own browser.
+* **A deposit uses the wallet**, so your app needs **Wallet access** on its
+  card. If it is off, the viewer asks the player over your app the first time;
+  a No refuses that deposit and the game plays on. `open`, `status`, `release`
+  and `mine` sign nothing and need no Wallet access.
 * **Anybody may ask for a release** (the winner of a duel, say); the judge
   decides. A release needs the escrow's facts that `open` returned (`escrow`,
   `owner`, `owner_pubkey`, `unlock`), so share them with the other players your
@@ -108,6 +113,18 @@ An item is `{inscription: id}` or `{token: id, amount: "50"}`.
 * **After the unlock time**, the wallet page shows *Held in escrow* with a
   *Take back* button, and one press brings everything home. No game, judge or
   referee is involved; the chain enforces the time.
+
+## Which chains
+
+An escrow lives on the chain the page is shown on. The arcade makes none on a
+chain where it would not be safe:
+
+* **A chain that does not enforce lock times.** The owner's way back is
+  `OP_CHECKLOCKTIMEVERIFY`. On Wojakcoin that rule never activates, so an owner
+  could take everything back at once; `open` is refused there.
+* **A chain whose script addresses share a version byte with another chain's
+  ordinary addresses** (Bellscoin). Coins sent there would be lost, so `open`
+  is refused there too.
 
 ## Costs
 

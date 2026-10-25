@@ -286,6 +286,11 @@ lands. Use it for prizes a game pays while it is being played.
 | `the judge ran too long` / `used too much memory` / `failed: ...` | the judge is broken for this run: a bug for the game's author |
 | `that wallet has had its limit of replays judged this minute ...` | wait a minute |
 | `this pool's referee did not answer ...` | the referee node is offline. The prize is still there |
+| `Wallet access is off for this app: ...` | the game has an app card and the player said no to wallet access. The game can ask again with `arcade.access.wallet()` |
+
+A game with an app card asks for wallet access the first time it claims (or
+asks with `arcade.access.wallet()`): the arcade's wallet access card comes up
+over the game. This holds for a pool that pays its own claims too.
 
 ## Verified results
 
@@ -358,11 +363,13 @@ trophies this way: the trophy pool's judge totals the claimer's verified races.
 `GET /r/referee` on any arcade says whether and how it referees:
 
 ```json
-{"pubkey": "02…", "engine": "quickjs==1.19.4", "cpu_seconds": 5,
+{"pubkey": "02…", "engine": "quickjs==1.19.4", "state_publisher": "…", "cpu_seconds": 5,
  "memory_bytes": 67108864, "inputs_bytes": 1048576, "judge_bytes": 262144,
  "seed_seconds": 7200, "judged_per_minute": 3}
 ```
 
+* `state_publisher` is the address this node publishes game state from (see
+  [Game state](game-state.md)), or empty when it does not.
 * **Every node takes claims**; only the referee node runs judges. Other nodes
   forward seed requests and replays to it.
 * **Its key** is made the first time it is needed, and kept in the node's own

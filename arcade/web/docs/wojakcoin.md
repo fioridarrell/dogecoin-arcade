@@ -7,7 +7,7 @@ its node has synced.
 
 **Status:**
 - **In the wallet,** on the same key as PEP, DOGE and LTC.
-- **Wojakinals are indexed and shown.**
+- **Wojakinals are indexed and shown,** and you can inscribe one from **Creator → Ords**.
 - **Swaps between chains, escrows and Wojakinal sends from the arcade are closed.** Wojakcoin never enforces lock
   times: its chainparams set BIP65 (CHECKLOCKTIMEVERIFY), BIP66 and CSV to never activate. Every swap lock and escrow
   this arcade makes refunds through CHECKLOCKTIMEVERIFY, so on Wojakcoin whoever locked could take the coins back at
@@ -31,6 +31,11 @@ port=20759
 
 - **`txindex=1` is needed** for the inscription index and the wallet's history.
 - **RPC stays on 127.0.0.1.** Only the peer port (20759) needs to be reachable.
+- **Its sync figure never reaches 100%.** Wojak Core's built-in estimate of the chain's traffic is a
+  placeholder, so its verification progress sits near 0.9 even at the tip. The arcade counts the chain
+  as synced once its blocks have caught up with its headers.
+- **The node's Core wallet address.** Wojak Core has no accounts, so the arcade keeps one legacy `W…`
+  address under a label in its wallet and uses that for the node's own coins.
 
 ## Addresses
 
@@ -63,3 +68,5 @@ input, the way `wojakinals` writes it. SegWit is not active, so there is no Tapr
   - The NFTs tab shows your Wojakinals, for viewing only for now.
   - Sending, listing and swapping one come later.
   - An ordinary WJK send never spends a coin that carries one.
+- **Inscribing:** **Creator → Ords** inscribes a Wojakinal from your own wallet, by the chain's own
+  rules (see *Inscribing ords from your wallet*).

@@ -645,6 +645,25 @@ def test_the_chat_knows_the_docs_and_does_not_charge_for_them(arcade):
     assert end["cost"] == int((0.001 * max(0, 100 - end["docs_tokens"]) + 0.01 * 20) * llm.COIN)
 
 
+def test_the_helper_can_reach_every_public_doc():
+    """2026-10-25: "Make sure that the helper bot has access to all of these docs." Every public page is cut into
+    sections the helper can pick, its prompt lists every page, the new guides answer their questions, and the plans
+    stay out."""
+    from arcade import llmdocs
+    from arcade.web import guide
+    public = [p["name"] for p in guide.pages(private=False) if p["name"] not in llmdocs.LEAVE_OUT]
+    have = {s["doc"] for s in llmdocs.sections()[0]}
+    assert set(public) <= have, sorted(set(public) - have)
+    assert not have & set(guide.PRIVATE), "the plans are not the helper's"
+    listed = llmdocs.contents()
+    assert all(f"(/docs/{name})" in listed for name in public)
+    assert not any(f"(/docs/{name})" in listed for name in guide.PRIVATE)
+    assert llmdocs.pick("how do I make an app and put it on the Apps tab")[0]["doc"] == "games.md"
+    assert llmdocs.pick("how do I inscribe a HashLips collection, step by step")[0]["doc"] == "collections.md"
+    said = llmdocs.system_message([{"role": "user", "content": "zzzz qqqq"}])
+    assert "/docs/collections.md" in said and "/docs/games.md" in said, "even with no match, the pages are named"
+
+
 def test_an_operator_can_be_given_the_models_free(arcade, monkeypatch):
     """2026-10-23: "share my model with Bigchiefenergy if I choose for free while simultaneously having it
     listed" -- that operator's account only; names resolved on the chain, never taken as addresses from the form."""

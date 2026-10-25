@@ -13,21 +13,28 @@ arcade. This page is the overview. The other guides go deeper.
 | Coins, tokens, NFTs and inscriptions | Mainnet blocks |
 | @tags (names), posts, likes and profiles | Blocks, and the mempool for speed |
 | Offers, asks and order-book trades | Blocks; takes in flight are watched in the mempool |
+| Swaps between two chains | Lock scripts on both chains, acted on from the mempool |
 | Private messages, sealed to one reader | Testnet, read from the mempool within seconds |
 
 Tokens follow the Omni Layer rules, so anyone who has used Omni Core will
 recognise the transaction types and the method names. Inscriptions (images,
 text and interactive HTML pages) are stored in the transactions themselves.
 
-The chain is **Pepecoin**, a Dogecoin Core fork. The protocol works the same
-on Dogecoin, and the installer can set up either one.
+The home chain is **Pepecoin**, a Dogecoin Core fork. The installer also sets
+up **Dogecoin** mainnet, and the protocol works the same there. An operator
+can add more chains on **Admin → Coins & chains**: Litecoin, Bellscoin,
+Luckycoin, Kotia and Wojakcoin. Each one runs on the arcade's own machine, or
+is borrowed from another arcade that shares its Core (see
+[Shared Cores](shared-cores.html)).
 
 ## What a node does
 
-A node is one machine running three things:
+A node is one machine running:
 
 * **Pepecoin Core, mainnet**: the ledger.
-* **Pepecoin Core, testnet**: the messenger's chain.
+* **Pepecoin Core, testnet**: the messenger's chain. It always runs on the
+  node's own machine.
+* **Dogecoin Core, mainnet**, unless the operator borrows it or turns it off.
 * **DogecoinArcade itself**: an indexer that replays blocks into a local
   database, and a web interface at `http://127.0.0.1:8420`.
 
@@ -67,6 +74,12 @@ transaction that either moves both sides or moves nothing. A seller signs
 their half in advance, and the buyer completes it later. Neither side can
 take the other's part without paying.
 
+A trade between two chains (PEP for DOGE, say) cannot be one transaction, so
+it is settled by **lock scripts** on both chains: either both sides get paid
+or both get their own coins back. It normally takes seconds, and your own node
+finishes your side with transactions you signed in advance. See
+[Swaps between chains](swaps.html).
+
 Standing buy orders can be filled while you are away, in one of two ways:
 
 * The node fills them from lots you signed in advance, which can only be
@@ -99,8 +112,8 @@ curl -O https://dogecoinarcade.com/install.py
 python3 install.py
 ```
 
-The installer downloads and verifies Pepecoin Core, sets up both chains as
-services, installs the latest release of the app and fetches the latest index
+The installer downloads and verifies Pepecoin Core and Dogecoin Core, sets
+up Pepecoin mainnet, Pepecoin testnet and Dogecoin mainnet as services, installs the latest release of the app and fetches the latest index
 bootstrap. Every node also hands out its own copy of the program and index at
 `/clone`, so the network does not depend on any one website.
 
@@ -109,6 +122,12 @@ bootstrap. Every node also hands out its own copy of the program and index at
 * [What it does](features.html): every feature, what it costs and its limits.
 * [Node setup](00-node-setup.html): the installer, and the same steps by hand.
 * [Remote access](remote-access.html): reaching your node from elsewhere.
+* [Swaps between chains](swaps.html) and
+  [Shared Cores](shared-cores.html): trading across chains, and borrowing the
+  chains you do not run.
+* [AI models and pictures](llm.html): selling and using AI models on the
+  exchange.
+* [LoRa](lora.html): reaching an arcade by radio.
 * [Inscription API](inscription-api.html): building interactive NFT pages.
 * [Bot RPC](bot-rpc.html): scripting against a node.
 * [Messaging node](messaging/01-node.html) and

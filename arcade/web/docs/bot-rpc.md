@@ -12,14 +12,16 @@ so anyone who has scripted against Omni knows it already. The code is
 
 | | |
 |---|---|
-| URL | `http://127.0.0.1:8420/rpc/test` for testnet, `http://127.0.0.1:8420/rpc/main` for mainnet |
+| URL | `http://127.0.0.1:8420/rpc/test` for testnet, `http://127.0.0.1:8420/rpc/main` for mainnet. An add-on chain this arcade runs or borrows answers at `/rpc/<its short name>` (`doge`, `ltc`, `ltctest`, `bel`, `lky`, `kot`, `wjk`) once its Core is ready; any other name is a `404` |
 | Auth | HTTP basic auth with the contents of `~/.dogecoinarcade/rpc.cookie` (`__cookie__:<secret>`, mode 0600, rewritten at every start of arcade-web) |
 | Body | `{"id": 1, "method": "omni_getbalance", "params": ["nAddress", 3]}` — positional or named params, batches as a list |
 | Answer | `{"result": ..., "error": null, "id": 1}`; on failure `error` is `{"code", "message"}` in bitcoind's codes (`src/rpc/protocol.h`): -32601 unknown method, -32602 wrong arguments, -8 bad value, -5 bad address, -4 not this wallet's address |
 | Shell | `arcade-rpc omni_listproperties`, `arcade-rpc -main omni_getinfo` — reads the cookie for you; testnet unless `-main`. The installer puts it beside `dogecoinarcade` (`~/.local/bin`, or `%LOCALAPPDATA%\DogecoinArcade\bin` on Windows); `dogecoinarcade-update` adds it to an existing installation |
 
-Nothing listens anywhere but loopback, and the cookie is the whole key: a
-browser tab cannot present it, so this endpoint is out of reach of the
+It is for programs on the same machine. A request that arrived from outside
+(through the arcade's public name or its tunnel) is refused with `403`, "the
+bot RPC is not served publicly". The cookie is the whole key: a browser tab
+cannot present it, so this endpoint is out of reach of the
 cross-site posts the forms guard against with their CSRF token, and a script
 never has a password to keep. If the server restarts, the cookie changes —
 read it when you start, as you would bitcoind's.
@@ -97,6 +99,27 @@ Public machine talk, one node to every node ([Broadcasts](broadcasts.md)):
 |---|---|
 | `da_publish topic body [from]` | prepares a public broadcast under a topic; send it with `da_broadcast txid` |
 | `da_broadcasts [topic after count [senders]]` | confirmed broadcasts from every node, oldest first; pass the last `id` as `after` |
+
+Sealed messages, one node to one node (the same channel an inscribed page uses
+through `arcade.node`). Pepecoin test only: on `/rpc/main` these are refused.
+
+| Method | |
+|---|---|
+| `da_identity` | this node's `pubkey`, `fingerprint`, `contactcode`, `address`, `network`, `maxbytes` (the largest body), `protocol`, `apihash`, `arcadeversion`: what another node addresses |
+| `da_send to body [from]` | prepares a message sealed to `to` (a contact code or 64 hex characters of public key); `body` is a string or JSON. Send it with `da_broadcast txid` |
+| `da_broadcast txid` | **sends** what `da_send` or `da_publish` prepared; returns the txid |
+| `da_inbox [after count unreadonly]` | messages addressed to this node, oldest first; pass the last `id` as `after` |
+| `da_markread [id, ...]` | marks messages read; returns how many changed |
+
+### Mining test coins
+
+`POST /rpc/work/<chain>` lets a miner use this arcade's Core (its own, or the
+one it borrows) for a **test-coin** chain only, with the same cookie; a chain
+of real coins is a `404`. It answers the mining calls (`getblocktemplate`, `submitblock`,
+`getbestblockhash`, `getblockcount`, `getdifficulty`, `getmininginfo`) and
+`getworkshare`: `{address, percent}`, where a tenth of each block is owed when
+the chain is borrowed from a sharing arcade (`address` is `null` when it is
+not). `arcade/blockminer.py` is a miner that uses it.
 
 ### Sending is two calls
 

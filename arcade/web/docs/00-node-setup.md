@@ -360,7 +360,9 @@ An announcement is a small transaction paid from the node's fee address.
 | `--mesh-public-port N` | the port the router forwards, if it is not the same number |
 | `--mesh-peer IP:PORT` | link to a node directly, such as one on the same network, which the chain cannot carry; may be repeated |
 | `--mesh-announce IP:PORT` | announce this address instead of working it out |
-| `--mesh-core on/off` | let this node's Cores (Pepecoin, and Dogecoin and Litecoin when it runs them) peer with other arcades' through the mesh, so two nodes behind routers still sync with each other (on by default) |
+| `--mesh-inbound N` | how many other nodes may link to this one (32 by default; a server everyone can reach can take hundreds) |
+| `--mesh-tunnel auto/off` | when no address of this node can be proved, open a free Cloudflare quick tunnel (if `cloudflared` is installed) and announce that, so every node can still dial this one (`auto` by default) |
+| `--mesh-core on/off` | let every Core that runs on this node peer with the same chain's Core on other arcades through the mesh, so two nodes behind routers still sync with each other (on by default) |
 | `--stun-port N` | UDP port of this node's STUN server (default 3478); `0` runs none |
 
 **STUN for fast games.** Fast games connect players' browsers directly to each
@@ -429,6 +431,15 @@ There is no Dogecoin testnet node; the arcade's testnet is Pepecoin's.
 
 The Dogecoin mainnet chain is large: its first sync takes much longer than
 Pepecoin's, and the arcade shows its progress.
+
+### The other chains
+
+Litecoin, Litecoin testnet, Bellscoin, Luckycoin, Kotia and Wojakcoin are add-on chains. The
+installer does not install their Cores. In **Admin → Chains** each one is run here (with its node on
+this machine), borrowed from an arcade that shares its Core, or left off. Dogecoin can be borrowed or
+left off too. Pepecoin testnet always runs here, and at least one more Core must run here as well (see
+*Shared Cores*). The Bellscoin, Luckycoin, Kotia and Wojakcoin pages give each node's version and
+config.
 
 ### A node you already run
 

@@ -32,6 +32,10 @@ reads the same state with no server in between. One announcement carries up to
 }
 ```
 
+The card may say `{"app": {...}}` instead of `{"game": {...}}`; `state` works
+the same beside either. The declaration counts only on an HTML inscription
+whose card has a name.
+
 | Field | What it is |
 |---|---|
 | `family` | the id your game's versions share; state is kept per family, so a new version of your game sees the old state |

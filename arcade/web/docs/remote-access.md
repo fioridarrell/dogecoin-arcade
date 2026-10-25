@@ -97,9 +97,12 @@ route added later. In short:
 - **Readable:** the splash and join pages, feed, collections, tokens, NFTs,
   inscriptions, exchange and launch pages, the guide and docs, the source
   archive, and each signed-in account's own pages.
-- **Accepted POSTs:** only signing in and the build-and-sign handshake, where
-  an account signs with a key the node never sees and the node broadcasts only
-  the transaction it offered.
+- **Accepted POSTs:** only routes where an account acts for itself: signing
+  up and in, the admin login, and the build-and-sign handshake, where an
+  account signs with a key the node never sees and the node broadcasts only
+  the transaction it offered. The same holds for an account's own swap locks,
+  escrows, game rooms and LLM keys. Each one is named in `door.py`, one at a
+  time.
 - **Always refused from outside:** anything that spends the node's wallet,
   the bot RPC (`/rpc/main`, `/rpc/test`), token creation and sending,
   inscription creation, and wizard previews that read the node's disk.

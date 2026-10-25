@@ -37,7 +37,7 @@ A shared Core answers a short list of requests and nothing else:
 
 - reading blocks, transactions, block headers and the chain tip;
 - reading the mempool and whether a coin is still unspent;
-- fee estimates;
+- fee estimates, the relay fee, and checking a signed message;
 - broadcasting a transaction that somebody already signed.
 
 **It never answers a wallet request.** Sharing can never spend, sign or reveal your node's coins. Your
@@ -46,6 +46,23 @@ arcades, and each borrowing arcade is limited in how fast it can ask.
 
 A sharing arcade also sends each new mempool transaction, as it arrives, to the arcades borrowing
 that chain, so their wallets see incoming payments as quickly as yours does.
+
+A Core that is still syncing or rescanning is not offered to other arcades until it has caught up.
+
+## Which sharer is asked
+
+When several linked arcades share a chain, the one with the fastest ping is asked first. A sharer that
+has failed three times lately goes behind every one that answers, whatever its ping. Among the ones
+failing, the fewest failures come first, then ping. A sharer caught sending a wrong answer counts as
+ten failures. Each answer it gives counts one failure off again, so a sharer that recovers moves back up.
+
+## Every broadcast goes to every sharer
+
+When your arcade sends a signed transaction on a chain, its own Core (or the borrowed one) takes it
+first. The same transaction is then also sent to every linked arcade that shares that chain, each at
+once, and each of them passes it on once more. In several mempools at once it reaches the miners sooner,
+and one slow or badly connected node no longer leaves it unseen. Sending a transaction twice is
+harmless: a node that already has it says so.
 
 ## What a borrowing arcade checks
 
@@ -56,8 +73,12 @@ from the bytes:
   transaction; nothing in it can have been changed.
 - **Blocks** are fetched raw. The block's hash must be the hash of its header, its transactions must
   hash up to the header's merkle root, and the header must carry the proof of work its difficulty
-  asks for: scrypt, or for a merge-mined chain (Dogecoin, Pepecoin mainnet) a parent block that
-  commits to it. A block whose difficulty falls more than fourfold from the block under it is refused.
+  asks for: scrypt (SHA-256 on Wojakcoin), or for a merge-mined chain (Dogecoin, Pepecoin mainnet,
+  Bellscoin, Luckycoin) a parent block that commits to it. A block whose difficulty falls more than
+  fourfold from the block under it is refused.
+- **Kotia's blocks** (staked since block 1,000,000) are not checked for work or stake. Their hash,
+  merkle root and link to the block under them are proved; the rest is taken on the sharer's word.
+  **Admin → Chains** says so on a borrowed chain whose work is not checked.
 - **Mempool transactions** pushed by a sharer are checked the same way as any other transaction.
 
 What cannot be proved from bytes is taken on the sharer's word: which block is at a given height,
@@ -70,6 +91,32 @@ next sharing arcade is asked instead.
 A borrowed chain has no node wallet. Accounts work as usual, because people sign in their own browsers.
 What needs the node's own coins on that chain does not: the faucet, the node's own trading, and the node
 paying for inscriptions.
+
+## A Core that is behind borrows until it catches up
+
+A chain you run here can still be read from a sharer for a while. When its Core is behind (still
+syncing, loading its block index, or rescanning its wallet) and a linked arcade shares the chain, reads
+and broadcasts go through that sharer, proved the same way as on a borrowed chain. Everything else,
+above all the node's own wallet, stays on your Core, and a broadcast is handed to your Core as well so
+its wallet knows what it spent.
+
+The arcade checks every 30 seconds and goes back to your own Core after two caught-up checks in a row.
+**Admin → Chains** says on the chain's row which arcade it is borrowing from and how far your Core has
+got. With no linked arcade sharing the chain, your Core is used as it is.
+
+## Ord-index lanes on lending arcades
+
+An ord index (**Admin → Ords**) reads many blocks at once, each lane fetching its own next block. Beside
+the lanes on your own Core, it also gets lanes on every linked arcade that shares the chain's Core. An
+arcade with no Core of its own for a chain walks its ord index on these borrowed lanes alone.
+
+- **Each lender says how many lanes it lends** one borrower at a time: 4 on a machine with 8 or more
+  CPU cores, 1 on a smaller one, so a small server's disk is never asked for more than one block at a
+  time per borrower. An arcade that does not say lends one.
+- **Lanes are dealt round the lenders:** each lender's first lane, then each one's second, up to the
+  number of cores you give the ord index in **Admin → Ords**.
+- **A lender that misses three times in a row rests for five minutes,** and the chunk it was reading
+  is let go for another lane to take.
 
 ## Every arcade's index, compared
 
@@ -99,7 +146,7 @@ An arcade that borrows a chain pays the arcade whose Core it uses a tenth of wha
 Each sharing arcade names the address it is paid at for every chain it shares, and a borrowing arcade is
 paid its fees and mined coins in the same way. It's the operator account's own address on that chain when
 one is named, so the coins show up in that account's Wallet. Otherwise it's the Core wallet's address, or,
-on a chain with no Core wallet here (a borrowed one, or Litecoin), the arcade's own key's address there.
+on a chain with no Core wallet here (a borrowed one), the arcade's own key's address there.
 **Admin → The node's coins** shows and spends those coins, signed by the arcade itself with its identity
 key. Nothing has to be imported into another wallet.
 

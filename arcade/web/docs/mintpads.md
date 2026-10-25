@@ -22,7 +22,7 @@ A mintpad is two things, and only one of them is the page.
   own; it reads everything live, so it never goes stale.
 
 What makes a page a mintpad is the JSON inscribed beside it. The Exchange's
-*Mintpads* tab lists every page whose JSON says it is a pad for its own
+*Launchpad* tab lists every page whose JSON says it is a pad for its own
 creator's collection or token, as long as there is something left to mint.
 If you inscribe a new pad for the same collection or token, it replaces the
 old one in that list.
@@ -35,7 +35,7 @@ number (`19` for PLASMA) and the price is that many of it. The piece and the
 token then move in one transaction, or neither does. It
 signs your pieces over, puts the sales on the chain and inscribes a
 standard page. Your own page, inscribed afterwards, replaces the standard
-one on the Exchange, and both keep working.
+one on the Exchange's *Launchpad*, and both keep working.
 
 **A token:** put a sell order on the Exchange (*Exchange → Tokens →* your
 token *→ Sell*) for the whole amount you want to sell, at your price per
@@ -121,7 +121,8 @@ price or press anything on their behalf.
 
 Inscribe your page from your own wallet, with *Inscribe one thing* on the
 NFTs page. Open *JSON beside the file* and enter one of these, with **your
-own address** as the creator (it is on *Wallet → Coins*):
+own address** as the creator (on *Wallet*, press *Receive*, or tap the
+address at the top to copy it):
 
 A collection:
 
@@ -140,12 +141,12 @@ A token (`lot` in base units: 50 whole tokens of a divisible token is
 
 The creator has to be the address that inscribes the page, so nobody can
 make a pad that claims to sell your collection. Once the inscription is in a
-block, your page is on the Exchange under *Mintpads*.
+block, your page is on the Exchange under *Launchpad*.
 
 ## Good to know
 
 * The page is permanent, but the sale is not: what is left, the price and
-  the pictures are read live. A sold-out pad leaves the Mintpads list by
+  the pictures are read live. A sold-out pad leaves the Launchpad list by
   itself.
 * To stop a token pad, cancel the sell order on the Exchange. To stop a
   collection pad, cancel its listings on each piece.

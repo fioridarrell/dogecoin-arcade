@@ -88,6 +88,22 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-25 Documentation brought up to date; step-by-step Apps and Collections guides; the helper sees every page (Claude)
+The operator: "Update all of the documentation. Especially user guides on how to add inscriptions collections and especially
+how to create an application and add it to the apps"; "Make sure that the helper bot has access to all of these docs."
+- `docs/games.md` is now *Apps: making one and listing it on the Apps tab*: a walkthrough from a one-page app to a
+  launcher + parts + registry app, `arcade-publish`, every card field (`app`/`game`, wallet, media, contacts, notify,
+  minimized), reactions carrying across versions, `/play/<family>`, the App Store, "when the card does not show".
+- New `docs/collections.md`: Creator -> NFTs -> Run a collection, Creator -> Ords -> Inscribe a collection, and Make a
+  collection index (doggy.market and OW trait files), step by step. Linked from both panels and the Apps tab.
+- Every other public doc and README.md checked against the code and corrected (lora flash steps and Web Serial help,
+  the Apps/Launchpad/Creator names, chains, swaps per chain, shared-core lanes, room.media, ring, call relay, new /r/
+  endpoints, bot RPC chains). guide.md gained Notifications, AI models, Affiliates, The installed app and LoRa.
+- `llmdocs.contents()`: the helper's system prompt lists every public page (title + /docs link), so it can point to a
+  page even when no section matched; still public docs only, not charged. Test: `test_the_helper_can_reach_every_public_doc`.
+- The three tests that compare against `~/docs` (test_what_ships_is_what_was_written, test_the_two_copies_are_the_same_file,
+  test_the_written_guide_covers_what_the_navigation_offers) already fail on master: that copy is stale.
+
 ### 2026-10-25 PWA: an editable dock; the helper as an app; robot back on pages (Claude)
 home.html: icons drag out of the dock onto a page and into it (4 at most, a dock slot taken once the finger rests);
 the dock is kept with the layout (`/account/homeapps` now `{pages, dock}`; the setting is a dict, an old list read as

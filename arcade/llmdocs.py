@@ -115,6 +115,15 @@ def pick(question: str, budget: int = BUDGET) -> list[dict]:
     return out
 
 
+def contents() -> str:
+    """Every public page's title and link, one line each, so the model knows the whole documentation exists and can
+    point to the right page even when no section of it matched the question (2026-10-25: the helper "has access to all
+    of these docs")."""
+    from .web import guide
+    return "\n".join(f"- {p['title']} (/docs/{p['name']})" for p in guide.pages(private=False)
+                     if p["name"] not in LEAVE_OUT)
+
+
 def system_message(messages: list, arcade: str = "DogecoinArcade", page: str = "") -> str:
     """The system prompt for a chat: who the model is, where the person is in the arcade (the helper says it: the operator
     2026-10-23 "should have context on what tab the user is on"), then the sections that bear on what they asked."""
@@ -132,6 +141,7 @@ def system_message(messages: list, arcade: str = "DogecoinArcade", page: str = "
                  "or \"how do I do this here\"): " + page)
         question = (question + " " + page)[-4600:]
         parts = pick(question)
+    head += "\n\nThe documentation's pages, for pointing the person to the right one:\n" + contents()
     if not parts:
         return head + "\n\n(No section of the documentation matched this question.)"
     docs = "\n\n".join(f"### {p['title']} -- {p['head']} (/docs/{p['doc']})\n{p['text']}" for p in parts)

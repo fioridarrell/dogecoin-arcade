@@ -232,6 +232,11 @@ their browser builds and checks before signing: it pays the pool and delivers
 the tokens to the player, or does nothing at all. The tokens show in their
 wallet when the block lands.
 
+If the game has an app card and the player has not allowed it wallet access
+yet, the arcade first asks them to, with its own wallet access card. *Yes*
+ticks **Wallet access** on the game's card; *No* refuses this claim and the
+game plays on.
+
 ## Pools made before
 
 Pools made from the Prize lots form, before pools were inscriptions, keep

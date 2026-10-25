@@ -3,8 +3,9 @@
 For whoever adds the next coin, person or agent. Most of a chain is data, its `Params` in
 `arcade/config.py`: the launcher flags, `core:` / `share:`, mesh Core peering, borrowing, discovery,
 fees, dust and the ord index all follow from them. This page lists what still needs a hand, learned
-from adding Bellscoin and Luckycoin (2026-10-22). Use Dogecoin (`doge`), Bellscoin (`bel`) and
-Luckycoin (`lky`) as the worked examples.
+from adding Bellscoin and Luckycoin (2026-10-22), Kotia and Wojakcoin (2026-10-24). Use Dogecoin
+(`doge`), Bellscoin (`bel`), Luckycoin (`lky`), Kotia (`kot`) and Wojakcoin (`wjk`) as the worked
+examples.
 
 ## 1. Read the coin's own source, at the release tag the arcade will run
 
@@ -16,6 +17,11 @@ From its `chainparams.cpp` and `chainparamsbase.cpp`:
 - AuxPoW chain id and start height, and how the header holds the id
 - From `policy.h` and `validation.h`: the minimum relay fee, dust, soft dust, the OP_RETURN size
   (80 bytes must be standard) and bare multisig (must relay)
+- the proof-of-work hash (scrypt, SHA-256, or none the arcade can check, such as proof of stake)
+- `BIP65Height` (CHECKLOCKTIMEVERIFY). Every swap lock and escrow refunds through it. Wojakcoin
+  sets it to never activate, so it cannot swap.
+- anything a transaction or block carries that Bitcoin's do not: Kotia's transaction time after the
+  version, and its block signature after the transactions
 
 Then check every value against a node of that chain:
 - `getblockhash 0`
@@ -32,7 +38,14 @@ one. Set:
 - `min_fee_per_kb`, `soft_dust`, `dust_limit`
 - `letter` (one not already used for a badge), `family`, `net_word`
 - `node_dir`, `node_conf`
-- `real_coins`, `bech32_hrp`
+- `real_coins`, `bech32_hrp`, `mweb`
+- `pow_algo` (`"scrypt"`, `"sha256d"`, or `""` when the work cannot be checked) and `pow_limit_bits`
+- `cltv_enforced=False` on a chain that never enforces CHECKLOCKTIMEVERIFY: no swap lock or escrow is
+  made there (`require_cltv`, `trade_orders.check_order`, and `NO_CLTV` in `wallet_js.js`)
+- `tx_time` and `block_sig` for a Peercoin-style chain. Every builder that does not write the time
+  yet refuses that chain (`funding.untimed`), so only ordinary sends work until it does.
+- `trust_progress=False` when the Core's `verificationprogress` never reaches 1 at the tip (a stub
+  `chainTxData`, as on Wojakcoin)
 
 Add it to `NETWORKS` and `CHAIN_NAMES`. Set the floor at the tip rounded up about two days (D-004).
 The other arcade must take the same floor. Mainnets keep swaps, takes and the rest at `None`.
@@ -58,11 +71,15 @@ quieter clashes too: Luckycoin's P2SH 5 is Litecoin's legacy "3".
   envelope found by scanning the chain), `SOURCES`, `TAPROOT`.
 - **`ord_rules.py`:** `RULES_BY_NET` and `NUMBERS_REINSCRIPTIONS`. Follow the chain's official
   indexer, and bump the chain's rules when its numbering changes so its indexes are cut again.
+- **`ord_inscribe.py`:** `RULES` and `CHAINS`, for inscribing from **Creator → Ords**, and
+  `collection_json.py` `CHAINS` for its collections.
+- **`coins.js`:** `TX_TIME`, for a chain whose transactions carry a time.
 - **Templates:**
   - `my_wallet.html`: `ORD_WORDS` and the inscription word.
   - `my_backup.html`: the key list.
   - `_tab_swaps.html`: the coin names.
   - `base.html`: the real-coin review card.
+  - `create.html` and `create_ord.html`: the inscription word in the Creator tab.
   - `base_css.css`: the chain's colours and tags.
   - `coin-<net>.png`: its icon.
 - **This docs page list:** `arcade/web/guide.py ORDER`, and a page of its own like this one's neighbours.

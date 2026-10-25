@@ -138,8 +138,12 @@ key:
 | `0x04` | profile picture: an inscription's 32-byte txid | Honoured only while the chain says that address still holds the piece |
 | `0x05` | a bio, at most 160 bytes | Shown on their feed; refused rather than trimmed |
 | `0x06` | a link, at most 120 bytes, `http(s)` only | It lands on other people's pages as something to click |
+| `0x07` | the Dogecoin address (20-byte hash160) | So others can send DOGE to an `@tag` |
+| `0x08` | an address on any other chain: the network name's length, the name (`ltc`, `bel`, ...), and the 20-byte hash160 | Every wallet address in one announcement; the reader puts that chain's version byte back |
 
-A whole profile is therefore one transaction: name, both addresses, key,
+`0x07` and `0x08` always come after the others, so an older reader stops there having read the rest.
+
+A whole profile is therefore one transaction: name, every address, key,
 face, bio and link. Anybody who finds the tag has everything without asking
 the person or the node that drew it.
 

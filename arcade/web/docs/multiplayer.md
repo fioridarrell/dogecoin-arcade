@@ -10,6 +10,9 @@ Two page APIs let an inscribed game be played *together*:
 Neither knows anything about your game. A room is a name, a message is your own
 data, and a trade is "this piece for that". What they mean is up to you.
 
+A room can also carry a video call (`room.media`), and an app can ring a player
+whose app is closed (`arcade.realtime.ring`). Both are below.
+
 ## How it works, in one paragraph
 
 Arcade nodes link to each other directly, peer to peer, with no server in the
@@ -60,8 +63,8 @@ outside an arcade viewer, or anything else goes wrong, the room has
 | `room.send(value)` | send to everyone else; a string as is, anything else as JSON |
 | `room.on('message', fn(data, player))` | `data` is parsed JSON when it parses |
 | `room.on('join', fn(player))`, `room.on('leave', fn(player))` | |
-| `room.on('rejoined', fn(me))` | your connection dropped for longer than the node waits (30 seconds) and you were seated again: everyone else saw you leave and come back, so **send your state again** (position, gear) |
-| `room.on('closed', fn(why))` | the room is gone for good (the node unreachable for about ten minutes); join again to retry |
+| `room.on('reconnecting', fn())` | the line dropped and the viewer is taking your seat again by itself; `room.online` is `false` until it is back. Show "reconnecting" if you like |
+| `room.on('rejoined', fn(me))` | you were seated again after the line dropped: the others may have seen you leave and come back, so **send your state again** (position, gear) |
 | `room.leave()` | leave the room |
 
 A **player** is `{id, address, tag, guest, node}`. Key your game state by `id`.
@@ -77,14 +80,19 @@ proved by their own key; for a guest they are `null` and `""`, and `guest` is
   ("I am at 12,40"), not changes ("I moved 2 left"), and the next message
   corrects any that went missing.
 * You never hear your own messages.
-* A player whose page has gone is dropped after about 10 seconds. Nothing is
-  stored: anything that has to be true later belongs on the chain.
+* A player whose page closes leaves at once. One whose page vanishes without a
+  word (a phone that lost its network) keeps its seat for about 30 seconds,
+  then is dropped. Nothing is stored: anything that has to be true later
+  belongs on the chain.
 
 ### When the node restarts
 
 A node restarts now and then (an update, a reboot), and every room on it goes
 with it. Your page does not have to notice: the viewer takes the player's seat
-again by itself, retrying until the node is back, and the room carries on.
+again by itself, and the room carries on. It never gives up while the game is
+open: it tries again every 15 seconds at most, and at once when the network or
+the tab comes back. Your page hears `reconnecting` when the line drops and
+`rejoined` when the seat is back.
 
 * The players who are not back yet arrive as `leave`, and come back as `join`,
   so a game that keeps its player list from those two events stays right.
@@ -140,7 +148,8 @@ rest of the arcade. Nothing changes for a game: `arcade.realtime` works the same
 
 Rooms are made for games where a few updates a second is plenty. An action game
 (a shooter, a racer, a brawler) with up to about 8 players can ask for the
-**fast lane**, which connects the players' browsers directly to each other:
+**fast lane**, which connects the players' browsers directly to each other.
+It connects up to 20 players in a room: each browser links to at most 19 others.
 
 ```js
 arcade.realtime.join('match-1', {fast: true}).then(function (room) {
@@ -169,11 +178,104 @@ that refuse direct connections (carrier NAT on some phone networks and satellite
 internet). Most connect anyway, often over IPv6. A pair that cannot connect is in
 state `'room'`: their fast sends go through the room instead, about three a
 second (reliable ones in order, and of the rest only the latest). The game keeps
-working for those two, slower. A relay that carries such pairs at full speed is
-planned as a service your game can pay node operators for.
+working for those two, slower.
+
+**The call relay.** An operator can give their arcade a relay that carries such
+pairs at full speed (Admin → Network → Call relay, a Cloudflare TURN key). The
+viewer asks for it with your app's id, and gets it only:
+
+* for a signed-in player (guests never get the relay);
+* for the apps the operator chose (none chosen yet means every app);
+* while this month's relay use is under the operator's limit.
+
+A pair that connects through the relay is `'direct'` like any other. Nothing
+changes for your page.
 
 The connections are made by the viewer, not your page. Your page still reaches
 nothing but the viewer, and the other players' addresses are never shown to it.
+
+### Camera and microphone: `room.media`
+
+A video call, or a game with voice, uses `room.media` on a room joined with
+`{fast: true}`. A sandboxed page cannot open the camera itself, so the viewer
+opens it, sends it to the players your page names, and draws the pictures over
+your page where your page says.
+
+Say `"media": true` in your card's JSON, so the card shows a **Camera &
+microphone** switch from the start. (Without it, the switch appears only after
+your app first asks.) Nothing is opened until the player turns the switch on;
+until then `start` answers `{ok: false, error: 'off'}` and the viewer tells the
+player where to turn it on.
+
+```js
+arcade.realtime.join('call-x7', {fast: true}).then(function (room) {
+  if (!room.media) return noCall();                 // no WebRTC here
+  room.media.start({video: true, audio: true}).then(function (r) {
+    // {ok: true, video, audio}, or {ok: false, error: 'off' | 'denied' | ...}
+    if (r.error === 'off') say('Turn on Camera & microphone on this app\'s card');
+  });
+  room.media.place('me', {x: 10, y: 10, w: 160, h: 120}, {fit: 'cover', mirror: true});
+  room.fast.on('peer', function (p, state) {
+    if (state === 'direct' && p.address === friend) {   // only the player you mean
+      room.media.share(p.id, true);                     // your picture and sound go to them
+      room.media.hear(p.id, true);                      // their sound plays
+      room.media.place(p.id, {x: 0, y: 140, w: 640, h: 480}, {fit: 'contain'});
+    }
+  });
+});
+```
+
+| | |
+|---|---|
+| `start({video, audio})` | opens the camera, the microphone or both. Called again mid-call, the new tracks replace the old (the camera joins the microphone, say) |
+| `stop()` | camera and microphone off; every share ends |
+| `share(id, on)` | send your picture and sound to one player: `true`, `false`, or `{video, audio}` for one kind only. Refused with `not direct` until that player's link is direct |
+| `hear(id, on)` | play that player's sound. Nobody's sound plays until you say |
+| `place(id or 'me', rect, {fit, mirror})` | where a picture is drawn: `{x, y, w, h}` in your page's CSS pixels, or `null` to hide it. `fit` is `'cover'` or `'contain'`. At most 16 pictures |
+| `mute({video, audio})` | `true` mutes that kind, `false` unmutes it |
+| `on('media', fn(player, {video, audio}))` | a player is sending to you |
+| `on('media-off', fn(player))` | they stopped |
+| `on('state', fn(s))` | `'on'`, `'off'` (the player pressed Stop) or `'denied'` |
+
+* **Share only with the player you mean.** A room's name can be guessed, and
+  anybody who joins it is a peer. Check `p.address` before you call `share`
+  or `hear`.
+* **Media is direct only.** It goes over a direct link or the call relay, and
+  never through the room.
+* **The player can always see it and stop it.** While the camera or microphone
+  is on, the viewer shows so over your page, with a Stop button your page
+  cannot cover.
+* Place the pictures again when your layout moves.
+
+### Ringing a player whose app is closed
+
+`arcade.realtime.ring` wakes another player's phone with a notification, even
+when your app is closed there. Tapping it opens your app.
+
+```js
+arcade.realtime.ring(friendAddress, {line: 'Video call', link: 'call=x7'})
+  .then(function (r) { /* {ok: true, rung: true} or {ok: true, rung: false, why} or {ok: false, error} */ });
+
+// In the app that was rung, when it opens:
+arcade.realtime.ringed().then(function (ring) {
+  if (ring) joinCall(ring.link);        // {from, tag, link, line, at}, or null
+});
+```
+
+Say `"notify": true` in your card's JSON: only then does the card show a
+**Notifications** switch, and the player's phone must allow the arcade's
+notifications. A ring wakes somebody only when all of these hold, checked by their own
+node:
+
+* they turned on Notifications on your app's card;
+* the caller is in their address book;
+* the caller is signed in with an unlocked wallet, which signs who they are;
+* not too often: one ring from the same caller every 15 seconds, at most 30 an
+  hour for one pair, and at most 20 a minute from one caller.
+
+`line` is up to 80 characters and `link` up to 200. The notification says who
+is ringing (their @name), which app, and your `line`. `ringed()` answers only
+in the app that was rung, and only for a ring from the last ten minutes.
 
 ### A service for your game: a bank, a dealer, a referee
 
@@ -205,7 +307,7 @@ Every node carries its own players into the same rooms, so it does not matter
 which node a player uses. A node finds others from the chain's mesh
 announcements, from `--mesh-peer`, from what its peers pass on, and from the
 peers it reached before (`mesh-peers.json`, kept for 30 days), so a restart never
-depends on any one node still being there. It keeps four links and swaps its
+depends on any one node still being there. It keeps six links and swaps its
 slowest for a faster peer when it finds one.
 
 A node behind a router that cannot forward a port (carrier NAT, Starlink) still
@@ -217,8 +319,8 @@ can reach it. The mesh's own encryption runs inside the tunnel, so Cloudflare
 carries only ciphertext; nodes still link directly wherever they can, and
 `--mesh-tunnel off` turns it off.
 
-The node's Pepecoin Core nodes ride the mesh too: for up to four linked arcades per
-chain (the quickest links), the node gives its Core a local peer address that leads,
+The node's Cores ride the mesh too: for up to four linked arcades per chain (the
+quickest links), the node gives each Core a local peer address that leads,
 through the mesh link, to that arcade's Core. Two nodes behind routers that Core
 alone could never connect still sync and relay to each other. Core traffic is capped
 at 256 KB/s per link and sent in small pieces, so games stay quick; `--mesh-core off`
@@ -256,7 +358,10 @@ A side is one of:
   string,
 * `{coins: '1.5'}`: coins.
 
-Both players must be signed in; guests cannot trade.
+Both players must be signed in; guests cannot trade. Signing a trade uses the
+wallet, so your app needs **Wallet access** on its card. If it is off, the
+viewer asks the player over your app the first time it reaches for the wallet;
+a No refuses that one trade, and the game plays on.
 
 ### Calls
 
@@ -325,5 +430,5 @@ expects them; read them with `items()`.
 
 ## Putting your game on the Apps tab
 
-A multiplayer game is listed like any other: see *Games: listing yours on the
-Apps tab*, and set `"multiplayer": true` in its `game` JSON.
+A multiplayer game is listed like any other: see [Apps](games.md), and set
+`"multiplayer": true` in its card (`{"game": {...}}` or `{"app": {...}}`).

@@ -16,8 +16,9 @@ counterpart of node-to-node messages, which are sealed to one recipient.
 * **One transaction.** Up to 7,000 bytes; a larger message is refused, not
   split. Publish several instead.
 * **Confirmed only.** A broadcast is read once its block arrives.
-* **On the messaging chain** (testnet), like every other message. Older arcades
-  simply skip a type they do not know.
+* **On the messaging chain** (Pepecoin test), like every other message. Ask
+  `/rpc/test`: `da_publish` on `/rpc/main` is refused. Older arcades simply
+  skip a type they do not know.
 
 ## Topics
 
@@ -47,8 +48,9 @@ for b in rpc("da_broadcasts", "my-game/scores/v1", after, 50):
 ## Its first user: sensitive-material flags
 
 An arcade whose content screening is on can tell every other arcade what its
-model flagged. Turn it on under **Admin → Switches → Broadcast this arcade's
-sensitive-material flags**. The flags go out under the topic `flags/v1`:
+model flagged. Turn it on under **Admin → Safety → Content screening →
+Broadcast this arcade's sensitive-material flags to every arcade**, then press
+**Save switches**. The flags go out under the topic `flags/v1`:
 
 ```json
 {"f": [["<sha256 of the picture or words>", "sensitive"],
@@ -64,7 +66,7 @@ sensitive-material flags**. The flags go out under the topic `flags/v1`:
 * **Only the model's own verdicts go out**, never flags taken from another
   arcade, so arcades that follow each other do not echo.
 
-Every arcade lists the arcades that broadcast flags under **Admin →
+Every arcade lists the arcades that broadcast flags under **Admin → Safety →
 Sensitive-material flags from other arcades**, by @name or domain, each with its
 own switch. Turn one on and what it flags is covered (sensitive) or hidden
 (illegal) on your arcade too, even with your own screening off. Another arcade's

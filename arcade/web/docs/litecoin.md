@@ -19,6 +19,13 @@ DOGE and LTC) and on the Exchange (PEP/LTC and DOGE/LTC).
 - **Lock-script swaps.** LTC for PEP, and a Litecoin inscription for PEP, use the same lock scripts
   as PEP for DOGE (see *Swaps between chains*).
 
+## Address types
+
+On **Litecoin testnet** the Wallet's drop-down also offers a native SegWit (`tltc1…`) and a nested
+SegWit (P2SH) wallet beside the legacy one, each its own entry, and every kind can pay every other. On
+Litecoin mainnet SegWit wallets are not offered yet: the node refuses to register one on a real-coin
+chain.
+
 ## Inscriptions on Litecoin, and Taproot
 
 Litecoin has two kinds of inscription, and they are not interchangeable.
@@ -34,8 +41,11 @@ What that means for you:
 - **Litecoin's Taproot ordinals indexers and marketplaces do not show Doginals-format
   inscriptions.** An inscription made here is seen by this arcade and by Doginals-style indexers
   pointed at Litecoin, but not by Taproot-only sites.
+- **The arcade's ord index for Litecoin reads both kinds.** Turn it on in **Admin → Ords**. It
+  starts at block 2,424,429 (2,669,127 on Litecoin testnet), as ord-litecoin does, and reads Taproot
+  envelopes as well as the Doginals kind.
 - **This arcade cannot yet move inscriptions on Taproot (`ltc1p…`) addresses.** Use a Taproot
-  wallet for those. Reading them here is planned; moving them may come later.
+  wallet for those.
 - **Nothing is converted.** Content already on the chain never changes. An inscription made here is
   never presented as the same item as one made elsewhere.
 

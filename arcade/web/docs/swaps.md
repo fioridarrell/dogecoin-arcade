@@ -25,6 +25,23 @@ market: the seller signs their half ahead of time and the buyer completes it.
 * If the other side disappears part-way, your coins come back to you
   automatically after at most **two hours**.
 
+## Which chains can swap
+
+A swap between chains needs a lock script on each chain, and every lock this arcade makes refunds
+through CHECKLOCKTIMEVERIFY: the owner may take it back only after its time has passed.
+
+* **Pepecoin, Dogecoin and Litecoin** (and their test chains) swap with each other.
+* **Doginals, Pepinals and DRC-20 / PRC-20 tokens** swap from Dogecoin and Pepecoin mainnet.
+* **Wojakcoin cannot swap.** Its chain never turns on CHECKLOCKTIMEVERIFY (BIP65), so there a lock's
+  refund opens at once. Whoever locked could take their coins back after the other side had claimed, and
+  keep both. Your browser and every node refuse a swap order, a swap lock or an escrow with a Wojakcoin
+  side. Swaps on one chain, which need no lock, are not affected.
+* **Bellscoin cannot swap yet.** Its script addresses share their version byte with ordinary Dogecoin
+  addresses, so the arcade makes no lock there.
+* **Kotia cannot swap yet.** Every Kotia transaction carries a time, and the arcade writes it only for
+  ordinary sends so far.
+* **Luckycoin swaps are not open yet** (see its own page).
+
 ## Step by step
 
 Say Alice lists 1,000 PEP for 300 DOGE and Bob takes it.
@@ -64,7 +81,7 @@ and they can only go to you. All it adds is the secret, which by then is public.
 Whoever locks a side pays its fees, on top, so the other side receives exactly
 what was agreed:
 
-* About **0.01** of the coin to put your side in its lock (the network fee).
+* About **0.01** of the coin to put your side in its lock (the network fee); about 0.0001 on Litecoin.
 * A coin lock also holds the network fee of the other side's claim (**0.01**;
   about 0.0001 on Litecoin), so the coins come out of it whole.
 * A token or NFT goes into its lock with **0.02** of that chain's coin, which
@@ -89,6 +106,10 @@ such as PEP/DOGE), choose what you offer and what you want. Your listing shows
 on other arcades while an arcade page is open in your browser; close them all
 and it stops being shown within the hour. Withdraw it whenever you like.
 
+What you list is held for the listing until you withdraw it or it is taken. A listed DRC-20 / PRC-20
+amount is off your balance, so it cannot be sent or listed again meanwhile, and a listed Doginal cannot
+be sent or listed twice.
+
 When somebody takes it, your browser checks that their terms match yours
 exactly, locks your side once theirs is confirmed, and hands your node the claim
 and refund. You can close the page after that.
@@ -106,3 +127,7 @@ Then your side is locked, and the swap finishes by itself.
   locked, your node finishes it either way.
 * Your wallet has to be **unlocked** in some tab for anything to be signed.
 * Swaps between chains move whole amounts: a listing is taken in full.
+* A **DRC-20 / PRC-20** side is locked as a transfer note on the lock itself. The other side counts it
+  only once the ord index has read that note as valid, so it waits for the index, not only for the
+  mempool.
+* The swap book is shared by every arcade. When two people take the same listing, the first one wins.

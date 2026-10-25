@@ -37,6 +37,7 @@ GET /content/<id>
 Content-Type: <whatever you inscribed>
 Access-Control-Allow-Origin: *
 X-Content-Type-Options: nosniff
+Referrer-Policy: unsafe-url
 Cache-Control: public, max-age=31536000, immutable
 Content-Security-Policy:
   sandbox allow-scripts allow-pointer-lock;
@@ -58,6 +59,11 @@ The viewer loads it into
 Note what is **not** in that sandbox list: no `allow-same-origin`. Your page
 runs in an **opaque origin**. That one omission is what makes it safe to run a
 stranger's code inside a wallet that can spend.
+
+`Referrer-Policy: unsafe-url` is there so your page's own fetches carry the
+frame's URL back to this node. That URL holds the viewer's ticket (`?v=`),
+which is how `/r/wallet` knows which signed-in account is looking. It goes
+nowhere else: `connect-src` is this node only.
 
 ### Where your page turns up
 
@@ -113,8 +119,11 @@ So: **inscribe your dependencies**, or do without them.
 
 ## 3. The endpoints
 
-Every one is a read. There is no endpoint that spends, signs, sends or changes
-anything — the wallet's own controls are not reachable from inside the frame.
+Nearly every one is a read. The few `POST`s (`/r/send`, `/r/ask`,
+`/r/state/update`, `/r/escrow/release` and the referee's) only *ask*: none of
+them spends or signs for your page, and the wallet's own controls are not
+reachable from inside the frame. Everything that needs the person's key goes
+through the viewer around your page, on a card your page cannot draw or press.
 
 All return JSON with `Access-Control-Allow-Origin: *` unless noted.
 
@@ -171,6 +180,55 @@ fact and our ability to parse it is not.
 CBOR and leaves you to decode it; this is JSON because that is what it was
 written as.
 
+`GET /r/inscription/<id>/history` — every hand it has been in, oldest first:
+
+```json
+{ "id": "2ea169a4c7b1…", "creator": "nAlice1…", "owner": "nBob22…",
+  "inscribed": 1486617, "left_creator": 1490012,
+  "moves": [ { "from": "nAlice1…", "to": "nBob22…", "block": 1490012,
+               "txid": "…", "how": "…" } ] }
+```
+
+`left_creator` is the block it first left the address that made it, or `null`
+while the creator still has it. `limit` (default 100) caps `moves`.
+
+### Pieces that answer questions
+
+A piece can answer other pages' questions (what is your power, whose turn is
+it), whether or not its holder is looking. It declares what it answers under
+`api` in its own JSON, one entry per route:
+
+```json
+{ "name": "Fire Drake",
+  "api": { "power": {"json": "stats.power"},
+           "ready": {"store": "ready"},
+           "owner": {"owner": true},
+           "kind":  {"const": "dragon"} } }
+```
+
+| Route kind | Answers |
+|---|---|
+| `{"json": "a.b"}` | a value out of the piece's own JSON |
+| `{"store": "key"}` | a value the page saved with `arcade.storage` |
+| `{"owner": true}` | who holds it now |
+| `{"number": true}` | its inscription number |
+| `{"collection": true}` | `{collection, edition}` |
+| `{"const": value}` | a fixed answer |
+
+Up to 32 routes, names up to 40 characters, answers up to 2,000 bytes. A route
+only reads; nothing a route does can change anything.
+
+`GET /r/inscription/<id>/routes` → `{id, routes}`: what a piece answers, before
+you ask. `POST /r/ask` with `{inscription, route, args}` asks it:
+
+* **Held on this node** (the operator's wallet, or an account here): answered
+  at once, `{"answer": …, "from": "here", "inscription": "…"}`.
+* **Held elsewhere**: the question goes to the holder's node as a node-to-node
+  message, `202` with `{"asked": "<txid>", "from": "their node", "to": "…"}`,
+  and the answer comes back through `arcade.node`'s replies. A public arcade
+  does not pay to ask for you (`403`); an account's page asks with its own key
+  through `arcade.node`.
+
 ### Lists
 
 | | |
@@ -191,7 +249,9 @@ Parameters on `/r/inscriptions`, all optional:
 | `owner`, `creator` | filter to an address |
 
 `/r/inscriptions/count` takes `owner` and `creator` too, so a page can size its
-own paging before it asks for anything.
+own paging before it asks for anything. An `owner` or `creator` address of
+another chain this arcade indexes is answered from that chain, so
+`/r/inscriptions?creator=<address>` finds a maker's work wherever it is.
 
 ### Collections
 
@@ -234,6 +294,29 @@ So the rarity of any item is one call: `traits[t][v] / count`.
 const set = await (await fetch('/r/collection/' + creator + '/' +
                    encodeURIComponent('Doge Punks') + '?limit=500')).json();
 ```
+
+### Doginals a player holds
+
+For a game that rewards holders of a Doginals collection (one that described
+itself in a collection inscription this arcade knows):
+
+`GET /r/doginals/<address>` → the pieces of known collections that a Dogecoin
+address holds:
+
+```json
+{ "address": "D…", "unknown": 0,
+  "items": [ { "inscription": "…i0", "collection": {"root": "…", "name": "Doge Punks"},
+               "number": 12, "traits": { "Hat": "Cap" } } ] }
+```
+
+`address` may be a Dogecoin address, or an account's Pepecoin address, which
+stands for that account's Dogecoin address. `unknown` counts coins that could
+not be read just now; they are not guessed. `503` while this arcade's
+Dogecoin node is not ready.
+
+`GET /r/collection-item/<chain>/<inscription>` → `{inscription, collection:
+{root, name}, number, traits}` for one ord inscription (`chain` is `doge`, say),
+or `404` when no collection this arcade knows names it.
 
 ### The chain
 
@@ -467,6 +550,89 @@ Four scripts a game page loads, each with its own guide:
 without a page. All of them are game-agnostic: the arcade moves and stores, and
 your judge decides.
 
+Three more scripts are for any app, game or not:
+
+| Script | What it is |
+|---|---|
+| `/r/access.js` | `arcade.access`: whether this app has Wallet access, asking for it, and moving the player to another arcade (below) |
+| `/r/app.js` | `arcade.app`: told when the installed app's home screen minimizes, restores or closes your app (see [Apps](games.md)) |
+| `/r/llm.js` | `arcade.llm`: a language or image model the player pays for (below) |
+
+### Switches on your app's card
+
+Some things a page can ask for are behind a switch on its card on the Apps tab,
+which the player turns on, and which they can turn off again there. Each is
+kept per app. Say in your card's JSON which ones your app uses, and the card
+shows those switches from the start:
+
+| Card says | Switch | What it guards |
+|---|---|---|
+| `"wallet": true` | Wallet access | anything that uses the player's key: trades, shops, escrow deposits, `take`, `inscribe`, `claim`, `mint`, signing. Joining a room as yourself does not need it |
+| `"media": true` | Camera & microphone | `room.media` (Multiplayer and trades) |
+| `"notify": true` | Notifications | being rung by `arcade.realtime.ring` while the app is closed |
+| `"contacts": true` | Contacts | `arcade.contacts.list()` |
+
+A card says `{"game": {...}}` or `{"app": {...}}`; both work the same. When
+Wallet access is off, your app still runs: the first time it reaches for the
+wallet, the viewer asks the player over it, naming your app and its publisher
+and warning about lookalike copies. Yes turns the switch on; No refuses that
+one action and the app plays on. A page with no card (a shop, a mintpad) is
+asked the same way.
+
+### Access, and moving to another arcade
+
+```html
+<script src="/r/access.js"></script>
+<script>
+arcade.access.status().then(function (s) {
+  // {wallet, signedIn, node, game, name}
+  if (s.signedIn && !s.wallet) showButton('Allow wallet', function () {
+    arcade.access.wallet().then(function (r) { /* {ok, wallet, status: "allowed" | "already" | "declined"} */ });
+  });
+});
+</script>
+```
+
+* `status()` — `wallet` (Wallet access is on here), `signedIn`, `node` (this
+  arcade's host), `game` (the page has a card) and `name`. No card is shown.
+* `wallet()` — asks for Wallet access with the same card the switch shows,
+  even after an earlier No, because the player chose to. Rejects with
+  `sign in first` for a guest.
+* `nodes()` — this arcade's Affiliates list and the mesh's relays, each timed
+  from this browser: `[{base, host, ms, here, arcade, affiliate, name, by}]`,
+  this arcade first. `arcade: true` is a place a player can move to; a relay
+  carries rooms only. `ms` is `null` for no answer.
+* `move(base)` — offers the player your game on another arcade from
+  `nodes()`. The viewer's card says who lists it and what signing in there
+  means; yes leaves for that arcade (`{status: "moving"}` just before). Also
+  `"declined"` or `"here"`. Only an arcade on this arcade's Affiliates list,
+  and only for a page with a card.
+
+### Using a model: `arcade.llm`
+
+Arcades sell their operators' language and image models on the Exchange's LLM
+tab. A page can use one; the signed-in player pays from the credit they hold
+with a seller, and is asked once whether your page may use it.
+
+```html
+<script src="/r/llm.js"></script>
+<script>
+arcade.llm.chat({messages: [{role: 'user', content: 'Name a dragon'}],
+                 onToken: function (text) { out.textContent += text; }})
+  .then(function (r) { /* {content, reasoning, usage: {tokens_in, tokens_out}, cost, left, seller, leg} */ },
+        function (e) { /* e.message: "declined", "sign in first", "not enough credit" ... */ });
+</script>
+```
+
+* `offers()` — `[{seller, name, tag, models: [{id}], prices: [...]}]`.
+* `chat(request)` — OpenAI's chat fields (`messages`, `max_tokens`,
+  `temperature`, `tools` ...) plus `seller` and `leg` (which seller, and which
+  coin pays). Left out, the viewer picks one the player has credit with.
+  `onToken` hears each piece as it is written.
+* `image({prompt, size, image, seller, leg})` — a picture, paid per picture:
+  `{png, url, seed, cost, left, seller, leg}`. `url` is a `data:` URL you can
+  put in an `<img>`; `image` is a picture (a data URL) to edit.
+
 ### Remembering things
 
 Your page has no `localStorage`: an opaque origin has no storage, and the
@@ -490,6 +656,19 @@ return a promise that rejects when the wallet refuses — a key over 256
 characters, a value over 64 KiB, more than 1,000 keys or 1 MiB in all — and
 the mirror is rolled back. Strings only, as in `localStorage`; `JSON.stringify`
 what is not one.
+
+The wallet also keeps the last ten values each key had before it changed, so a
+game that saved over its player's progress can offer it back:
+
+```js
+arcade.storage.history('save').then(function (h) {
+  // {save: [{value, replaced}, ...]}, newest first; history() with no key: every key
+});
+```
+
+`replaced` is when that value was replaced, in unix seconds. In an account's
+browser the history is a nicety: when the browser runs short of room, the
+oldest entries go first, never the save itself.
 
 It is kept under **your inscription's id, by the viewer**, which knows which
 frame it is talking to: another page cannot read or write yours, and yours
@@ -530,10 +709,16 @@ arcade.contacts.remove('@alice')
 </script>
 ```
 
-* **`list()`** asks the person once per game whether it may see their
-  contacts, and the browser remembers the answer. Until they say yes, and for
-  a guest or a page opened on its own, it resolves `[]`. Only names and
+* **`list()`** reads the book only while **Contacts** is on on your app's
+  card. Say `"contacts": true` in your card's JSON so the card shows that
+  switch from the start; your page shows no question of its own. A page with
+  no card (a shop, a mintpad) is asked instead, once a visit. Only names and
   addresses come back, nothing else of the book.
+* **An empty list says why** on `.why`: `'off'` (Contacts is off on the card:
+  tell the player to turn it on there), `'guest'` (not signed in), `'operator'`
+  (the node's own wallet view, which has no book), `'no'` (a page with no
+  card, told no) or `'viewer'` (no arcade viewer around the page). A book that
+  is really empty has no `.why`.
 * **`add({address, name})`** puts one person in the book. `address` is an
   address or an `@tag`; only names claimed on the chain go in an address book,
   so an address nobody holds a name for is refused. `name` is optional,
@@ -558,8 +743,8 @@ arcade.contacts.remove('@alice')
   wallet view), `not an address`, `busy`, `no viewer` (the page was opened on
   its own), or what the chain said about the name (`nobody holds @x on this
   chain`, `they have not published a messaging key ...`).
-* **Adding and removing never read the book**, and a yes to an add is not a
-  yes to `list()`: that keeps its own question.
+* **Adding and removing never read the book**, and a yes to an add does not
+  turn on the Contacts switch that `list()` needs.
 
 ### Talking to another node
 
@@ -881,8 +1066,14 @@ accident.
   "coin": { "spendable": 13847.945, "ticker": "" },
   "tokens": [ { "propertyid": 3, "name": "Arcade Test", "balance": "989,995",
                 "units": 98999500000000, "divisible": true } ],
-  "inscriptions": 2 }
+  "inscriptions": 2, "wallet": "account" }
 ```
+
+`wallet` says whose wallet answered: `"account"`, the signed-in account looking
+at your page (on a public arcade, or from outside), or `"operator"`, the node's
+own wallet on the operator's machine. From outside, a page nobody signed in is
+looking at gets `403` with `{"wallet": "off", "error": "nobody signed in is
+looking at this page"}`, never the operator's wallet.
 
 One chain, said out loud. An inscription lives on exactly one, and a page shown
 a balance from the other would be reading a number about a wallet that does not
@@ -892,7 +1083,8 @@ wallet has**: fifteen addresses holding one token is one balance, not fifteen.
 This is the only endpoint about the viewer rather than about the chain. The
 balances themselves are public — anyone with an index can look up any address —
 but **which** address belongs to the person reading your page is the one thing
-the chain does not say. It can be switched off, and when it is:
+the chain does not say. On the operator's own machine it can be switched off,
+and when it is:
 
 ```json
 { "error": "this wallet does not tell inscriptions who is looking" }
@@ -1074,10 +1266,12 @@ never moves it; sending it is always something you did on purpose.
   account or a signed-out stranger is — always per inscription.
 * **No external anything.** Not a CDN, not an analytics beacon, not a font.
   See §2.
-* **No sockets, no servers.** A page reaches another machine one way: a
-  node-to-node message (`arcade.node`, §3), on testnet, sealed, and answered
-  the same way — carried by the wallet it runs in, or by the account's own
-  messaging key where accounts sign for themselves.
+* **No sockets, no servers of your own.** A page reaches other machines only
+  through the viewer around it: a node-to-node message (`arcade.node`, §3), on
+  testnet, sealed, and answered the same way; a room on the arcade mesh
+  (`arcade.realtime`, with its browser-to-browser fast lane); or a model a
+  player pays for (`arcade.llm`). Each is carried by the viewer, and the page
+  never learns another machine's address.
 * **No `/r/children`, `/r/parents`, `/r/sat`.** The first two describe a
   relationship this chain does not record, and the third is about satoshi
   ordinals, which this is not.
