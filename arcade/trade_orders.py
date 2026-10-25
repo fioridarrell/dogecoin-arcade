@@ -105,6 +105,13 @@ def check_order(said: Any, now: float | None = None) -> dict:
         # 2026-10-13: a swap on ONE chain is instant -- one atomic transaction on that
         # chain's own markets (pre-signed legs) -- so lock scripts are for two chains only.
         raise OrderError("a swap on one chain settles in one transaction on its own market")
+    if give["network"] != get["network"]:
+        # Two chains settle through lock scripts that refund by CHECKLOCKTIMEVERIFY: never on a chain that does not
+        # enforce it (Wojakcoin, 2026-10-25), where the side that locked there could refund at once and keep both.
+        for side in (give, get):
+            params = NETWORKS.get(side["network"])
+            if params is not None and not getattr(params, "cltv_enforced", True):
+                raise OrderError(f"{params.label} does not enforce lock times, so it can't be swapped across chains")
     for field, pattern in (("trade_key", _KEY33), ("msg_key", _HEX32), ("node", _HEX32)):
         if not isinstance(said.get(field), str) or not pattern.match(said[field]):
             raise OrderError(f"an order's {field} is hex of the right length")

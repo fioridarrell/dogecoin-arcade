@@ -252,6 +252,10 @@ class Params:
     #: chain whose chainTxData matches its real traffic. False when that estimate is a stub: Wojakcoin's
     #: is 100 transactions a second, so the figure stays near 0.9 at a live tip and never reaches 0.9999.
     trust_progress: bool = True
+    #: Whether the chain's consensus enforces OP_CHECKLOCKTIMEVERIFY (BIP65). Every lock this arcade makes (a swap's
+    #: HTLC, an escrow) refunds through CHECKLOCKTIMEVERIFY; where it is a no-op the refunder can take a lock back at
+    #: any moment, so a swap there could be robbed (`require_cltv`). Wojakcoin (2026-10-25): BIP65Height is max.
+    cltv_enforced: bool = True
 
     @property
     def index_start(self) -> int | None:
@@ -664,6 +668,9 @@ WOJAKCOIN = dataclasses.replace(
     # "W": no other chain wears it.
     letter="W", family="WJK", net_word="wojakcoin", real_coins=True, bech32_hrp="", mweb=False,
     trust_progress=False,
+    # BIP65Height, BIP66Height and CSVHeight are all std::numeric_limits<int>::max() in its chainparams.cpp: CLTV is
+    # never enforced, so no swap lock or escrow is made here (config.require_cltv).
+    cltv_enforced=False,
 )
 
 NETWORKS = {p.name: p for p in (MAINNET, TESTNET, REGTEST, DOGECOIN, LITECOIN, LITECOIN_TESTNET,
@@ -681,6 +688,15 @@ def unpayable_versions(params: "Params") -> frozenset:
         return frozenset()
     key_hashes = {p.pubkeyhash_version for p in NETWORKS.values() if p.name != name}
     return frozenset({version} & key_hashes)
+
+
+def require_cltv(params: "Params") -> None:
+    """Refuse a lock that refunds through CHECKLOCKTIMEVERIFY (a swap's HTLC, an escrow) on a chain whose consensus
+    never enforces it (`Params.cltv_enforced`, Wojakcoin): there the opcode is a no-op, so whoever locked could refund
+    at once -- after the other side has claimed with the secret -- and walk away with both legs."""
+    if not getattr(params, "cltv_enforced", True):
+        raise ValueError(f"{params.label} does not enforce lock times (CHECKLOCKTIMEVERIFY), so this arcade makes no "
+                         f"swap or escrow lock there: whoever locked could take it back at any moment")
 
 
 def require_p2sh_payable(params: "Params") -> None:

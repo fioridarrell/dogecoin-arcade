@@ -38,7 +38,7 @@ from typing import Any
 
 from . import escrow as E
 from .script import b58check_encode, hash160
-from .config import require_p2sh_payable
+from .config import require_cltv, require_p2sh_payable
 from .txbuild import op_return_script, p2pkh_script, push
 
 OP_0, OP_1 = 0x00, 0x51
@@ -133,7 +133,9 @@ def parse(redeem: bytes) -> dict | None:
 
 
 def address_of(redeem: bytes, params: Any) -> str:
-    """The lock's P2SH address on a chain (its own script-hash version byte)."""
+    """The lock's P2SH address on a chain (its own script-hash version byte). Never on a chain that does not
+    enforce CHECKLOCKTIMEVERIFY (config.require_cltv): the refund branch would open at once."""
+    require_cltv(params)
     require_p2sh_payable(params)
     return b58check_encode(params.scripthash_version, hash160(redeem))
 

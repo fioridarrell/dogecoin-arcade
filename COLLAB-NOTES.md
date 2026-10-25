@@ -88,6 +88,23 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-25 Wojakcoin (PR #14) applied; no swap or escrow lock on a chain that does not enforce CLTV (Claude)
+The operator: "incorporate the swaps for it ... And then merge this PR". Branch `claude/wojakcoin`: reallyshadydev's #14 applied as
+its own commit (author kept), conflicts taken with master's wording and master's Kotia `initialblockdownload` fix kept
+beside the PR's `trust_progress`. **Swaps for WJK were NOT opened:** WojakCoinProj/wojakcore chainparams.cpp has
+`BIP65Height`, `BIP66Height` and `CSVHeight` = `std::numeric_limits<int>::max()` on mainnet, so OP_CHECKLOCKTIMEVERIFY is a
+no-op there. Every arcade lock (htlc.py, escrow.py) refunds through it: on WJK the locker could refund at once, after the
+other side claimed with the secret, and keep both legs; a cheap rented sha256d block gets a non-standard refund mined.
+And the engine took any ready chain, so after #14 a WJK swap could have been made. Now:
+- `Params.cltv_enforced` (False for WOJAKCOIN) and `config.require_cltv`, called by `htlc.address_of` and `escrow.address_of`.
+- `trade_orders.check_order` refuses a two-chain order with a leg on such a chain (same-chain offers are not locks).
+- wallet_js.js `NO_CLTV` and a refusal at the top of `redeemsOf`, before any lock is derived or funded.
+- Wojak Core's wallet defaults are LEGACY (wallet.h `DEFAULT_ADDRESS_TYPE`), so Core-wallet change and `getnewaddress`
+  give `W` addresses; that part is safe. docs/wojakcoin.md says why swaps are closed.
+- Needs from the other side: opening WJK swaps needs a lock that does not rely on CLTV, e.g. a 2-of-2 with a pre-signed
+  nLockTime refund (nLockTime itself is always enforced). Worth checking BIP65 on the other add-on chains the same way.
+- Tests: test_wojakcoin::test_no_swap_or_escrow_lock_is_made_on_a_chain_that_does_not_enforce_cltv.
+
 ### 2026-10-25 · the operator's side · branch `add-wojakcoin-mainnet` · Wojakcoin mainnet as an add-on chain
 Wojakcoin (WJK), Wojak Core 1.21.3, added the same way as Bellscoin, Luckycoin and Kotia. `WOJAKCOIN` is
 `LITECOIN` with the Bitcoin-Core values from chainparams: P2PKH 73 (`W`), P2SH 5, WIF 201, ports 20760/20759,

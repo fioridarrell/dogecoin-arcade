@@ -163,3 +163,35 @@ def test_the_ord_index_starts_where_ord_wojakcoin_does_and_is_not_taproot():
     assert ord_rules.dialect_of("wjk") == "dogecoin"
     assert ord_inscribe.rules_of("wjk").label == "Wojakinal"
     assert "wjk" in ord_inscribe.CHAINS
+
+
+def test_no_swap_or_escrow_lock_is_made_on_a_chain_that_does_not_enforce_cltv():
+    """Wojak Core's chainparams set BIP65Height to max (2026-10-25): OP_CHECKLOCKTIMEVERIFY is a no-op there, so a lock's
+    refund branch would open at once and the side that locked on WJK could take it back after the other side claimed.
+    Refused in the server's lock builders, in every cross-chain order, and in the browser before anything is locked."""
+    import pytest
+    from arcade import config, escrow, htlc, trade_orders
+    from arcade.config import MAINNET, WOJAKCOIN as WJK
+    assert WJK.cltv_enforced is False
+    assert all(p.cltv_enforced for name, p in config.NETWORKS.items() if name != "wjk"), "only WJK so far"
+    with pytest.raises(ValueError, match="does not enforce lock times"):
+        config.require_cltv(WJK)
+    config.require_cltv(MAINNET)
+    redeem = bytes(40)
+    with pytest.raises(ValueError, match="does not enforce lock times"):
+        htlc.address_of(redeem, WJK)
+    with pytest.raises(ValueError, match="does not enforce lock times"):
+        escrow.address_of(redeem, WJK)
+    assert htlc.address_of(redeem, MAINNET).startswith("P")
+    import time
+    order = {"id": "wjk-order-1", "trade_key": "02" + "11" * 32, "msg_key": "22" * 32, "node": "33" * 32,
+             "expires": int(time.time()) + 3600,
+             "give": {"network": "wjk", "amount": 100_000_000}, "get": {"network": "main", "amount": 100_000_000}}
+    with pytest.raises(trade_orders.OrderError, match="does not enforce lock times"):
+        trade_orders.check_order(order)
+    with pytest.raises(trade_orders.OrderError, match="does not enforce lock times"):
+        trade_orders.check_order({**order, "give": order["get"], "get": order["give"]})
+    wallet = (TEMPLATES / "wallet_js.js").read_text()
+    assert 'const NO_CLTV = new Set(["wjk"]);' in wallet
+    body = wallet[wallet.index("async function redeemsOf(trade) {"):]
+    assert body.index("NO_CLTV.has(leg.network)") < body.index("coins.htlcRedeem("), "refused before a lock is made"

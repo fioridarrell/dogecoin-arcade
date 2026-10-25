@@ -2909,6 +2909,9 @@ export const TRADE = {
 //: Each chain's coin as a leg says it (config.py `coin`).
 const COIN_WORD = {doge: "DOGE", main: "PEP", ltc: "LTC", ltctest: "LTC TEST", bel: "BEL", lky: "LKY", kot: "KOT", wjk: "WJK"};
 const REAL_COINS = new Set(["main", "doge", "ltc", "bel", "lky", "kot", "wjk"]);
+//: Chains whose consensus never enforces CHECKLOCKTIMEVERIFY (config.Params.cltv_enforced): a swap lock there refunds
+//: at any moment, so the side that locked could take it back after the other side claimed. No lock is made on them.
+const NO_CLTV = new Set(["wjk"]);
 const tierOf = (leg) => REAL_COINS.has(leg.network) ? "mainnet" : "testnet";
 
 /** 0, or 1 when a mainnet coin leg is at or above its line (trade.confirmations_for). */
@@ -3378,6 +3381,10 @@ async function swapBig() {
 }
 
 async function redeemsOf(trade) {
+  for (const leg of [trade.give, trade.get]) {
+    if (leg && NO_CLTV.has(leg.network))
+      throw new Error(`${COIN_WORD[leg.network] || leg.network} does not enforce lock times, so it can't be swapped across chains. Nothing was locked.`);
+  }
   const h = unhex(trade.secretHash);
   const myTime = trade.role === "initiator" ? trade.t1 : trade.t2;
   const theirTime = trade.role === "initiator" ? trade.t2 : trade.t1;

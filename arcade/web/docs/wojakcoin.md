@@ -8,7 +8,11 @@ its node has synced.
 **Status:**
 - **In the wallet,** on the same key as PEP, DOGE and LTC.
 - **Wojakinals are indexed and shown.**
-- **Swaps between chains and Wojakinal sends from the arcade are not open yet.**
+- **Swaps between chains, escrows and Wojakinal sends from the arcade are closed.** Wojakcoin never enforces lock
+  times: its chainparams set BIP65 (CHECKLOCKTIMEVERIFY), BIP66 and CSV to never activate. Every swap lock and escrow
+  this arcade makes refunds through CHECKLOCKTIMEVERIFY, so on Wojakcoin whoever locked could take the coins back at
+  any moment, even after the other side paid. The arcade refuses such a lock, in your browser and on every node. Ordinary
+  sends are fine.
 
 ## Running the node
 
