@@ -182,15 +182,18 @@ def test_no_swap_or_escrow_lock_is_made_on_a_chain_that_does_not_enforce_cltv():
         htlc.address_of(redeem, WJK)
     with pytest.raises(ValueError, match="does not enforce lock times"):
         escrow.address_of(redeem, WJK)
-    assert htlc.address_of(redeem, MAINNET).startswith("P")
+    assert htlc.address_of(redeem, MAINNET), "a chain that enforces CLTV still gets its lock address"
     import time
     order = {"id": "wjk-order-1", "trade_key": "02" + "11" * 32, "msg_key": "22" * 32, "node": "33" * 32,
              "expires": int(time.time()) + 3600,
-             "give": {"network": "wjk", "amount": 100_000_000}, "get": {"network": "main", "amount": 100_000_000}}
+             "give": {"network": "wjk", "kind": "coin", "asset": "", "amount": 100_000_000},
+             "get": {"network": "main", "kind": "coin", "asset": "", "amount": 100_000_000}}
     with pytest.raises(trade_orders.OrderError, match="does not enforce lock times"):
         trade_orders.check_order(order)
     with pytest.raises(trade_orders.OrderError, match="does not enforce lock times"):
         trade_orders.check_order({**order, "give": order["get"], "get": order["give"]})
+    ordinary = {**order, "id": "pep-doge-1", "give": {**order["get"]}, "get": {**order["get"], "network": "doge"}}
+    assert trade_orders.check_order(ordinary)["get"]["network"] == "doge", "chains that enforce CLTV still swap"
     wallet = (TEMPLATES / "wallet_js.js").read_text()
     assert 'const NO_CLTV = new Set(["wjk"]);' in wallet
     body = wallet[wallet.index("async function redeemsOf(trade) {"):]
