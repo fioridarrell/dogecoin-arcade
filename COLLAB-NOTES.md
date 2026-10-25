@@ -88,6 +88,11 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-25 PWA: notifications bell, no text selection, reshuffle on phones (Claude)
+home.html: Notifications is a bell top right (red outline at 0, solid red with the count), out of the grid; nothing is
+selectable but inputs; a held icon's rest is "within 14 px" (a phone finger twitches, which restarted the 350 ms wait
+for ever), and touchmove is held while the menu is up so moving on drags instead of scrolling.
+
 ### 2026-10-25 PWA: a menu on a held icon; no robot over an open app (Claude)
 home.html: holding an icon (450 ms) opens a menu -- Edit Home Screen, Open (Go back to it when running), Close (when
 running), Remove from Home Screen (apps); moving the held finger on drags as before. `#arc-bot` is hidden while a window

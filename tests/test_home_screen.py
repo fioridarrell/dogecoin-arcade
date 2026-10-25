@@ -188,3 +188,17 @@ def test_holding_an_icon_opens_its_menu_and_no_robot_over_an_open_app():
     assert "body.hs-win-open #arc-bot" in home and "document.body.classList.toggle('hs-win-open', !!front)" in home
     base = (TEMPLATES / "base.html").read_text()
     assert "html.inshell #arc-bot,html.inshell #arc-bot-box{display:none !important}" in base
+
+
+def test_notifications_are_a_bell_in_the_corner_and_nothing_is_selected():
+    """2026-10-25: "Make notifications a little bell and upper right hand corner ... a red outline of a bell with
+    the background color showing when there are no notifications when there are notifications, the bell should be fully
+    red with the number of notifications shown in the middle of it"; "disable text select"; "The reshuffling of the apps
+    quit working"."""
+    home = (TEMPLATES / "home.html").read_text()
+    assert 'id="hs-bell"' in home and ".hs-bell #hs-bell-shape { fill: none; stroke: #e5484d; }" in home
+    assert ".hs-bell.on #hs-bell-shape { fill: #e5484d; }" in home and "b.classList.toggle('on', n > 0);" in home
+    assert "if (bellTab) dockKeys.push(bellTab.key);" in home, "the Notifications icon leaves the grid"
+    assert "body.fullscreen, body.fullscreen * { -webkit-user-select: none; user-select: none;" in home
+    assert "Math.abs(e.clientX - rest.x) + Math.abs(e.clientY - rest.y) < 14" in home, "a twitch is still resting"
+    assert "if (drag || (press && press.menu)) e.preventDefault();" in home

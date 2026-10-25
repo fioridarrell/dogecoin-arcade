@@ -25,6 +25,9 @@
       <div class="hs-name">{% if account_name %}@{{ account_name }}{% elif operator_view %}This arcade{% else %}Welcome{% endif %}</div>
     </div>
     <button type="button" class="hs-done" id="hs-done" hidden>Done</button>
+    <button type="button" class="hs-bell" id="hs-bell" hidden aria-label="Notifications">
+      <svg width="40" height="40" viewBox="0 0 40 40" aria-hidden="true"><path id="hs-bell-shape" d="M20 5a2.5 2.5 0 0 1 2.5 2.5v1.1C27.3 9.8 30.5 14 30.5 19v6.5l3 4.5h-27l3-4.5V19c0-5 3.2-9.2 8-10.4V7.5A2.5 2.5 0 0 1 20 5zM16.5 32h7a3.5 3.5 0 0 1-7 0z" stroke-width="2" stroke-linejoin="round"/><text id="hs-bell-n" x="20" y="24.5" text-anchor="middle" font-size="11" font-weight="800" fill="#fff"></text></svg>
+    </button>
   </div>
   <p class="hs-hint" id="hs-hint" hidden></p>
   <div class="hs-pager" id="hs-pager"></div>
@@ -82,6 +85,10 @@
 
 <style>
 html, body.fullscreen { margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none; }
+/* Nothing on the home screen is text to select (2026-10-25: "sometimes it tries to select the whole screen"),
+   except what is typed. */
+body.fullscreen, body.fullscreen * { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+body.fullscreen input, body.fullscreen textarea { -webkit-user-select: text; user-select: text; }
 body.fullscreen main { max-width: none !important; padding: 0 !important; margin: 0 !important; }
 header, footer.version, .notice, #appbar, #newposts { display: none !important; }
 .hs h1, .hs h2, .hs-store h1, .hs-store h2, .hs-sheet h2 { font-family: inherit; text-transform: none; letter-spacing: normal; }
@@ -92,6 +99,12 @@ header, footer.version, .notice, #appbar, #newposts { display: none !important; 
 .hs-who { flex: 1; min-width: 0; }
 .hs-brand { font-weight: 800; letter-spacing: .08em; font-size: .72rem; color: var(--accent); text-transform: uppercase; }
 .hs-name { font-size: 1.35rem; font-weight: 750; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Notifications, a bell in the corner (2026-10-25: a red outline when there are none; fully red with the number
+   in the middle when there are). */
+.hs-bell { width: 48px; height: 48px; padding: 0; border: 0; background: none; box-shadow: none; display: flex;
+  align-items: center; justify-content: center; }
+.hs-bell #hs-bell-shape { fill: none; stroke: #e5484d; }
+.hs-bell.on #hs-bell-shape { fill: #e5484d; }
 .hs-done { border-radius: 999px; padding: 8px 18px; min-height: 40px; }
 .hs-hint { margin: 2px 16px 6px; min-height: 1.1em; font-size: .8rem; color: var(--muted); }
 .hs-pager { flex: 1; min-height: 0; display: flex; overflow-x: auto; overflow-y: hidden; scroll-snap-type: x mandatory;
@@ -273,6 +286,9 @@ body.hs-win-open #arc-bot, body.hs-win-open #arc-bot-box { display: none !import
     if (t && !(h === '/' && !OPERATOR && TABS.some(function (x) { return x.href === '/me'; }))) dockTabs.push(t);
   });
   var dockKeys = dockTabs.map(function (t) { return t.key; });
+  // Notifications is the bell in the corner, not an icon (2026-10-25).
+  var bellTab = TABS.filter(function (t) { return t.href === '/me/notifications' || t.href === '/notifications'; })[0];
+  if (bellTab) dockKeys.push(bellTab.key);
   var byKey = {};
   TABS.forEach(function (t) { byKey[t.key] = {key: t.key, kind: 'tab', name: t.name, href: t.href, badge: t.badge, glyph: glyphOf(t.href)}; });
   byKey.store = {key: 'store', kind: 'store', name: 'App Store', img: STORE_ICON};
@@ -447,6 +463,7 @@ body.hs-win-open #arc-bot, body.hs-win-open #arc-bot-box { display: none !import
     dockTabs.forEach(function (t) { dock.appendChild(tileFor(t.key, true)); });
     dock.hidden = !dockTabs.length;
     $('hs-done').hidden = !editing;
+    paintBell();
     home.classList.toggle('editing', editing);
     // Only while arranging (2026-10-24: "Remove the touch and hold icons to move text ... that should be pretty
     // intuitive").
@@ -514,7 +531,8 @@ body.hs-win-open #arc-bot, body.hs-win-open #arc-bot-box { display: none !import
     if (navigator.vibrate) { try { navigator.vibrate(12); } catch (err) {} }
   }
   // While dragging, the page must not scroll under the finger (touch-action was decided when the touch began).
-  document.addEventListener('touchmove', function (e) { if (drag) e.preventDefault(); }, {passive: false});
+  // Nor while an icon is held with its menu up: moving on from there drags it, and a scroll would cancel that.
+  document.addEventListener('touchmove', function (e) { if (drag || (press && press.menu)) e.preventDefault(); }, {passive: false});
   document.addEventListener('pointermove', function (e) {
     if (!press) return;
     var dx = e.clientX - press.x0, dy = e.clientY - press.y0;
@@ -536,7 +554,7 @@ body.hs-win-open #arc-bot, body.hs-win-open #arc-bot-box { display: none !import
     var cx = PAD + col * CW + CW / 2, cy = TOP + row * RH + 37;
     var onTop = target && idOf(target) !== drag.id && Math.abs(x - cx) < 22 && Math.abs(y - cy) < 22 && !isFolder(at && !at.inFolder ? at.item : null);
     if (onTop) {
-      clearTimeout(drag.rt);
+      clearTimeout(drag.rt); drag.rest = null;
       if (drag.over !== idOf(target)) {
         clearOver(); drag.over = idOf(target);
         drag.ot = setTimeout(function () {
@@ -550,8 +568,13 @@ body.hs-win-open #arc-bot, body.hs-win-open #arc-bot-box { display: none !import
     if (!at) return;
     // Between icons, the others make room only once the finger rests there a moment, as a phone does, so passing
     // over an icon on the way to another's middle does not shuffle it away.
+    // A finger is never quite still (2026-10-25: on a phone every twitch started the wait again, and nothing moved):
+    // resting is staying within a small circle over the same place.
+    var rest = drag.rest;
+    if (rest && rest.cell === cell && rest.page === pageNow && Math.abs(e.clientX - rest.x) + Math.abs(e.clientY - rest.y) < 14) return;
+    drag.rest = {cell: cell, page: pageNow, x: e.clientX, y: e.clientY};
     clearTimeout(drag.rt);
-    drag.rt = setTimeout(function () { shuffle(cell); }, 350);
+    drag.rt = setTimeout(function () { shuffle(cell); }, 300);
   });
   function shuffle(cell) {
     if (!drag) return;
@@ -624,6 +647,19 @@ body.hs-win-open #arc-bot, body.hs-win-open #arc-bot-box { display: none !import
     if (b.dataset.folder) { openFolder(b.dataset.key); return; }
     openKey(b.dataset.key);
   });
+
+  // ---------- the bell ----------
+  function paintBell() {
+    var b = $('hs-bell');
+    if (!bellTab) { b.hidden = true; return; }
+    var n = byKey[bellTab.key].badge || 0;
+    b.hidden = editing;
+    b.classList.toggle('on', n > 0);
+    $('hs-bell-n').textContent = n > 0 ? (n > 99 ? '99+' : String(n)) : '';
+    $('hs-bell-n').setAttribute('font-size', n > 99 ? '8' : n > 9 ? '10' : '12');
+    b.setAttribute('aria-label', n > 0 ? 'Notifications, ' + n + ' new' : 'Notifications');
+  }
+  $('hs-bell').addEventListener('click', function () { if (bellTab) openKey(bellTab.key); });
 
   // ---------- hold an icon: its menu ----------
   var ICON = {
@@ -1031,7 +1067,7 @@ body.hs-win-open #arc-bot, body.hs-win-open #arc-bot-box { display: none !import
         });
         // Notifications already counts new messages for an account: count them once.
         if (typeof by['/me/messages'] === 'number' && TABS.some(function (t) { return t.href === '/me/notifications'; })) total -= by['/me/messages'];
-        if (!drag && !editing) draw();
+        if (!drag && !editing) draw(); else paintBell();
         try {
           if (total > 0 && navigator.setAppBadge) navigator.setAppBadge(total);
           else if (navigator.clearAppBadge) navigator.clearAppBadge();
