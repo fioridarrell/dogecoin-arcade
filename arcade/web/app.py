@@ -25828,9 +25828,12 @@ def create_app(state: AppState) -> FastAPI:
     def _walk_readers(chain) -> list[str]:
         """Who reads a walk on `chain`: this arcade (when it can) and the arcades that read their node's files for
         others; arcades reading over RPC only when fewer than two read files. Arcades caught wrong rest an hour."""
-        files, rpc_only = [], []
+        files, rpc_only, borrowed = [], [], []
         if _readable(chain):
-            (files if _walk_reader.can(chain)["files"] else rpc_only).append("self")
+            if chain.borrowed:                              # every block over the mesh: only when nobody else can
+                borrowed.append("self")
+            else:
+                (files if _walk_reader.can(chain)["files"] else rpc_only).append("self")
         for host in _arcade_hosts():
             if time.time() - _walk_resting.get(host, 0.0) < WALK_REST:
                 continue
@@ -25848,6 +25851,8 @@ def create_app(state: AppState) -> FastAPI:
         readers = files[:most]
         if len(readers) < 2:
             readers += rpc_only[:2 - len(readers)]
+        if not readers:
+            readers = borrowed
         return readers
 
     def _walk_canaries(chain, top: int, bottom: int, skip: set) -> list[list]:

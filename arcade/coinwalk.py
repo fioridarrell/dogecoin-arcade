@@ -23,6 +23,9 @@ ADDRESSES_MAX = 20_000
 KEEP_SECONDS = 3600.0
 #: Jobs waiting at once (others are refused: the asker deals them elsewhere).
 QUEUE_MAX = 8
+#: Over RPC a walk rests this share of each block's read time, so the node keeps answering its other work (2026-10-04
+#: and 10-18: Dogecoin's RPC work queue filled under a flood of reads). Block files need no rest.
+RPC_REST = 1.0
 
 
 def files_ok(params) -> bool:
@@ -101,6 +104,7 @@ class Reader:
         plain = files_ok(chain.params)
         with chain.rpc() as rpc:
             for h in range(int(top), int(bottom) - 1, -1):
+                took = time.perf_counter()
                 block_hash = rpc.get_block_hash(h)
                 if plain:
                     raw = bytes.fromhex(rpc.call("getblock", block_hash, False))
@@ -115,6 +119,8 @@ class Reader:
                             if k in want and sats > 0:
                                 out.append([tx["txid"], int(o.get("n", 0)), sats, h, want[k]])
                 progress["height"] = h
+                if RPC_REST:
+                    time.sleep(min(0.5, (time.perf_counter() - took) * RPC_REST))
         return out
 
 
