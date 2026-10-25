@@ -36,7 +36,8 @@ def test_the_door_is_read_only_asks_once_and_gives_a_guest_nothing():
 def test_add_and_remove_write_the_address_books_own_way_and_only_after_a_yes():
     """The browser test (test_contacts_add_browser.py) drives it; this pins the shape where no browser runs."""
     door = (pathlib.Path(__file__).resolve().parent.parent / "arcade/web/templates/_page_doors.js.html").read_text()
-    body = door[door.index("function contactsChange"):door.index("window.addEventListener('message'")]
+    start = door.index("function contactsChange")
+    body = door[start:door.index("\n    function ", start + 1)]  # contactsChange alone, not the doors after it
     for write in ("mail.addToBook(", "mail.removeFromBook(", "mail.updateBookEntry("):
         assert write in body, f"{write} is the Address book's own write"
     assert body.count("arcadeAsk(") == 2, "one card for add, one for remove"

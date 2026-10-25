@@ -88,6 +88,12 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-24 Contacts test reads only contactsChange (Claude)
+The node-hop door (`accessDoor`, from `team/in-game-wallet-access`) sits between `contactsChange` and the message
+listener in `_page_doors.js.html`, so `test_contacts_bridge` counted its "Play ... on ...?" card as a third contacts
+card. The test now slices `contactsChange` up to the next function. Full suite on this merge: 3,687 passed; the 4
+`test_account_take` reds were load flakes (green on rerun, green on master).
+
 ### 2026-10-24 LoRa (Meshtastic) gateway in every arcade; Admin -> Meshtastic with a T-Deck web flasher; LoRa badge (Claude)
 The operator (via the LoRa/T-Deck session): "Add a Meshtastic admin panel and a Web flasher for our new firmware to the admin
 panel. And the admin overview table add a Lora badge for nodes with a Lora gateway" ... "Incorporated as a option for all
