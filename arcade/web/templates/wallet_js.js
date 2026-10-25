@@ -380,7 +380,6 @@ async function _signIn(tag, password, {network, version}) {
     Promise.all([bringImports(""), openImportsWith(wallet, password)])
       .then(([brought]) => brought && brought.outcome === "taken" ? openImportsWith(wallet, password) : null),
   ]);
-  keepCoins(wallet.pubkey).catch(() => {});        // the browser's copy of the coin list, both ways (not waited for)
   // Any chain whose coins were never read back here (a read-back cut short by a restart): finished now. A chain
   // already done costs the node nothing (2026-10-19).
   fetch("/account/coins/backfill", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"})
@@ -2590,6 +2589,19 @@ export async function keepCoins(account) {
     try { localStorage.setItem(slot, JSON.stringify(kept)); } catch (e) { /* full or blocked: the node keeps it */ }
     return kept;
   } catch (e) { return mine; }
+}
+
+/** `keepCoins`, at most once every ten minutes in this tab (the page you land on after signing in, the Wallet page,
+ *  the installed app's home screen): a sign-in moves to the next page at once, which would cut a copy short. */
+export async function keepCoinsSoon(account) {
+  try {
+    if (!account) account = ((await (await fetch("/auth/who", {cache: "no-store"})).json()) || {}).pubkey;
+  } catch (e) { return null; }
+  if (!account) return null;
+  const key = "arcade_coins_at:" + String(account).toLowerCase();
+  try { if (Date.now() - Number(sessionStorage.getItem(key) || 0) < 600000) return keptCoins(account); } catch (e) {}
+  try { sessionStorage.setItem(key, String(Date.now())); } catch (e) {}
+  return keepCoins(account);
 }
 
 function keepImports(account, opened) {

@@ -2515,6 +2515,7 @@ setInterval(() => {
 {% if not node_side %}
 <script type="module">
 import * as wallet from "/wallet.js";
+wallet.keepCoinsSoon().catch(() => {});             // this browser's copy of the coin list, both ways (2026-10-25)
 async function drawEscrows() {
   const box = document.getElementById("escrow-panel");
   let said = null;

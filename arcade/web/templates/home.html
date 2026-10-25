@@ -1224,6 +1224,7 @@ body.fullscreen #arc-bot { display: none !important; }
     if (typeof ARCADE_SIGNED === 'undefined' || !ARCADE_SIGNED || !ARCADE_ME) return;
     import('/wallet.js').then(function (w) { return w.opened(ARCADE_CHAIN); }).then(function (keys) {
       if (!keys) arcadeUnlockSheet('');
+      return import('/wallet.js').then(function (w) { return w.keepCoinsSoon(keys && keys.pubkey); });   // the coin list, both ways
     }).catch(function () {});
   }
 
