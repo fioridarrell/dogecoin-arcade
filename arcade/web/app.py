@@ -7556,18 +7556,14 @@ def create_app(state: AppState) -> FastAPI:
     #: balance"). A ticket names one address on one chain for one page, for an
     #: hour, and says nothing a chain explorer could not -- except that this
     #: viewer is that address, which is what the page is being told on purpose.
-    _viewer_tickets: dict[str, tuple[str, str, str, float]] = {}
-    VIEWER_TICKET_SECONDS = 3600
+    #: Kept on disk since 2026-10-26 (viewer_tickets.py): a deploy restarted the worker and every open page lost its
+    #: ticket (a game's /r/send answered {"wallet": "off"} until the player reloaded). Twelve hours, renewed while used.
+    from .viewer_tickets import Tickets as _Tickets
+    _home = getattr(state, "home", None)
+    _viewer_tickets = _Tickets(Path(_home) / "viewer-tickets.sqlite" if _home else None)
 
     def _viewer_ticket(address: str, network: str, txid: str) -> str:
-        now = time.time()
-        for key in [k for k, v in _viewer_tickets.items() if v[3] < now]:
-            _viewer_tickets.pop(key, None)
-        if len(_viewer_tickets) > 20000:
-            _viewer_tickets.clear()
-        ticket = secrets.token_urlsafe(18)
-        _viewer_tickets[ticket] = (address, network, txid, now + VIEWER_TICKET_SECONDS)
-        return ticket
+        return _viewer_tickets.mint(address, network, txid)
 
     def _viewer_of(request: Request, chain) -> str:
         """The address of the account looking at the page asking, or "".
@@ -7587,7 +7583,7 @@ def create_app(state: AppState) -> FastAPI:
             if said.path.startswith("/content/"):
                 page = said.path[len("/content/"):].split("/")[0].split("i")[0]
         held = _viewer_tickets.get(ticket or "")
-        if not held or held[3] < time.time() or held[1] != chain.network:
+        if not held or held[1] != chain.network:
             return ""
         if page and page != held[2]:
             return ""                      # one page's ticket, not every page's

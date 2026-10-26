@@ -88,6 +88,16 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-26 Viewer tickets survive restarts, and last while used (Claude)
+Asked by the ASHVALE/a tester session: at 16:13 the operator's clubhouse table got 403 {"wallet":"off","error":"this wallet
+does not tell inscriptions who is looking"} from /r/send -- the worker restarted at 16:12:28 (the 901d714c deploy) and
+`_viewer_tickets` lived only in memory, so every open inscribed page lost its ticket until reloaded; the 1-hour life cut
+long sessions off the same way.
+- `arcade/web/viewer_tickets.py`: tickets stay opaque random strings (no address in URLs), now kept in
+  `<home>/viewer-tickets.sqlite` (WAL; both workers of a reload share it) with memory in front. Life 12 h, sliding:
+  renewed for a whole life once half is gone while the page keeps asking.
+- Games can still say "reload the page" on that 403; after this it should only follow a 12-hour idle page.
+- Tests: test_viewer_tickets (new).
 ### 2026-10-26 LoRa congestion: airtime pacing, one replay per 10 s, two requests in flight (Claude)
 The operator on the T-Deck over LoRa: "No answer from the gateway" for me-seeks.mesh. .25's log: a sign-in fired a dozen
 requests, the gateway answered each and REPLAYED each answer whenever the T-Deck asked again (every 12 s), at 0.4 s
