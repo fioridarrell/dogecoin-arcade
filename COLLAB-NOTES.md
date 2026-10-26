@@ -104,6 +104,8 @@ lost them at every start. The operator chose "Remember + parallel asks".
   whole-index install starts the file again (`_forget_values`).
 - `_fetch_many`: batches of at most 50, as many at once on each source as the lanes it lends (own Core 4).
 - Ords status has `values` {from, bytes, behind_chunks, brought_in, lanes}; the panel shows the backfill.
+- Follow-up (same day, live on Strawberry): while values lanes run, the walk waits and the lanes get the whole pass
+  (`_walk`). Beside a walk still waiting on lenders, they brought in 3 chunks in 5 minutes.
 - Ords modes renamed (the operator): Keep the full index / Help scan / Watch only / Off. Help stays: its scans are the
   audit's second words. Setting values unchanged (walk/help/read/off).
 - Tests: `test_every_coin_the_walk_saw_is_kept_on_disk_and_never_asked_of_a_core_again`,

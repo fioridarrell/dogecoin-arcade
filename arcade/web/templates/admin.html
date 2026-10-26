@@ -2519,7 +2519,9 @@ section.panel h2{margin-top:0}
     var vals = r.values;
     if (r.mode === 'walk' && vals && vals.behind_chunks > vals.brought_in)
       box.appendChild(ordEl('div', 'muted', 'Coin values: bringing in the chunks walked before they were kept, '
-        + num(vals.brought_in) + ' of ' + num(vals.behind_chunks) + ' (' + (vals.lanes || []).length + ' lanes).'));
+        + num(vals.brought_in) + ' of ' + num(vals.behind_chunks) + ' (' + (vals.lanes || []).length + ' lanes)'
+        + ((vals.lanes || []).length ? '. The walk waits until they are in: without them it asks a lender for nearly every '
+        + 'coin.' : '.')));
     // how complete
     var three = 0;
     Object.keys(r.levels || {}).forEach(function (k) { if (Number(k) >= 3) three += r.levels[k].chunks; });

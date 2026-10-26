@@ -1716,10 +1716,15 @@ class DoginalIndex:
         if self.walker.disk is None:
             self.walker.disk = ord_values.Values(Path(str(self.store.path) + ".values"))
         if self._lane_sources(walking=True):
-            self._help(rpc, budget / 2, walking=True)
+            self._help(rpc, budget if self._values_lanes() else budget / 2, walking=True)
         else:
             self._let_go()
         self._fetch_ahead()
+        if self._values_lanes():
+            # Bringing in the coin values (ord_values): the walk waits. Without them each of its blocks waits on a
+            # lender for nearly every coin -- tens of seconds a block, on the same thread the lanes need (2026-10-25,
+            # Strawberry: 3 chunks brought in in 5 minutes beside a walk of 70 blocks).
+            return
         self.walker.step(rpc, self.tip, budget, notes=self._notes_for)
 
     @property
