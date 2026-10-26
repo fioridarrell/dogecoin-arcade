@@ -57,6 +57,8 @@ ORDER = (
      "Step by step: run a HashLips build or a folder of pictures, inscribe a set as ords, or index ords already inscribed."),
     ("lora.md", "LoRa: reaching an arcade by radio",
      "Run a Meshtastic gateway on your arcade, and flash T-Decks with the arcade firmware."),
+    ("mesh-web.md", "The .mesh web: pages for the T-Deck",
+     "Claim a .mesh name, publish a page in MeshText, and read pages on a T-Deck over WiFi or LoRa."),
     ("prize-pools.md", "Prize pools",
      "How a game or any page pays out tokens to whoever wins, and how to make one."),
     ("referee.md", "The referee: prizes for a verified win",

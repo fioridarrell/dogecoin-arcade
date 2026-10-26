@@ -33256,6 +33256,9 @@ def create_app(state: AppState) -> FastAPI:
     # T-Decks over WiFi (tdecklink.py, 2026-10-26): the LoRa frames over HTTPS, to a gateway with no radio.
     from . import tdecklink
     tdecklink.register(app, state)
+    # The .mesh web (meshweb.py, 2026-10-26): pages a .mesh name's holder inscribes, for the T-Deck's browser.
+    from . import meshweb
+    meshweb.register(app, state)
     # The LLM service (llmweb.py, 2026-10-23): Admin -> LLM, the Exchange's LLM tab, and /v1 for API keys.
     from . import llmweb
     llmweb.register(app, state, signed_in=signed_in, account_address=_account_address, account_chain=_account_chain,

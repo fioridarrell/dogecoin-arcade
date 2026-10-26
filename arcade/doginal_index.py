@@ -34,7 +34,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Callable
 
-from . import ord_rules, ord_values, rawchain
+from . import mesh_web, ord_rules, ord_values, rawchain
 
 log = logging.getLogger("arcade.doginal_index")
 
@@ -372,7 +372,10 @@ INDEXES = """
             CREATE INDEX IF NOT EXISTS names_json ON names (json, number);
             CREATE INDEX IF NOT EXISTS names_doge2023 ON names (doge2023, number);
             CREATE INDEX IF NOT EXISTS bal_rich ON bal (tick, length(overall), overall);
+            CREATE INDEX IF NOT EXISTS insc_mesh ON insc (proto) WHERE proto = 'mesh';
 """
+#: insc_mesh (2026-10-26, the .mesh web, arcade/mesh_web.py): the "p":"mesh" pages, newest first, without reading
+#: the millions of other inscriptions; a partial index holds only those rows.
 #: bal_rich (2026-10-21, Admin -> Ords -> Tokens: "a list rich list of the token holders paginated to 20 holders"): a
 #: token's holders biggest first, read straight off the index, a page at a time. A balance is a whole number of units
 #: as text with no leading zeros, so its length and then its text sort it as a number (RICH_ORDER). Made in place, as
@@ -453,7 +456,7 @@ def _pct(part: Any, whole: Any) -> float | None:
 
 
 #: Questions the explorer asks (2026-10-21) that a walking arcade from before does not know.
-NEWER_QUESTIONS = ("number", "ticks", "holders", "note", "ticklist")
+NEWER_QUESTIONS = ("number", "ticks", "holders", "note", "ticklist", "mesh", "mesh_directory")
 
 
 def _first_page_of(token: dict | None) -> dict | None:
@@ -2428,13 +2431,14 @@ class DoginalIndex:
         kept = getattr(self, "_counts_kept", None)
         if kept and time.monotonic() - kept[0] < self.COUNTS_SECONDS:
             return kept[1]
-        if not (self.mode() == "walk" and not self.store.old_layout):
-            return self._count(walking=False)
+        # Every mode off the asking thread (2026-10-26: on .25's busy disk an index it does not walk summed its block
+        # table in 62 s (Dogecoin) and 235 s (Pepecoin), and every Admin -> Ords request queued behind it).
+        walking = self.mode() == "walk" and not self.store.old_layout
         lock = self.__dict__.setdefault("_counts_lock", threading.Lock())
         if lock.acquire(blocking=False):
             def count() -> None:
                 try:
-                    self._count(walking=True)
+                    self._count(walking=walking)
                 except Exception as exc:                       # noqa: BLE001 -- tried again next time
                     log.warning("doginal index counts: %s", exc)
                 finally:
@@ -2595,6 +2599,10 @@ class DoginalIndex:
             return {"note": self.note(str(question.get("id") or ""))}
         if what == "ticklist":
             return {"ticklist": self.ticklist()}
+        if what == "mesh":                               # the .mesh web (arcade/mesh_web.py, 2026-10-26)
+            return {"mesh": self.mesh(str(question.get("name") or ""))}
+        if what == "mesh_directory":
+            return {"mesh_directory": self.mesh_directory()}
         if what == "moves":                              # a snapshot being checked: this walk's moves, chunk by chunk
             from .ord_snapshot import MOVES_SAMPLE, moves_digest
             chunks = [int(c) for c in (question.get("chunks") or [])[:MOVES_SAMPLE]]
@@ -2880,6 +2888,96 @@ class DoginalIndex:
                   if len({got.get(r) for r in rules if got.get(r) is not None}) > 1]
         return {"names": len(firsts), "per_reading": {r: sum(1 for g in firsts.values() if r in g) for r in rules},
                 "different_first_claim": len(differ), "examples": differ[:limit]}
+
+    # --- the .mesh web (arcade/mesh_web.py) --------------------------------------------------------------------
+
+    #: Reads an inscription's body: (content type, bytes). None: this chain's guard (funding.GUARD_BY_NET), the same
+    #: reader /content uses, which keeps every body on disk for good.
+    mesh_reader = None
+
+    def _mesh_body(self, iid: str) -> bytes:
+        cache = self.__dict__.setdefault("_mesh_bodies", {})
+        if iid in cache:
+            return cache[iid]
+        reader = self.mesh_reader
+        if reader is None:
+            from . import funding
+            guard = (getattr(funding, "GUARD_BY_NET", None) or {}).get(self.net)
+            reader = guard.content if guard is not None else None
+        if reader is None:
+            raise ValueError("this arcade reads no inscriptions of this chain")
+        body = bytes(reader(iid)[1])
+        if len(cache) > 1000:
+            cache.clear()
+        cache[iid] = body
+        return body
+
+    def _mesh_pages(self) -> list:
+        """The "p":"mesh" inscriptions, newest first (insc_mesh)."""
+        return self.store.q("SELECT tx, n, number, height FROM insc WHERE proto = 'mesh' ORDER BY rid DESC LIMIT ?",
+                            (mesh_web.SCAN,))
+
+    def _mesh_holder(self, name: str) -> tuple[str | None, str | None]:
+        """(the name's first claim, the address holding that claim now) under the spec reading."""
+        win = (self.name(name)["readings"].get("spec") or {}).get("winner")
+        if not win or not win.get("output"):
+            return (win or {}).get("inscription"), None
+        txid, vout = win["output"].split(":")
+        return win["inscription"], self._owner_at(txid, int(vout))
+
+    def _mesh_page(self, row: tuple, name: str | None, holder: str | None) -> dict | None:
+        """One page row, when it is a page of `name` (any name: None) inscribed to `holder`."""
+        tx, n, number, height = row
+        iid = iid_of(tx, n)
+        try:
+            body = self._mesh_body(iid)
+        except Exception:                                # noqa: BLE001 -- not readable now: the next one
+            return None
+        page = mesh_web.parse(body)
+        if page is None or (name is not None and page["name"] != name):
+            return None
+        if holder is None or self._owner_at(bytes(tx).hex(), 0) != holder:
+            return None
+        return {"id": iid, "number": number, "height": height, "name": page["name"], "pages": page["pages"],
+                "size": len(body), "sha256": mesh_web.digest(body)}
+
+    def mesh(self, name: str) -> dict:
+        """A .mesh name's site: who holds the name, and the newest page inscribed to that holder (the operator chose "Latest
+        by the holder"). {"page": None} when the holder has inscribed none, {"holder": None} when nobody holds it."""
+        made = mesh_web.name_of(name)
+        out: dict = {"name": made, "claim": None, "holder": None, "page": None}
+        if not made or self.store.old_layout:
+            return out
+        out["claim"], out["holder"] = self._mesh_holder(made)
+        if out["holder"]:
+            for row in self._mesh_pages():
+                page = self._mesh_page(row, made, out["holder"])
+                if page:
+                    out["page"] = page
+                    break
+        return out
+
+    def mesh_directory(self) -> list[dict]:
+        """Every .mesh name with a page that counts, newest page first: the web's front door, as in 1994."""
+        if self.store.old_layout:
+            return []
+        holders: dict[str, str | None] = {}
+        out, done = [], set()
+        for row in self._mesh_pages():
+            try:
+                page = mesh_web.parse(self._mesh_body(iid_of(row[0], row[1])))
+            except Exception:                            # noqa: BLE001
+                continue
+            if page is None or page["name"] in done:
+                continue
+            if page["name"] not in holders:
+                holders[page["name"]] = self._mesh_holder(page["name"])[1]
+            found = self._mesh_page(row, page["name"], holders[page["name"]])
+            if found:
+                done.add(page["name"])
+                out.append({"name": found["name"], "page": found["id"], "number": found["number"],
+                            "height": found["height"], "title": mesh_web.title_of(found["pages"].get("/", ""))})
+        return out
 
     def note(self, iid: str) -> dict | None:
         """A DRC-20 / PRC-20 transfer note not moved yet (2026-10-22, a swap's lock holds one: token20_swap): its tick,

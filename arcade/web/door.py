@@ -209,6 +209,8 @@ PUBLIC_TREES = (
 #: Nothing is disclosed on the page itself: `inscription_view` reads this
 #: node's wallet only when it is the operator's own copy of the page.
 PUBLIC_SHAPES = (
+    # The .mesh web drawn in a browser (meshweb.py, 2026-10-26): public pages, read-only.
+    re.compile(r"^/meshweb(?:/[A-Za-z0-9._/-]{1,200})?$"),
     re.compile(r"^/account/ring/[0-9a-f]{16}$"),       # the ring a tapped notification opened (signed in)
     # Every chain's coin icon (2026-10-18: Litecoin's two joined PEP's and DOGE's); the route serves only files there.
     re.compile(r"^/coin-[a-z0-9-]{2,24}\.png$"),

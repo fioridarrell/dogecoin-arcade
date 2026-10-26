@@ -88,6 +88,23 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-26 The .mesh web, part 1: pages, the resolver, the directory, a preview (Claude)
+The operator: ".mesh DNS protocol. For the Meshtastic ... an app for the T deck. That is a simple web browser. Whichever wallet
+holds the name should be able to inscribe a companion ... like original web like in 1990"; chose "Latest by the holder"
+and ".25 walks it too".
+- `arcade/mesh_web.py`: a page is `{"p":"mesh","name":"x.mesh","pages":{"/":MeshText,...}}` on Pepecoin mainnet, at
+  most 3,000 bytes (one 16-part LoRa message). It counts when inscribed to (its reveal's output 0) the address holding
+  the name's spec-reading first claim now; newest wins. MeshText = Gemini-style lines (`#`, `*`, `>`, `=>`, ```).
+- `DoginalIndex.mesh(name)`, `mesh_directory()`, questions "mesh"/"mesh_directory" (so a linked walker answers via
+  lookup); partial index `insc_mesh` on proto='mesh'; bodies read through funding.GUARD_BY_NET (mesh_reader).
+- `arcade/web/meshweb.py`: `GET /r/mesh` (directory), `GET /r/mesh/<name>[/path]` (`?have=<page id>` -> unchanged),
+  `GET /meshweb[/<name>[/path]]` drawn at 320x240 (door PUBLIC_SHAPES). /mesh is the mesh websocket, hence /meshweb.
+- docs/mesh-web.md (guide list). Also: DoginalIndex._counts off the asking thread in every mode -- on .25 a
+  non-walking index's block sum took 62 s (Doge) / 235 s (PEP) and Admin -> Ords queued behind it.
+- Tests: test_mesh_web (new, 3).
+- Next: .25 walks PEP main; Creator -> Names "Publish a page"; PAGE_REQ/PAGE frames; mesh.get in the T-Deck's
+  AppRuntime; the Mesh Browser app.
+
 ### 2026-10-26 Creator -> Names (p:dns), the Creator tab's load, block maps out of the names (Claude)
 The operator: "Build a p:dns inscriber in the creators tab. See if you can take a look at the creators tab as to why it takes
 so long to load check each of the modules. Also fix the swamped indexer."
