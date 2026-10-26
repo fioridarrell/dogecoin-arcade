@@ -146,6 +146,8 @@ button.danger{background:var(--bad);border-color:var(--bad);color:#fff}
 .pill.ok{color:var(--ok);border-color:var(--ok)}
 .pill.warn{color:var(--warn);border-color:var(--warn)}
 .pill.bad{color:var(--bad);border-color:var(--bad)}
+/* an app with a T-Deck build (its card's `tdeck`; 2026-10-26) */
+.pill.tdeck{color:var(--accent);border-color:var(--accent)}
 .tag{font-size:.58rem;text-transform:uppercase;letter-spacing:.06em;padding:1px 5px;
   border-radius:4px;margin-left:6px;vertical-align:1px;font-weight:600}
 /* One color per coin, everywhere (2026-10-13: "Change the P test color to green"

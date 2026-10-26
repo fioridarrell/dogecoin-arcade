@@ -355,3 +355,9 @@ def test_the_t_deck_app_store_lists_cards_with_a_t_deck_build_by_the_same_creato
                               "Tic-Tac-Toe", "", "Play the T-Deck"])]
     outside = app.get("/r/tdeck/apps", headers={"host": "app.example.com", "cf-ray": "x"})
     assert outside.status_code == 200, "a T-Deck asks from anywhere: the page API's tree is open"
+    # the T-Deck badge beside the genre (2026-10-26: "If an app is designed for the T deck, it should have a T
+    # deck badge"), by the same rule: Borrowed names somebody else's script, so it has none
+    page = app.get("/apps").text
+    assert page.count('class="pill tdeck"') == 1
+    card = page[page.index('id="game-' + "a2" * 32):]
+    assert 'class="pill tdeck"' in card[:card.index('class="gamebody"') + 1500]

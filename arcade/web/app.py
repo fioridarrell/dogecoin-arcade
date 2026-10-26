@@ -10132,6 +10132,7 @@ def create_app(state: AppState) -> FastAPI:
                 "page": page, "open": f"/inscriptions/{page}/full",
                 "cover": f"/content/{g['cover']}" if g.get("cover") else None,
                 "genre": str(g.get("genre") or "")[:24].lower(), "mp": bool(g.get("multiplayer")),
+                "tdeck": _tdeck_build(it),
                 "desc": str(g.get("description") or "")[:400],
                 "by": ("@" + who) if who else it["creator"][:12] + "…", "address": it["creator"],
                 "version": str(g.get("version") or "")[:24], "players": str(g.get("players") or "")[:40],
@@ -25054,6 +25055,19 @@ def create_app(state: AppState) -> FastAPI:
         q = request.url.query
         return RedirectResponse("/apps" + (f"?{q}" if q else ""), status_code=301)
 
+    def _tdeck_build(item: dict) -> bool:
+        """Has this app a T-Deck build, by the T-Deck App Store's rule (its `tdeck` inscribed by the card's own creator)?
+        The cards' T-Deck badge (2026-10-26: "If an app is designed for the T deck, it should have a T deck
+        badge")."""
+        script = item["game"].get("tdeck") or ""
+        if not script:
+            return False
+        try:
+            row = _chain_of(script)[1].inscription(script)
+        except Exception:                                  # noqa: BLE001 -- that chain cannot say just now
+            return False
+        return bool(row) and row.get("creator") == item["creator"]
+
     @app.get("/apps", response_class=HTMLResponse)
     def games_page(request: Request, sort: str = "popular"):
         """Every app (a game, a video call, any page with a card) on the chain, Popular or Latest, with the feed's
@@ -25068,6 +25082,7 @@ def create_app(state: AppState) -> FastAPI:
         for g in games:
             g["star_key"] = gameslib.app_key(g["creator"], g["name"])
             g["starred"] = g["star_key"] in starred
+            g["tdeck"] = _tdeck_build(g)
         games = [g for g in games if g["starred"]] + [g for g in games if not g["starred"]]
         mine = _tag_of_whoever_is_asking(request) or {}
         return render(request, "games.html", chain=chain, games=games, sort=sort,
@@ -33187,6 +33202,9 @@ def create_app(state: AppState) -> FastAPI:
     # The LoRa gateway (lora.py, loraweb.py, 2026-10-24): Admin -> Meshtastic and the T-Deck web flasher.
     from . import loraweb
     loraweb.register(app, state, admin_check=_admin_check)
+    # T-Decks over WiFi (tdecklink.py, 2026-10-26): the LoRa frames over HTTPS, to a gateway with no radio.
+    from . import tdecklink
+    tdecklink.register(app, state)
     # The LLM service (llmweb.py, 2026-10-23): Admin -> LLM, the Exchange's LLM tab, and /v1 for API keys.
     from . import llmweb
     llmweb.register(app, state, signed_in=signed_in, account_address=_account_address, account_chain=_account_chain,

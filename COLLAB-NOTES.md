@@ -88,6 +88,22 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-26 T-Decks over WiFi; the T-Deck badge on app cards (Claude)
+The operator: "stay connected to Wi-Fi and while you're connected to Wi-Fi have sign in and be done through Wi-Fi" ... "When
+connected to Wi-Fi, all messages and transactions should be sent through Wi-Fi"; "If an app is designed for the T deck,
+it should have a T deck badge" ("next to where it says puzzle").
+- `arcade/web/tdecklink.py`: `POST /r/tdeck/link` (door PUBLIC_POST). Body = the T-Deck's 16-byte secret token + its
+  LoRa frames (u16 length each); answer = frames back. They go to an arcade/lora Gateway with no radio (`name` "WiFi",
+  the Meshtastic panel's chains and tokens, state in `tdeck-wifi.sqlite`), so sign-in, balances, payments and letters
+  run exactly as over LoRa. The token picks the T-Deck's node (0xE0000000 | sha256); the account proves itself by its
+  signed LOGIN. An empty post waits up to 4 s for letters. A thread checks mail every 10 s while any T-Deck posted in
+  the last 10 min.
+- The T-Deck badge: `_tdeck_build` (the App Store's rule: `tdeck` inscribed by the card's creator) puts a `pill tdeck`
+  beside the genre on /apps and on the PWA home's App Store.
+- Firmware: device-ui keeps WiFi joined while unlocked with WiFi on and saved, and uses it as the gateway (WIFI_NODE);
+  back to LoRa when it drops.
+- Tests: test_tdeck_link (new, 5), test_games (+badge); arcade-lora test_c_wifi (4).
+
 ### 2026-10-26 T-Deck apps: a card's `tdeck` build, listed at /r/tdeck/apps (Claude)
 The operator: "can we download inscribed apps from the Blockchain like we do with apps in the PWA? ... we have to add apps over
 Wi-Fi that would be fine"; chose "With the redesign".

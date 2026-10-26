@@ -81,6 +81,7 @@
     <div style="margin:0 0 4px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">{{ exui.fav_button(it.star_key, small=true, what='app') }}<strong style="font-size:1.05rem">{{ wall(g.name, 'name') }}</strong>
       {% if g.multiplayer %}<span class="pill">multiplayer</span>{% endif %}
       {% if g.genre %}<span class="pill">{{ g.genre }}</span>{% endif %}
+      {% if it.tdeck %}<span class="pill tdeck" title="Also runs on the DogecoinArcade T-Deck: get it from the T-Deck's App Store">T-Deck</span>{% endif %}
       {% if it.net %}{{ net_badge(it.net) }}{% endif %}</div>
     <div class="muted" style="font-size:.84rem">by {{ it.creator|who }}
       &middot; {{ when(it.time) if it.time else 'just now' }}

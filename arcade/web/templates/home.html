@@ -1098,7 +1098,8 @@ body.fullscreen #arc-bot { display: none !important; }
       return '<div class="hs-card"><div class="hs-card-cover"' + (a.cover ? '' : ' style="background:#6b4fa0"') + '>'
         + (a.cover ? '<img src="' + esc(a.cover) + '" alt="" loading="lazy">' : esc(a.name)) + '</div>'
         + '<div class="hs-card-body"><div class="hs-card-name"><strong>' + esc(a.name) + '</strong>'
-        + (a.mp ? '<span class="pill">multiplayer</span>' : '') + (a.genre ? '<span class="pill">' + esc(a.genre) + '</span>' : '') + '</div>'
+        + (a.mp ? '<span class="pill">multiplayer</span>' : '') + (a.genre ? '<span class="pill">' + esc(a.genre) + '</span>' : '')
+        + (a.tdeck ? '<span class="pill tdeck" title="Also runs on the DogecoinArcade T-Deck">T-Deck</span>' : '') + '</div>'
         + '<div class="hs-card-by">' + esc(meta) + '</div><div class="hs-card-by">' + esc(bg) + '</div>'
         + (a.desc ? '<p class="hs-card-desc">' + esc(a.desc) + '</p>' : '')
         + '<div class="hs-card-acts">'
