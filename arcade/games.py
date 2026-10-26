@@ -22,6 +22,7 @@ loads its parts from other inscriptions.
               "wallet": true,                          uses the player's wallet (trades, pays, signs)
               "minimized": {"timeout": 300},           seconds it keeps running minimized; 0 no limit; 15 min unsaid
               "tdeck": "<inscription txid>",           its T-Deck build: a JavaScript inscription, same creator
+              "tdeck_icon": "globe",                   the T-Deck tile's built-in icon (else the app's letter)
               "genre": "rpg"}}                         up to 24
 
 **Minimized** (the installed app's home screen, 2026-10-24; the operator: "App builders should be able to decide their apps
@@ -112,6 +113,9 @@ def parse(json_text: Any) -> dict | None:
     # the DogecoinArcade T-Deck firmware runs; listed at /r/tdeck/apps only when the card's creator inscribed it too.
     tdeck = str(game.get("tdeck") or "").lower()
     out["tdeck"] = tdeck if _TXID.match(tdeck) else ""
+    # one of the firmware's own icons for the T-Deck's home tile (2026-10-26: the Mesh Browser's mesh globe)
+    icon = str(game.get("tdeck_icon") or "").lower()
+    out["tdeck_icon"] = icon if re.fullmatch(r"[a-z]{1,16}", icon) else ""
     return out
 
 

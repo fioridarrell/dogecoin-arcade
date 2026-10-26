@@ -25143,16 +25143,17 @@ def create_app(state: AppState) -> FastAPI:
                 continue
             out.append({"card": item["txid"], "name": game["name"], "description": game["description"],
                         "version": game["version"], "creator": item["creator"], "tdeck": script, "size": len(body),
-                        "sha256": hashlib.sha256(body).hexdigest(), "net": item["net"]})
+                        "sha256": hashlib.sha256(body).hexdigest(), "net": item["net"],
+                        "icon": game.get("tdeck_icon") or ""})
         tags = _tags_for([a["creator"] for a in out])
         for a in out:
             a["by"] = "@" + tags[a["creator"]] if tags.get(a["creator"]) else ""
         out = out[:60]
         if format == "tsv":
-            # one app a line, for the T-Deck's own reader: card, script, size, sha256, name, by, description
+            # one app a line, for the T-Deck's own reader: card, script, size, sha256, name, by, icon, description
             clean = lambda v: " ".join(str(v).split())           # noqa: E731 -- no tabs or line ends inside a field
             text = "".join("\t".join([a["card"], a["tdeck"], str(a["size"]), a["sha256"], clean(a["name"]), clean(a["by"]),
-                                      clean(a["description"])]) + "\n" for a in out)
+                                      clean(a["icon"]), clean(a["description"])]) + "\n" for a in out)
             return Response(text, media_type="text/plain; charset=utf-8", headers={"Cache-Control": "public, max-age=60"})
         return JSONResponse({"apps": out}, headers={"Cache-Control": "public, max-age=60"})
 

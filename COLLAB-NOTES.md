@@ -88,6 +88,12 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-26 T-Deck app icons: `tdeck_icon` on a card (Claude)
+The operator: "the app icon for the mesh Web should be a mesh globe". A card may name one of the firmware's icons
+(`"tdeck_icon": "globe"`, a-z up to 16); `/r/tdeck/apps` lists it (JSON `icon`; tsv gains an icon column BEFORE the
+description: card, script, size, sha256, name, by, icon, description). Firmware draws it on the tile (else the letter).
+docs/games.md step 3, and mesh.get / ui.link / backspace in the sandbox's list. Tests: test_games (+icon).
+
 ### 2026-10-26 LoRa speed: no radio acks, RESEND, zlib pages; the WiFi link's wait 1 s (Claude)
 The operator: "the lora mesh Web is really slow" ... "Everything with the Meshtastic is really slow and Arcade can't be this
 slow" (messages, payments, everything). Cause, from .25's log: the gateway sent every frame with want_ack and waited up

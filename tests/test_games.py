@@ -352,7 +352,9 @@ def test_the_t_deck_app_store_lists_cards_with_a_t_deck_build_by_the_same_creato
     assert got[0]["sha256"] == hashlib.sha256(script).hexdigest()
     tsv = app.get("/r/tdeck/apps?format=tsv").text.splitlines()
     assert tsv == ["\t".join(["a2" * 32, "a1" * 32, str(len(script)), hashlib.sha256(script).hexdigest(),
-                              "Tic-Tac-Toe", "", "Play the T-Deck"])]
+                              "Tic-Tac-Toe", "", "", "Play the T-Deck"])], "no icon named: the T-Deck draws its letter"
+    assert gameslib.parse(json.dumps({"app": {"name": "x", "tdeck_icon": "Globe"}}))["tdeck_icon"] == "globe"
+    assert gameslib.parse(json.dumps({"app": {"name": "x", "tdeck_icon": "../etc"}}))["tdeck_icon"] == ""
     outside = app.get("/r/tdeck/apps", headers={"host": "app.example.com", "cf-ray": "x"})
     assert outside.status_code == 200, "a T-Deck asks from anywhere: the page API's tree is open"
     # the T-Deck badge beside the genre (2026-10-26: "If an app is designed for the T deck, it should have a T
