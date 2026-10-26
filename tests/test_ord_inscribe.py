@@ -321,8 +321,10 @@ def test_creator_names_says_whether_a_name_counts_and_is_free(client, monkeypatc
         def lookup(self, q):
             assert q == {"what": "name", "name": q["name"]}
             held = {"wow.doge": {"inscription": "ab" * 32 + "i0", "number": 7, "kind": "json", "output": None}}
-            return {"name": q["name"], "readings": {r: {"winner": held.get(q["name"]), "later_claims": 0}
-                                                     for r in ord_rules.NAME_RULES}}
+            # as DoginalIndex.lookup answers a name: the index's name() under "name", and whose answer it is
+            return {"name": {"name": q["name"], "readings": {r: {"winner": held.get(q["name"]), "later_claims": 0}
+                                                              for r in ord_rules.NAME_RULES}},
+                    "from": "this arcade", "walked_to": 100}
     monkeypatch.setattr(state, "ord_indexes", lambda: {"doge": Index()})
     ask = lambda name, chain="doge": app.get("/account/ord/name", params={"chain": chain, "name": name}).json()
     free = ask("Me-Seeks.doge")

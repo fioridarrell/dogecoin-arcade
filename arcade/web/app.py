@@ -14898,8 +14898,9 @@ def create_app(state: AppState) -> FastAPI:
         except Exception as exc:                               # noqa: BLE001 -- said on the page
             out["why"] = f"The index could not say just now: {str(exc)[:200]}"
             return JSONResponse(out, headers={"Cache-Control": "no-store"})
+        answer = found.get("name") if isinstance(found.get("name"), dict) else {}   # DoginalIndex.answer: {"name": {...}}
         for rule, what in ord_rules.NAME_RULES.items():
-            got = (found.get("readings") or {}).get(rule) or {}
+            got = (answer.get("readings") or {}).get(rule) or {}
             out["readings"][rule] = {"counts": bool(made[rule]), "about": what, "winner": got.get("winner")}
         out["taken"] = any(r["winner"] for r in out["readings"].values() if r["counts"])
         if found.get("node"):

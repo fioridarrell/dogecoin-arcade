@@ -189,6 +189,9 @@ def test_every_reading_of_a_name_is_kept_and_their_disagreements_show(tmp_path):
     assert wow["doge2023"]["winner"] is None, "the 2023 guide counts .doge only"
     seen = index.name_disagreements()
     assert seen["different_first_claim"] == 1 and seen["examples"][0]["name"] == "jon.doge"
+    # the shape /account/ord/name reads (Creator -> Names): a name's answer under "name"
+    said = index.answer({"what": "name", "name": "jon.doge"})
+    assert said["name"]["readings"]["spec"]["winner"]["inscription"] == f"{text_first[1]}i0"
 
 
 def test_name_rules():

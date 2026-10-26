@@ -105,6 +105,8 @@ so long to load check each of the modules. Also fix the swamped indexer."
   the whole graph for a signed-in reader (`preload_wallet`). /create/ord asks its chains and runs at once.
   Considered and left: the live-update baseline fetch at 300 ms (delaying it lost changes in the first seconds).
 - Tests: test_ord_rules (+2), test_ord_inscribe (+2), test_assets_cache (+1).
+- Follow-up: /account/ord/name read `readings` at the top of index.lookup's answer, which nests them under "name" --
+  every name showed free (me-seeks.mesh did). Fixed; test_ord_rules now pins the real answer's shape.
 
 ### 2026-10-26 T-Decks over WiFi; the T-Deck badge on app cards (Claude)
 The operator: "stay connected to Wi-Fi and while you're connected to Wi-Fi have sign in and be done through Wi-Fi" ... "When
