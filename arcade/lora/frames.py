@@ -28,6 +28,8 @@ ADDR, ADDR_OK, TOK_REQ, TOKS = 0x19, 0x1A, 0x1B, 0x1C
 PAGE_REQ, PAGE = 0x1D, 0x1E                              # the .mesh web (PROTOCOL.md, 2026-10-26)
 # PAGE's status
 PAGE_OK, PAGE_UNCHANGED, PAGE_MISSING = 0, 1, 2
+PAGE_ZLIB = 0x80          # status bit: the body is zlib-compressed (only to a T-Deck whose PAGE_REQ said it reads it)
+PAGE_ACCEPTS_ZLIB = 0x01  # PAGE_REQ's optional trailing flags byte
 WHO_REQ, WHO, WATCH, WATCH_OK = 0x20, 0x21, 0x22, 0x23
 MAIL_POST, MAIL_IN, MAIL_TOO_LONG, MAIL_ACK, MAIL_POLL = 0x30, 0x31, 0x32, 0x33, 0x34
 PRESENCE, P2P_MSG, P2P_PAY, P2P_ACK = 0x40, 0x41, 0x42, 0x43

@@ -3,10 +3,12 @@
 Frames travel as PRIVATE_APP direct messages; stock firmware encrypts those
 end to end (PKC) and every Meshtastic node relays them.
 
-One frame is in the air at a time: each send waits for the other radio's
-ack (or a timeout) before the next goes. A 200-byte LongFast packet is about
-1.5 s of airtime, and firing several back to back while the T-Deck answers
-with its own acks made them collide (MAX_RETRANSMIT, 2026-10-23). Received
+Frames go with no radio ack (2026-10-26): each send waited for the other
+radio's ack, up to 75 s, so one lost ack held a whole answer for a minute; and
+the T-Deck's acks collided with the next parts (MAX_RETRANSMIT, 2026-10-23).
+Now the parts of an answer go one after another, a short gap apart, and the
+protocol recovers what is lost: the T-Deck asks again for an answer that does
+not come and sends RESEND for the parts of one that stopped. Received
 frames are handled on a worker thread, never the radio library's reader
 thread, so a handler that sends can wait for acks the reader delivers.
 """
@@ -26,8 +28,10 @@ log = logging.getLogger("arcade_lora.link")
 # seconds to wait for the radio's verdict on a frame: Meshtastic retries itself 3 times first, and on a weak LongFast
 # link that took ~30 s -- with 25 s the gateway sent the frame again while the radio was still trying (and the T-Deck
 # had it), doubling the airtime (2026-10-26: 2,301 "no ack" since 10-23, each followed ~5 s later by MAX_RETRANSMIT).
-ACK_WAIT = 75.0
+ACK_WAIT = 75.0         # (send_acked only)
 AFTER_ACK = 0.3         # a breath between frames so relays and the T-Deck can answer
+#: Between frames sent with no ack: the radio queues them (its transmit queue holds a few), each about 1.2 s on air.
+FRAME_GAP = 0.4
 
 
 class MeshLink:
@@ -90,7 +94,15 @@ class MeshLink:
                     log.exception("frame handler failed")
 
     def send(self, node: int, frame: bytes) -> bool:
-        """One frame to one node; True once that node's radio acked it (one more try if not)."""
+        """One frame to one node, with no radio ack: True once the radio took it (the protocol recovers losses)."""
+        with self.send_lock:
+            self.iface.sendData(frame, destinationId=node, portNum=portnums_pb2.PortNum.PRIVATE_APP, wantAck=False)
+            self.stats["sent"] += 1
+            time.sleep(FRAME_GAP)
+        return True
+
+    def send_acked(self, node: int, frame: bytes) -> bool:
+        """One frame, waiting for the node's radio ack (one more try if not): the old way, kept for tools."""
         return self._send_once(node, frame) or self._send_once(node, frame)
 
     def _send_once(self, node: int, frame: bytes) -> bool:

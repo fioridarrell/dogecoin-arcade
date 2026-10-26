@@ -26,8 +26,9 @@ from fastapi.responses import Response
 log = logging.getLogger("arcade.tdecklink")
 
 TOKEN = 16
-#: A post with nothing to send waits this long for an answer to come (the T-Deck asks again at once).
-POLL_WAIT = 4.0
+#: A post with nothing to send waits this long for an answer to come (the T-Deck asks again at once). 1 s, not 4
+#: (2026-10-26): a frame the T-Deck sends while a post waits goes out only when it ends.
+POLL_WAIT = 1.0
 #: The most frames one post may carry, the largest frame, and how many may wait for a T-Deck that stopped asking.
 FRAMES_MAX = 40
 FRAME_MAX = 256

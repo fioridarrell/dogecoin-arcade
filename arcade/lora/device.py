@@ -107,10 +107,17 @@ class DeviceClient:
         r = F.Reader(self.request(F.TOK_REQ, want=(F.TOKS,)).body)
         return [(r.str(), r.str(), r.str()) for _ in range(r.u8())]
 
-    def page(self, address: str, have: str = "") -> dict:
+    def page(self, address: str, have: str = "", zlib_ok: bool = False) -> dict:
         """A .mesh page: {"status", "page", "note", "body"} (PROTOCOL.md PAGE). Needs no sign-in."""
-        r = F.Reader(self.request(F.PAGE_REQ, F.Writer().str(address).str(have).done(), want=(F.PAGE,)).body)
-        return {"status": r.u8(), "page": r.str(), "note": r.str(), "body": r.bytes().decode("utf-8", "replace")}
+        w = F.Writer().str(address).str(have)
+        if zlib_ok:
+            w.u8(F.PAGE_ACCEPTS_ZLIB)
+        r = F.Reader(self.request(F.PAGE_REQ, w.done(), want=(F.PAGE,)).body)
+        status, page, note, body = r.u8(), r.str(), r.str(), r.bytes()
+        if status & F.PAGE_ZLIB:
+            import zlib
+            status, body = status & 0x7F, zlib.decompress(body)
+        return {"status": status, "page": page, "note": note, "body": body.decode("utf-8", "replace")}
 
     def coins(self, network: str) -> list[dict]:
         index = self._index(network)

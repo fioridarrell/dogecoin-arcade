@@ -330,3 +330,21 @@ def test_mesh_pages_need_no_sign_in_and_unchanged_ones_are_not_sent_again(pair, 
     big = dev.page("big.mesh")
     assert big["status"] == F.PAGE_OK and 2900 < len(big["body"]) < 3120, "cut to one 16-part message"
     assert asked[0] == ("me-seeks.mesh", "")
+
+
+def test_a_page_goes_compressed_only_to_a_t_deck_that_reads_it(pair, monkeypatch):
+    """Item 3 of 2026-10-26's speed work: MeshText packs to about half, so half the frames on air -- but only for a
+    T-Deck whose PAGE_REQ says it inflates (a T-Deck from before gets the page as it was)."""
+    gw, dev = pair
+    body = "# Hello\n" + "\n".join(f"=> /p{i} Page number {i} of the site" for i in range(40))
+    monkeypatch.setattr(FakeArcade, "mesh_page", lambda self, a, have="": (200, {"page": "p1", "title": "Hi",
+                                                                                "body": body}), raising=False)
+    sent = []
+    real = gw.send_frame
+    gw.send_frame = lambda node, frame: (sent.append(frame), real(node, frame))
+    old = dev.page("x.mesh")
+    plain = len(sent)
+    sent.clear()
+    new = dev.page("x.mesh", zlib_ok=True)
+    assert old["body"] == new["body"] == body and old["status"] == new["status"] == F.PAGE_OK
+    assert len(sent) < plain, (len(sent), plain)

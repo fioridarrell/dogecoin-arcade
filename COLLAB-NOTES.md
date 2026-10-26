@@ -88,6 +88,18 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-26 LoRa speed: no radio acks, RESEND, zlib pages; the WiFi link's wait 1 s (Claude)
+The operator: "the lora mesh Web is really slow" ... "Everything with the Meshtastic is really slow and Arcade can't be this
+slow" (messages, payments, everything). Cause, from .25's log: the gateway sent every frame with want_ack and waited up
+to 75 s for its verdict before the next (MAX_RETRANSMIT, the stall watchdog caught `link.send`); the T-Deck asked again
+after 75 s; its own acks collided with the next parts.
+- arcade/lora copied from arcade-lora adfadba: MeshLink.send has no radio ack (0.4 s between frames; send_acked keeps the
+  old way); Gateway.reply keeps multi-part answers 120 s for RESEND (implemented now: `u8 type, u16 missing bitmap`);
+  PAGE bodies zlib-compressed (status bit 0x80) for a PAGE_REQ whose trailing flags byte says it inflates.
+- tdecklink POLL_WAIT 4 -> 1 s: a frame the T-Deck sends while a post waits goes when that wait ends.
+- Firmware (device-ui): no radio acks, RESEND after a 4 s gap, a request asked again after 12 s (not 75), ROM inflater.
+- Tests: test_lora_gateway (+1 compression); arcade-lora: a 16-part page over 30% loss comes in 5-35 s simulated.
+
 ### 2026-10-26 The .mesh web, part 1: pages, the resolver, the directory, a preview (Claude)
 The operator: ".mesh DNS protocol. For the Meshtastic ... an app for the T deck. That is a simple web browser. Whichever wallet
 holds the name should be able to inscribe a companion ... like original web like in 1990"; chose "Latest by the holder"

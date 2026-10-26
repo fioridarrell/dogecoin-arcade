@@ -1,6 +1,6 @@
 # arcade/lora: the LoRa (Meshtastic) gateway
 
-A copy of `gateway/arcade_lora` from https://github.com/dogecoinarcade/arcade-lora (commit ab6f5a9, 2026-10-26: the .mesh web's PAGE_REQ/PAGE),
+A copy of `gateway/arcade_lora` from https://github.com/dogecoinarcade/arcade-lora (commit adfadba, 2026-10-26: no radio acks, RESEND, zlib pages),
 unchanged, so every arcade runs the same gateway (Admin -> Meshtastic, `arcade/web/lora.py`). Its protocol is that
 repository's PROTOCOL.md; its tests are `tests/test_lora_{frames,gateway,keys,txcheck}.py` here (the C++ T-Deck client
 tests stay in arcade-lora: they need its hosttest build).

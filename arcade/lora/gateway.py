@@ -26,6 +26,7 @@ MAIL_MAX = 645                  # sealed bytes; 3 frames of MAIL_IN with its hea
 RETRY = 180.0                   # seconds between tries while the T-Deck is online
 ONLINE_WINDOW = 1200.0          # heard within this long = online; after it, no more tries
 RECEIPT = b"arcade-lora receipt\n"
+RESEND_KEEP = 120.0             # seconds the parts of a multi-part answer are kept for RESEND
 REPLAY_KEEP = 300.0             # seconds an answer is kept for a T-Deck that asks again
 NOTICE_WAIT = 1800.0            # how long a contact's letter may wait for its notice coin to be indexed
 NOTICE_VALUE = 1_000_000        # the 0.01 coin a message pays its recipient
@@ -93,6 +94,7 @@ class Gateway:
         self.lock = threading.RLock()
         self._next_id = 1
         self.answers: dict[tuple, tuple[float, list[bytes]]] = {}   # (node, type, id, body) -> (when, frames)
+        self.sent_parts: dict[tuple, tuple[float, list[bytes]]] = {}  # (node, type, id) -> (when, frames): RESEND
         self._capture: list[bytes] | None = None
         self.store = store or Store(":memory:")
         self.flush_delay = flush_delay      # sign-in answers first, then the mail
@@ -110,10 +112,29 @@ class Gateway:
 
     # -- out ------------------------------------------------------------------
     def reply(self, node: int, kind: int, ident: int, body: bytes = b""):
-        for frame in F.split(F.Message(kind, ident, body)):
+        frames = F.split(F.Message(kind, ident, body))
+        if len(frames) > 1:
+            # kept for RESEND: the T-Deck asks for the parts that did not come, by number (2026-10-26)
+            now = self.clock()
+            for k in [k for k, (t, _) in self.sent_parts.items() if now - t > RESEND_KEEP]:
+                del self.sent_parts[k]
+            self.sent_parts[(node, kind, ident)] = (now, frames)
+        for frame in frames:
             if self._capture is not None:
                 self._capture.append(frame)
             self.send_frame(node, frame)
+
+    def on_resend(self, node, msg):
+        """RESEND (PROTOCOL.md): the parts of one of our answers that never came, sent again from what we kept."""
+        r = F.Reader(msg.body)
+        kind, missing = r.u8(), r.u16()
+        kept = self.sent_parts.get((node, kind, msg.id))
+        if kept is None:
+            return                                       # too old, or never ours: the T-Deck will ask the request again
+        frames = kept[1]
+        for i, frame in enumerate(frames):
+            if missing & (1 << i):
+                self.send_frame(node, frame)
 
     def error(self, node: int, ident: int, code: int, text: str):
         self.reply(node, F.ERR, ident, F.Writer().u8(code).str(text[:200]).done())
@@ -326,6 +347,7 @@ class Gateway:
     def on_page_req(self, node, msg):
         r = F.Reader(msg.body)
         address, have = r.str()[:200], r.str()[:80]
+        flags = r.u8() if r.at < len(r.body) else 0      # a T-Deck from before the flags sends none
         try:
             code, said = self._public().mesh_page(address, have)
         except Exception as exc:                         # noqa: BLE001 -- the arcade did not answer
@@ -339,6 +361,11 @@ class Gateway:
         else:
             status, note, body = F.PAGE_MISSING, str(said.get("detail") or f"HTTP {code}"), b""
         note = note.encode()[:80].decode("utf-8", "ignore")
+        if body and flags & F.PAGE_ACCEPTS_ZLIB:
+            import zlib
+            packed = zlib.compress(body, 9)
+            if len(packed) < len(body):                  # MeshText packs to about half: half the frames on air
+                body, status = packed, status | F.PAGE_ZLIB
         head = F.Writer().u8(status).str(page).str(note).done()
         room = F.MAX_PARTS * F.MAX_BODY - len(head) - 2
         if len(body) > room:                             # a site is capped to fit; never more than one message
@@ -557,7 +584,7 @@ class Gateway:
 
     HANDLERS = {
         F.HELLO: on_hello, F.LOGIN: on_login, F.PING: on_ping,
-        F.BAL_REQ: on_bal_req, F.TOK_REQ: on_tok_req, F.PAGE_REQ: on_page_req, F.COINS_REQ: on_coins_req, F.SEND_REQ: on_send_req,
+        F.BAL_REQ: on_bal_req, F.TOK_REQ: on_tok_req, F.PAGE_REQ: on_page_req, F.RESEND: on_resend, F.COINS_REQ: on_coins_req, F.SEND_REQ: on_send_req,
         F.SIGN: on_sign, F.BROADCAST: on_broadcast, F.ADDR: on_addr,
         F.WHO_REQ: on_who_req, F.WATCH: on_watch,
         F.MAIL_POST: on_mail_post, F.MAIL_ACK: on_mail_ack, F.MAIL_POLL: on_mail_poll,
