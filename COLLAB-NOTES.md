@@ -88,6 +88,78 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-26 · SadFrog's side (Claude, node 3, for tbuuol) · branch `team/kotia-wallet-direct` (on `main` 7745b201) · Kotia's wallet from the unspent set only, lent to borrowers (KOTIA ONLY)
+Found live on pepecoinarcade.com after #23: the one-time copy into the index (`_utxoset_seed`) ran at block 1,529,978
+while Kotia's index had read nothing (floor 1,530,000, tip 1,529,994). @banana sent 0.1 KOT in 1,529,979, between the
+two: the spent 1 KOT stayed in the wallet, the change and the payee's coin never came (1.8999 shown, 0.8999 held), and
+no confirmations. tbuuol: Pepecoin test is the main chain, Kotia only storage and a coin, so its wallet needs no floor;
+history only for arcade accounts, "if one is new he sees only what has happened on the address since his signup", and
+no rescan, none a user can set off. Kotia only.
+- `watcher._utxoset_mirror` replaces `_utxoset_seed`: every pass the watched addresses' `utxo` and `activity` rows are
+  made what the set says (rows above the set's height are left for its next pass; a reorg the set takes back is
+  undone on the next pass). Written straight, not journalled: the index no longer writes those rows on Kotia
+  (`indexer.py`: no `utxos.on_block` when `Params.full_utxo_set`). Coverage (coin lists) from block 0 as before.
+- New accounts: `UtxoSet.watch` adds them to `history_for` from the next block on; the history-only pass from block 0
+  is gone, and `_watch_accounts_on` reads nothing back on Kotia (no `seed_from_core`/`backfill_many`).
+- Admin -> Chains -> Rebuild unchanged: the build reads every block anyway, so every account's history from block 0
+  comes with it. The "reading new accounts' history" status is gone. `docs/kotia.md` says how it works now.
+- A borrowed Kotia builds no set (its block files are on the sharer's machine; 1.5 million blocks over the mesh
+  would weigh on the sharer). tbuuol: the borrower should borrow the set too. **It is lent over the shared Core:**
+  `arcade_utxoset` is in coreshare's SERVED, answered by the sharer from its set (`service.shared_cores` ->
+  `utxoset.answer`), never by a Core. One call per pass (`utxoset.LentSet.fetch`, `watcher._utxoset_lent_pass`, once
+  a minute): the borrower's watched addresses' wallet coins, and their history, which the sharer keeps from that first
+  ask on (`watch`, at most 5,000 addresses beyond its own; only Kotia key/script-hash addresses). The borrower mirrors
+  it like a set of its own, except that history rows are only ever added (another sharer may have begun later).
+  The sharer's word, like everything else borrowed that bytes cannot prove. `UtxoSet.lock` keeps the watcher's pass
+  and borrowers' asks apart on its one connection.
+- `LedgerIndex.coins_from_set` (asked at every sync): run here -> the set; borrowed -> the lent set while its last
+  answer is under 5 minutes old (`state.utxoset_lent`), else the index follows the coins and reads back as before (a
+  sharer on an older version answers "a shared Core does not answer arcade_utxoset"). Admin -> Chains says
+  "the sharer's, lent (block N)" or "the sharer lends none". The operator's arcade borrows Kotia from node 3 and shows 0 KOT
+  today; with this on both sides it gets node 3's set. Left open: blocks an index skipped while a set was the source
+  are not read back if the set later goes away.
+- The floor (`KOT_MAINNET_FLOOR`) stays for the arcade's own features on Kotia; the Kotia wallet no longer depends on it.
+- On node 3 the next pass after the update puts @banana's and @tbuuol's rows right by itself (test
+  `test_a_spend_after_the_first_pass_reaches_the_wallet` is that case).
+- Tests: test_utxoset 21, test_coreshare, test_kotia, test_utxos, test_coinlist(_web), test_watcher, test_utxo_backfill,
+  test_utxo_seed, test_wallet_imports: all pass.
+
+### 2026-10-25 · SadFrog's side (Claude, node 2) · branch `team/bells-index` · Bellscoin's ords read as Nintondo reads them
+SadFrog: "Start with Bells: index bel-20 tokens, keep Taproot births in input 0, read envelopes in every input like
+Nintondo, and show bel1q/bel1p owners." Found by checking node 2's index against nintondo.io the same day (67
+inscriptions and 10 ticks sampled; content, size, block and holders matched; these four did not).
+
+- **Every input** (`ord_rules.EVERY_INPUT`, Bellscoin only): an envelope complete in a later input is an inscription,
+  `txid i1, i2 ...` in input order. Nintondo has `6d110444...e809i1` (#14,234,881, a NOOK mint) and `52e3fa95...56f0`
+  i1..i344 (#15,853,039 to #15,853,382, no i345). We read input 0 only, so every Bells number from #14,234,881 on was
+  short by 1, then by 345.
+- **Taproot births in input 0** (`doginal_index.py`, the walk's `if b["n"] or b["vin"]`): every witness birth in
+  input 0 was counted in the chunk hash and filed nowhere. On Bells that means everything from Taproot's activation
+  (block 191,520). On Litecoin the walked index held no inscriptions at all. Births now carry a `kind`
+  ("p2sh"/"taproot"), and witness births keep their body (size, "p", token operations).
+- **bel-20** (`ord_rules.TOKEN_PROTOCOLS`): Bells was read as "drc-20", so its `tok` table was empty. Nintondo lists 415
+  ticks (nook, CATS, ondo ...). The real nook deploy and the izzy mints / rats transfers in witness envelopes now read
+  as bel-20 operations.
+- **bel1q / bel1p holders** (`Walker.owner_of`): SegWit v0 and Taproot outputs are named by their bech32/bech32m
+  address on a chain that has one (also ltc1q/ltc1p). This is the same as bellsd's `decoderawtransaction`, not
+  `script:<hash>`.
+- **Notes format 3** on Taproot chains (`ord_notes.WITNESS_VERSION`): those programs are kept whole, and on Bells a
+  later input's envelope script too. A walk stitched from notes therefore ends the same as one read from a Core. Doge and
+  PEP notes stay format 2, byte for byte.
+
+**Rules: Bellscoin 7, Litecoin 5.** Every Bells index is cut again and walked from 22,470. Litecoin's (off on node 2)
+is cut too, because its holders are named anew. Litecoin still differs from ord-litecoin (cursed numbering and the
+jubilee at 2,608,704, inscriptions sent to fees, the pointer, LTC-20). That comes in its own PR, checked against
+ord.chikun.market.
+
+Also in this branch: `test_doginal_swap` named Pepecoin testnet as a chain no doginal leg may be on. #22 swaps its ords
+now, so the test uses Wojakcoin (no CLTV), the chain that is never swapped.
+
+Tests: `tests/test_bells_index.py` (8; a made-up chain with two inputs, a witness mint and bel1q/bel1p/P2WSH outputs;
+stitched == walked). `test_ord_dialects` was updated for the rules numbers. The ord, wallet, trade and web suites give
+737 passed. The only failures are ones that fail on main too, or come from this machine (`test_doginals_at_the_testnet_key...`;
+`test_ord_slim` layout 1 needs sqlite's `unhex`; snap Firefox can't read `/tmp` uploads).
+
 ### 2026-10-25 Ord walk keeps every coin's value on disk; parallel lookups; Ords modes renamed (Claude)
 Strawberry walked Dogecoin at 0.02 blocks a second through borrowed Cores. Profiled: the time was all in
 `Walker._prefetch` (the values of coins spent ahead of an inscribed one). Each was a `getrawtransaction` on the
