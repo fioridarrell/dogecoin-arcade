@@ -30,8 +30,9 @@ log = logging.getLogger("arcade_lora.link")
 # had it), doubling the airtime (2026-10-26: 2,301 "no ack" since 10-23, each followed ~5 s later by MAX_RETRANSMIT).
 ACK_WAIT = 75.0         # (send_acked only)
 AFTER_ACK = 0.3         # a breath between frames so relays and the T-Deck can answer
-#: Between frames sent with no ack: the radio queues them (its transmit queue holds a few), each about 1.2 s on air.
-FRAME_GAP = 0.4
+#: Between frames sent with no ack: about one LongFast frame's airtime (a 200-byte packet is ~1.2-1.5 s on air). At
+#: 0.4 s the radio's transmit queue overflowed in a burst and dropped frames (2026-10-26, a sign-in's dozen answers).
+FRAME_GAP = 1.6
 
 
 class MeshLink:

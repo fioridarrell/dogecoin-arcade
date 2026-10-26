@@ -283,7 +283,12 @@ def test_a_repeated_sign_gets_the_same_answer_and_sends_once(pair):
     sign = [f for f in out if F.parse(f)[0] == F.SIGN]
     assert sign
     before = len(FakeArcade.last.sent)
-    for f in sign:                                     # the T-Deck lost SENT and asks again
+    for f in sign:                                     # at once: the answer may still be on its way, not sent again
+        gw.receive(0x970046A4, f)
+    assert dev.inbox.empty(), "no replay within REPLAY_GAP of the answer"
+    real_clock = gw.clock
+    gw.clock = lambda: real_clock() + 11               # the T-Deck lost SENT and asks again later
+    for f in sign:
         gw.receive(0x970046A4, f)
     assert len(FakeArcade.last.sent) == before         # not signed and broadcast twice
     again = dev.inbox.get(timeout=1)

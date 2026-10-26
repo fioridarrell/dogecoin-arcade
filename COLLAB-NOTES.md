@@ -88,6 +88,15 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-26 LoRa congestion: airtime pacing, one replay per 10 s, two requests in flight (Claude)
+The operator on the T-Deck over LoRa: "No answer from the gateway" for me-seeks.mesh. .25's log: a sign-in fired a dozen
+requests, the gateway answered each and REPLAYED each answer whenever the T-Deck asked again (every 12 s), at 0.4 s
+between ~1.5 s frames -- the radio's queue overflowed, nothing came through, more asks, more replays.
+- arcade/lora copied from arcade-lora 5501054: MeshLink FRAME_GAP 1.6 s (a frame's airtime); Gateway replays an answer
+  at most every REPLAY_GAP (10 s). Firmware: at most two requests in flight over LoRa (pages first); a refused ADDR is
+  not asked again (bel/lky/kot/wjk addresses differ from the arcade's -- still to look into).
+- Tests: test_lora_gateway in simulated time (+replay gap).
+
 ### 2026-10-26 T-Deck app icons: `tdeck_icon` on a card (Claude)
 The operator: "the app icon for the mesh Web should be a mesh globe". A card may name one of the firmware's icons
 (`"tdeck_icon": "globe"`, a-z up to 16); `/r/tdeck/apps` lists it (JSON `icon`; tsv gains an icon column BEFORE the

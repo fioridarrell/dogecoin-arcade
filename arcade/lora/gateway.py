@@ -26,6 +26,7 @@ MAIL_MAX = 645                  # sealed bytes; 3 frames of MAIL_IN with its hea
 RETRY = 180.0                   # seconds between tries while the T-Deck is online
 ONLINE_WINDOW = 1200.0          # heard within this long = online; after it, no more tries
 RECEIPT = b"arcade-lora receipt\n"
+REPLAY_GAP = 10.0               # an answer is replayed at most this often
 RESEND_KEEP = 120.0             # seconds the parts of a multi-part answer are kept for RESEND
 REPLAY_KEEP = 300.0             # seconds an answer is kept for a T-Deck that asks again
 NOTICE_WAIT = 1800.0            # how long a contact's letter may wait for its notice coin to be indexed
@@ -95,6 +96,7 @@ class Gateway:
         self._next_id = 1
         self.answers: dict[tuple, tuple[float, list[bytes]]] = {}   # (node, type, id, body) -> (when, frames)
         self.sent_parts: dict[tuple, tuple[float, list[bytes]]] = {}  # (node, type, id) -> (when, frames): RESEND
+        self.replayed: dict[tuple, float] = {}                        # answers key -> when last replayed
         self._capture: list[bytes] | None = None
         self.store = store or Store(":memory:")
         self.flush_delay = flush_delay      # sign-in answers first, then the mail
@@ -206,7 +208,15 @@ class Gateway:
             now = self.clock()
             for k in [k for k, (t, _) in self.answers.items() if now - t > REPLAY_KEEP]:
                 del self.answers[k]
+                self.replayed.pop(k, None)
             if key in self.answers:
+                # not again while the last copy may still be queued for the air (2026-10-26: every repeat of a
+                # request sent its whole answer again, and the replays drowned the radio)
+                last = self.replayed.get(key, self.answers[key][0])
+                if now - last < REPLAY_GAP:
+                    log.info("%08x asked again (%s %d): answered %.0f s ago, not yet", node, msg.name, msg.id, now - last)
+                    return
+                self.replayed[key] = now
                 log.info("%08x asked again (%s %d): same answer", node, msg.name, msg.id)
                 for frame in self.answers[key][1]:
                     self.send_frame(node, frame)
