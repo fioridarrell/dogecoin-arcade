@@ -517,7 +517,22 @@ class Store:
             self._db.executescript(SCHEMA)
             if self.meta("layout") is None:
                 self.set_meta("layout", LAYOUT)
+            self._names_without_maps(self._db)
         self._columns_added(self._db)
+
+    @staticmethod
+    def _names_without_maps(db) -> None:
+        """Block-map claims out of the names (ord_rules.is_block_map, 2026-10-26): an index walked before the rule kept
+        "<block>.pepemap" and its kin as names under the spec reading -- 1.64 million of them on Pepecoin. Once per
+        index (and again for a snapshot fetched from an arcade that had not done it yet), while the index opens, before
+        the walk writes; readers go on meanwhile (WAL)."""
+        if db.execute("SELECT 1 FROM meta WHERE k='names_maps'").fetchone():
+            return
+        if db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='names'").fetchone():
+            maps = "(spec LIKE '%map' OR spec LIKE '%maps' OR spec LIKE '%mep')"
+            db.execute(f"DELETE FROM names WHERE {maps} AND json IS NULL AND doge2023 IS NULL")
+            db.execute(f"UPDATE names SET spec=NULL WHERE {maps}")
+        db.execute("INSERT OR REPLACE INTO meta VALUES ('names_maps', '1')")
 
     @staticmethod
     def _columns_added(db) -> None:

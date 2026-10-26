@@ -213,8 +213,8 @@ $("ord-go").onclick = async () => {
 };
 
 /* --- unfinished and made here --- */
-async function loadRuns() {
-  try { runs = (await getJSON("/account/ord/runs")).runs || []; } catch (e) { return; }
+async function loadRuns(asked = null) {
+  try { runs = (await (asked || getJSON("/account/ord/runs"))).runs || []; } catch (e) { return; }
   const open = runs.filter((r) => !r.done), made = runs.filter((r) => r.done);
   const box = $("ord-unfinished");
   box.innerHTML = open.length ? `<div class="panel"><h3 style="margin:0 0 6px">Not finished yet</h3>
@@ -501,7 +501,11 @@ $("set-go").onclick = async () => {
   }
 };
 
-loadChains().then(loadRuns);
+// both asked at once (2026-10-26, the Creator tab's load: one waited for the other); the runs drawn once the chains
+// they name are known
+const runsAsked = getJSON("/account/ord/runs");
+runsAsked.catch(() => {});
+loadChains().then(() => loadRuns(runsAsked));
 </script>
 {% endif %}
 {% endblock %}

@@ -67,6 +67,7 @@ PUBLIC_PAGES = frozenset({
     "/create",
     "/create/chain",          # which chain this browser creates on (a cookie, no spending)
     "/create/ord",            # inscribe an ord from the account's own wallet (signed in the tab)
+    "/create/name",           # claim a name ("p":"dns") as an ord, the same way
     "/inscriptions",
     "/exchange",
     "/exchange/token20/search",       # DRC-20 / PRC-20 ticks as they are typed into the exchange's search boxes
@@ -147,6 +148,7 @@ PUBLIC_PAGES = frozenset({
     "/account/ord/runs",              # this account's ords being inscribed, and the ones made here
     "/account/ord/confirmed",         # how many blocks this account's transaction has (a collection's lanes wait for one)
     "/account/ord/chains",            # the chains an ord is inscribed on here, each with its rules
+    "/account/ord/name",              # is a name valid and free on a chain (Creator -> Names, 2026-10-26)
     "/account/arcades",               # the arcades on the mesh, for the Your arcade page's Arcades card
     "/account/favorites",             # the markets this account starred (Exchange, 2026-10-17)
     "/account/homeapps",              # the icons on this account's home screen, in its order (PWA, 2026-10-24)

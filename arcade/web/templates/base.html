@@ -115,6 +115,15 @@ html.inshell body.fullscreen #arc-bot,html.inshell body.fullscreen #arc-bot-box{
 })();
 </script>
 <link rel="stylesheet" href="/base.css">
+{% if preload_wallet %}{# The wallet's whole module graph at once (2026-10-26: "take a look at the creators tab as to
+   why it takes so long to load"): wallet.js imports signin.js and coins.js, which import the vendored secp256k1 and
+   ripemd160, which import their helpers -- five round trips in a row before a page could ask for its own data, 0.2 to
+   0.9 s each through the public tunnel. Listed here they come in one. #}
+<link rel="modulepreload" href="/wallet.js"><link rel="modulepreload" href="/signin.js"><link rel="modulepreload" href="/coins.js">
+<link rel="modulepreload" href="/vendor/noble-secp256k1.js"><link rel="modulepreload" href="/vendor/hashes/ripemd160.js">
+<link rel="modulepreload" href="/vendor/hashes/_md.js"><link rel="modulepreload" href="/vendor/hashes/utils.js">
+<link rel="modulepreload" href="/vendor/hashes/_assert.js"><link rel="modulepreload" href="/vendor/hashes/crypto.js">
+{% endif %}
 {% if brand.css %}<style>/* this node's face (arcade/web/brand.py) */{{ brand.css | safe }}</style>{% endif %}
 </head>
 {# Every page is live. The counter lives on the body rather than in an

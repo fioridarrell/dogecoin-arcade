@@ -308,3 +308,41 @@ def test_a_collections_lanes_split_pays_only_this_account(client, monkeypatch, t
     assert bad.status_code == 400
     gone = app.post("/account/ord/inscribe", json={**body, "lane": {"txid": "cd" * 32, "vout": 0}})
     assert gone.status_code == 400, "a lane's coin this account does not hold pays nothing"
+
+
+def test_creator_names_says_whether_a_name_counts_and_is_free(client, monkeypatch, tmp_path):
+    """Creator -> Names (2026-10-26: "Build a p:dns inscriber in the creators tab"): /account/ord/name checks a
+    name the page would claim as {"p":"dns","op":"reg","name":...} against each reading, and asks the chain's index who
+    holds it."""
+    app, state = client
+    _doge_account(app, state, monkeypatch, tmp_path)
+
+    class Index:
+        def lookup(self, q):
+            assert q == {"what": "name", "name": q["name"]}
+            held = {"wow.doge": {"inscription": "ab" * 32 + "i0", "number": 7, "kind": "json", "output": None}}
+            return {"name": q["name"], "readings": {r: {"winner": held.get(q["name"]), "later_claims": 0}
+                                                     for r in ord_rules.NAME_RULES}}
+    monkeypatch.setattr(state, "ord_indexes", lambda: {"doge": Index()})
+    ask = lambda name, chain="doge": app.get("/account/ord/name", params={"chain": chain, "name": name}).json()
+    free = ask("Me-Seeks.doge")
+    assert free["valid"] and not free["taken"] and free["name"] == "me-seeks.doge"
+    assert all(r["counts"] for r in free["readings"].values()), "a .doge name counts under every reading"
+    assert ".doge" in free["endings"]
+    mesh = ask("me-seeks.mesh")
+    assert mesh["valid"] and not mesh["readings"]["doge2023"]["counts"], "the 2023 guide counts .doge only"
+    taken = ask("wow.doge")
+    assert taken["taken"] and taken["readings"]["spec"]["winner"]["number"] == 7
+    for bad in ("-wow.doge", "wow", "a.b.doge", "w_w.doge"):
+        assert not ask(bad)["valid"], bad
+    assert ask("1234.pepemap")["why"] == "A block map, not a name"
+    away = ask("wow.doge", chain="bel")
+    assert away["valid"] and not away["taken"] and "does not read" in away["why"]
+    page = app.get("/create/name", headers={"host": "app.example.com", "cf-ray": "x"}).text
+    assert 'id="nm-go"' in page and '"p":"dns"' in page
+    assert 'href="/create/name"' in app.get("/create", headers={"host": "app.example.com", "cf-ray": "x"}).text
+
+
+def test_creator_names_route_is_open_to_accounts():
+    from arcade.web import door
+    assert door.public_path("/create/name") and door.public_path("/account/ord/name")

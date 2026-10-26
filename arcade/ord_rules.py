@@ -429,6 +429,16 @@ NAME_RULES = {
 }
 
 
+#: A namespace that is a block map, not a name (2026-10-26: "fix the swamped indexer"): the spec leaves out
+#: "bitmap" and "dogemap"; Pepecoin's are "pepemap", "pepmap", "kekmap", "frogmap", "pepemaps" and the misspelt
+#: "pepemep" -- 1.64 million claims of "<block>.pepemap" against some 2,750 real names on Pepecoin mainnet.
+BLOCK_MAP = re.compile(r"(map|maps|mep)$")
+
+
+def is_block_map(namespace: str) -> bool:
+    return bool(BLOCK_MAP.search(namespace))
+
+
 def name_claim(ctype: bytes, body: bytes) -> tuple[str, str] | None:
     """(kind, raw name) when an inscription claims a name: kind "json" ({"p":"dns","op":"reg"|"register"}) or "text"
     (its first word looks like label.namespace)."""
@@ -490,7 +500,7 @@ def normalise(rule: str, kind: str, raw: str) -> str | None:
         parts = name.split(".")
         if len(parts) != 2 or not all(_spec_part(p) for p in parts):
             return None
-        if parts[1] in ("bitmap",) or parts[1].startswith("dogemap"):
+        if is_block_map(parts[1]):
             return None
         return name
     if kind != "json":

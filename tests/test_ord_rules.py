@@ -204,6 +204,42 @@ def test_name_rules():
     assert ord_rules.name_claim(TEXT, b"jon.doge and more") == ("text", "jon.doge")
 
 
+def test_block_maps_are_not_names():
+    """2026-10-26: "fix the swamped indexer" -- Pepecoin's 1.64 million "<block>.pepemap" claims were counted as
+    names under the spec reading, beside some 2,750 real ones."""
+    n = ord_rules.normalise
+    for claim in ("295434.pepemap", "3.pepmap", "12.kekmap", "7.frogmap", "9.pepemaps", "4.pepemep", "1.bitmap",
+                  "5.dogemap", "5.dogemaps"):
+        assert n("spec", "text", claim) is None, claim
+    for name in ("market.pepe", "genesis.pep", "frog.ribbit", "me-seeks.mesh", "pepmap.pepe", "maps.kek"):
+        assert n("spec", "text", name) == name, name
+    assert n("spec", "text", "-meseeks.mesh") is None and n("spec", "text", "meseeks-.mesh") is None, \
+        "a hyphen inside a label, never at its ends"
+
+
+def test_an_index_from_before_loses_its_block_maps_once_and_keeps_its_names(tmp_path):
+    """The names an index already kept: block maps out on its next open, the real names and JSON claims kept."""
+    import sqlite3
+    from arcade.doginal_index import Store
+    path = tmp_path / "ord-main.sqlite"
+    s = Store(path, net="main")
+    rows = [(1, 10, 100, "text", "1.pepemap", "1.pepemap", None, None),
+            (2, 11, 100, "text", "market.pepe", "market.pepe", None, None),
+            (3, 12, 100, "json", "2.pepmap", "2.pepmap", "2.pepmap", None),         # JSON-only still counts it
+            (4, 13, 100, "text", "7.kekmap", "7.kekmap", None, None)]
+    s._db.executemany("INSERT INTO names VALUES (?,?,?,?,?,?,?,?)", rows)
+    s._db.execute("DELETE FROM meta WHERE k='names_maps'")                           # as an index walked before
+    s._db.close()
+    s = Store(path, net="main")
+    got = {r[0]: (r[1], r[2]) for r in sqlite3.connect(path).execute("SELECT rid, spec, json FROM names")}
+    assert got == {2: ("market.pepe", None), 3: (None, "2.pepmap")}
+    assert s.meta("names_maps") == 1
+    s._db.execute("INSERT INTO names VALUES (5, 14, 101, 'text', '8.pepemap', '8.pepemap', NULL, NULL)")
+    Store(path, net="main")
+    assert sqlite3.connect(path).execute("SELECT COUNT(*) FROM names WHERE rid=5").fetchone()[0] == 1, \
+        "once per index: what the walk writes from now on is the rule's own business"
+
+
 def test_every_inscription_keeps_its_type_its_protocol_and_its_size(tmp_path):
     """2026-10-20: "keep track of which ord are what MIME type? So we can go back and scan by mime type later?
     In case there is another protocol we want to index" -- the type as text, a JSON body's "p", and the size."""

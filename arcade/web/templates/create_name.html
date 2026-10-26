@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+{% block title %}Claim a name · {{ brand.name }}{% endblock %}
+{% block body %}
+{# 2026-10-26: "Build a p:dns inscriber in the creators tab". A name is an ord whose body is
+   {"p":"dns","op":"reg","name":"..."}: the first valid claim of a name owns it, and whoever holds that ord holds the
+   name. Inscribed through the same flow as Creator -> Ords (arcade/ord_inscribe.py), every transaction checked by
+   wallet.js and signed in this tab; /account/ord/name says first whether the name counts and is free. #}
+<p style="margin:0 0 6px"><a href="/create">&larr; Creator</a></p>
+<h1>Claim a name</h1>
+<p class="muted" style="max-width:760px">A name like <b>yours.doge</b> or <b>yours.pepe</b>, inscribed as an ord from
+  your own wallet. The first claim of a name owns it, and whoever holds that ord holds the name: send the ord and the
+  name goes with it.</p>
+<p class="err" id="trouble" hidden></p>
+<p class="ok" id="news" hidden></p>
+{% if not account_here %}
+<div class="panel"><p style="margin:0">Sign in to claim a name from your wallet.</p></div>
+{% else %}
+<div class="panel" id="nm-make">
+  <div class="nm-grid">
+    <label>Chain <select id="nm-chain"><option value="">Loading&hellip;</option></select></label>
+    <label>Name
+      <span class="nm-name"><input id="nm-label" autocomplete="off" autocapitalize="none" spellcheck="false"
+        maxlength="63" placeholder="yours"><input id="nm-ending" list="nm-endings" autocomplete="off"
+        autocapitalize="none" spellcheck="false" maxlength="64" placeholder=".pepe"></span>
+      <datalist id="nm-endings"></datalist>
+    </label>
+  </div>
+  <p class="muted nm-rules">Letters, digits and hyphens (never first or last), one dot before the ending. Any ending
+    works; the ones people already use on the chain are offered.</p>
+  <div class="nm-check" id="nm-check" hidden>
+    <div class="nm-verdict" id="nm-verdict"></div>
+    <ul class="nm-readings" id="nm-readings"></ul>
+  </div>
+  <div class="row" style="margin-top:10px">
+    <button type="button" id="nm-go" disabled>Claim it</button>
+  </div>
+  <div id="nm-progress" hidden>
+    <div class="ord-bar"><span id="nm-bar"></span></div>
+    <p class="muted" id="nm-says" style="margin:6px 0 0"></p>
+  </div>
+  <p class="muted" style="font-size:.84rem;margin:12px 0 0">What is inscribed: <code id="nm-body">{"p":"dns","op":"reg","name":"yours.pepe"}</code></p>
+</div>
+{% endif %}
+<style>
+.nm-grid{display:grid;gap:10px;grid-template-columns:minmax(150px,220px) 1fr}
+@media (max-width:620px){.nm-grid{grid-template-columns:1fr}}
+.nm-grid label{display:flex;flex-direction:column;gap:4px;font-size:.88rem}
+.nm-name{display:flex;gap:0}
+.nm-name input:first-child{flex:1;min-width:0;border-top-right-radius:0;border-bottom-right-radius:0}
+.nm-name input:last-child{width:9em;border-top-left-radius:0;border-bottom-left-radius:0;border-left:0}
+.nm-rules{font-size:.84rem;margin:8px 0 0}
+.nm-check{margin-top:10px;padding:10px 12px;border:1px solid var(--line);border-radius:12px}
+.nm-verdict{font-weight:650}
+.nm-verdict.free{color:var(--ok)}
+.nm-verdict.taken,.nm-verdict.bad{color:var(--bad)}
+.nm-readings{margin:6px 0 0;padding-left:18px;font-size:.84rem;color:var(--muted)}
+.ord-bar{height:8px;border-radius:4px;background:var(--line);overflow:hidden;margin-top:10px}
+.ord-bar span{display:block;height:100%;width:0;background:var(--accent);transition:width .3s}
+</style>
+{% if account_here %}
+<script type="module">
+import * as wallet from "/wallet.js";
+
+const $ = (id) => document.getElementById(id);
+const say = (t) => { $("trouble").textContent = t; $("trouble").hidden = !t; };
+const news = (t) => { $("news").textContent = t; $("news").hidden = !t; };
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const commas = (n) => Number(n || 0).toLocaleString();
+let chains = [], busy = false, checked = null, asking = 0;
+const chainOf = (net) => chains.find((c) => c.chain === net);
+const coins = (sats, net) => `${(Number(sats || 0) / 1e8).toLocaleString(undefined, {maximumFractionDigits: 8})} ${(chainOf(net) || {}).coin || ""}`;
+const keysNow = async () => (await wallet.opened(ARCADE_CHAIN)) || await arcadeKeys(ARCADE_CHAIN);
+const b64 = (bytes) => { let s = ""; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(s); };
+const READING = {spec: "The name standard (DNS v1.2)", json: "JSON claims, any ending", doge2023: "The 2023 guide (.doge only)"};
+
+async function getJSON(url, opts) {
+  const r = await fetch(url, {cache: "no-store", credentials: "same-origin", ...(opts || {})});
+  const said = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(said.detail || `HTTP ${r.status}`);
+  return said;
+}
+
+function wanted() {
+  let label = $("nm-label").value.trim(), ending = $("nm-ending").value.trim();
+  // a whole name typed or pasted into the first box: split it at its last dot
+  if (label.includes(".") && !ending) { const at = label.lastIndexOf("."); ending = label.slice(at); label = label.slice(0, at); }
+  if (ending && !ending.startsWith(".")) ending = "." + ending;
+  return label + ending;
+}
+const body = (name) => JSON.stringify({p: "dns", op: "reg", name});
+
+function draw() {
+  const name = wanted();
+  $("nm-body").textContent = body(name || "yours.pepe");
+  const c = checked;
+  $("nm-go").disabled = busy || !c || !c.valid || c.taken || c.name !== name.toLowerCase() || !chainOf($("nm-chain").value);
+  if (!c || !name) { $("nm-check").hidden = true; return; }
+  $("nm-check").hidden = false;
+  const v = $("nm-verdict");
+  if (!c.valid) { v.className = "nm-verdict bad"; v.textContent = c.why; $("nm-readings").innerHTML = ""; return; }
+  if (c.why) { v.className = "nm-verdict bad"; v.textContent = c.why; }
+  else if (c.taken) { v.className = "nm-verdict taken"; v.textContent = `${c.name} is taken.`; }
+  else { v.className = "nm-verdict free"; v.textContent = `${c.name} is free.`; }
+  $("nm-readings").innerHTML = Object.entries(c.readings || {}).map(([rule, r]) => {
+    const who = r.winner ? `claimed by inscription #${commas(r.winner.number)}` : "nobody has it";
+    return `<li>${esc(READING[rule] || rule)}: ${r.counts ? esc(who) : "does not count this name"}</li>`;
+  }).join("") + (c.walk ? `<li>Answered by ${esc(c.walk)} that reads the whole chain.</li>` : "");
+}
+
+let timer = null;
+function check() {
+  checked = null; draw();
+  clearTimeout(timer);
+  const name = wanted(), chain = $("nm-chain").value;
+  if (!name || !chain) return;
+  timer = setTimeout(async () => {
+    const mine = ++asking;
+    try {
+      const said = await getJSON(`/account/ord/name?chain=${encodeURIComponent(chain)}&name=${encodeURIComponent(name)}`);
+      if (mine !== asking) return;
+      checked = said;
+      $("nm-endings").innerHTML = (said.endings || []).map((e) => `<option value="${esc(e)}">`).join("");
+    } catch (e) { if (mine === asking) say(e.message); }
+    draw();
+  }, 350);
+}
+
+async function loadChains() {
+  try { chains = (await getJSON("/account/ord/chains")).chains || []; } catch (e) { say(e.message); return; }
+  $("nm-chain").innerHTML = chains.map((c) => `<option value="${esc(c.chain)}">${esc(c.label)}</option>`).join("")
+    || `<option value="">This arcade runs none of these chains</option>`;
+  try { const last = localStorage.getItem("arcade.name.chain"); if (last && chainOf(last)) $("nm-chain").value = last; } catch (e) {}
+  if (!$("nm-ending").value) $("nm-ending").placeholder = $("nm-chain").value === "doge" ? ".doge" : ".pepe";
+  check();
+}
+$("nm-chain").onchange = () => {
+  try { localStorage.setItem("arcade.name.chain", $("nm-chain").value); } catch (e) {}
+  $("nm-ending").placeholder = $("nm-chain").value === "doge" ? ".doge" : ".pepe";
+  check();
+};
+$("nm-label").oninput = check;
+$("nm-ending").oninput = check;
+
+function progress(said, name) {
+  $("nm-progress").hidden = false;
+  const of = Number(said.of || 1), sent = Number(said.sent || 0);
+  $("nm-bar").style.width = `${Math.round(100 * Math.min(sent, of) / of)}%`;
+  $("nm-says").textContent = said.done ? `${name}: both transactions sent.`
+    : said.restarting ? `${name}: the arcade is not answering (it may be restarting); trying again…`
+    : said.wait ? `${name}: waiting for a block…`
+    : `${name}: ${commas(sent)} of ${commas(of)} sent… keep this tab open.`;
+}
+
+$("nm-go").onclick = async () => {
+  say(""); news("");
+  const c = chainOf($("nm-chain").value), name = checked && checked.name;
+  if (!c || !name || !checked.valid || checked.taken) return;
+  const bytes = new TextEncoder().encode(body(name));
+  try {
+    const held = await keysNow();
+    if (!held) return;
+    const first = await wallet.startOrd(held, {chain: c.chain, content: b64(bytes), content_type: "text/plain;charset=utf-8", name});
+    const k = first.costs, shown = await wallet.checked(first, held);
+    const network = Number(shown.fee || 0) + Number(k.reveal_fees || 0);
+    const label = `Claim ${name} on ${c.label}: ${commas(first.of)} transactions, signed here without asking again. `
+      + `${coins(k.postage, c.chain)} stays yours as the name's own coin: whoever holds it holds the name.`;
+    const ok = c.mainnet
+      ? await arcadeMainnetReview({label, network, data: 0, others: 0, operator: 0, total: network + Number(k.postage), chain: c.chain})
+      : await arcadeAsk(`Claim ${name}?`, `${label} Network fees: ${coins(network, c.chain)}.`, "Claim it");
+    if (!ok) return;
+    busy = true; draw();
+    const stay = (e) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", stay);
+    document.body.dataset.inscribing = "1";
+    try {
+      const id = await wallet.inscribeOrd(held, first, async () => b64(bytes), (s) => progress(s, name));
+      news(`Claimed: ${name} is inscription ${id}. It is yours once the block is mined, unless somebody's claim of it was mined first.`);
+    } finally {
+      window.removeEventListener("beforeunload", stay);
+      delete document.body.dataset.inscribing;
+    }
+  } catch (e) { say(String(e.message || e)); }
+  busy = false; check();
+};
+
+loadChains();
+</script>
+{% endif %}
+{% endblock %}

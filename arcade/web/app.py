@@ -1187,6 +1187,8 @@ def create_app(state: AppState) -> FastAPI:
             # The name its wallet opens under, for the unlock sheet every page
             # carries (a tester, 2026-09-26: "unlock your wallet from each page").
             "account_name": _account_name(request),
+            # a signed-in reader's pages run the wallet: base.html preloads its modules (2026-10-26)
+            "preload_wallet": signed_in(request) is not None,
             # A stranger on the public site: a sign-in hint on every page.
             "stranger_here": bool(_public_request(request)
                                   and signed_in(request) is None),
@@ -5638,6 +5640,11 @@ def create_app(state: AppState) -> FastAPI:
         """One tab for making things (2026-09-27): NFTs, tokens, and
         the launchpad wizard, each a button to the page that does it."""
         return render(request, "create.html", chain=_token_chain()[0])
+
+    @app.get("/create/name", response_class=HTMLResponse)
+    def create_name_page(request: Request):
+        """Claim a name ("p":"dns") as an ord from the account's own wallet (2026-10-26)."""
+        return render(request, "create_name.html", chain=_token_chain()[0])
 
     @app.get("/create/ord", response_class=HTMLResponse)
     def create_ord_page(request: Request):
@@ -14855,6 +14862,49 @@ def create_app(state: AppState) -> FastAPI:
                         "soft_dust": bool(getattr(p, "soft_dust", True)), "postage": oi.POSTAGE,
                         "mainnet": bool(chain.is_mainnet), "max_bytes": oi.MAX_BYTES})
         return JSONResponse({"chains": out}, headers={"Cache-Control": "no-store"})
+
+    #: Endings people already use on each chain, offered first on Creator -> Names (any other ending is allowed).
+    NAME_ENDINGS = {"doge": [".doge"], "main": [".pepe", ".pep", ".\U0001f438", ".ribbit", ".frog", ".kek"],
+                    "test": [".pepe", ".pep"]}
+
+    @app.get("/account/ord/name")
+    def account_ord_name(request: Request, chain: str = "", name: str = ""):
+        """Creator -> Names (2026-10-26: "Build a p:dns inscriber in the creators tab"): is `name` a name that
+        counts, and is it free on `chain`? Under each reading (ord_rules.NAME_RULES) of the claim this page inscribes
+        -- {"p":"dns","op":"reg","name":...} -- what it would make and who, if anybody, claimed it first."""
+        from .. import ord_rules
+        _signed_in_account(request)
+        said = name.strip()
+        out: dict[str, Any] = {"name": said.lower(), "chain": chain, "endings": NAME_ENDINGS.get(chain, []),
+                               "readings": {}, "valid": False, "taken": False, "why": ""}
+        if not said:
+            out["why"] = "Type a name, like yours.pepe"
+            return JSONResponse(out, headers={"Cache-Control": "no-store"})
+        made = {rule: ord_rules.normalise(rule, "json", said) for rule in ord_rules.NAME_RULES}
+        label, _, ending = said.lower().rpartition(".")
+        if not made["spec"]:
+            out["why"] = ("A block map, not a name" if ending and ord_rules.is_block_map(ending)
+                          else "One dot between the name and its ending; letters, digits and hyphens, a hyphen never "
+                               "first or last, up to 63 characters each side")
+            return JSONResponse(out, headers={"Cache-Control": "no-store"})
+        out["name"] = made["spec"]
+        out["valid"] = True
+        index = state.ord_indexes().get(chain)
+        if index is None:
+            out["why"] = "This arcade does not read that chain's ords, so it cannot say whether the name is free"
+            return JSONResponse(out, headers={"Cache-Control": "no-store"})
+        try:
+            found = index.lookup({"what": "name", "name": made["spec"]})
+        except Exception as exc:                               # noqa: BLE001 -- said on the page
+            out["why"] = f"The index could not say just now: {str(exc)[:200]}"
+            return JSONResponse(out, headers={"Cache-Control": "no-store"})
+        for rule, what in ord_rules.NAME_RULES.items():
+            got = (found.get("readings") or {}).get(rule) or {}
+            out["readings"][rule] = {"counts": bool(made[rule]), "about": what, "winner": got.get("winner")}
+        out["taken"] = any(r["winner"] for r in out["readings"].values() if r["counts"])
+        if found.get("node"):
+            out["walk"] = "a linked arcade"
+        return JSONResponse(out, headers={"Cache-Control": "no-store"})
 
     @app.post("/account/ord/inscribe")
     def account_ord_inscribe(request: Request, payload: Any = Body(None)):

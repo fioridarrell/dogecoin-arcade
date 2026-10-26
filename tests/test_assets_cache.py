@@ -79,3 +79,30 @@ def test_one_account_asking_at_once_is_answered_from_one_working_out(client, mon
     assert len(calls) == 1, f"worked out {len(calls)} times for 5 asks at once"
     app.get("/account", headers=LOCAL)
     assert len(calls) == 2, "nothing kept afterwards"
+
+
+def test_a_signed_in_page_preloads_the_wallets_whole_module_graph(client):
+    """The Creator tab's load (2026-10-26): wallet.js -> signin/coins -> secp256k1/ripemd160 -> their helpers
+    were five round trips in a row. A signed-in page names the whole graph up front, fingerprinted like every import,
+    so the browser fetches it at once; a page nobody is signed in to does not."""
+    from nacl.signing import SigningKey
+    from test_auth_web import _sign_in
+    app, state = client
+    assert "modulepreload" not in app.get("/create", headers=LOCAL).text
+    assert _sign_in(app, SigningKey.generate(), headers=LOCAL).status_code == 200
+    html = app.get("/create", headers=LOCAL).text
+    mark = re.search(r'/wallet\.js\?v=([0-9a-f]{12})', html).group(1)
+    for name in ("/wallet.js", "/signin.js", "/coins.js"):
+        assert f'<link rel="modulepreload" href="{name}?v={mark}">' in html, name
+    root = pathlib.Path(__file__).resolve().parent.parent / "arcade/web/vendor"
+    for f in ("noble-secp256k1.js", "hashes/ripemd160.js", "hashes/_md.js", "hashes/utils.js", "hashes/_assert.js",
+              "hashes/crypto.js"):
+        assert f'<link rel="modulepreload" href="/vendor/{f}">' in html, f
+        assert (root / f).exists(), f
+    # every module the graph imports is preloaded: nothing left to find one hop later
+    imports = set()
+    for f in ("hashes/ripemd160.js", "hashes/_md.js", "hashes/utils.js", "hashes/_assert.js", "noble-secp256k1.js"):
+        for m in re.findall(r"from '\./([\w.]+)'", (root / f).read_text()):
+            imports.add("hashes/" + m)
+    for f in imports:
+        assert f'href="/vendor/{f}"' in html, f

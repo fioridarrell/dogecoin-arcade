@@ -88,6 +88,24 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-26 Creator -> Names (p:dns), the Creator tab's load, block maps out of the names (Claude)
+The operator: "Build a p:dns inscriber in the creators tab. See if you can take a look at the creators tab as to why it takes
+so long to load check each of the modules. Also fix the swamped indexer."
+- Names: `/create/name` (Creator card "Names") claims `{"p":"dns","op":"reg","name":...}` as an ord, text/plain,
+  through the Ords flow (startOrd/inscribeOrd, mainnet review). `GET /account/ord/name?chain=&name=` (door GET list)
+  says whether the name counts under each reading, and the index's first claim (index.lookup, so a linked walking
+  arcade answers when this one does not walk). Endings people use are offered per chain (NAME_ENDINGS).
+- Block maps: `ord_rules.is_block_map` -- any namespace ending map/maps/mep (pepemap, pepmap, kekmap, frogmap,
+  pepemaps, pepemep; bitmap, dogemap as before) is not a name under the spec reading. Indexes walked before are
+  cleaned once on open (`Store._names_without_maps`, meta `names_maps`; 2.9 s on PEP main: 1,646,257 rows -> 3,170,
+  2,715 names). No RULES bump: nothing is walked again.
+- Load: every Creator module is 0.03-0.2 s on the server warm (cold first hits 0.6-2 s). On a phone the time went to
+  the public tunnel (0.2-0.9 s a request) times the wallet's module chain: wallet.js -> signin/coins -> secp256k1/
+  ripemd160 -> their helpers, five round trips before a page asked for its own data. base.html now `modulepreload`s
+  the whole graph for a signed-in reader (`preload_wallet`). /create/ord asks its chains and runs at once.
+  Considered and left: the live-update baseline fetch at 300 ms (delaying it lost changes in the first seconds).
+- Tests: test_ord_rules (+2), test_ord_inscribe (+2), test_assets_cache (+1).
+
 ### 2026-10-26 T-Decks over WiFi; the T-Deck badge on app cards (Claude)
 The operator: "stay connected to Wi-Fi and while you're connected to Wi-Fi have sign in and be done through Wi-Fi" ... "When
 connected to Wi-Fi, all messages and transactions should be sent through Wi-Fi"; "If an app is designed for the T deck,
