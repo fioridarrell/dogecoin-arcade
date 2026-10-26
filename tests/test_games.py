@@ -316,3 +316,42 @@ def test_a_star_puts_an_app_first_and_stays_across_its_versions(client):
     assert "&#128172; 1" in card, "and its comment"
     thread = app.get(f"/games/{a2}").text
     assert thread.count("nSomebody") >= 1, "the discussion holds what was said to v1"
+
+
+def _inscribe_bytes(state, txid, number, creator, body, kind, said=None):
+    import hashlib
+    index = state.token_index(state.messaging)
+    with index.open() as db:
+        db.conn.execute(
+            "INSERT OR REPLACE INTO inscription(txid,number,creator,owner,block_height,"
+            "position,content_type,content_len,sha256,json,chunks,content) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (txid, number, creator, creator, 100, 0, kind, len(body), hashlib.sha256(body).hexdigest(),
+             json.dumps(said) if said else None, 1, body))
+        db.conn.commit()
+
+
+def test_the_t_deck_app_store_lists_cards_with_a_t_deck_build_by_the_same_creator(client):
+    """2026-10-26: "can we download inscribed apps from the Blockchain like we do with apps in the PWA? Maybe we
+    have to add apps over Wi-Fi". A card's `tdeck` names a JavaScript inscription; only the card's own creator's counts,
+    and its size and sha256 travel with it, for the T-Deck to check what it downloads."""
+    import hashlib
+    app, state = client
+    script = b"ui.text('Tic-Tac-Toe');"
+    _inscribe_bytes(state, "a1" * 32, 30, MAKER, script, "text/javascript")
+    _inscribe_bytes(state, "a2" * 32, 31, MAKER, b"<html></html>", "text/html",
+                    {"app": {"name": "Tic-Tac-Toe", "description": "Play the T-Deck", "tdeck": "A1" * 32}})
+    _inscribe_bytes(state, "b1" * 32, 32, OTHER, b"evil()", "text/javascript")
+    _inscribe_bytes(state, "b2" * 32, 33, MAKER, b"<html></html>", "text/html",
+                    {"app": {"name": "Borrowed", "tdeck": "b1" * 32}})            # somebody else's script: not listed
+    _inscribe_bytes(state, "c2" * 32, 34, MAKER, b"<html></html>", "text/html", {"app": {"name": "Web only"}})
+    assert gameslib.parse(json.dumps({"app": {"name": "x", "tdeck": "not a txid"}}))["tdeck"] == ""
+    got = app.get("/r/tdeck/apps").json()["apps"]
+    assert [a["name"] for a in got] == ["Tic-Tac-Toe"]
+    assert got[0]["tdeck"] == "a1" * 32 and got[0]["size"] == len(script)
+    assert got[0]["sha256"] == hashlib.sha256(script).hexdigest()
+    tsv = app.get("/r/tdeck/apps?format=tsv").text.splitlines()
+    assert tsv == ["\t".join(["a2" * 32, "a1" * 32, str(len(script)), hashlib.sha256(script).hexdigest(),
+                              "Tic-Tac-Toe", "", "Play the T-Deck"])]
+    outside = app.get("/r/tdeck/apps", headers={"host": "app.example.com", "cf-ray": "x"})
+    assert outside.status_code == 200, "a T-Deck asks from anywhere: the page API's tree is open"

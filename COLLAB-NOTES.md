@@ -88,6 +88,15 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-26 T-Deck apps: a card's `tdeck` build, listed at /r/tdeck/apps (Claude)
+The operator: "can we download inscribed apps from the Blockchain like we do with apps in the PWA? ... we have to add apps over
+Wi-Fi that would be fine"; chose "With the redesign".
+- `games.parse` reads `tdeck` (a txid). `GET /r/tdeck/apps` (`?format=tsv` for the T-Deck) lists every card whose
+  `tdeck` is a `text/javascript` inscription by the card's own creator, at most 64 KB, with size and sha256.
+- docs/games.md "On the T-Deck": the sandbox's API. Firmware side: arcade-lora 2b3fb6c, device-ui 5b3b378 (QuickJS-ng
+  0.16.2 AppRuntime, App Store over Wi-Fi, home screen of app icons, PIN pad). Simulator: dogecoinarcade.com/meshtastic.
+- Tests: test_games (+1).
+
 ### 2026-10-26 LoRa: downlinks that stop failing, token picks for T-Decks (Claude)
 The gateway logged 2,301 "no ack" since 10-23. Each was followed ~5 s later by the radio's MAX_RETRANSMIT: the
 T-Deck had the frame, but its acks reached the Heltec too weakly, and the gateway sent again at 25 s while the radio

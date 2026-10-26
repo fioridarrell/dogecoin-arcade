@@ -407,6 +407,32 @@ minimizes it (see *Minimized* above).
 
 So for the phone, a good cover is a square picture that still reads when it is small, like a phone app icon.
 
+## On the T-Deck: a build for the LoRa handheld
+
+The DogecoinArcade T-Deck firmware has an App Store of its own. It lists every app whose card names a **T-Deck build**,
+downloads it over Wi-Fi, checks it against the sha256 the arcade lists, keeps it in the T-Deck's flash and runs it there.
+A T-Deck has no web browser, so the build is not your page: it is a small JavaScript file.
+
+1. Inscribe the script as `text/javascript`, at most 64 KB.
+2. Name it on your card: `{"app": {"name": "Tic-Tac-Toe", "tdeck": "<the script's txid>"}}`. Only a script **you**
+   inscribed counts, the same rule as `play`.
+
+The arcade lists them at `/r/tdeck/apps`. The script runs in a sandbox: it can draw on its own screen, hear keys, keep a
+few strings, set timers and chime. It has no radio, no wallet and no files.
+
+```js
+ui.title("Hello");
+ui.text("Press a button", {center: true});
+ui.row(function () { ui.button("Yes", function () { chime("coins"); }, {primary: true}); ui.button("No", app.close); });
+var c = ui.canvas(120, 60); c.fill(0x141310); c.rect(10, 10, 20, 20, 0xd9a520); c.text(40, 20, "hi", 0xffffff);
+onKey(function (k) { return k === "enter"; });           // "up" "down" "left" "right" "enter" or a character
+every(500, function () { /* ... */ });                   // after(ms, fn), cancel(id)
+store.set("best", "12"); store.get("best");              // strings, 4 KB per app
+```
+
+An app may use 512 KB of memory, and one call may run for a quarter of a second; past either, the T-Deck stops it and
+says why. A full example is `apps/tictactoe.js` in github.com/dogecoinarcade/arcade-lora.
+
 ## Recipes
 
 ### An app that is one page

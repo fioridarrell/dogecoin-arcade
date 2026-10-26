@@ -25006,6 +25006,48 @@ def create_app(state: AppState) -> FastAPI:
             item["mine"] = bool(me) and me in makers.get(item["creator"], {item["creator"]})
         return launchlist.rank(items, sort, int(time.time()))
 
+    #: The largest T-Deck app script listed (it is kept in the T-Deck's flash and run there).
+    TDECK_APP_MAX = 64 * 1024
+
+    @app.get("/r/tdeck/apps")
+    def tdeck_apps(request: Request, format: str = ""):
+        """The App Store of the DogecoinArcade T-Deck (2026-10-26: "can we download inscribed apps from the
+        Blockchain like we do with apps in the PWA? ... we have to add apps over Wi-Fi that would be fine"): every app
+        card whose `tdeck` names a JavaScript inscription by the card's own creator, with its size and sha256, so the
+        T-Deck checks the bytes it downloads from /content/<txid> before it keeps them."""
+        import hashlib
+        out: list[dict[str, Any]] = []
+        for item in _games_ranked(request, "popular"):
+            game, script = item["game"], item["game"].get("tdeck") or ""
+            if not script:
+                continue
+            try:
+                index = _chain_of(script)[1]
+                row = index.inscription(script)
+                found = index.inscription_content(contentlib._key(script))
+            except Exception:                              # noqa: BLE001 -- that chain cannot say just now
+                continue
+            if not row or row.get("creator") != item["creator"] or not found:
+                continue
+            ctype, body = found
+            if not str(ctype).split(";")[0].strip() in ("text/javascript", "application/javascript") \
+                    or len(body) > TDECK_APP_MAX:
+                continue
+            out.append({"card": item["txid"], "name": game["name"], "description": game["description"],
+                        "version": game["version"], "creator": item["creator"], "tdeck": script, "size": len(body),
+                        "sha256": hashlib.sha256(body).hexdigest(), "net": item["net"]})
+        tags = _tags_for([a["creator"] for a in out])
+        for a in out:
+            a["by"] = "@" + tags[a["creator"]] if tags.get(a["creator"]) else ""
+        out = out[:60]
+        if format == "tsv":
+            # one app a line, for the T-Deck's own reader: card, script, size, sha256, name, by, description
+            clean = lambda v: " ".join(str(v).split())           # noqa: E731 -- no tabs or line ends inside a field
+            text = "".join("\t".join([a["card"], a["tdeck"], str(a["size"]), a["sha256"], clean(a["name"]), clean(a["by"]),
+                                      clean(a["description"])]) + "\n" for a in out)
+            return Response(text, media_type="text/plain; charset=utf-8", headers={"Cache-Control": "public, max-age=60"})
+        return JSONResponse({"apps": out}, headers={"Cache-Control": "public, max-age=60"})
+
     @app.get("/games")
     def games_moved(request: Request):
         """The Games tab is the Apps tab (2026-10-23); old links still land on it."""

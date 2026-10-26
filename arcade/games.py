@@ -21,6 +21,7 @@ loads its parts from other inscriptions.
               "play": "<inscription txid>",            the page Play opens, if not this one
               "wallet": true,                          uses the player's wallet (trades, pays, signs)
               "minimized": {"timeout": 300},           seconds it keeps running minimized; 0 no limit; 15 min unsaid
+              "tdeck": "<inscription txid>",           its T-Deck build: a JavaScript inscription, same creator
               "genre": "rpg"}}                         up to 24
 
 **Minimized** (the installed app's home screen, 2026-10-24; the operator: "App builders should be able to decide their apps
@@ -107,6 +108,10 @@ def parse(json_text: Any) -> dict | None:
     out["cover"] = cover if _TXID.match(cover) else ""
     play = str(game.get("play") or "").lower()
     out["play"] = play if _TXID.match(play) else ""
+    # The app's T-Deck build (2026-10-26: apps "that you can add from the App Store ... over Wi-Fi"): a script
+    # the DogecoinArcade T-Deck firmware runs; listed at /r/tdeck/apps only when the card's creator inscribed it too.
+    tdeck = str(game.get("tdeck") or "").lower()
+    out["tdeck"] = tdeck if _TXID.match(tdeck) else ""
     return out
 
 
