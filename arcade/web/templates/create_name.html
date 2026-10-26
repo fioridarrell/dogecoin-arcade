@@ -40,6 +40,37 @@
   </div>
   <p class="muted" style="font-size:.84rem;margin:12px 0 0">What is inscribed: <code id="nm-body">{"p":"dns","op":"reg","name":"yours.pepe"}</code></p>
 </div>
+
+{# The .mesh web (2026-10-26): the holder of a .mesh name publishes its page, MeshText for the T-Deck's Mesh
+   Browser (docs/mesh-web.md). The newest page inscribed to the name's holder is the one that counts. #}
+<div class="panel" id="mp-make">
+  <h3 style="margin:0 0 4px">Publish a .mesh page</h3>
+  <p class="muted" style="font-size:.86rem;margin:0 0 10px">A page for a .mesh name you hold, read on T-Decks in the
+    Mesh Browser and at <a href="/meshweb" target="_blank" rel="noopener">/meshweb</a>. Plain text like the web in
+    1990: <code># heading</code>, <code>* item</code>, <code>=&gt; other.mesh Link</code>. The newest page you publish
+    is the one that shows. <a href="/docs/mesh-web.md" target="_blank" rel="noopener">How pages work</a></p>
+  <div class="nm-grid">
+    <label>Your .mesh name <input id="mp-name" autocomplete="off" autocapitalize="none" spellcheck="false"
+      placeholder="yours.mesh"></label>
+    <div class="muted mp-who" id="mp-who"></div>
+  </div>
+  <div id="mp-edit" hidden>
+    <div class="mp-tabs" id="mp-tabs"></div>
+    <div class="mp-cols">
+      <textarea id="mp-text" autocomplete="off" spellcheck="false" rows="14"></textarea>
+      <div class="mp-deck"><div class="mp-bar"><span>Home</span><span class="mp-addr" id="mp-addr"></span></div>
+        <div class="mp-page" id="mp-preview"></div><div class="mp-status" id="mp-status"></div></div>
+    </div>
+    <p class="muted" id="mp-count" style="font-size:.84rem;margin:8px 0 0"></p>
+    <div class="row" style="margin-top:8px;gap:8px">
+      <button type="button" id="mp-go" disabled>Publish</button>
+    </div>
+    <div id="mp-progress" hidden>
+      <div class="ord-bar"><span id="mp-bar"></span></div>
+      <p class="muted" id="mp-says" style="margin:6px 0 0"></p>
+    </div>
+  </div>
+</div>
 {% endif %}
 <style>
 .nm-grid{display:grid;gap:10px;grid-template-columns:minmax(150px,220px) 1fr}
@@ -54,6 +85,23 @@
 .nm-verdict.free{color:var(--ok)}
 .nm-verdict.taken,.nm-verdict.bad{color:var(--bad)}
 .nm-readings{margin:6px 0 0;padding-left:18px;font-size:.84rem;color:var(--muted)}
+.mp-who{align-self:end;font-size:.86rem;padding-bottom:8px}
+.mp-tabs{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 6px}
+.mp-tabs button{padding:4px 10px;font-size:.82rem;border-radius:999px}
+.mp-tabs button.on{background:var(--accent);color:var(--accent-fg)}
+.mp-cols{display:grid;grid-template-columns:1fr 322px;gap:12px;align-items:start}
+@media (max-width:760px){.mp-cols{grid-template-columns:1fr}}
+#mp-text{width:100%;box-sizing:border-box;font:13px/1.4 ui-monospace,monospace;min-height:240px}
+.mp-deck{width:320px;height:240px;background:#141310;color:#ece8e0;border:1px solid #2c2a25;border-radius:10px;display:flex;
+  flex-direction:column;overflow:hidden}
+.mp-bar{display:flex;gap:6px;align-items:center;padding:4px 6px;background:#1c1b17;border-bottom:1px solid #2c2a25;font-size:11px;color:#d9a520}
+.mp-addr{flex:1;background:#141310;border:1px solid #2c2a25;border-radius:8px;padding:2px 7px;color:#ece8e0;overflow:hidden;white-space:nowrap}
+.mp-page{flex:1;overflow:auto;padding:6px 8px;font-size:12px;line-height:1.45}
+.mp-page h1{font-size:16px;margin:2px 0 4px}.mp-page h2{font-size:14px;margin:6px 0 3px}.mp-page h3{font-size:12px;margin:6px 0 2px}
+.mp-page p{margin:0 0 4px}.mp-page a{color:#6fb0ff;cursor:pointer}
+.mp-page blockquote{margin:0 0 4px;padding-left:6px;border-left:2px solid #2c2a25;color:#9b948a}
+.mp-page pre{margin:2px 0 6px;font:11px/1.2 ui-monospace,monospace;white-space:pre;overflow:auto}
+.mp-status{padding:2px 6px;border-top:1px solid #2c2a25;font-size:10px;color:#9b948a}
 .ord-bar{height:8px;border-radius:4px;background:var(--line);overflow:hidden;margin-top:10px}
 .ord-bar span{display:block;height:100%;width:0;background:var(--accent);transition:width .3s}
 </style>
@@ -184,6 +232,127 @@ $("nm-go").onclick = async () => {
 };
 
 loadChains();
+
+/* --- the .mesh web: publish a page (docs/mesh-web.md) --- */
+const MAX_FRAME_BODY = 195;                      // one LoRa part (PROTOCOL.md)
+let site = null, pages = {"/": ""}, at = "/", siteTimer = null;
+function meshHTML(text, here) {
+  const out = []; let pre = false;
+  for (const line of String(text).split("\n")) {
+    if (line.startsWith("```")) { out.push(pre ? "</pre>" : "<pre>"); pre = !pre; continue; }
+    if (pre) { out.push(esc(line)); continue; }
+    const s = line.trimEnd();
+    if (s.startsWith("=>")) {
+      const [target, ...rest] = s.slice(2).trim().split(/\s+/);
+      if (target) out.push(`<p><a data-to="${esc(target)}">${esc(rest.join(" ") || target)}</a></p>`);
+    } else if (s.startsWith("### ")) out.push(`<h3>${esc(s.slice(4))}</h3>`);
+    else if (s.startsWith("## ")) out.push(`<h2>${esc(s.slice(3))}</h2>`);
+    else if (s.startsWith("# ")) out.push(`<h1>${esc(s.slice(2))}</h1>`);
+    else if (s.startsWith("* ")) out.push(`<p>&bull; ${esc(s.slice(2))}</p>`);
+    else if (s.startsWith(">")) out.push(`<blockquote>${esc(s.slice(1).trim())}</blockquote>`);
+    else if (s) out.push(`<p>${esc(s)}</p>`);
+  }
+  if (pre) out.push("</pre>");
+  return out.join("");
+}
+function siteBytes() {
+  return new TextEncoder().encode(JSON.stringify({p: "mesh", name: (site && site.name) || "", pages})).length;
+}
+function drawSite() {
+  const tabs = Object.keys(pages).sort();
+  $("mp-tabs").innerHTML = tabs.map((p) => `<button type="button" data-path="${esc(p)}" class="${p === at ? "on" : "ghost"}">${esc(p)}</button>`).join("")
+    + `<button type="button" class="ghost" data-add="1">+ page</button>`
+    + (at !== "/" ? `<button type="button" class="ghost" data-drop="1">Remove ${esc(at)}</button>` : "");
+  $("mp-text").value = pages[at] || "";
+  drawPreview();
+}
+function drawPreview() {
+  const name = (site && site.name) || "";
+  $("mp-addr").textContent = name + (at === "/" ? "" : at);
+  $("mp-preview").innerHTML = meshHTML(pages[at] || "", name);
+  const n = siteBytes(), max = (site && site.max) || 3000;
+  const parts = Math.ceil(n / MAX_FRAME_BODY);
+  $("mp-status").textContent = `Document: Done (${commas(n)} bytes)`;
+  $("mp-count").textContent = `${commas(n)} of ${commas(max)} bytes for the whole site · ${Object.keys(pages).length} page(s) · `
+    + `about ${parts} LoRa part${parts === 1 ? "" : "s"} (roughly ${Math.max(5, parts * 3)} s by radio, instant over WiFi)`
+    + (n > max ? " — too big: shorten it" : "");
+  $("mp-go").disabled = busy || !site || !site.mine || n > max || !(pages["/"] || "").trim();
+}
+$("mp-text").oninput = () => { pages[at] = $("mp-text").value; drawPreview(); };
+$("mp-tabs").onclick = (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  if (b.dataset.path) { at = b.dataset.path; drawSite(); return; }
+  if (b.dataset.add) {
+    const p = (prompt("The new page's path, like /about") || "").trim().toLowerCase();
+    const path = "/" + p.replace(/^\/+|\/+$/g, "");
+    if (!/^\/(?:[a-z0-9._-]{1,32}(?:\/[a-z0-9._-]{1,32}){0,3})?$/.test(path)) { if (p) say("A path is / and short words of a-z 0-9 . _ - between slashes."); return; }
+    if (!(path in pages)) pages[path] = `# ${path.slice(1)}\n\n=> / Back home`;
+    at = path; drawSite(); return;
+  }
+  if (b.dataset.drop) { delete pages[at]; at = "/"; drawSite(); }
+};
+$("mp-preview").onclick = (e) => {
+  const a = e.target.closest("a[data-to]"); if (!a) return;
+  const to = a.dataset.to;
+  if (to.startsWith("/") && to in pages) { at = to; drawSite(); }
+  else window.open("/meshweb/" + to.replace(/^mesh:\/\//, ""), "_blank", "noopener");
+};
+function loadSite() {
+  clearTimeout(siteTimer);
+  const name = $("mp-name").value.trim();
+  site = null; $("mp-edit").hidden = true; $("mp-who").textContent = "";
+  if (!name) return;
+  siteTimer = setTimeout(async () => {
+    try {
+      const said = await getJSON(`/account/mesh/site?name=${encodeURIComponent(name)}`);
+      if ($("mp-name").value.trim() !== name) return;
+      site = said;
+      $("mp-who").textContent = said.mine ? `You hold ${said.name}.` + (said.page ? ` Its page now: inscription #${commas(said.page.number)}.` : " No page yet.")
+        : (said.why || "");
+      if (!said.mine) return;
+      pages = said.page ? {...said.page.pages} : {"/": `# ${said.name}\n\nWelcome to my corner of the mesh.\n\n=> /about About\n`};
+      at = "/"; $("mp-edit").hidden = false; drawSite();
+    } catch (e) { $("mp-who").textContent = e.message; }
+  }, 400);
+}
+$("mp-name").oninput = loadSite;
+
+$("mp-go").onclick = async () => {
+  say(""); news("");
+  if (!site || !site.mine) return;
+  const c = chainOf("main");
+  if (!c) { say("This arcade does not inscribe on Pepecoin mainnet."); return; }
+  try {
+    const draft = await getJSON("/account/mesh/draft", {method: "POST", headers: {"Content-Type": "application/json"},
+                                                         body: JSON.stringify({name: site.name, pages})});
+    const held = await keysNow();
+    if (!held) return;
+    const first = await wallet.startOrd(held, {chain: draft.chain, content: draft.content, content_type: draft.content_type, name: `${site.name} page`});
+    const k = first.costs, shown = await wallet.checked(first, held);
+    const network = Number(shown.fee || 0) + Number(k.reveal_fees || 0);
+    const label = `Publish ${site.name}'s page (${commas(draft.size)} bytes) on ${c.label}: ${commas(first.of)} transactions. `
+      + `${coins(k.postage, c.chain)} stays yours as the page's own coin.`;
+    if (!(await arcadeMainnetReview({label, network, data: 0, others: 0, operator: 0, total: network + Number(k.postage), chain: c.chain}))) return;
+    busy = true; drawPreview();
+    const stay = (e) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", stay);
+    document.body.dataset.inscribing = "1";
+    try {
+      const bytes = Uint8Array.from(atob(draft.content), (ch) => ch.charCodeAt(0));
+      const id = await wallet.inscribeOrd(held, first, async () => b64(bytes), (s) => {
+        $("mp-progress").hidden = false;
+        const of = Number(s.of || 1), sent = Number(s.sent || 0);
+        $("mp-bar").style.width = `${Math.round(100 * Math.min(sent, of) / of)}%`;
+        $("mp-says").textContent = s.done ? "All sent." : `${commas(sent)} of ${commas(of)} sent… keep this tab open.`;
+      });
+      news(`Published: ${site.name}'s page is inscription ${id}. It shows once its block is mined and read.`);
+    } finally {
+      window.removeEventListener("beforeunload", stay);
+      delete document.body.dataset.inscribing;
+    }
+  } catch (e) { say(String(e.message || e)); }
+  busy = false; drawPreview();
+};
 </script>
 {% endif %}
 {% endblock %}

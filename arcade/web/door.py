@@ -149,6 +149,7 @@ PUBLIC_PAGES = frozenset({
     "/account/ord/confirmed",         # how many blocks this account's transaction has (a collection's lanes wait for one)
     "/account/ord/chains",            # the chains an ord is inscribed on here, each with its rules
     "/account/ord/name",              # is a name valid and free on a chain (Creator -> Names, 2026-10-26)
+    "/account/mesh/site",             # a .mesh name's holder and pages, for its holder's editor (the .mesh web)
     "/account/arcades",               # the arcades on the mesh, for the Your arcade page's Arcades card
     "/account/favorites",             # the markets this account starred (Exchange, 2026-10-17)
     "/account/homeapps",              # the icons on this account's home screen, in its order (PWA, 2026-10-24)
@@ -302,6 +303,8 @@ PUBLIC_POST = ("/auth/challenge", "/auth/login", "/auth/logout",
                "/account/escrow/open", "/account/escrow/deposit",
                "/account/escrow/reclaim", "/account/escrow/reclaim/sign",
                "/r/escrow/release",
+               # a .mesh page's bytes, checked, for the name's own holder to inscribe from its tab (the .mesh web)
+               "/account/mesh/draft",
                # a T-Deck on WiFi (tdecklink.py): its LoRa frames over HTTPS; the account proves itself by its own
                # signed LOGIN, and the token it sends is its own secret
                "/r/tdeck/link",

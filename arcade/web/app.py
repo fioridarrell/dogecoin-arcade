@@ -14907,6 +14907,62 @@ def create_app(state: AppState) -> FastAPI:
             out["walk"] = "a linked arcade"
         return JSONResponse(out, headers={"Cache-Control": "no-store"})
 
+    def _mesh_site_for(account, name: str) -> dict:
+        """A .mesh name as its holder's editor sees it (Creator -> Names -> Publish a page): who holds it, whether this
+        account does (its Pepecoin mainnet address), and the pages that count now."""
+        from .. import mesh_web
+        made = mesh_web.name_of(name)
+        out: dict[str, Any] = {"name": made, "claim": None, "holder": None, "mine": False, "page": None, "why": "",
+                               "max": mesh_web.SITE_MAX}
+        if not made:
+            out["why"] = "A .mesh name, like yours.mesh"
+            return out
+        main = next((c for c in state.all_chains if c.network == mesh_web.NET), None)
+        out["address"] = _account_any_address(account.pubkey, main) if main is not None else ""
+        index = state.ord_indexes().get(mesh_web.NET)
+        if index is None:
+            out["why"] = "This arcade does not read Pepecoin's ords"
+            return out
+        said = index.lookup({"what": "mesh", "name": made}).get("mesh") or {}
+        out.update(claim=said.get("claim"), holder=said.get("holder"), page=said.get("page"))
+        out["mine"] = bool(out["holder"]) and out["holder"] == out["address"]
+        if not out["claim"]:
+            out["why"] = f"Nobody has claimed {made} yet: claim it above first"
+        elif not out["mine"]:
+            out["why"] = (f"{made} is held by {out['holder']}, not by your Pepecoin address" if out["holder"]
+                          else f"Nobody can say who holds {made} just now")
+        return out
+
+    @app.get("/account/mesh/site")
+    def account_mesh_site(request: Request, name: str = ""):
+        """Creator -> Names -> Publish a page (2026-10-26, the .mesh web): the name's holder and pages."""
+        account = _signed_in_account(request)
+        try:
+            return JSONResponse(_mesh_site_for(account, name), headers={"Cache-Control": "no-store"})
+        except Exception as exc:                               # noqa: BLE001 -- the index could not say
+            return JSONResponse({"detail": str(exc)[:300]}, status_code=409)
+
+    @app.post("/account/mesh/draft")
+    def account_mesh_draft(request: Request, payload: Any = Body(None)):
+        """The bytes of a page for a .mesh name this account holds ({name, pages: {path: MeshText}}), checked the way the
+        resolver reads them (mesh_web.make); the tab then inscribes them as an ord on Pepecoin mainnet."""
+        from .. import mesh_web
+        account = _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        pages = said.get("pages")
+        if not isinstance(pages, dict):
+            return JSONResponse({"detail": "pages: {path: text}"}, status_code=400)
+        try:
+            body = mesh_web.make(str(said.get("name") or ""), {str(k): str(v) for k, v in pages.items()})
+        except mesh_web.MeshError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        site = _mesh_site_for(account, str(said.get("name") or ""))
+        if not site["mine"]:
+            return JSONResponse({"detail": site["why"] or "this account does not hold that name"}, status_code=403)
+        return JSONResponse({"content": base64.b64encode(body).decode(), "size": len(body), "chain": mesh_web.NET,
+                             "content_type": "text/plain;charset=utf-8", "name": site["name"],
+                             "max": mesh_web.SITE_MAX})
+
     @app.post("/account/ord/inscribe")
     def account_ord_inscribe(request: Request, payload: Any = Body(None)):
         """Inscribe an ord (2026-10-23), one offer at a time, each signed in the tab and broadcast by
@@ -27774,6 +27830,13 @@ def create_app(state: AppState) -> FastAPI:
                 return JSONResponse({"detail": f"from 1 to {os.cpu_count() or 1} cores"}, status_code=400)
             state.set_setting("ord_cores", cores)
             return JSONResponse({"ok": True, "cores": cores})
+        if "fetch" in said:
+            # a small machine may fetch one chain's whole index once, when its operator says so (ord_snapshot)
+            fnet = str(said.get("net") or "")
+            if fnet not in STARTS:
+                return JSONResponse({"detail": "a chain"}, status_code=400)
+            state.set_setting(f"ord_fetch:{fnet}", bool(said["fetch"]))
+            return JSONResponse({"ok": True, "net": fnet, "fetch": bool(said["fetch"])})
         net, mode = str(said.get("net") or ""), said.get("mode")
         if net not in STARTS or mode not in MODES:
             return JSONResponse({"detail": "a chain, and walk, help or off"}, status_code=400)

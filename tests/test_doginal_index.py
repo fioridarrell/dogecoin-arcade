@@ -1128,6 +1128,22 @@ def test_a_small_machine_never_fetches_the_whole_index(tmp_path, monkeypatch):
     assert small.snapshots.fetch is None and small.walker.next_height() == dx.BASE
     assert "fewer than 8 cores" in small.snapshots.said
     assert not any(x[2] == "piece" for x in mesh.fetched if x[0] == "small")
+    # its operator lets it fetch this chain's index once (2026-10-26, .25 and Pepecoin mainnet): two pieces at a time
+    monkeypatch.setattr(ord_snapshot, "PIECE", 4096)
+    holder.snapshots.want_made = lambda: holder.snapshots.made is None   # the holder is a big machine (Strawberry)
+    holder._snap_asked = True
+    small.fetch_allowed = lambda: True
+    assert small.snapshots.may_fetch() == ""
+    most = 0
+    for _ in range(40):
+        _hold_round(mesh, holder, small)
+        f = small.snapshots.fetch
+        most = max(most, len(f["asked"]) if f else 0)
+        if small.walker.next_height() > dx.BASE:
+            break
+    assert small.walker.next_height() > dx.BASE, "allowed, it fetched the copy and walks on from its block"
+    assert most <= ord_snapshot.IN_FLIGHT_SMALL, most
+    small.fetch_allowed = lambda: False
     monkeypatch.setattr(ord_snapshot.os, "cpu_count", lambda: 20)
     assert "free disk" in small.snapshots.may_fetch(10 ** 15), "and a big one with too little room says so"
 

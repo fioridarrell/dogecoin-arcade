@@ -127,3 +127,34 @@ def test_the_routes_serve_pages_the_directory_and_a_preview(client, tmp_path, mo
     home = app.get("/meshweb", headers=outside)
     assert home.status_code == 200 and 'href="/meshweb/me-seeks.mesh"' in home.text
     assert app.get("/r/mesh/me-seeks.mesh", headers=outside).status_code == 200, "the page API's tree is open"
+
+
+def test_only_the_names_holder_gets_a_draft_to_publish(client, tmp_path, monkeypatch):
+    """Creator -> Names -> Publish a page: the site and its draft, only for the account whose Pepecoin mainnet address
+    holds the name."""
+    import base64
+    from arcade.script import b58check_encode
+    from test_doginal_wallet import _seat
+    app, state = client
+    _seat(app)
+    chain, claim, page_a, page_b = _story()
+    index = _index(tmp_path, chain)
+    # the test chain's owners as Pepecoin mainnet addresses (version 56), as the real walk of that chain says them
+    index.walker.owner_of = lambda spk: b58check_encode(56, spk[3:23]) if len(spk) == 25 else None
+    index.__dict__.pop("_owners", None)
+    monkeypatch.setattr(state, "ord_indexes", lambda: {"main": index})
+    a_address = b58check_encode(56, b"\xaa" * 20)
+    assert index.mesh("me-seeks.mesh")["holder"] == a_address
+    stranger = app.get("/account/mesh/site", params={"name": "me-seeks.mesh"}).json()
+    assert not stranger["mine"] and "not by your Pepecoin address" in stranger["why"]
+    assert app.post("/account/mesh/draft", json={"name": "me-seeks.mesh", "pages": {"/": "# Mine?"}}).status_code == 403
+    said = app.post("/account/address", json={"address": a_address, "chain": "main"})
+    assert said.status_code == 200, said.text
+    site = app.get("/account/mesh/site", params={"name": "me-seeks.mesh"}).json()
+    assert site["mine"] and site["page"]["pages"] == {"/": "# From A"}, "the holder's editor opens on the page now"
+    draft = app.post("/account/mesh/draft", json={"name": "me-seeks.mesh", "pages": {"/": "# New front", "about": "Hi"}})
+    assert draft.status_code == 200 and draft.json()["chain"] == "main"
+    assert M.parse(base64.b64decode(draft.json()["content"]))["pages"] == {"/": "# New front", "/about": "Hi"}
+    too_big = app.post("/account/mesh/draft", json={"name": "me-seeks.mesh", "pages": {"/": "x" * 4000}})
+    assert too_big.status_code == 400 and "at most" in too_big.json()["detail"]
+    assert app.post("/account/mesh/draft", json={"name": "other.mesh", "pages": {"/": "# No"}}).status_code == 403

@@ -1632,11 +1632,14 @@ class DoginalIndex:
     def __init__(self, path: Path, rpc_factory: Callable[[], Any] | None, mode: Callable[[], str],
                  own_core: Callable[[], bool] = lambda: True, net: str = "doge", mweb: bool = False,
                  cores: Callable[[], int] | None = None, walk_share: Callable[[], int] | None = None,
-                 lenders: Callable[[], list] | None = None):
+                 lenders: Callable[[], list] | None = None, fetch_allowed: Callable[[], bool] | None = None):
         self.net = net
         # The linked arcades lending this chain's Core, [(node, client factory)]: a lane each (2026-10-24).
         self.lenders = lenders or (lambda: [])
         self.cores = cores or default_cores
+        # A machine below BIG_FROM_CORES fetches this chain's whole index only when its operator said so (ord_snapshot
+        # may_fetch; Admin API {"net", "fetch": true}).
+        self.fetch_allowed = fetch_allowed or (lambda: False)
         # Without a setting: all of a big machine, half of a small one (as it paced before 2026-10-21).
         self.walk_share = walk_share or (lambda: 100 if self._big() else 50)
         self._pool: Any = None

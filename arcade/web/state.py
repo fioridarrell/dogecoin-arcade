@@ -1800,7 +1800,8 @@ class AppState:
                                          own_core=(lambda c=chain: not getattr(c, "borrowed", False)),
                                          lenders=(lambda c=chain: self._ord_lenders(c)),
                                          net=net, mweb=bool(getattr(chain.params, "mweb", False)),
-                                         cores=self.ord_cores, walk_share=self.ord_share)
+                                         cores=self.ord_cores, walk_share=self.ord_share,
+                                         fetch_allowed=(lambda n=net: bool(self.setting(f"ord_fetch:{n}"))))
             except Exception:                                  # noqa: BLE001 -- e.g. the file still locked by the
                 # worker this one replaces, mid-reset (2026-10-21): this chain is opened again at the next ask, and
                 # the others go on meanwhile.

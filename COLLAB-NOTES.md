@@ -102,8 +102,13 @@ and ".25 walks it too".
 - docs/mesh-web.md (guide list). Also: DoginalIndex._counts off the asking thread in every mode -- on .25 a
   non-walking index's block sum took 62 s (Doge) / 235 s (PEP) and Admin -> Ords queued behind it.
 - Tests: test_mesh_web (new, 3).
-- Next: .25 walks PEP main; Creator -> Names "Publish a page"; PAGE_REQ/PAGE frames; mesh.get in the T-Deck's
-  AppRuntime; the Mesh Browser app.
+- Part 2 (same day): Creator -> Names -> "Publish a .mesh page": `GET /account/mesh/site` (the holder, mine?, the pages
+  now) and `POST /account/mesh/draft` (door PUBLIC_POST; the checked bytes, only for the account whose Pepecoin address
+  holds the name), an editor with a 320x240 preview, byte count and LoRa estimate, inscribed through the Ords flow.
+- A small machine may fetch one chain's whole index when its operator says so: Admin API `{"net","fetch":true}` ->
+  setting `ord_fetch:<net>`, DoginalIndex.fetch_allowed, two pieces in flight (IN_FLIGHT_SMALL). For .25 and PEP main
+  (3.6 GB once) instead of walking a million blocks on its disk.
+- arcade/lora gets PAGE_REQ/PAGE in the next copy from arcade-lora.
 
 ### 2026-10-26 Creator -> Names (p:dns), the Creator tab's load, block maps out of the names (Claude)
 The operator: "Build a p:dns inscriber in the creators tab. See if you can take a look at the creators tab as to why it takes

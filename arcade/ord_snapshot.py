@@ -40,6 +40,8 @@ SNAP_SERVING = 15 * 60
 WORTH_BLOCKS = 20_000
 #: Pieces asked for at once, each of another arcade where it can.
 IN_FLIGHT = 6
+#: ... on a machine below BIG_FROM_CORES whose operator let it fetch this chain's index once (ord_fetch:<net>).
+IN_FLIGHT_SMALL = 2
 PIECE_SECONDS = 60
 #: A fetch that got nothing (no manifest, no piece) for this long is let go of, and the newest copy started on (2026-10-22:
 #: @yourfirstname's Pepecoin walk sat at its first block all day on a snapshot the maker had long let go of and made
@@ -281,7 +283,10 @@ class Snapshots:
         disk, the live site -- fetched two 6 GB copies at once, and the site stopped answering. Only a big machine
         fetches one, with three times its size free."""
         from .doginal_index import BIG_FROM_CORES
-        if (os.cpu_count() or 1) < BIG_FROM_CORES:
+        allowed = getattr(self.index, "fetch_allowed", None)
+        if (os.cpu_count() or 1) < BIG_FROM_CORES and not (callable(allowed) and allowed()):
+            # The operator may let it, for one chain (2026-10-26: .25 and Pepecoin mainnet, for the .mesh web --
+            # one 3.6 GB copy, two pieces at a time, beat walking a million blocks on its disk)
             return f"this machine has fewer than {BIG_FROM_CORES} cores: it walks on rather than fetch the whole index"
         if size is not None:
             import shutil
@@ -355,7 +360,9 @@ class Snapshots:
                 self._finish()
                 return
             busy = {node for node, _at in f["asked"].values()}
-            for i in missing[:max(0, IN_FLIGHT - len(f["asked"]))]:
+            from .doginal_index import BIG_FROM_CORES
+            most = IN_FLIGHT if (os.cpu_count() or 1) >= BIG_FROM_CORES else IN_FLIGHT_SMALL
+            for i in missing[:max(0, most - len(f["asked"]))]:
                 has = [n for n, o in self.offers.items() if o["id"] == f["id"]
                        and (o.get("have") == "all" or i in (o.get("have") or []))]
                 if not has:
