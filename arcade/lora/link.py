@@ -105,7 +105,9 @@ class MeshLink:
         """One frame to one node, with no radio ack: True once the radio took it (the protocol recovers losses)."""
         with self.send_lock:
             hops = self.hops.get(node)
-            kw = {"hopLimit": hops} if hops is not None else {}   # unknown: the radio's default
+            # one more than it took, so one relay can still carry a frame the other radio does not hear directly
+            # (over the air 2026-10-26: the T-Deck heard the gateway only through a relay about half the time)
+            kw = {"hopLimit": min(hops + 1, 7)} if hops is not None else {}   # unknown: the radio's default
             self.iface.sendData(frame, destinationId=node, portNum=portnums_pb2.PortNum.PRIVATE_APP, wantAck=False, **kw)
             self.stats["sent"] += 1
             time.sleep(FRAME_GAP)

@@ -94,7 +94,7 @@ over USB on a test machine <-> the live gateway on .25) showed parts of one answ
 LongFast channel (44 nodes), and our frames relayed across the mesh (a copy at SNR -18.5) though the two radios hear
 each other directly (~+3 dB).
 - arcade/lora from arcade-lora d30b393: MeshLink remembers each node's hops (hopStart - hopLimit) and replies with no
-  more (direct: 0); device_keys COIN_TYPE has bel/lky/kot/wjk on 3 like coins.js (the T-Deck's addresses for them
+  more plus one (2026-10-26 follow-up: at exactly 0, frames the T-Deck missed directly found no relay); device_keys COIN_TYPE has bel/lky/kot/wjk on 3 like coins.js (the T-Deck's addresses for them
   differed from the arcade wallet's; nothing had been sent to the wrong ones). Firmware does both too.
 
 ### 2026-10-26 Viewer tickets survive restarts, and last while used (Claude)
