@@ -52,6 +52,10 @@ class MeshLink:
         self.send_lock = threading.Lock()
         self.inbox: queue.Queue = queue.Queue()
         self.stats = {"sent": 0, "acked": 0, "failed": 0}
+        # hops each node's packets took to reach us (hopStart - hopLimit): a reply needs no more (2026-10-26, over the
+        # air: our frames went out with 3 hops and the public mesh's nodes relayed every one -- more airtime, more
+        # collisions -- though the T-Deck and the gateway hear each other directly)
+        self.hops: dict[int, int] = {}
         self.worker = threading.Thread(target=self._work, name="arcade-frames", daemon=True)
         self.worker.start()
         pub.subscribe(self._on_receive, "meshtastic.receive")
@@ -70,6 +74,9 @@ class MeshLink:
             return
         node = packet.get("from")
         d = packet.get("decoded") or {}
+        start, left = packet.get("hopStart"), packet.get("hopLimit")
+        if isinstance(start, int) and isinstance(left, int) and start >= left >= 0:
+            self.hops[node] = start - left
         frame = None
         if d.get("portnum") in ("PRIVATE_APP", F.PORTNUM):
             payload = d.get("payload") or b""
@@ -97,7 +104,9 @@ class MeshLink:
     def send(self, node: int, frame: bytes) -> bool:
         """One frame to one node, with no radio ack: True once the radio took it (the protocol recovers losses)."""
         with self.send_lock:
-            self.iface.sendData(frame, destinationId=node, portNum=portnums_pb2.PortNum.PRIVATE_APP, wantAck=False)
+            hops = self.hops.get(node)
+            kw = {"hopLimit": hops} if hops is not None else {}   # unknown: the radio's default
+            self.iface.sendData(frame, destinationId=node, portNum=portnums_pb2.PortNum.PRIVATE_APP, wantAck=False, **kw)
             self.stats["sent"] += 1
             time.sleep(FRAME_GAP)
         return True

@@ -26,7 +26,7 @@ H = 0x80000000
 LOGIN_BRANCH = (24946 | H, 1 | H, 0 | H)
 MAIL_BRANCH = (24946 | H, 0 | H, 0 | H)
 # coins.js COIN_TYPE: anything not listed is 1
-COIN_TYPE = {"main": 3, "test": 1, "regtest": 1, "doge": 3, "ltc": 3}
+COIN_TYPE = {"main": 3, "test": 1, "regtest": 1, "doge": 3, "ltc": 3, "bel": 3, "lky": 3, "kot": 3, "wjk": 3}
 N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 
 

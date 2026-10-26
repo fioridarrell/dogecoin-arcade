@@ -88,6 +88,15 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-26 LoRa over the air: hops as needed; T-Deck coin types (Claude)
+The operator: "Can't you run the tests over the actual mesh using the two devices?" -- an over-the-air test (the T-Deck's radio
+over USB on a test machine <-> the live gateway on .25) showed parts of one answer arriving 15-17 s apart on the crowded public
+LongFast channel (44 nodes), and our frames relayed across the mesh (a copy at SNR -18.5) though the two radios hear
+each other directly (~+3 dB).
+- arcade/lora from arcade-lora d30b393: MeshLink remembers each node's hops (hopStart - hopLimit) and replies with no
+  more (direct: 0); device_keys COIN_TYPE has bel/lky/kot/wjk on 3 like coins.js (the T-Deck's addresses for them
+  differed from the arcade wallet's; nothing had been sent to the wrong ones). Firmware does both too.
+
 ### 2026-10-26 Viewer tickets survive restarts, and last while used (Claude)
 Asked by the ASHVALE/a tester session: at 16:13 the operator's clubhouse table got 403 {"wallet":"off","error":"this wallet
 does not tell inscriptions who is looking"} from /r/send -- the worker restarted at 16:12:28 (the 901d714c deploy) and
