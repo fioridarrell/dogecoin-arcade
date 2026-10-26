@@ -43,6 +43,17 @@ def spendable(row: dict) -> int:
                - int(row.get("inscribed") or 0) + int(row.get("incoming") or 0))
 
 
+
+
+def shown_units(units: int, decimals: int) -> str:
+    """Whole token units as the wallet writes them: 1234500 at 4 decimals -> "123.45"."""
+    if decimals <= 0:
+        return str(units)
+    whole, frac = divmod(units, 10 ** decimals)
+    frac_s = f"{frac:0{decimals}d}".rstrip("0")
+    return f"{whole}.{frac_s}" if frac_s else str(whole)
+
+
 @dataclass
 class Device:
     node: int
@@ -64,13 +75,16 @@ class Device:
 
 class Gateway:
     def __init__(self, arcade_url: str, send, *, name: str = "arcade gateway",
-                 networks: list[str] | None = None, mail_max: int = MAIL_MAX,
+                 networks: list[str] | None = None, assets: list[dict] | None = None, mail_max: int = MAIL_MAX,
                  session_factory=ArcadeSession, clock=time.monotonic, store: Store | None = None,
                  flush_delay: float = 6.0):
         self.arcade_url = arcade_url
         self.send_frame = send
         self.name = name
         self.networks = networks            # operator's choice; None = every chain the account has
+        # Tokens the operator lets T-Decks see (Admin -> Meshtastic), [{"key": "<net>-token20-<tick>" |
+        # "<net>-token-<property id>", "label"}]: their balances answer TOK_REQ.
+        self.assets = [a for a in (assets or []) if isinstance(a, dict) and "-token" in str(a.get("key") or "")]
         self.mail_max = mail_max
         self.session_factory = session_factory
         self.clock = clock
@@ -259,6 +273,48 @@ class Gateway:
             row = rows.get(c["network"], {})
             w.u8(i).amount(spendable(row)).amount(int(row.get("arriving") or 0))
         self.reply(node, F.BAL, msg.id, w.done())
+
+    #: Tokens in one answer at most (each row ~40 bytes: 24 fill five frames).
+    TOKENS_MAX = 24
+
+    def on_tok_req(self, node, msg):
+        dev = self._device(node, msg)
+        if dev is None:
+            return
+        rows: list[tuple[str, str, str]] = []
+        t20: dict[str, list[dict]] = {}
+        held: list[dict] | None = None
+        for asset in self.assets[:self.TOKENS_MAX]:
+            net, kind, ref = (str(asset["key"]).split("-", 2) + ["", ""])[:3]
+            label = str(asset.get("label") or ref)
+            amount = "0"
+            try:
+                if kind == "token20":
+                    if net not in t20:
+                        t20[net] = dev.arcade.token20(net)
+                    b = next((b for b in t20[net] if str(b.get("tick") or "").lower() == ref.lower()), None)
+                    if b is not None:
+                        units = int(b.get("units") or 0) - int(b.get("pending_units") or 0)
+                        amount = shown_units(max(units, 0), int(b.get("decimals") or 0))
+                elif kind == "token":
+                    if held is None:
+                        held = dev.arcade.tokens()
+                    for chain in held:
+                        if chain.get("network") != net:
+                            continue
+                        for t in chain.get("tokens") or []:
+                            if str(t.get("property_id")) == ref:
+                                amount = str(t.get("display") or t.get("balance") or "0")
+                else:
+                    continue
+            except Exception as exc:                     # noqa: BLE001 -- that chain cannot say just now: "?"
+                log.info("token %s for @%s: %s", asset["key"], dev.tag, exc)
+                amount = "?"
+            rows.append((net, label[:40], amount[:24]))
+        w = F.Writer().u8(len(rows))
+        for net, label, amount in rows:
+            w.str(net).str(label).str(amount)
+        self.reply(node, F.TOKS, msg.id, w.done())
 
     def on_coins_req(self, node, msg):
         dev = self._device(node, msg)
@@ -472,7 +528,7 @@ class Gateway:
 
     HANDLERS = {
         F.HELLO: on_hello, F.LOGIN: on_login, F.PING: on_ping,
-        F.BAL_REQ: on_bal_req, F.COINS_REQ: on_coins_req, F.SEND_REQ: on_send_req,
+        F.BAL_REQ: on_bal_req, F.TOK_REQ: on_tok_req, F.COINS_REQ: on_coins_req, F.SEND_REQ: on_send_req,
         F.SIGN: on_sign, F.BROADCAST: on_broadcast, F.ADDR: on_addr,
         F.WHO_REQ: on_who_req, F.WATCH: on_watch,
         F.MAIL_POST: on_mail_post, F.MAIL_ACK: on_mail_ack, F.MAIL_POLL: on_mail_poll,

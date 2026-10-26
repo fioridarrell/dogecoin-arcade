@@ -1223,6 +1223,16 @@
     <div style="font-size:.82rem;font-weight:650;margin-bottom:6px">Coins the T-Decks see</div>
     <div class="chips" id="lora-chains"></div>
   </div>
+  {# 2026-10-26: "a search bar that auto complete just like in the public token exchange that allows the operator
+     to include any token for the T deck to see" -- the Exchange's search tool (_pick.html). #}
+  <div style="margin-top:12px">
+    <div style="font-size:.82rem;font-weight:650;margin-bottom:6px">Tokens the T-Decks see</div>
+    <span class="pick" id="lora-asset-pick" style="max-width:380px"><input type="search" class="pick-q" autocomplete="off"
+      role="combobox" aria-expanded="false" aria-label="Add a token" placeholder="Search a token or DRC-20 / PRC-20 tick">
+      <span class="pick-list" role="listbox" hidden></span></span>
+    <div class="chips" id="lora-assets" style="margin-top:8px"></div>
+    <span class="h">Each T-Deck's Wallet shows its account's balance of these (up to 24). Saved as you add or remove one.</span>
+  </div>
   <label style="display:flex;gap:8px;align-items:center;margin-top:12px;font-size:.88rem">
     <input type="checkbox" id="lora-beacon" style="width:auto;margin:0"> <span>Beacon every 15 minutes
     <span class="h">(off: T-Decks find gateways by asking; a beacon only adds airtime on a busy channel)</span></span></label>
@@ -1296,7 +1306,39 @@ function drawConfig(c, ports, chains) {
   $("lora-beacon").checked = !!c.beacon;
   const on = c.chains == null ? null : new Set(c.chains);
   $("lora-chains").innerHTML = chains.map((x) => `<label><input type="checkbox" value="${esc(x.net)}"${on == null || on.has(x.net) ? " checked" : ""}> ${esc(x.label)}</label>`).join("");
+  loraAssets = (c.assets || []).slice();
+  drawAssets();
 }
+let loraAssets = [];
+function drawAssets() {
+  $("lora-assets").innerHTML = loraAssets.length ? loraAssets.map((a, i) =>
+    `<span class="chip">${esc(a.label)} <button type="button" class="link" data-drop="${i}" aria-label="Remove ${esc(a.label)}">&times;</button></span>`).join("")
+    : `<span class="muted" style="font-size:.85rem">None yet: the T-Decks show coins only.</span>`;
+}
+$("lora-assets").addEventListener("click", (e) => {
+  const i = e.target.dataset && e.target.dataset.drop;
+  if (i == null) return;
+  loraAssets.splice(Number(i), 1);
+  drawAssets();
+  save({assets: loraAssets});
+});
+window.arcadePick($("lora-asset-pick"), {
+  placeholder: "Search a token or DRC-20 / PRC-20 tick",
+  shown: () => "",
+  choose: (row) => {
+    if (!loraAssets.some((a) => a.key === row.value)) loraAssets.push({key: row.value, label: row.label});
+    drawAssets();
+    save({assets: loraAssets});
+    $("lora-asset-pick").querySelector(".pick-q").value = "";
+  },
+  items: (text, words, done) => {
+    if (!words.length) return done([], 0, "Type a token's name, number or tick.");
+    fetch("/admin/api/lora/assets?q=" + encodeURIComponent(text), {credentials: "same-origin"})
+      .then((r) => r.json()).then((got) => done((got.results || []).filter((r) => !loraAssets.some((a) => a.key === r.key))
+        .map((r) => ({value: r.key, label: r.label, note: r.note})), 0, "Nothing matches."))
+      .catch(() => done([], 0, "The search did not answer."));
+  },
+});
 function drawStatus(s, local, packages) {
   const pill = $("lora-on");
   pill.textContent = s.running ? "Running" : s.enabled ? "Starting…" : "Off";

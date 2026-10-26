@@ -205,3 +205,31 @@ def test_the_lora_badge_travels_in_the_operators_frame():
     asyncio.run(share.on_frame(link, {"op": "me", "tag": "bigchiefenergy", "lora": True}, b""))
     asyncio.run(share.on_frame(type("Link", (), {"peer_id": "p2"})(), {"op": "me", "lora": "yes"}, b""))
     assert share.peers["p1"]["lora"] is True and share.peers["p2"]["lora"] is False
+
+
+def test_the_operator_picks_tokens_the_t_decks_see(client, monkeypatch):
+    """2026-10-26: "a search bar that auto complete just like in the public token exchange that allows the
+    operator to include any token for the T deck to see". Picks are kept as the exchange names a leg; anything else,
+    a chain this arcade does not run, or a repeat is dropped; the search finds issued tokens and DRC-20 / PRC-20 ticks."""
+    app, state = client
+    net = state.messaging.network
+    ok = app.post("/admin/api/lora", headers=WRITE, json={"assets": [
+        {"key": f"{net}-token-5", "label": "Arcade Coin"}, {"key": f"{net}-token-5", "label": "again"},
+        {"key": "nochain-token-1", "label": "x"}, {"key": f"{net}-token20-dogi", "label": "DOGI"},
+        {"key": f"{net}-nft-abc", "label": "not a token"}, "junk"]})
+    assert ok.status_code == 200
+    assert ok.json()["config"]["assets"] == [{"key": f"{net}-token-5", "label": "Arcade Coin"},
+                                             {"key": f"{net}-token20-dogi", "label": "DOGI"}]
+    assert app.get("/admin/api/lora", headers=LOCAL).json()["config"]["assets"][0]["key"] == f"{net}-token-5"
+
+    class Index:
+        def properties(self):
+            return [{"property_id": 5, "name": "Arcade Coin"}, {"property_id": 6, "name": "Other"}]
+    monkeypatch.setattr(type(state), "token_index", lambda self, chain: Index())
+    got = app.get("/admin/api/lora/assets?q=arcade", headers=LOCAL).json()["results"]
+    assert [r["key"] for r in got] == [f"{c.network}-token-5" for c in state.token_chains]
+    assert app.get("/admin/api/lora/assets?q=", headers=LOCAL).json()["results"] == []
+    outside = app.get("/admin/api/lora/assets?q=a", headers={"host": "app.example.com", "cf-ray": "x"})
+    assert outside.status_code in (401, 403, 404)
+    page = app.get("/admin", headers=LOCAL).text
+    assert 'id="lora-asset-pick"' in page and "window.arcadePick($(\"lora-asset-pick\")" in page

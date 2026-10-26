@@ -23,7 +23,10 @@ from meshtastic.protobuf import portnums_pb2
 from . import frames as F
 
 log = logging.getLogger("arcade_lora.link")
-ACK_WAIT = 25.0         # seconds: Meshtastic retries itself 3 times inside this
+# seconds to wait for the radio's verdict on a frame: Meshtastic retries itself 3 times first, and on a weak LongFast
+# link that took ~30 s -- with 25 s the gateway sent the frame again while the radio was still trying (and the T-Deck
+# had it), doubling the airtime (2026-10-26: 2,301 "no ack" since 10-23, each followed ~5 s later by MAX_RETRANSMIT).
+ACK_WAIT = 75.0
 AFTER_ACK = 0.3         # a breath between frames so relays and the T-Deck can answer
 
 

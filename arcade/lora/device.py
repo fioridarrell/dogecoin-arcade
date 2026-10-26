@@ -102,6 +102,11 @@ class DeviceClient:
             out[self.chains[i].network] = (conf, pend)
         return out
 
+    def tokens(self) -> list[tuple[str, str, str]]:
+        """(chain, label, amount) of each token the gateway's operator lets T-Decks see."""
+        r = F.Reader(self.request(F.TOK_REQ, want=(F.TOKS,)).body)
+        return [(r.str(), r.str(), r.str()) for _ in range(r.u8())]
+
     def coins(self, network: str) -> list[dict]:
         index = self._index(network)
         r = F.Reader(self.request(F.COINS_REQ, bytes([index]), want=(F.COINS,)).body)

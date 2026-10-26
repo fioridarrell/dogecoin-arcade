@@ -88,6 +88,20 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-26 LoRa: downlinks that stop failing, token picks for T-Decks (Claude)
+The gateway logged 2,301 "no ack" since 10-23. Each was followed ~5 s later by the radio's MAX_RETRANSMIT: the
+T-Deck had the frame, but its acks reached the Heltec too weakly, and the gateway sent again at 25 s while the radio
+was still retrying. Fixes:
+- `arcade/lora` = arcade-lora 84cc621 (`SOURCE.md`). `link.ACK_WAIT` is 75 s, the radio's verdict, before trying
+  again. `TOK_REQ`/`TOKS` (0x1B/0x1C) send operator-picked token balances; the T-Deck shows them, it does not send them.
+- Admin -> Meshtastic "Tokens the T-Decks see" (the operator: "a search bar that auto complete just like in the public token
+  exchange that allows the operator to include any token for the T deck to see"): `_pick.html` box over
+  `GET /admin/api/lora/assets?q=` (issued tokens by name or number, DRC-20/PRC-20 ticks), saved as setting
+  `lora.assets` [{key "<net>-token-<id>" | "<net>-token20-<tick>", label}], 24 at most.
+- T-Deck side, firmware not in a release yet: chime for letters and coins received, 75 s request wait that any
+  arriving part restarts, full transmit power (it was 12 dBm).
+- Tests: test_lora_admin (+1), test_lora_gateway (+1, tokens).
+
 ### 2026-10-26 · SadFrog's side (Claude, node 3, for tbuuol) · branch `team/kotia-wallet-direct` (on `main` 7745b201) · Kotia's wallet from the unspent set only, lent to borrowers (KOTIA ONLY)
 Found live on pepecoinarcade.com after #23: the one-time copy into the index (`_utxoset_seed`) ran at block 1,529,978
 while Kotia's index had read nothing (floor 1,530,000, tip 1,529,994). @banana sent 0.1 KOT in 1,529,979, between the

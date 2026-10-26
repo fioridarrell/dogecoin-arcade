@@ -54,6 +54,14 @@ class FakeArcade:
             {"network": "main", "label": "PEP", "tags": False, "mainnet": True, "balance": 1, "incoming": 0,
              "version": 56, "p2sh": 22}]}
 
+    def tokens(self):
+        return [{"network": "test", "tokens": [{"property_id": 5, "name": "Arcade", "display": "84,000,000"}]}]
+
+    def token20(self, network):
+        if network != "doge":
+            raise ArcadeError("no ord index of that chain")
+        return [{"tick": "DOGI", "units": "1234500", "pending_units": "4500", "decimals": 4}]
+
     def coins(self, network):
         return [{"txid": "11" * 32, "vout": 0, "value": 4000}, {"txid": "22" * 32, "vout": 3, "value": 3000},
                 {"txid": "33" * 32, "vout": 1, "value": NOTICE_VALUE}]
@@ -280,3 +288,19 @@ def test_a_repeated_sign_gets_the_same_answer_and_sends_once(pair):
     assert len(FakeArcade.last.sent) == before         # not signed and broadcast twice
     again = dev.inbox.get(timeout=1)
     assert again.type == F.SENT and again.body.hex() == txid
+
+
+def test_tokens_the_operator_picked_with_this_accounts_balances():
+    """Admin -> Meshtastic picks the tokens T-Decks see (2026-10-26: "a search bar that auto complete just like
+    in the public token exchange that allows the operator to include any token for the T deck to see")."""
+    box = {}
+    assets = [{"key": "test-token-5", "label": "Arcade"}, {"key": "doge-token20-dogi", "label": "DOGI \u00b7 DRC-20"},
+              {"key": "main-token20-pepe", "label": "PEPE \u00b7 PRC-20"}, {"key": "test-coin", "label": "PEP test"}]
+    gw = Gateway("http://127.0.0.1:8420", lambda node, frame: box["dev"].receive(frame),
+                 session_factory=FakeArcade, flush_delay=0, assets=assets)
+    dev = DeviceClient(ACCT, lambda frame: gw.receive(0x970046A4, frame), timeout=2)
+    box["dev"] = dev
+    dev.login()
+    assert dev.tokens() == [("test", "Arcade", "84,000,000"),
+                            ("doge", "DOGI \u00b7 DRC-20", "123"),            # less what is on its way out
+                            ("main", "PEPE \u00b7 PRC-20", "?")]              # that chain cannot say: said so

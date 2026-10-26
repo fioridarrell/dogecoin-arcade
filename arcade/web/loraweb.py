@@ -109,7 +109,7 @@ def register(app, state, *, admin_check: Callable) -> None:
         admin_check(request, write=True)
         said = payload if isinstance(payload, dict) else {}
         svc = service()
-        changes = {k: said[k] for k in ("enabled", "port", "name", "chains", "beacon") if k in said}
+        changes = {k: said[k] for k in ("enabled", "port", "name", "chains", "beacon", "assets") if k in said}
         try:
             cfg = svc.config()
             cfg.update(changes)
@@ -119,6 +119,43 @@ def register(app, state, *, admin_check: Callable) -> None:
         except ValueError as exc:
             return JSONResponse({"detail": str(exc)}, status_code=400)
         return JSONResponse({"ok": True, "config": saved})
+
+    @app.get("/admin/api/lora/assets")
+    def admin_lora_assets(request: Request, q: str = ""):
+        """Tokens matching what was typed into Admin -> Meshtastic's search box (2026-10-26: "auto complete just
+        like in the public token exchange"): each chain's issued tokens by name or number, then DRC-20 / PRC-20 ticks
+        from the most complete copy of the ord index; a dozen at most."""
+        admin_check(request)
+        typed = str(q or "").strip().lower()[:40]
+        out: list[dict] = []
+        if not typed:
+            return JSONResponse({"results": out})
+        from ..config import NETWORKS
+        for chain in state.token_chains:
+            coin = NETWORKS[chain.network].coin
+            try:
+                props = state.token_index(chain).properties()
+            except Exception:                              # noqa: BLE001 -- that chain cannot say just now
+                props = []
+            for p in props:
+                name, pid = str(p.get("name") or ""), str(p.get("property_id"))
+                if typed in name.lower() or typed == pid:
+                    out.append({"key": f"{chain.network}-token-{pid}", "label": f"{name} \u00b7 {coin}"[:40],
+                                "note": f"token #{pid}"})
+        indexes = state.ord_indexes()
+        for net, proto in (("main", "PRC-20"), ("doge", "DRC-20")):
+            index = indexes.get(net)
+            if index is None or not any(c.network == net for c in state.token_chains):
+                continue
+            try:
+                first = (index.lookup({"what": "ticks", "prefix": typed[:16]}).get("ticks") or {}).get("first") or []
+            except Exception:                              # noqa: BLE001
+                first = []
+            for row in first:
+                tick = str(row.get("tick") or "")
+                if tick:
+                    out.append({"key": f"{net}-token20-{tick.lower()}", "label": f"{tick} \u00b7 {proto}", "note": proto})
+        return JSONResponse({"results": out[:12]}, headers={"Cache-Control": "no-store"})
 
     @app.post("/admin/api/lora/install")
     def admin_lora_install(request: Request):

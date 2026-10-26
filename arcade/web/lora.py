@@ -17,6 +17,7 @@ import glob
 import importlib.util
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -29,7 +30,12 @@ log = logging.getLogger("arcade.lora")
 #: The extra's pins, as the gateway was tested with (arcade-lora's venv on .25, 2026-10-24).
 PACKAGES = ("meshtastic==2.7.11", "coincurve==21.0.0")
 MODULES = ("meshtastic", "coincurve", "nacl", "httpx")
-DEFAULTS = {"enabled": False, "port": "", "name": "arcade gateway", "chains": None, "beacon": False}
+DEFAULTS = {"enabled": False, "port": "", "name": "arcade gateway", "chains": None, "beacon": False, "assets": []}
+#: Tokens the T-Decks see (2026-10-26: "a search bar that auto complete just like in the public token exchange
+#: that allows the operator to include any token for the T deck to see"): {"key", "label"}, the key as the exchange
+#: names a leg -- "<net>-token-<property id>" or "<net>-token20-<tick>".
+ASSET_KEY = re.compile(r"^[a-z0-9]{1,12}-(token-[0-9]{1,10}|token20-[a-z0-9]{1,16})$")
+ASSETS_MAX = 24
 BEACON_EVERY = 900.0
 POLL_EVERY = 30.0
 RETRY_EVERY = 20.0
@@ -93,6 +99,16 @@ class LoraService:
             cfg["chains"] = None if nets is None else [n for n in nets if n in known]
         if "beacon" in changes:
             cfg["beacon"] = bool(changes["beacon"])
+        if "assets" in changes:
+            known = {c.network for c in self.state.all_chains}
+            seen, assets = set(), []
+            for a in changes["assets"] or []:
+                key = str((a or {}).get("key") or "").strip().lower() if isinstance(a, dict) else ""
+                if not ASSET_KEY.match(key) or key.split("-", 1)[0] not in known or key in seen:
+                    continue
+                seen.add(key)
+                assets.append({"key": key, "label": str(a.get("label") or key)[:40]})
+            cfg["assets"] = assets[:ASSETS_MAX]
         if cfg["enabled"] and not cfg["port"]:
             raise ValueError("pick the radio's serial port first")
         self.state.set_setting("lora", cfg)
@@ -161,7 +177,8 @@ class LoraService:
         from ..lora.gateway import Gateway
         from ..lora.store import Store
         arcade = f"http://127.0.0.1:{int(getattr(self.state, 'port', 0) or 8420)}"
-        return Gateway(arcade, self._send, name=cfg["name"], networks=cfg["chains"], store=Store(self.state_path()))
+        return Gateway(arcade, self._send, name=cfg["name"], networks=cfg["chains"],
+                       assets=cfg.get("assets") or [], store=Store(self.state_path()))
 
     def _send(self, node: int, frame: bytes) -> bool:
         link = self.link

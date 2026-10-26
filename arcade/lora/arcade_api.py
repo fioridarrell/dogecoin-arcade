@@ -58,6 +58,14 @@ class ArcadeSession:
     def account(self) -> dict:
         return self._call("GET", "/account")
 
+    def tokens(self) -> list[dict]:
+        """Tokens this account holds, on every chain (the Wallet's own answer)."""
+        return self._call("GET", "/account/tokens")
+
+    def token20(self, network: str) -> list[dict]:
+        """DRC-20 / PRC-20 balances on Dogecoin or Pepecoin main."""
+        return self._call("GET", "/account/token20", params={"chain": network}).get("balances") or []
+
     def coins(self, network: str) -> list[dict]:
         return self._call("GET", "/account/coins", params={"chain": network})["coins"]
 
