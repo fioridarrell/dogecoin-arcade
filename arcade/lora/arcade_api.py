@@ -66,6 +66,14 @@ class ArcadeSession:
         """DRC-20 / PRC-20 balances on Dogecoin or Pepecoin main."""
         return self._call("GET", "/account/token20", params={"chain": network}).get("balances") or []
 
+    def mesh_page(self, address: str, have: str = "") -> tuple[int, dict]:
+        """A .mesh page (the arcade's /r/mesh/<name>[/path]): (HTTP status, answer). Public: no session needed."""
+        r = self.http.get("/r/mesh/" + address.lstrip("/"), params={"have": have} if have else None)
+        try:
+            return r.status_code, r.json()
+        except ValueError:
+            return r.status_code, {"detail": r.text[:200]}
+
     def coins(self, network: str) -> list[dict]:
         return self._call("GET", "/account/coins", params={"chain": network})["coins"]
 

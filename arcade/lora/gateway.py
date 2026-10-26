@@ -316,6 +316,35 @@ class Gateway:
             w.str(net).str(label).str(amount)
         self.reply(node, F.TOKS, msg.id, w.done())
 
+    # -- the .mesh web (PROTOCOL.md PAGE_REQ / PAGE) --------------------------------------------------------------
+    def _public(self):
+        """A session with no account in it: pages are public, so anybody's T-Deck may ask, signed in or not."""
+        if getattr(self, "_public_session", None) is None:
+            self._public_session = self.session_factory(self.arcade_url)
+        return self._public_session
+
+    def on_page_req(self, node, msg):
+        r = F.Reader(msg.body)
+        address, have = r.str()[:200], r.str()[:80]
+        try:
+            code, said = self._public().mesh_page(address, have)
+        except Exception as exc:                         # noqa: BLE001 -- the arcade did not answer
+            log.info("mesh page %s: %s", address, exc)
+            code, said = 503, {"detail": "The arcade did not answer"}
+        page = str(said.get("page") or "")[:80]
+        if code == 200 and said.get("unchanged"):
+            status, note, body = F.PAGE_UNCHANGED, str(said.get("title") or ""), b""
+        elif code == 200:
+            status, note, body = F.PAGE_OK, str(said.get("title") or ""), str(said.get("body") or "").encode()
+        else:
+            status, note, body = F.PAGE_MISSING, str(said.get("detail") or f"HTTP {code}"), b""
+        note = note.encode()[:80].decode("utf-8", "ignore")
+        head = F.Writer().u8(status).str(page).str(note).done()
+        room = F.MAX_PARTS * F.MAX_BODY - len(head) - 2
+        if len(body) > room:                             # a site is capped to fit; never more than one message
+            body = body[:room]
+        self.reply(node, F.PAGE, msg.id, head + len(body).to_bytes(2, "big") + body)
+
     def on_coins_req(self, node, msg):
         dev = self._device(node, msg)
         if dev is None:
@@ -528,7 +557,7 @@ class Gateway:
 
     HANDLERS = {
         F.HELLO: on_hello, F.LOGIN: on_login, F.PING: on_ping,
-        F.BAL_REQ: on_bal_req, F.TOK_REQ: on_tok_req, F.COINS_REQ: on_coins_req, F.SEND_REQ: on_send_req,
+        F.BAL_REQ: on_bal_req, F.TOK_REQ: on_tok_req, F.PAGE_REQ: on_page_req, F.COINS_REQ: on_coins_req, F.SEND_REQ: on_send_req,
         F.SIGN: on_sign, F.BROADCAST: on_broadcast, F.ADDR: on_addr,
         F.WHO_REQ: on_who_req, F.WATCH: on_watch,
         F.MAIL_POST: on_mail_post, F.MAIL_ACK: on_mail_ack, F.MAIL_POLL: on_mail_poll,

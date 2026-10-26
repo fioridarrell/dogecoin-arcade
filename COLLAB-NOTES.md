@@ -108,7 +108,10 @@ and ".25 walks it too".
 - A small machine may fetch one chain's whole index when its operator says so: Admin API `{"net","fetch":true}` ->
   setting `ord_fetch:<net>`, DoginalIndex.fetch_allowed, two pieces in flight (IN_FLIGHT_SMALL). For .25 and PEP main
   (3.6 GB once) instead of walking a million blocks on its disk.
-- arcade/lora gets PAGE_REQ/PAGE in the next copy from arcade-lora.
+- Part 3: arcade/lora copied from arcade-lora ab6f5a9 (PAGE_REQ 0x1D / PAGE 0x1E: a page by address, `have` -> unchanged,
+  missing with why; public, no sign-in; the gateway asks /r/mesh with a session of nobody's). `/r/mesh/directory` is
+  the directory as a MeshText page (id = its sha256), the Mesh Browser's first homepage. Tests: test_lora_gateway (+1),
+  test_mesh_web (+directory).
 
 ### 2026-10-26 Creator -> Names (p:dns), the Creator tab's load, block maps out of the names (Claude)
 The operator: "Build a p:dns inscriber in the creators tab. See if you can take a look at the creators tab as to why it takes

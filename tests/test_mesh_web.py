@@ -127,6 +127,9 @@ def test_the_routes_serve_pages_the_directory_and_a_preview(client, tmp_path, mo
     home = app.get("/meshweb", headers=outside)
     assert home.status_code == 200 and 'href="/meshweb/me-seeks.mesh"' in home.text
     assert app.get("/r/mesh/me-seeks.mesh", headers=outside).status_code == 200, "the page API's tree is open"
+    d = app.get("/r/mesh/directory").json()
+    assert d["page"].startswith("directory-") and "=> me-seeks.mesh me-seeks.mesh - From A" in d["body"]
+    assert app.get("/r/mesh/directory", params={"have": d["page"]}).json()["unchanged"]
 
 
 def test_only_the_names_holder_gets_a_draft_to_publish(client, tmp_path, monkeypatch):

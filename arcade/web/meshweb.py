@@ -42,7 +42,23 @@ def register(app, state) -> None:
             kept["dir"] = (time.time(), names)
         return names
 
+    def directory_page() -> dict:
+        """The directory as a page of its own, so the T-Deck's browser opens it like any site (its homepage until one
+        is set): MeshText, its id the sha256 of what it lists, so an unchanged directory is not sent again."""
+        names = directory()
+        lines = ["# The .mesh web", "Every .mesh site, newest first.", ""]
+        lines += [f"=> {n['name']} {n['name']}" + (f" - {n['title']}" if n.get("title") else "") for n in names[:60]]
+        if not names:
+            lines.append("Nobody has published a page yet. Claim a .mesh name and publish one from the arcade's "
+                         "Creator tab.")
+        body = "\n".join(lines)
+        return {"name": "directory", "path": "/", "page": "directory-" + M.digest(body.encode())[:16],
+                "title": "The .mesh web", "body": body, "paths": ["/"], "size": len(body.encode()), "number": None,
+                "holder": None, "claim": None}
+
     def site(address: str) -> tuple[int, dict]:
+        if address.strip("/ ").lower() in ("", "directory", "mesh://directory"):
+            return 200, directory_page()
         name, path = M.split_address(address)
         if not name:
             return 400, {"detail": "not a .mesh name", "address": address}

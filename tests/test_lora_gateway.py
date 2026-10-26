@@ -304,3 +304,29 @@ def test_tokens_the_operator_picked_with_this_accounts_balances():
     assert dev.tokens() == [("test", "Arcade", "84,000,000"),
                             ("doge", "DOGI \u00b7 DRC-20", "123"),            # less what is on its way out
                             ("main", "PEPE \u00b7 PRC-20", "?")]              # that chain cannot say: said so
+
+
+def test_mesh_pages_need_no_sign_in_and_unchanged_ones_are_not_sent_again(pair, monkeypatch):
+    """The .mesh web (PROTOCOL.md PAGE_REQ/PAGE, 2026-10-26): any T-Deck asks for a page, signed in or not; a page it
+    already holds comes back as "unchanged" with no body; one too big for a message is cut to one message."""
+    gw, dev = pair
+    asked = []
+
+    def mesh_page(self, address, have=""):
+        asked.append((address, have))
+        if address.startswith("nobody.mesh"):
+            return 404, {"detail": "Nobody has claimed nobody.mesh."}
+        if have == "ab" * 32 + "i0":
+            return 200, {"page": have, "title": "Hello", "unchanged": True}
+        body = "# Hello\n=> /about About" if address != "big.mesh" else "x" * 5000
+        return 200, {"page": "ab" * 32 + "i0", "title": "Hello", "body": body}
+    monkeypatch.setattr(FakeArcade, "mesh_page", mesh_page, raising=False)
+    got = dev.page("me-seeks.mesh")
+    assert got == {"status": F.PAGE_OK, "page": "ab" * 32 + "i0", "note": "Hello", "body": "# Hello\n=> /about About"}
+    again = dev.page("me-seeks.mesh", have="ab" * 32 + "i0")
+    assert again["status"] == F.PAGE_UNCHANGED and again["body"] == ""
+    missing = dev.page("nobody.mesh")
+    assert missing["status"] == F.PAGE_MISSING and "Nobody has claimed" in missing["note"]
+    big = dev.page("big.mesh")
+    assert big["status"] == F.PAGE_OK and 2900 < len(big["body"]) < 3120, "cut to one 16-part message"
+    assert asked[0] == ("me-seeks.mesh", "")

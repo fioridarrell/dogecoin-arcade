@@ -107,6 +107,11 @@ class DeviceClient:
         r = F.Reader(self.request(F.TOK_REQ, want=(F.TOKS,)).body)
         return [(r.str(), r.str(), r.str()) for _ in range(r.u8())]
 
+    def page(self, address: str, have: str = "") -> dict:
+        """A .mesh page: {"status", "page", "note", "body"} (PROTOCOL.md PAGE). Needs no sign-in."""
+        r = F.Reader(self.request(F.PAGE_REQ, F.Writer().str(address).str(have).done(), want=(F.PAGE,)).body)
+        return {"status": r.u8(), "page": r.str(), "note": r.str(), "body": r.bytes().decode("utf-8", "replace")}
+
     def coins(self, network: str) -> list[dict]:
         index = self._index(network)
         r = F.Reader(self.request(F.COINS_REQ, bytes([index]), want=(F.COINS,)).body)
