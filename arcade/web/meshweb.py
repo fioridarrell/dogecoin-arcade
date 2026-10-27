@@ -101,14 +101,18 @@ def register(app, state, content=None) -> None:
 
     # --- every name, every chain (the Browser) --------------------------------------------------------------------
 
-    def indexes() -> dict:
-        """Every chain's index the Browser reads: asked to open (lazy ord indexes, 2026-10-27; a visit to the Browser
-        is what opens them), and those open now given."""
+    def indexes(chain: str = "", every: bool = False) -> dict:
+        """The indexes the Browser reads (lazy ord indexes, 2026-10-27): the .mesh chain's always, a chain named in the
+        address opened for it, and every chain opened only to look up a name given without one (`every`); the
+        directory lists what is open."""
         from ..doginal_index import STARTS
-        for chain in getattr(state, "all_chains", ()):
-            if chain.network in STARTS:
-                state.ord_index(chain.network, wait=0)
+        wanted = [chain] if chain else ([c.network for c in getattr(state, "all_chains", ()) if c.network in STARTS]
+                                        if every else [])
+        for net in wanted:
+            state.ord_index(net, wait=0)
         state.ord_index(M.NET)
+        for net in wanted:
+            state.ord_index(net)
         return dict(state.ord_indexes() or {})
 
     def all_sites() -> list[dict]:
@@ -130,7 +134,7 @@ def register(app, state, content=None) -> None:
         if not name:
             return 400, {"detail": "not a name: label.ending, like yours.mesh or yours.pepe", "address": address}
         found = []
-        nets = indexes()
+        nets = indexes(chain, every=not chain and not M.is_mesh(name))
         for net, idx in nets.items():
             if chain and net != chain:
                 continue
@@ -251,7 +255,7 @@ def register(app, state, content=None) -> None:
         if out.get("inscription"):
             return RedirectResponse(f"/content/{quote(out['inscription'])}", status_code=307)
         if out["kind"] == "html":
-            idx = indexes().get(chain)
+            idx = indexes(chain).get(chain)
             said = idx.lookup({"what": "mesh", "name": out["name"]}).get("mesh") or {}
             value = M.page_kind((said.get("page") or {}).get("pages", {}).get(out["path"]))[1]
             return HTMLResponse(value, headers={**contentlib.CONTENT_HEADERS, "Cache-Control": "no-store"})
