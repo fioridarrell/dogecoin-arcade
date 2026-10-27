@@ -28337,7 +28337,13 @@ def create_app(state: AppState) -> FastAPI:
         operator to host The sites index. Just like ords are an option"): each chain's mode, and how big the index is
         where this arcade hosts it."""
         _admin_check(request)
-        from ..doginal_index import STARTS
+        from ..doginal_index import STARTS, WALK_SETTLE as SETTLE
+        share = getattr(getattr(state, "mesh", None), "operators", None)
+        try:
+            names = {r["node"]: r.get("tag") or "" for r in (share.status() if share is not None else [])}
+            me_tag = (share.about() or {}).get("tag") or "" if share is not None else ""
+        except Exception:                                      # noqa: BLE001 -- shown without names
+            names, me_tag = {}, ""
         rows = []
         for chain in state.all_chains:
             net = chain.network
@@ -28346,6 +28352,28 @@ def create_app(state: AppState) -> FastAPI:
             index = state.sites_index(net)
             row = index.status() if index is not None else {"net": net, "mode": state.sites_mode(net)}
             row.update(chain=ordchainslib.chain_name(net), walks=state.ord_mode(net) == "walk")
+            # The rings (2026-10-27: "Give it the same rings as the ord indexes"): every whole copy of this
+            # chain's sites index -- this arcade's, and each linked arcade's that hosts one and says how far it reaches
+            # in its ord hello -- as far as it reaches, against the chain's tip.
+            ords = state.ord_indexes().get(net)
+            base, tip = STARTS[net], 0
+            try:
+                tip = int((ords.status() if ords is not None else {}).get("tip") or 0) \
+                    or int(state.chain_sync(chain).get("blocks") or 0)
+            except Exception:                                  # noqa: BLE001 -- not answering: no percentages
+                tip = 0
+            span = max(1, tip - SETTLE - base + 1)
+            frac = lambda h: (round(min(1.0, max(0.0, (int(h or 0) - base) / span)), 4)   # noqa: E731
+                              if tip > base else None)
+            held = []
+            if row.get("mode") == "host" and row.get("reach"):
+                held.append({"node": "this arcade", "me": True, "tag": me_tag, "walked_to": row["reach"]})
+            if ords is not None:
+                for node, peer in list(ords.chunks.peers.items()):
+                    if peer.get("sites") and time.time() - float(peer.get("at") or 0) < 300:
+                        held.append({"node": node, "me": False, "tag": names.get(node, ""), "walked_to": int(peer["sites"])})
+            row["copies"] = sorted(({**c, "frac": frac(c["walked_to"])} for c in held), key=lambda c: -(c["frac"] or 0))
+            row.update(tip=tip, tip_known=tip > base, title=getattr(chain, "title", "") or chain.label)
             rows.append(row)
         return {"chains": rows, "max_mb": state.sites_max_mb()}
 

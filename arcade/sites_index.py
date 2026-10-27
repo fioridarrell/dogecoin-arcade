@@ -188,6 +188,7 @@ class SitesIndex:
         self._lock = threading.RLock()
         self._db: sqlite3.Connection | None = None
         self.problem = ""
+        self._reach_after = 0
 
     # ---- the file
 
@@ -234,6 +235,9 @@ class SitesIndex:
         until = time.monotonic() + budget
         after = int(self._meta("after_rid", "0") or 0)
         rows = index.mesh_records_after(after, BATCH)
+        if len(rows) < BATCH:
+            # every record the walk has found is read: the index reaches as far as the walk (the rings, Admin -> DNS)
+            self._reach_after = int(index.walker.next_height()) - 1
         for row in rows:
             try:
                 self._take(index, row)
@@ -242,9 +246,14 @@ class SitesIndex:
             after = int(row[4])
             with self._lock:
                 self._set_meta("after_rid", after)
+                self._set_meta("reach", max(int(row[3] or 0), int(self._meta("reach", "0") or 0)))
                 self.db().commit()
             if time.monotonic() > until:
                 return 1.0
+        if len(rows) < BATCH and self._reach_after:
+            with self._lock:
+                self._set_meta("reach", self._reach_after)
+                self.db().commit()
         return 1.0 if len(rows) == BATCH else 30.0
 
     def _take(self, index, row) -> None:
@@ -351,6 +360,15 @@ class SitesIndex:
                           for n, r, num, h, t in rows],
                 "total": total, "page": page, "pages": (total + per - 1) // per}
 
+    def reach(self) -> int:
+        """The block this index has read the chain's site records up to: the walk's height once it has every record
+        the walk found, else the block of the last record read. 0 before any."""
+        try:
+            with self._lock:
+                return int(self._meta("reach", "0") or 0)
+        except sqlite3.Error:
+            return 0
+
     def status(self) -> dict:
         out: dict[str, Any] = {"net": self.net, "mode": self.mode(), "problem": self.problem}
         if self.mode() == "host" or self.path.exists():
@@ -360,6 +378,7 @@ class SitesIndex:
                     out["sites"] = db.execute("SELECT COUNT(*) FROM sites").fetchone()[0]
                     out["pages"] = db.execute("SELECT COALESCE(SUM(pages), 0) FROM sites").fetchone()[0]
                     out["read_to"] = int(self._meta("after_rid", "0") or 0) - 1
+                    out["reach"] = int(self._meta("reach", "0") or 0)
                 out["mb"] = round(self.size_mb(), 1)
                 out["max_mb"] = self.max_mb()
             except sqlite3.Error as exc:

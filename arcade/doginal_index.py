@@ -2683,7 +2683,7 @@ class DoginalIndex:
     def heard(self, node: str, header: dict) -> None:
         op = header.get("op")
         if op == "hi":
-            self.chunks.peers[node] = {k: header.get(k) for k in ("mode", "walk", "helped", "v", "rules")} | \
+            self.chunks.peers[node] = {k: header.get(k) for k in ("mode", "walk", "helped", "v", "rules", "sites")} | \
                 {"at": time.time()}
             if header.get("rules") == self.rules:
                 # "sn<layout>": a snapshot of this layout, said under its own key so an arcade of another layout
@@ -2724,6 +2724,9 @@ class DoginalIndex:
         offer = self.snapshots.offer()
         if offer is not None:
             said[f"sn{LAYOUT}"] = offer
+        reach = self.sites_reach() if self.sites_reach is not None else None
+        if reach:
+            said["sites"] = int(reach)                   # hosting the sites search, read to this block (Admin -> DNS)
         return said
 
     # --- for people ------------------------------------------------------------------------------------------------
@@ -3346,6 +3349,8 @@ class DoginalIndex:
     #: The sites search this arcade hosts for this chain (arcade/sites_index.py): (q, page, per) -> its answer; None
     #: when it hosts none. Set by the web state.
     sites_search = None
+    #: () -> the block this arcade's sites search of this chain reaches, or None when it hosts none (said in `hello`).
+    sites_reach = None
 
     def mesh_records_after(self, rid: int, limit: int = 40) -> list:
         """The "p":"mesh" site records inscribed after row `rid`, oldest first (insc_mesh): (tx, n, number, height,

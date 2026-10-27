@@ -88,6 +88,19 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-27 Admin -> DNS: the sites search gets the ord indexes' rings (Claude)
+The operator: "Give it the same rings as the ord indexes." On claude/sites-search-dns (afe08d1).
+- sites_index.py: reach(), the block its index has read the site records up to (the walk's height once it has every
+  record the walk found, else the last record's block), kept in meta "reach" and shown in status().
+- doginal_index.py: hello() says "sites": <reach> when this arcade hosts the chain's sites search (hook
+  DoginalIndex.sites_reach, set by web state); heard() keeps "sites" in chunks.peers.
+- /admin/api/sites: per chain, "copies" [{node, tag, me, walked_to, frac}] (this arcade's, and every linked arcade's
+  heard in the last 5 minutes), frac against the tip as the Ords tab does it; tip, tip_known, title.
+- admin.html: the DNS tab draws each chain's copies with the Ords tab's ordRing() (not copied). It takes
+  r.inner_word, here "holding": the inner ring says how many copies reach each stretch, since the copies are not
+  compared chunk by chunk. The legend is like "The copies of the index". The .ordring CSS also applies in #sitescard.
+- Tests: test_sites_index.py (one new: reach, hello, copies).
+
 ### 2026-10-27 Admin -> DNS: the Sites search in a tab of its own (Claude)
 The operator: "Make it a new admin tab called DNS". The Sites search card moved out of Ords into a new DNS tab (after Ords),
 loaded when the tab opens (#dns too) and every 15 s while it is open; loadOrds no longer loads it. Next (asked of the

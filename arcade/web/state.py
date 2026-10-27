@@ -1875,6 +1875,8 @@ class AppState:
                 cores=self.ord_cores, walk_share=self.ord_share,
                 fetch_allowed=(lambda n=net: bool(self.setting(f"ord_fetch:{n}"))))
             self._ord_indexes[net].sites_search = self._sites_hook(net)
+            self._ord_indexes[net].sites_reach = (
+                lambda n=net: (self.sites_index(n).reach() or None) if self.sites_mode(n) == "host" else None)
         except Exception:                                      # noqa: BLE001 -- e.g. the file still locked by the
             # worker this one replaces, mid-reset (2026-10-21): opened again at the next ask.
             logging.getLogger("arcade.web").warning("ord index of %s not opened yet; asked again later", net,

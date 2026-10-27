@@ -21,6 +21,7 @@ class Walk:
 
     def __init__(self):
         self.rows, self.records, self.bodies = [], {}, {}
+        self.walker = type("W", (), {"next_height": lambda _self: 500})()
 
     def mode(self):
         return "walk"
@@ -162,3 +163,28 @@ def test_search_and_the_directory_on_the_routes_and_admin_chooses_who_hosts(clie
     admin = app.get("/admin/api/sites").json()
     row = next(c for c in admin["chains"] if c["net"] == "main")
     assert row["mode"] == "host" and row["sites"] == 1 and row["pages"] == 2
+
+
+def test_a_host_says_how_far_its_index_reaches_and_admin_draws_every_copy(client, tmp_path, monkeypatch):
+    """2026-10-27: "Give it the same rings as the ord indexes": each hosting arcade's copy, as far as it reaches."""
+    walk = Walk()
+    for k in range(S.BATCH + 5):
+        walk.add(f"s{k}.pepe", {"/": f"# Site {k}"})
+    sites = _sites(tmp_path, walk)
+    sites.step()
+    assert sites.reach() == walk.rows[S.BATCH - 1][3], "part way: the block of the last record read"
+    sites.step()
+    assert sites.reach() == 499, "every record read: as far as the walk"
+    app, state = client
+    chain = Chain()
+    chain.add([_ins(0, _j({"p": "dns", "op": "reg", "name": "frog.pepe"}), A),
+               _ins(1, M.make("frog.pepe", {"/": "# Frogs"}), A)])
+    index = _index(tmp_path / "w", chain) if (tmp_path / "w").mkdir() is None else None
+    index.sites_reach = lambda: 4321
+    assert index.hello()["sites"] == 4321
+    index.heard("peer-b", {"op": "hi", "mode": "walk", "walk": 9000, "rules": index.rules, "sites": 1234})
+    monkeypatch.setattr(state, "ord_indexes", lambda: {"main": index})
+    row = next(c for c in app.get("/admin/api/sites").json()["chains"] if c["net"] == "main")
+    assert [(c["node"], c["walked_to"], c["me"]) for c in row["copies"]] == [("peer-b", 1234, False)]
+    index.sites_reach = None
+    assert "sites" not in index.hello(), "an arcade hosting none says nothing"

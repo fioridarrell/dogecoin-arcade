@@ -1751,9 +1751,9 @@ section.panel h2{margin-top:0}
 #ords .ordattn.ok{border-color:var(--good,#2f7d4f);background:color-mix(in srgb,var(--good,#2f7d4f) 9%,transparent)}
 #ords .ordcard{margin:12px 0}
 #ords .ordcard h3{margin:0 0 6px;font-size:1rem}
-#ords .ordring svg{width:100%;max-width:400px;display:block;margin:0 auto}
-#ords .ordring text{font:600 11px system-ui,sans-serif;fill:var(--fg)}
-#ords .ordring .sub{font:500 10px system-ui,sans-serif;fill:var(--muted)}
+#ords .ordring svg,#sitescard .ordring svg{width:100%;max-width:400px;display:block;margin:0 auto}
+#ords .ordring text,#sitescard .ordring text{font:600 11px system-ui,sans-serif;fill:var(--fg)}
+#ords .ordring .sub,#sitescard .ordring .sub{font:500 10px system-ui,sans-serif;fill:var(--muted)}
 #ords .ordmodes{display:grid;gap:8px}
 #ords .ordmode{display:flex;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;cursor:pointer}
 #ords .ordmode.on{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 7%,transparent)}
@@ -2565,6 +2565,9 @@ section.panel h2{margin-top:0}
     });
     // The inner circle (2026-10-21): how many arcades AGREE on each stretch of the chain -- one alone red, two
     // agreeing yellow, three or more green; grey where no arcade has said it yet (doginal_index status agree_runs).
+    // r.inner_word: what the inner ring counts -- 'agreeing' for the ord index; 'holding' for the sites search (Admin
+    // -> DNS), whose copies cannot be compared chunk by chunk, so it says how many copies reach each stretch.
+    var W = r.inner_word || 'agreeing';
     var runs = r.agree_runs || [], ready = Math.max(1, r.ready || 0), three = 0;
     var AGREE_COL = ['var(--line)', ORD_COLORS[0], ORD_COLORS[1], ORD_COLORS[2]];
     runs.forEach(function (run) {
@@ -2574,12 +2577,12 @@ section.panel h2{margin-top:0}
       // edge to edge: a gap between runs showed the dark page through as black ticks (2026-10-22, 157 runs on PEP)
       svg += '<path d="' + arc(s0, e0, 76) + '" fill="none" stroke="' + AGREE_COL[run[2]]
         + '" stroke-width="7"><title>' + (run[2] ? run[2] + (run[2] >= 3 ? '+' : '') + ' arcade' + (run[2] === 1 ? '' : 's')
-        + ' agreeing' : 'not said yet') + '</title></path>';
+        + ' ' + W : 'not said yet') + '</title></path>';
     });
-    svg += '<text x="' + cx + '" y="' + (cy - 50) + '" text-anchor="middle" class="sub">agreeing</text>';
+    svg += '<text x="' + cx + '" y="' + (cy - 50) + '" text-anchor="middle" class="sub">' + W + '</text>';
     svg += '<text x="' + cx + '" y="' + (cy - 6) + '" text-anchor="middle" style="font:700 22px system-ui;fill:var(--fg)">'
       + Math.round(three * 100) + '%</text><text x="' + cx + '" y="' + (cy + 12) + '" text-anchor="middle" class="sub">'
-      + 'of the chain, 3 agreeing</text><text x="' + cx + '" y="' + (cy + 26) + '" text-anchor="middle" class="sub">'
+      + 'of the chain, 3 ' + W + '</text><text x="' + cx + '" y="' + (cy + 26) + '" text-anchor="middle" class="sub">'
       + (r.copies || []).length + ' arcade' + ((r.copies || []).length === 1 ? '' : 's') + ' holding</text></svg>';
     return svg;
   }
@@ -2858,8 +2861,39 @@ section.panel h2{margin-top:0}
               + Number(c.pages || 0).toLocaleString() + ' pages, ' + Number(c.mb || 0).toLocaleString() + ' MB'))
             : c.mode === 'ask' ? 'searches are asked of a linked arcade that hosts it' : 'no searches of this chain';
           row.appendChild(name); row.appendChild(pick); row.appendChild(said); box.appendChild(row);
+          box.appendChild(sitesRings(c));
         });
       }).catch(function () { $('sitessaid').textContent = 'Could not read the sites search.'; });
+  }
+  // The rings (2026-10-27: "Give it the same rings as the ord indexes"): each whole copy of a chain's sites
+  // index, held by an arcade that hosts it, drawn by the Ords tab's ordRing() as far as it reaches; the inner ring
+  // says how many copies reach each stretch of the chain.
+  function sitesRings(c) {
+    var copies = c.copies || [], wrap = document.createElement('div');
+    wrap.className = 'ordring'; wrap.style.margin = '4px 0 14px';
+    if (c.mode === 'off' && !copies.length) return wrap;
+    if (!copies.length) {
+      wrap.appendChild(ordEl('div', 'muted', '<span style="font-size:.84rem">No arcade hosts ' + ordEsc(c.chain || c.net)
+        + '’s sites search yet. One that keeps this chain’s full ord index can choose Host.</span>'));
+      return wrap;
+    }
+    var R = 10000, f = copies.slice(0, 3).map(function (x) { return x.frac || 0; }), runs = [], at = 0;
+    for (var k = f.length; k >= 1; k--) {                       // k copies reach as far as the k-th furthest
+      var to = Math.round(f[k - 1] * R);
+      if (to > at) { runs.push([at, to, k]); at = to; }
+    }
+    if (at < R) runs.push([at, R, 0]);
+    wrap.appendChild(ordEl('div', '', ordRing({net: 'sites-' + c.net, title: (c.chain || c.net) + ' sites search',
+                                               copies: copies, agree_runs: runs, ready: R, inner_word: 'holding'})));
+    wrap.appendChild(ordEl('div', '', copies.map(function (x, k) {
+      return '<div style="display:flex;gap:8px;align-items:baseline;margin:4px 0"><span style="width:12px;height:12px;'
+        + 'border-radius:3px;flex:none;background:' + (k < 3 ? ORD_COLORS[k] : 'var(--line)') + '"></span><span><b>'
+        + ordEsc(ordName(x)) + '</b>' + (x.me ? ' (this arcade)' : ' <span class="muted">arcade ' + ordEsc(x.node) + '</span>')
+        + ': ring ' + (k < 3 ? 'ABC'[k] : '–') + ', ' + (x.frac == null ? 'waiting for the tip' : Math.round(x.frac * 100) + '%')
+        + ' (block ' + num(x.walked_to) + ')</span></div>';
+    }).join('') + (copies.length === 1 ? '<div class="muted" style="font-size:.84rem;margin-top:4px">Only one copy. A '
+      + 'second arcade hosting it (ring B) keeps the search answering if that one goes offline.</div>' : '')));
+    return wrap;
   }
   $('sitesmax').onchange = function () {
     call('/admin/api/sites', {max_mb: Number($('sitesmax').value)})
