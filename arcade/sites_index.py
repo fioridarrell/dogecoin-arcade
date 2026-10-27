@@ -43,29 +43,49 @@ PER_PAGE = 10
 RESULTS_MAX = 1000
 #: What one site may put in the index: pages, and words a page.
 PAGES_MAX = 50
-BODY_MAX = 20_000
+BODY_MAX = 30_000
+#: Words of a page's text indexed (2026-10-27, the operator: "think about when we have millions of pages"): past them
+#: a page is found by its name, title, description and headings.
+BODY_WORDS = 4000
 FIELD_MAX = 600
+#: The text kept of each page to show under its result (the index itself keeps no text: it is contentless).
+EXCERPT_MAX = 300
 #: Records read a pass, and the bytes of one page read to index it.
 BATCH = 40
 READ_MAX = 400_000
 #: A site's rows are rowid site_id * ROWS .. + ROWS - 1, so a site's pages go in one range delete.
 ROWS = 100
-#: The weights of the indexed columns, in the table's order (the unindexed ones count 0).
-WEIGHTS = (0.0, 0.0, 0.0, 10.0, 6.0, 3.0, 2.0, 1.0)
+#: The weights of the indexed columns, in the table's order.
+WEIGHTS = (10.0, 6.0, 3.0, 2.0, 1.0)
+#: The file's layout: a file of another layout is built again from the chain when opened.
+LAYOUT = 2
+#: About what the index takes a page (2026-10-27, made-up MeshText and HTML pages of ~400 words: 1.56 KB a page at
+#: 10,000 pages, 1.38 at 100,000 -- about 1.5 GB a million pages; the old layout took 7.15); shown before any host
+#: has said its own.
+KB_PER_PAGE = 1.5
 #: Taken off BM25's score (lower is better) when the words are in the page's name or title, and for a site's front
 #: page. BM25 alone ranks little while there are few sites (a word on every page is worth nearly nothing), so a name
 #: or title that says it comes first, whatever the corpus.
 NAMED_BOOST, FRONT_BOOST = 5.0, 0.5
 HIT_OPEN, HIT_CLOSE = "\x02", "\x03"
 
+# Sized for millions of pages (2026-10-27: 3 sites took 0.4 MB): the words index is contentless (it keeps no text,
+# only which page has which word), with no prefix indexes (a word's start is read from the terms in order); what a
+# result shows -- the site, path, title and a short excerpt -- is in `docs`, by the same rowid; `sites.record` is the
+# record's inscription id, read from the chain when needed.
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
 CREATE TABLE IF NOT EXISTS sites (id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, record TEXT NOT NULL,
     number INTEGER, height INTEGER, title TEXT, pages INTEGER, at REAL);
 CREATE INDEX IF NOT EXISTS sites_newest ON sites (number DESC);
-CREATE VIRTUAL TABLE IF NOT EXISTS pages USING fts5 (site UNINDEXED, path UNINDEXED, height UNINDEXED,
-    name, title, descr, heads, body, tokenize = 'unicode61 remove_diacritics 2', prefix = '2 3');
+CREATE TABLE IF NOT EXISTS docs (id INTEGER PRIMARY KEY, site TEXT, path TEXT, height INTEGER, title TEXT,
+    excerpt TEXT);
+CREATE VIRTUAL TABLE IF NOT EXISTS pages USING fts5 (name, title, descr, heads, body,
+    tokenize = 'unicode61 remove_diacritics 2', detail = column{contentless});
 """
+#: contentless_delete needs SQLite 3.43 (2023); an older one keeps the text in the index instead (bigger, the same
+#: answers).
+CONTENTLESS = ", content = '', contentless_delete = 1" if sqlite3.sqlite_version_info >= (3, 43) else ""
 
 
 # --------------------------------------------------------------------------- a page's words
@@ -114,7 +134,7 @@ class _Text(html.parser.HTMLParser):
 REPEATS_MAX = 8
 
 
-def _squash(text: str, most: int) -> str:
+def _squash(text: str, most: int, words: int = BODY_WORDS) -> str:
     seen: dict[str, int] = {}
     kept = []
     for word in re.sub(r"\s+", " ", text or "").strip().split(" "):
@@ -122,6 +142,8 @@ def _squash(text: str, most: int) -> str:
         seen[key] = seen.get(key, 0) + 1
         if seen[key] <= REPEATS_MAX:
             kept.append(word)
+            if len(kept) >= words:
+                break
     return " ".join(kept)[:most]
 
 
@@ -194,11 +216,29 @@ class SitesIndex:
         with self._lock:
             if self._db is None:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
-                db = sqlite3.connect(str(self.path), check_same_thread=False, timeout=30)
-                db.execute("PRAGMA journal_mode=WAL")
-                db.executescript(SCHEMA)
+                db = self._open()
+                try:
+                    layout = db.execute("SELECT v FROM meta WHERE k = 'layout'").fetchone()
+                except sqlite3.Error:
+                    layout = None
+                fresh = not db.execute("SELECT 1 FROM sqlite_master WHERE name = 'sites'").fetchone()
+                if not fresh and (layout is None or layout[0] != str(LAYOUT)):
+                    # a file of an older layout: built again from the chain (it was small when the layout changed)
+                    db.close()
+                    for p in (self.path, self.path.with_name(self.path.name + "-wal"),
+                              self.path.with_name(self.path.name + "-shm")):
+                        p.unlink(missing_ok=True)
+                    db = self._open()
+                db.executescript(SCHEMA.format(contentless=CONTENTLESS))
+                db.execute("INSERT OR REPLACE INTO meta (k, v) VALUES ('layout', ?)", (str(LAYOUT),))
+                db.commit()
                 self._db = db
             return self._db
+
+    def _open(self) -> sqlite3.Connection:
+        db = sqlite3.connect(str(self.path), check_same_thread=False, timeout=30)
+        db.execute("PRAGMA journal_mode=WAL")
+        return db
 
     def _meta(self, key: str, default: str = "") -> str:
         row = self.db().execute("SELECT v FROM meta WHERE k = ?", (key,)).fetchone()
@@ -208,13 +248,19 @@ class SitesIndex:
         self.db().execute("INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)", (key, str(value)))
 
     def size_mb(self) -> float:
-        total = 0
-        for p in (self.path, self.path.with_name(self.path.name + "-wal")):
-            try:
-                total += p.stat().st_size
-            except OSError:
-                pass
-        return total / 1e6
+        """The file's size (its write-ahead log is folded in after every pass, so not counted)."""
+        try:
+            return self.path.stat().st_size / 1e6
+        except OSError:
+            return 0.0
+
+    def _fold(self) -> None:
+        """Fold the write-ahead log into the file and empty it."""
+        try:
+            with self._lock:
+                self.db().execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except sqlite3.Error:
+            log.debug("sites index checkpoint", exc_info=True)
 
     # ---- feeding it
 
@@ -244,11 +290,14 @@ class SitesIndex:
                 self._set_meta("reach", max(int(row[3] or 0), int(self._meta("reach", "0") or 0)))
                 self.db().commit()
             if time.monotonic() > until:
+                self._fold()
                 return 1.0
         if len(rows) < BATCH and self._reach_after:
             with self._lock:
                 self._set_meta("reach", self._reach_after)
                 self.db().commit()
+        if rows:
+            self._fold()
         return 1.0 if len(rows) == BATCH else 30.0
 
     def _take(self, index, row) -> None:
@@ -267,7 +316,10 @@ class SitesIndex:
             db = self.db()
             old = db.execute("SELECT id FROM sites WHERE name = ?", (name,)).fetchone()
             if old:
-                db.execute("DELETE FROM pages WHERE rowid >= ? AND rowid < ?", (old[0] * ROWS, old[0] * ROWS + ROWS))
+                for (rid,) in db.execute("SELECT id FROM docs WHERE id >= ? AND id < ?",
+                                         (old[0] * ROWS, old[0] * ROWS + ROWS)).fetchall():
+                    db.execute("DELETE FROM pages WHERE rowid = ?", (rid,))
+                db.execute("DELETE FROM docs WHERE id >= ? AND id < ?", (old[0] * ROWS, old[0] * ROWS + ROWS))
                 db.execute("UPDATE sites SET record = ?, number = ?, height = ?, title = ?, pages = ?, at = ? WHERE id = ?",
                            (record["id"], record["number"], record["height"], title, len(found), time.time(), old[0]))
                 sid = old[0]
@@ -277,10 +329,11 @@ class SitesIndex:
                                                            len(found), time.time())).lastrowid
             words = name_words(name)
             for k, (path, t) in enumerate(found):
-                db.execute("INSERT INTO pages (rowid, site, path, height, name, title, descr, heads, body) "
-                           "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                           (sid * ROWS + k, name, path, record["height"], words, t["title"], t["descr"], t["heads"],
-                            t["body"]))
+                db.execute("INSERT INTO pages (rowid, name, title, descr, heads, body) VALUES (?, ?, ?, ?, ?, ?)",
+                           (sid * ROWS + k, words, t["title"], t["descr"], t["heads"], t["body"]))
+                db.execute("INSERT INTO docs (id, site, path, height, title, excerpt) VALUES (?, ?, ?, ?, ?, ?)",
+                           (sid * ROWS + k, name, path, record["height"], t["title"],
+                            _excerpt(t["descr"] or t["body"] or t["heads"])))
 
     @staticmethod
     def _page_text(index, value) -> dict | None:
@@ -323,22 +376,20 @@ class SitesIndex:
                         continue
                     weights = ", ".join(str(w) for w in WEIGHTS)
                     rows = db.execute(
-                        f"SELECT site, path, height, title, descr, "
-                        f"snippet(pages, 5, '{HIT_OPEN}', '{HIT_CLOSE}', '…', 24), "
-                        f"snippet(pages, 7, '{HIT_OPEN}', '{HIT_CLOSE}', '…', 28), "
+                        f"SELECT d.site, d.path, d.height, d.title, d.excerpt, "
                         f"bm25(pages, {weights}) "
-                        f"- CASE WHEN rowid IN (SELECT rowid FROM pages WHERE pages MATCH ?) THEN {NAMED_BOOST} ELSE 0 END "
-                        f"- CASE WHEN path = '/' THEN {FRONT_BOOST} ELSE 0 END AS score "
-                        f"FROM pages WHERE pages MATCH ? ORDER BY score LIMIT ? OFFSET ?",
+                        f"- CASE WHEN pages.rowid IN (SELECT rowid FROM pages WHERE pages MATCH ?) THEN {NAMED_BOOST} ELSE 0 END "
+                        f"- CASE WHEN d.path = '/' THEN {FRONT_BOOST} ELSE 0 END AS score "
+                        f"FROM pages JOIN docs d ON d.id = pages.rowid WHERE pages MATCH ? ORDER BY score LIMIT ? OFFSET ?",
                         ("{name title} : (" + query + ")", query, per, page * per)).fetchall()
             except sqlite3.OperationalError as exc:      # a query FTS5 cannot read: nothing found
                 log.debug("sites search %r: %s", query, exc)
                 continue
             out.update(total=total, pages=(total + per - 1) // per, any=query.startswith('"') and " OR " in query)
-            for site, path, height, title, descr, d_snip, b_snip, score in rows:
-                snip = d_snip if HIT_OPEN in (d_snip or "") else b_snip if HIT_OPEN in (b_snip or "") else (descr or b_snip)
+            for site, path, height, title, excerpt, score in rows:
                 out["results"].append({"name": site, "path": path, "chain": self.net, "title": title or "",
-                                       "address": site + ("" if path == "/" else path), "snippet": snip or "",
+                                       "address": site + ("" if path == "/" else path),
+                                       "snippet": mark_words(excerpt or "", said),
                                        "height": height, "score": round(float(score), 4)})
             break
         return out
@@ -375,6 +426,7 @@ class SitesIndex:
                     out["read_to"] = int(self._meta("after_rid", "0") or 0) - 1
                     out["reach"] = int(self._meta("reach", "0") or 0)
                 out["mb"] = round(self.size_mb(), 1)
+                out["kb_page"] = round(self.size_mb() * 1000 / out["pages"], 2) if out["pages"] else None
             except sqlite3.Error as exc:
                 out["problem"] = str(exc)[:200]
         return out
@@ -407,6 +459,24 @@ class Runner:
                 log.debug("sites index step", exc_info=True)
                 rests.append(60.0)
             self._stop.wait(min(rests) if rests else 60.0)
+
+
+def _excerpt(text: str) -> str:
+    text = re.sub(r"\s+", " ", text or "").strip()
+    if len(text) <= EXCERPT_MAX:
+        return text
+    cut = text[:EXCERPT_MAX].rsplit(" ", 1)[0]
+    return cut + "…"
+
+
+def mark_words(text: str, said: str) -> str:
+    """`text` with the searched words (the last may be the start of one) between HIT_OPEN and HIT_CLOSE."""
+    words = re.findall(r"\w+", str(said or "").lower())[:8]
+    if not words or not text:
+        return text
+    whole = [re.escape(w) for w in words[:-1]]
+    pattern = r"\b(?:" + "|".join(whole + [re.escape(words[-1]) + r"\w*"]) + r")"
+    return re.sub(pattern, lambda m: HIT_OPEN + m.group(0) + HIT_CLOSE, text, flags=re.IGNORECASE)
 
 
 def marked(snippet: str) -> str:

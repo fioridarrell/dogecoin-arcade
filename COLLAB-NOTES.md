@@ -88,6 +88,18 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-27 Sites search index a third of the size; a million pages ≈ 1.5 GB (Claude)
+The operator (Strawberry's DNS tab, "3 sites, 6 pages, 0.4 MB"): "thats a crazy large size. think about when we have millions
+of pages." sites_index.py layout 2: the FTS5 table is contentless (`content='', contentless_delete=1`; SQLite < 3.43
+keeps the text, same answers), `detail=column` (no word positions: no phrase search was ever asked), no prefix
+indexes; a page's site, path, title and a 300-character excerpt (the description, else the text's start) are in
+`docs` by the same rowid, the snippet marked in Python (mark_words); text capped at 4,000 words a page; the WAL is
+folded in (TRUNCATE) after every pass and size_mb is the file alone. `sites.record` was already the id only. A file of
+layout 1 is deleted and built again on open. Measured on made-up ~400-word pages: 7.15 KB a page before, 1.56 at
+10k pages, 1.38 at 100k (search 10 ms) -- KB_PER_PAGE = 1.5. Hello also says `sites_pages`; Admin -> DNS shows KB a
+page and GB a million pages (from a host of 1,000+ pages, else 1.5). Tiny indexes still look big per page: SQLite's
+empty table pages (~44 KB a file).
+
 ### 2026-10-27 Sites search: no size cap; each host says its index size (Claude)
 The operator: "Remove the longest each index may grow option on the dns tab. Anyone who decides they want to also index should
 know the size of the index before they choose to host. The size of all indexes should be broadcast to the network".

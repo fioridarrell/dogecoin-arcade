@@ -184,14 +184,46 @@ def test_a_host_says_how_far_its_index_reaches_and_admin_draws_every_copy(client
     assert index.hello()["sites"] == 4321
     index.sites_mb = lambda: 12.345
     assert index.hello()["sites_mb"] == 12.3, "and how big its copy is"
+    index.sites_pages = lambda: 40
+    assert index.hello()["sites_pages"] == 40
     index.heard("peer-b", {"op": "hi", "mode": "walk", "walk": 9000, "rules": index.rules, "sites": 1234,
-                           "sites_mb": 812.5})
+                           "sites_mb": 812.5, "sites_pages": 500_000})
     monkeypatch.setattr(state, "ord_indexes", lambda: {"main": index})
     row = next(c for c in app.get("/admin/api/sites").json()["chains"] if c["net"] == "main")
     assert [(c["node"], c["walked_to"], c["me"], c["mb"]) for c in row["copies"]] == [("peer-b", 1234, False, 812.5)]
     assert row["host_mb"]["mb"] == 812.5 and row["host_mb"]["node"] == "peer-b", \
         "2026-10-27: an operator knows what hosting costs before choosing Host"
+    assert row["kb_page"] == 1.62 and row["gb_million"] == 1.6, "KB a page from a copy big enough to say"
     index.sites_reach = None
     assert "sites" not in index.hello() and "sites_mb" not in index.hello(), "an arcade hosting none says nothing"
     assert app.post("/admin/api/sites", json={"max_mb": 50}, headers={"X-Arcade-Admin": "1"}).status_code == 400, \
         "no cap any more"
+
+
+def test_the_index_is_small_and_a_file_of_the_old_layout_is_built_again(tmp_path):
+    """2026-10-27, the operator: "how can the index for 3 sites be 0.4MB ... think about when we have millions of pages": no
+    text kept in the words index, no prefix indexes, a short excerpt a page, the log folded in after every pass."""
+    old = tmp_path / "sites-main.sqlite"
+    import sqlite3
+    db = sqlite3.connect(str(old))
+    db.executescript("CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT); CREATE TABLE sites (id INTEGER PRIMARY KEY, "
+                     "name TEXT, record TEXT); INSERT INTO meta VALUES ('after_rid', '99');")
+    db.commit()
+    db.close()
+    walk = Walk()
+    for k in range(300):
+        walk.add(f"s{k}.pepe", {"/": f"# Site {k}\n" + " ".join(f"word{(k * 7 + j) % 900}" for j in range(400))})
+    sites = _sites(tmp_path, walk)
+    assert sites.status()["read_to"] == -1, "the old file's place is forgotten: built again from the first record"
+    while sites.step() < 30:
+        pass
+    assert not old.with_name(old.name + "-wal").exists() or old.with_name(old.name + "-wal").stat().st_size == 0
+    st = sites.status()
+    assert st["pages"] == 300 and st["kb_page"] < 4, st
+    found = sites.search("word5")["results"][0]
+    assert found["snippet"].count(S.HIT_OPEN) >= 1 and len(found["snippet"]) < S.EXCERPT_MAX + 40
+    walk.add("s0.pepe", {"/": "# Site zero\nNothing else."})
+    sites.step()
+    assert [r["name"] for r in sites.search("zero")["results"]] == ["s0.pepe"]
+    assert "s0.pepe" not in [r["name"] for r in sites.search("word0", per=100)["results"]], \
+        "a site's old words go when its record is replaced (contentless delete)"

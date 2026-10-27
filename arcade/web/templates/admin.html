@@ -469,7 +469,7 @@
     <p class="muted" style="margin-top:0;font-size:.84rem">A search engine of every site on a chain: each page&rsquo;s
       title, description, headings and words, kept in a file of its own. <b>Host</b> keeps it here and answers searches
       for this arcade and linked ones; it needs that chain&rsquo;s full ord index (Keep the full index) and grows with
-      the sites, a few KB a page. <b>Ask</b> (the default) keeps nothing and asks a linked arcade that hosts it.
+      the sites, about 1.5 KB a page. <b>Ask</b> (the default) keeps nothing and asks a linked arcade that hosts it.
       <b>Off</b> answers no searches of that chain.</p>
     {# the chain picked as on the Ords tab (2026-10-27: "Add the same chain selection as ORD panel to DNS"); the
        same choice on both tabs #}
@@ -2936,17 +2936,21 @@ section.panel h2{margin-top:0}
           };
           var said = document.createElement('span'); said.className = 'muted'; said.style.fontSize = '.84rem';
           said.textContent = c.mode === 'host' ? (c.problem || (Number(c.sites || 0).toLocaleString() + ' sites, '
-              + Number(c.pages || 0).toLocaleString() + ' pages, ' + sitesMb(c.mb)))
+              + Number(c.pages || 0).toLocaleString() + ' pages, ' + sitesMb(c.mb)
+              + ' here; about ' + Number(c.gb_million).toLocaleString() + ' GB a million pages'))
             : c.mode === 'ask' ? 'searches are asked of a linked arcade that hosts it' : 'no searches of this chain';
           row.appendChild(name); row.appendChild(pick); row.appendChild(said); box.appendChild(row);
           // What hosting costs, before Host is picked (2026-10-27): the size a hosting arcade says its copy is.
           if (c.mode !== 'host') {
             var cost = c.host_mb;
+            var per = 'about ' + Number(c.kb_page).toLocaleString(undefined, {maximumFractionDigits: 1}) + ' KB a page, '
+              + 'about ' + Number(c.gb_million).toLocaleString() + ' GB a million pages';
             box.appendChild(ordEl('div', 'muted', '<span style="font-size:.84rem">' + (cost
-              ? 'Hosting takes about <b>' + sitesMb(cost.mb) + '</b> of disk, as on ' + ordEsc(ordName(cost))
-                + (cost.frac != null && cost.frac < 0.99 ? ' (' + Math.round(cost.frac * 100) + '% of the chain read, so more once it is all read)' : '')
-                + ', and grows with the sites.'
-              : 'No hosting arcade has said its size yet: a few KB a page, growing with the sites.') + '</span>'));
+              ? 'Hosting takes about <b>' + sitesMb(cost.mb) + '</b> of disk today, as on ' + ordEsc(ordName(cost))
+                + (cost.pages != null ? ' (' + num(cost.pages) + ' pages)' : '')
+                + (cost.frac != null && cost.frac < 0.99 ? ', ' + Math.round(cost.frac * 100) + '% of the chain read' : '')
+                + '. It grows with the sites: ' + per + '.'
+              : 'No hosting arcade has said its size yet. It grows with the sites: ' + per + '.') + '</span>'));
           }
           box.appendChild(sitesRings(c));
         });

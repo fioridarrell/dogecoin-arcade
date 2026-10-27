@@ -2683,7 +2683,8 @@ class DoginalIndex:
     def heard(self, node: str, header: dict) -> None:
         op = header.get("op")
         if op == "hi":
-            self.chunks.peers[node] = {k: header.get(k) for k in ("mode", "walk", "helped", "v", "rules", "sites", "sites_mb")} | \
+            self.chunks.peers[node] = {k: header.get(k) for k in ("mode", "walk", "helped", "v", "rules", "sites", "sites_mb",
+                                                                     "sites_pages")} | \
                 {"at": time.time()}
             if header.get("rules") == self.rules:
                 # "sn<layout>": a snapshot of this layout, said under its own key so an arcade of another layout
@@ -2730,6 +2731,9 @@ class DoginalIndex:
             mb = self.sites_mb() if self.sites_mb is not None else None
             if mb is not None:
                 said["sites_mb"] = round(float(mb), 1)   # and how big that copy is: what hosting it costs
+            pages = self.sites_pages() if self.sites_pages is not None else None
+            if pages is not None:
+                said["sites_pages"] = int(pages)         # over how many pages (KB a page, Admin -> DNS)
         return said
 
     # --- for people ------------------------------------------------------------------------------------------------
@@ -3392,6 +3396,8 @@ class DoginalIndex:
     sites_reach = None
     #: () -> the size in MB of that sites search's file, or None (said in `hello` beside `sites`).
     sites_mb = None
+    #: () -> how many pages that sites search holds, or None (said in `hello`).
+    sites_pages = None
 
     def mesh_records_after(self, rid: int, limit: int = 40) -> list:
         """The "p":"mesh" site records inscribed after row `rid`, oldest first (insc_mesh): (tx, n, number, height,

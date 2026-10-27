@@ -118,13 +118,14 @@ inscription that asks `GET /r/search?q=frog&page=0`: 10 results a page (`results
 `chain`, `title`, `snippet`; `total`, `pages`). The words that matched sit between `\x02` and `\x03` in the snippet;
 draw it as text, never as markup.
 
-The index lives on the arcades that choose to host it: **Admin → Ords → Sites search**, per chain, **Host**, **Ask a
+The index lives on the arcades that choose to host it: **Admin → DNS → Sites search**, per chain, **Host**, **Ask a
 linked arcade** (the default) or **Off**. Hosting needs that chain's full ord index ("Keep the full index"), and keeps
-every page's title, description, headings and words in `sites-<chain>.sqlite`, a few KB a page, up to the size you
-set. Every hosting arcade builds it from the chain alone, by the same rule the Browser reads sites by, so any two give
+which page has which word (title, description, headings and up to 4,000 words of text) in `sites-<chain>.sqlite`,
+with a short excerpt a page: about 1.5 KB a page, about 1.5 GB a million pages. Each host tells the network how big
+its copy is, and the DNS tab shows it before you choose Host. Every hosting arcade builds it from the chain alone, by the same rule the Browser reads sites by, so any two give
 the same answers. An arcade that does not host asks a linked one that does.
 
 **Being found.** What counts most is your name, then your page's `<title>`, its `<meta name="description">` (shown as
-the snippet when it matches), its headings and its words. A word counts at most eight times a page, so repeating it
+the snippet), its headings and its words. A word counts at most eight times a page, so repeating it
 does not help. A site's front page comes before its other pages. A newer site record replaces the old one in the
 index when it is mined and read.

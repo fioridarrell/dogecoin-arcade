@@ -28472,19 +28472,28 @@ def create_app(state: AppState) -> FastAPI:
             held = []
             if row.get("mode") == "host" and row.get("reach"):
                 held.append({"node": "this arcade", "me": True, "tag": me_tag, "walked_to": row["reach"],
-                             "mb": row.get("mb")})
+                             "mb": row.get("mb"), "pages": row.get("pages")})
             if ords is not None:
                 for node, peer in list(ords.chunks.peers.items()):
                     if peer.get("sites") and time.time() - float(peer.get("at") or 0) < 300:
                         mb = peer.get("sites_mb")
                         held.append({"node": node, "me": False, "tag": names.get(node, ""), "walked_to": int(peer["sites"]),
-                                     "mb": float(mb) if isinstance(mb, (int, float)) and mb >= 0 else None})
+                                     "mb": float(mb) if isinstance(mb, (int, float)) and mb >= 0 else None,
+                                     "pages": int(peer["sites_pages"]) if isinstance(peer.get("sites_pages"), int) else None})
             row["copies"] = sorted(({**c, "frac": frac(c["walked_to"])} for c in held), key=lambda c: -(c["frac"] or 0))
             # What hosting costs (2026-10-27: "Anyone who decides they want to also index should know the size
             # of the index before they choose to host"): the size of the furthest-reaching copy that says its size.
+            # KB a page from a copy big enough to say (a small one is mostly empty file pages), else the measured one.
             sized = [c for c in row["copies"] if c.get("mb") is not None]
-            row["host_mb"] = ({"mb": sized[0]["mb"], "tag": sized[0]["tag"], "node": sized[0]["node"], "me": sized[0]["me"],
-                               "frac": sized[0]["frac"]} if sized else None)
+            for c in row["copies"]:
+                c["kb_page"] = round(c["mb"] * 1000 / c["pages"], 2) if c.get("mb") is not None and c.get("pages") else None
+            big = [c for c in sized if (c.get("pages") or 0) >= 1000]
+            from ..sites_index import KB_PER_PAGE
+            kb = big[0]["kb_page"] if big else KB_PER_PAGE
+            row["host_mb"] = ({"mb": sized[0]["mb"], "pages": sized[0].get("pages"), "tag": sized[0]["tag"],
+                               "node": sized[0]["node"], "me": sized[0]["me"], "frac": sized[0]["frac"]} if sized else None)
+            row["kb_page"] = kb
+            row["gb_million"] = round(kb, 1)                  # KB a page x a million pages = GB
             row.update(tip=tip, tip_known=tip > base, title=getattr(chain, "title", "") or chain.label,
                        label=chain.label, icon=_coin_icon(net))
             rows.append(row)

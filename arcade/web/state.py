@@ -1903,6 +1903,8 @@ class AppState:
                 lambda n=net: (self.sites_index(n).reach() or None) if self.sites_mode(n) == "host" else None)
             self._ord_indexes[net].sites_mb = (
                 lambda n=net: self.sites_index(n).size_mb() if self.sites_mode(n) == "host" else None)
+            self._ord_indexes[net].sites_pages = (
+                lambda n=net: self.sites_index(n).status().get("pages") if self.sites_mode(n) == "host" else None)
         except Exception:                                      # noqa: BLE001 -- e.g. the file still locked by the
             # worker this one replaces, mid-reset (2026-10-21): opened again at the next ask.
             logging.getLogger("arcade.web").warning("ord index of %s not opened yet; asked again later", net,
