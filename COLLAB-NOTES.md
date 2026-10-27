@@ -88,6 +88,85 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-27 · SadFrog's side (Claude, node 2) · branch `team/onboarding` (on `main` 0569eb2) · Welcoming new operators: one ask for 1 PEP test, one click to pay it, a Welcomers board
+SadFrog: "make it easy for someone new running an arcade to get setup": a new arcade asks every operator on the mesh for
+1 PEP test, any operator pays it in one click from the notification, "One ask, closes when paid", a popup that nothing
+works until PEP test arrives with a Mine a block button usable before the node syncs, and "a highscores list for
+operators ... of people "welcoming" new operators - if 2 operators send a pep test in the same block, count it for both".
+One commit, 7e07abd, plus this entry:
+- **Records (arcade/welcome.py):** `ask {addr, tag}`, `sent {ask, txid, tag}`, `closed {block, height, txids}`, each
+  signed by the writing arcade's mesh node key (`a` = its node id), kept in `<home>/welcome.json` (5,000 at most; open
+  asks 14 days, the rest a year). A record is refused whole when anything in it would need changing (a badly shaped
+  tag, unsorted txids), because a changed record no longer carries its signature. One ask an arcade; a closed one is
+  never opened again; one `sent` an arcade per ask.
+- **The whole mesh (arcade/mesh/welcomeshare.py, kind "wl"):** a record new to an arcade is kept and sent to every
+  other link, so it crosses the mesh once; on link-up each side sends all it keeps, so an arcade that joins later still
+  hears an open ask. A link brings at most 30 new asks an hour. Registered in `service.for_state` after operators.
+- **This arcade (arcade/web/welcoming.py, every minute from the extension's rebalance):** asks once (setting
+  `welcome:asked`) when it links to another arcade and neither its payout address on the messaging chain (by the index)
+  nor its node wallet holds 1 PEP test. It then looks at every payment it was told of with `getrawtransaction`
+  (through the sharer while it catches up: core_catchup) and closes on the first block that pays its address, with every
+  such payment in that block. Coins that came another way (it mined) close it with no payments, so nobody scores.
+- **Paying:** `POST /admin/api/welcome/send {ask}` sends 1 PEP test from the node's Core wallet on the messaging chain
+  (`sendtoaddress`), admin write check, no password (test coins, as the faucet). `GET /admin/api/welcome` is the view;
+  `POST /admin/api/welcome/ask` is the one ask by hand once the first is gone (14 days unanswered).
+- **Board:** one point per closed ask for each arcade whose txid is in its `txids`; a txid counts for whoever said it
+  first. All of it is each arcade's own word, like the operator tags: nothing pays, permits or vouches by it.
+- **UI:** Admin -> Overview -> "Welcome new operators" (`_welcome_panel.html`): open asks with Send 1 PEP test, this
+  arcade's own ask, the Welcomers table. The first-run sheet opens on every Admin visit until the arcade is funded:
+  why, the ask's status (Ask again when allowed), **Mine a block**, and the next steps (claim the @name on /me, publish
+  the key on /me/contacts, welcome the next one). Notifications (node and operator account) get a `welcome` row per
+  open ask not yet paid by this arcade, with its own Send button.
+- **Mining:** `/admin/api/mine` takes `{"blocks": n}` (0-100; passed to blockminer only when set). `_work_share` now
+  pays the sharer its tenth while a chain run here is catching up (core_catchup.borrowing), as on a borrowed chain: the
+  work comes from that sharer then.
+- **Pepecoin test is still never "borrow":** the borrowing a new arcade needs is the catch-up borrowing that is already
+  there, so `cores.REQUIRED` is untouched.
+- **Tests:** tests/test_welcome.py (16, including a three-arcade mesh a - b - c). tests/test_admin.py, test_notifications,
+  test_mesh, test_core_catchup, test_litecoin_testnet, test_shared_revenue, test_ring, test_page_scripts and the smoke
+  set pass, but for main's own two in test_docs.
+- **Needs from the other side:** apply the commit. Open question: is 1 PEP test the right amount, and should a node
+  wallet with no coins at all be allowed to show Send (it fails with the wallet's own error now)?
+
+### 2026-10-27 · SadFrog's side (Claude, node 2) · branch `team/core-no-wallet` (on `main` 0ae7b90e) · Admin: a chain's wallet always shown, or why it can't be read
+SadFrog: "there is currently no way for an admin to see the digibyte wallet or even if it has one -this may be true for other
+chains added as well". DigiByte Core had no wallet at all, so `getwalletinfo` raised -18 and Admin showed nothing for the chain.
+- 1e134e9 `state.keyed()`: on -18 it asks `listwalletdir`. With no wallet on disk at all, the chain is held with the arcade's
+  own key (the same as a chain with no Core wallet), so Admin shows its key card, address and balance. With wallets on disk
+  but none loaded, or if `listwalletdir` fails, it stays not keyed: we never guess past a wallet the operator has.
+- fcce665 `app._wallet_note(ctx, exc)` + admin.html: when Core's wallet can't be read, Admin says why instead of a bare error.
+  -18: "N wallet(s) on disk, none loaded: names. Load one in this chain's Core." -19: "N wallets loaded (names): the arcade
+  reads one wallet. Leave only its own loaded".
+- Found on node 2: Litecoin's `arcade` wallet was on disk but not loaded (-18); Bells has two wallets loaded (-19).
+- Tests: tests/test_admin.py (no wallet at all is key-held), tests/test_litecoin_testnet.py (-18 and -19 notes).
+- Running on node 2 and node 6 since 2026-10-27. Nothing needed from you but the merge.
+
+### 2026-10-27 Exchange safety after the Doginal Dogs theft: stale listings, lots, swap locks, Kotia (Claude)
+The theft on the Doginal Dogs marketplace (2026-10-26): six transactions swept 201 Dogs from 194 wallets to one address,
+every one of their 264 inputs signed SIGHASH_NONE|ANYONECANPAY -- a signature over no output, which whoever holds it can
+put in any transaction. Checked against the arcade, which never signs or files NONE (listings and Doginals are
+SINGLE|ANYONECANPAY, refused otherwise), then a review of every lock script and every chain's send/receive/exchange:
+- **Stale listings** (`app._no_dearer_relist`, `doginal_market.Book.register`): a listing stays good until its coins
+  move, so listing a piece again for MORE left the cheaper one buyable (exchange legs are announced to every node).
+  Refused until cancelled; for less is fine. Replaced/expired Doginal rows keep no signature.
+- **Buy-order lots** (`/account/standing/sign`, `/cancel`, pair.html): a lot signs only its change, so its holder can
+  spend it. Only the buyer's own SINGLE|ANYONECANPAY over that lot is kept now, cancel offers the sweep that moves the
+  lots back, and the prompt says what is trusted.
+- **One secret hash per swap** (`trade.Book.knows_secret_hash`, node_trader, wallet.js answerProposals): a lock commits
+  to hash, keys and lock time but no amount, so two trades on one hash shared one counterparty lock.
+- **Lock times beyond a miner's reach** (`trade.LOCK_SECONDS` 8 h, `FUTURE_DRIFT` 2 h, next_step / wallet.js /
+  locktimes_fit): without BIP113 a time lock is checked against the block's own time, which may run 2 h ahead; 2 h / 1 h
+  locks let one early block refund after the other side's claim showed the secret. Older arcades still take the new
+  proposals; theirs (2 h) are refused here as too close.
+- **Kotia / Bellscoin locks** (`config.require_untimed`, `trade_orders.check_order`, wallet.js NO_LOCK): Kotia lock
+  claims/refunds lack nTime and Bellscoin's P2SH is unpayable, so no cross-chain order or lock is made on either.
+  `keywallet.prepare` writes Kotia's nTime; `txbuild.SCRIPTHASH_VERSIONS` += 45 (a K script address was paid as a key).
+- **Shop countersign** (`swap.countersign`): a buyer input the node's wallet owns is refused (signrawtransaction signs
+  them all). Testnet only.
+- Not changed, for the operator: zero-conf swaps below the big line (2026-10-17) stay as decided; bids'
+  ALL|ANYONECANPAY signatures need the database and the seller together.
+- Tests: test_account_list, test_doginal_market, test_standing, test_trade, test_trade_tab, test_kotia, test_swap.
+
 ### 2026-10-27 Admin -> DNS: the Ords tab's chain picker; the rings' centre counts 2 copies (Claude)
 The operator: "Add the same chain selection as ORD panel to DNS". The PR merge session found the centre read "0% / 3 holding"
 with two copies.
