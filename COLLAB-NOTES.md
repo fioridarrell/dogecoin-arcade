@@ -88,6 +88,20 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-26 The T-Deck builds its own letters; ord coins never spent (Claude)
+The operator: "Can't the T-Deck build the transaction?" / "Is it going to protect ord coins from spending?" -- a letter over
+LoRa was MAIL_POST up, a three-part OFFER down, SIGN up, SENT down; now it is one BROADCAST up and one SENT down.
+- `/account/coins?spendable=1`: only the coins a transaction may take, by funding.choose's own rule
+  (`_spendable_coins`: the inscription guard on the index's coins, this node's unconfirmed change as it is, never a
+  NOTE_COINS token note; a coin the guard cannot judge is left out).
+- `/account/broadcast` (door PUBLIC_POST): a signed transaction from the account's T-Deck; every input must be one of the
+  account's own spendable coins on that chain, or nothing is sent (400); remembered in `_flights` inside the send lane.
+- arcade/lora from arcade-lora 80d18e1: COINS asks for spendable coins and sends the biggest 8; BROADCAST goes to
+  /account/broadcast and answers SENT.
+- Firmware (device-ui 5ed3b9d) builds the arcade's /account/write message output for output (held to arcade/encoding.py,
+  funding.price and funding.sighash by arcade-lora's test_c_msgtx.py) and never spends a kept coin under 0.1.
+  Refused, it falls back to MAIL_POST. Tests: tests/test_tdeck_broadcast.py.
+
 ### 2026-10-26 LoRa over the air: hops as needed; T-Deck coin types (Claude)
 The operator: "Can't you run the tests over the actual mesh using the two devices?" -- an over-the-air test (the T-Deck's radio
 over USB on a test machine <-> the live gateway on .25) showed parts of one answer arriving 15-17 s apart on the crowded public

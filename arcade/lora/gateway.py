@@ -389,7 +389,7 @@ class Gateway:
         index = F.Reader(msg.body).u8()
         coins = dev.arcade.coins(self._chain(dev, index)["network"])
         coins.sort(key=lambda c: -int(c["value"]))
-        coins = coins[:F.MAX_PARTS * F.MAX_BODY // 46 - 1]
+        coins = coins[:8]                                # the biggest few: two parts on the air, plenty for a letter
         w = F.Writer().u8(index).u8(len(coins))
         for c in coins:
             w.raw(bytes.fromhex(c["txid"])).u16(int(c["vout"])).amount(int(c["value"])).u32(int(c.get("height") or 0))
@@ -453,9 +453,15 @@ class Gateway:
         self.reply(node, F.ADDR_OK, msg.id, F.Writer().str(address).done())
 
     def on_broadcast(self, node, msg):
-        # Carried offline payments need a raw broadcast route on the arcade;
-        # until one exists the gateway says so rather than pretending.
-        self.error(node, msg.id, F.E_ARCADE, "this gateway cannot broadcast carried payments yet")
+        """A transaction the T-Deck built and signed itself (2026-10-26: a letter as one BROADCAST up, one SENT down);
+        the arcade takes only one spending this account's own uninscribed coins."""
+        dev = self._device(node, msg)
+        if dev is None:
+            return
+        r = F.Reader(msg.body)
+        index, raw = r.u8(), r.bytes()
+        said = dev.arcade.broadcast(self._chain(dev, index)["network"], raw)
+        self.reply(node, F.SENT, msg.id, bytes.fromhex(said["txid"]))
 
     # -- contacts -------------------------------------------------------------
     def on_who_req(self, node, msg):

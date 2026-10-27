@@ -14279,8 +14279,21 @@ def create_app(state: AppState) -> FastAPI:
                         "address": address})
         return out
 
+    def _spendable_coins(account, chain, address: str) -> list[dict]:
+        """`_own_coins` less what a transaction may not take, by funding.choose's own rule: the inscription guard on the
+        index's coins, and the change this node broadcast as it is (its inputs passed the guard) unless it is a token
+        note this arcade just revealed. A coin the guard cannot judge now is left out, not let through."""
+        coins = _own_coins(account, chain, address)
+        guard = fundinglib.guard_for(address or _account_address(account.pubkey, chain))
+        if guard is not None:
+            change = {(c["txid"], int(c["vout"])) for c in _flights.change_for(account.pubkey, chain.network)}
+            judged = {(c["txid"], int(c["vout"]))
+                      for c in guard.spendable([c for c in coins if (c["txid"], int(c["vout"])) not in change])}
+            coins = [c for c in coins if (c["txid"], int(c["vout"])) in judged or (c["txid"], int(c["vout"])) in change]
+        return [c for c in coins if (c["txid"], int(c["vout"])) not in fundinglib.NOTE_COINS]
+
     @app.get("/account/coins")
-    def account_coins(request: Request, chain: str = "", address: str = ""):
+    def account_coins(request: Request, chain: str = "", address: str = "", spendable: int = 0):
         """The account's own coins on one chain, one row per output.
 
         [Claude 2026-10-15] For the Wallet's Doginals check (2026-10-14: "We have to have the wallet check its own utxo
@@ -14294,7 +14307,9 @@ def create_app(state: AppState) -> FastAPI:
         # One of this account's own addresses only (an imported wallet's, plan item 18); a 403 for any other.
         address = _own_address_asked(account, one, address)
         try:
-            coins = _own_coins(account, one, address)
+            # spendable: only the coins a transaction may take (2026-10-26, for the T-Deck, which builds its own and
+            # has no Doginals check of its own)
+            coins = _spendable_coins(account, one, address) if spendable else _own_coins(account, one, address)
         except Exception as exc:                          # noqa: BLE001 -- a node still catching up
             return JSONResponse({"detail": f"this node cannot read those coins yet: {exc}"}, status_code=503)
         return JSONResponse({"chain": one.network, "address": address,
@@ -27260,6 +27275,56 @@ def create_app(state: AppState) -> FastAPI:
             return JSONResponse({"txid": txid, "what": offer.what})
         finally:
             state.end_send(lane)
+
+    @app.post("/account/broadcast")
+    def account_broadcast(request: Request, payload: Any = Body(None)):
+        """A transaction the account's T-Deck built and signed itself (2026-10-26: "Can't the T-Deck build the
+        transaction?" -- a letter over LoRa is then one BROADCAST up and one SENT down). Only this account's own: every
+        input must be one of its unspent coins on the chain named, never a coin carrying an inscription, or nothing goes
+        out. Remembered like an offer that was signed, so the next transaction does not reuse its coins."""
+        from types import SimpleNamespace
+        account = _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        try:
+            chain = _chain_asked({"chain": said.get("chain")})
+            raw = str(said.get("raw") or "")
+            bytes.fromhex(raw)
+            if not raw or len(raw) > 200_000:
+                raise ValueError("a signed transaction, as hex")
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        address = _account_address(account.pubkey, chain)
+        lane = f"account {account.pubkey}"
+        if not state.begin_send(lane):
+            return JSONResponse({"detail": "one of your transactions is still going: try again in a moment"},
+                                status_code=409)
+        try:
+            own = {(c["txid"], int(c["vout"])): c for c in _own_coins(account, chain, address)}
+            free = {(c["txid"], int(c["vout"])) for c in _spendable_coins(account, chain, address)}
+            with chain.rpc() as rpc:
+                decoded = rpc.call("decoderawtransaction", raw)
+                inputs = []
+                for vin in decoded.get("vin", []):
+                    key = (vin.get("txid"), int(vin.get("vout", -1)))
+                    if key not in own:
+                        raise ValueError("it spends a coin that is not this account's")
+                    if key not in free:
+                        raise ValueError("it spends a coin that carries an inscription, or one not checked yet")
+                    inputs.append(own[key])
+                outputs = [(round(float(v["value"]) * 100_000_000), bytes.fromhex(v["scriptPubKey"]["hex"]))
+                           for v in decoded.get("vout", [])]
+                txid = rpc.call("sendrawtransaction", raw)
+            # inside the lane: the next send this account makes must already see these coins gone
+            _flights.add(account.pubkey, txid, SimpleNamespace(inputs=inputs, outputs=outputs), address,
+                         network=chain.network)
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        except Exception as exc:                          # noqa: BLE001
+            return JSONResponse({"detail": f"the node refused it: {exc}"}, status_code=409)
+        finally:
+            state.end_send(lane)
+        state.bump_generation()
+        return JSONResponse({"txid": txid})
 
     def _class_c_or_b(chain, address: str, raw: bytes,
                       coin_pubkey: bytes = b"", wrap: bool = True):

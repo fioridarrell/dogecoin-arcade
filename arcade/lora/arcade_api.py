@@ -74,8 +74,17 @@ class ArcadeSession:
         except ValueError:
             return r.status_code, {"detail": r.text[:200]}
 
-    def coins(self, network: str) -> list[dict]:
-        return self._call("GET", "/account/coins", params={"chain": network})["coins"]
+    def coins(self, network: str, spendable: bool = True) -> list[dict]:
+        """This account's coins on a chain; `spendable` (the default for a T-Deck, which builds its own transactions):
+        only those a transaction may take -- none carrying an inscription, none the arcade could not check."""
+        params = {"chain": network}
+        if spendable:
+            params["spendable"] = 1
+        return self._call("GET", "/account/coins", params=params)["coins"]
+
+    def broadcast(self, network: str, raw: bytes) -> dict:
+        """A transaction the T-Deck built and signed (its own coins only; the arcade checks)."""
+        return self._call("POST", "/account/broadcast", json={"chain": network, "raw": raw.hex()})
 
     def send(self, network: str, to: str, amount: int) -> dict:
         # The arcade parses amounts as coin text; send it exactly, no float.

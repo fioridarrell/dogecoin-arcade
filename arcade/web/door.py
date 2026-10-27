@@ -305,6 +305,8 @@ PUBLIC_POST = ("/auth/challenge", "/auth/login", "/auth/logout",
                "/r/escrow/release",
                # a .mesh page's bytes, checked, for the name's own holder to inscribe from its tab (the .mesh web)
                "/account/mesh/draft",
+               # a transaction the account's own T-Deck built and signed: only its own unspent coins, none inscribed
+               "/account/broadcast",
                # a T-Deck on WiFi (tdecklink.py): its LoRa frames over HTTPS; the account proves itself by its own
                # signed LOGIN, and the token it sends is its own secret
                "/r/tdeck/link",
