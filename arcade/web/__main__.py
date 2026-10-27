@@ -31,7 +31,22 @@ DEFAULT_HOME = Path.home() / ".dogecoinarcade"
 GRACEFUL_STOP = 5.0
 
 
+def _more_open_files() -> None:
+    """Raise this process's open-file limit to the most it may have (2026-10-27: .25 went down twice in an hour at the
+    usual soft limit of 1,024 -- every request thread keeps a read connection to each chain's ord index and ledger,
+    two files each, and with a dozen chains that ran out; then nothing could be accepted)."""
+    try:
+        import resource
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        want = hard if hard != resource.RLIM_INFINITY else 1 << 20
+        if soft != resource.RLIM_INFINITY and soft < want:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (want, hard))
+    except (ImportError, ValueError, OSError):          # Windows, or a limit this process may not change
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _more_open_files()
     parser = argparse.ArgumentParser(prog="arcade-web", description=__doc__)
     parser.add_argument("--home", default=str(DEFAULT_HOME))
     # Two chains, permanently (D-012): testnet carries messages, mainnet carries

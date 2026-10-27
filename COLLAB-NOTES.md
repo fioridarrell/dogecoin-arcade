@@ -88,6 +88,12 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-27 arcade-web raises its own open-file limit (Claude)
+.25 went down twice in an hour: "[Errno 24] Too many open files" at the usual soft limit of 1,024. Each request thread
+keeps a read connection (file + WAL) to every chain's ord index and ledger, and with a dozen chains ~50 threads ran
+out. `__main__._more_open_files()` lifts the soft limit to the hard one at start. The real fix (open a chain's index
+and wallet only when a page needs it) follows.
+
 ### 2026-10-26 The Browser: every name's site; pictures on .mesh pages (Claude)
 The operator: "Instead of mesh browser call the app browser. When it's installed on a T deck it should be the .mesh domains
 only; when it is opened on the PWA or website it should be able to explore all p:dns names", "small size images on
