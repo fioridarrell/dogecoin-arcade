@@ -58,8 +58,10 @@ LTC_SUBSIDY, LTC_HALVING = 50 * 100_000_000, 840_000
 #: complete in its own input is an inscription (txid i1, i2 ... in input order); a piece of a longer one is not.
 EVERY_INPUT = frozenset({"bel"})
 #: The JSON tokens a chain's ord index reads ("p"): PRC-20 on Pepecoin (reallyshadydev/pepecoin-ord-indexer), bel-20 on
-#: Bellscoin (nintondo's, 2026-10-25: nook, CATS, ondo ...), the DRC-20 rules elsewhere.
-TOKEN_PROTOCOLS = {"main": "prc-20", "test": "prc-20", "bel": "bel-20", "ltc": "ltc-20", "ltctest": "ltc-20"}
+#: Bellscoin (nintondo's, 2026-10-25: nook, CATS, ondo ...), dgb-20 on DigiByte (wonky-ord-digibyte src/drc20/params.rs
+#: PROTOCOL_LITERAL, 2026-10-26: its DRC-20 code with its own "p"), the DRC-20 rules elsewhere.
+TOKEN_PROTOCOLS = {"main": "prc-20", "test": "prc-20", "bel": "bel-20", "ltc": "ltc-20", "ltctest": "ltc-20",
+                   "dgb": "dgb-20"}
 #: Tokens read by BRC-20's rules rather than wonky-ord's DRC-20 (LTC-20 on Litecoin, 2026-10-26: "p":"ltc-20" as
 #: litescribe and chikun read it -- the LITE deploy #224,061): no shortest body (wonky-ord's 40 characters).
 BRC20_STYLE = frozenset({"ltc-20"})
