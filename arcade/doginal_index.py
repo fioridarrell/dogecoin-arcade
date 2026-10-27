@@ -23,6 +23,7 @@ every earlier block in order and the values of the coins spent, so only a walker
 from __future__ import annotations
 
 import hashlib
+import os
 import json
 import logging
 import random
@@ -536,7 +537,25 @@ class Store:
             if self.meta("layout") is None:
                 self.set_meta("layout", LAYOUT)
             self._names_without_maps(self._db)
+            self._token_reading()
         self._columns_added(self._db)
+
+    def _token_reading(self) -> None:
+        """Mark from which block this index reads tokens as its chain's token rules say (ord_rules.token_rules; PR #32,
+        Dogecoin 2026-10-27). A new index: from its first block. One walked before: from its walk's next block -- the
+        blocks behind were read the old way, and Backfill walks them again beside it."""
+        want = ord_rules.token_rules(self.net)
+        if want == 1 or self.meta("token_rules") == want:
+            return
+        empty = not self._db.execute("SELECT 1 FROM insc LIMIT 1").fetchone()
+        start = self.base if empty else int(self.meta("walk_next") or self.base)
+        self.set_meta("token_rules", want)
+        self.set_meta("token_rules_from", start)
+
+    @property
+    def tokens_from(self) -> int:
+        """The first block whose tokens this index read by its chain's current token rules (`base`: all of them)."""
+        return int(self.meta("token_rules_from", self.base) or self.base)
 
     @staticmethod
     def _names_without_maps(db) -> None:
@@ -1637,7 +1656,10 @@ class Walker:
             op = ord_rules.token_op(self.token_protocol, ctype, body)
             if op is None:
                 continue
-            number = w.get("insc", (rid,))["number"]
+            insc = w.get("insc", (rid,))
+            if insc.get("reinscribed") and not ord_rules.tokens_in_reinscriptions(self.store.net):
+                continue                                      # on Dogecoin a reinscription is no token operation (#32)
+            number = insc["number"]
             if number < 0:
                 continue                                      # a cursed inscription is no token operation (BRC-20)
             try:
@@ -2023,7 +2045,62 @@ class DoginalIndex:
             # lender for nearly every coin -- tens of seconds a block, on the same thread the lanes need (2026-10-25,
             # Strawberry: 3 chunks brought in in 5 minutes beside a walk of 70 blocks).
             return
+        bf = self._backfill()
+        if bf is not None and bf.caught_up():
+            self._backfill_finish(bf)                    # the index waits this pass: the backfill takes its place
+            return
         self.walker.step(rpc, self.tip, budget, notes=self._notes_for)
+        if bf is not None:
+            try:
+                bf.step(rpc, budget / 2)
+                bf.error = ""
+            except Reorg:
+                raise
+            except Exception as exc:                     # noqa: BLE001 -- said in the Ords tab, tried again
+                bf.error = str(exc)[:200]
+                log.debug("ord index %s: backfill pass failed", self.net, exc_info=True)
+
+    def _backfill(self) -> "Backfill | None":
+        """The walk behind this index's token reading, done again beside it (Backfill), while one is needed: a walking
+        index whose tokens were read by an older rule before some block, and no backfill already let go of."""
+        bf = getattr(self, "_bf", None)
+        # A big machine only (BIG_FROM_CORES): a small one serving pages does not walk the chain twice (.25, 4 cores,
+        # 2026-10-20: one walk there already starved its pages).
+        needed = (self.mode() == "walk" and self.store.tokens_from > self.base and self._big()
+                  and not self.store.meta("backfill_failed"))
+        if not needed:
+            if bf is not None:
+                bf.store.close()
+                self._bf = None
+            return None
+        if bf is None:
+            bf = self._bf = Backfill(self)
+            log.warning("ord index %s: tokens read the old way before block %d; walking them again beside the index",
+                        self.net, self.store.tokens_from)
+        return bf
+
+    def _backfill_status(self) -> dict | None:
+        """For the Ords panel: the token backfill (PR #32's rule over the blocks walked before it), if any."""
+        tf = self.store.tokens_from
+        if tf <= self.base:
+            return None
+        bf = getattr(self, "_bf", None)
+        return {"tokens_from": tf, "base": self.base, "small": not self._big(), "next": bf.next_height() if bf is not None else None,
+                "target": self.walker.next_height(), "rate": round(bf.walker.rate, 2) if bf is not None else 0.0,
+                "error": bf.error if bf is not None else "", "failed": self.store.meta("backfill_failed") or ""}
+
+    def _backfill_finish(self, bf: "Backfill") -> None:
+        why = bf.same_inscriptions()
+        self._bf = None
+        if why:
+            log.warning("ord index %s: the backfill's inscriptions are not the index's (%s); let go", self.net, why)
+            bf.let_go()
+            self.store.set_meta("backfill_failed", why)
+            return
+        at = bf.next_height()
+        bf.take_over()
+        log.warning("ord index %s: backfill in at block %d: tokens read by the current rule from the first block",
+                    self.net, at)
 
     @property
     def snapshots(self):
@@ -2812,6 +2889,7 @@ class DoginalIndex:
                 # sat at one block for hours, and nothing here said whether they were fetching a copy or stuck).
                 "peers": {n[:12]: {**p, **_copy_said(self.snapshots.offers.get(n))}
                           for n, p in self.chunks.peers.items()}, "walk": walk, "error": self.error,
+                "backfill": self._backfill_status(),
                 "upgrading": (f"slimming the index (one time): {self.store.upgrading or 'starting'}"
                               if self.store.old_layout else "")}
 
@@ -3365,6 +3443,103 @@ def _copy_said(offer) -> dict:
     have = offer.get("have")
     return {"copy": {"h": int(offer.get("h") or 0), "of": int(offer.get("n") or 0),
                      "have": "all" if have == "all" else len(have) if isinstance(have, list) else 0}}
+
+
+class Backfill:
+    """The walk behind an index's token reading, done again beside it (PR #32 without cutting the index: the operator
+    2026-10-27, "I would like to keep what we have index ... use sad frogs PR to backfill").
+
+    An index walked before Dogecoin's token rule (a reinscription carries no DRC-20 operation, as nintondo and doggy.market
+    read it) keeps serving and walking. Beside it, in `<file>.backfill`, a private walk from the chain's first block
+    reads every block again under the rule: whether an inscription is a reinscription is known only from where every
+    inscription sat at that moment, and the index keeps where they are now. It never talks to the mesh. Once it reaches
+    the index's block, and its inscriptions (how many, the next number, the last block's hash) are the index's, it takes
+    the index's place as a fetched snapshot does, with the index's peer words and notes; if they differ it is let go and
+    the panel says so."""
+
+    def __init__(self, index: "DoginalIndex"):
+        self.index = index
+        self.path = Path(str(index.store.path) + ".backfill")
+        self.store = Store(self.path, index.base, index.dialect, index.net)
+        self.walker = Walker(self.store, index.taproot, index.mweb, params=index.walker.params,
+                             token_protocol=index.walker.token_protocol, dialect=index.dialect)
+        self.walker.fetch_many = index._fetch_many
+        self.walker.disk = ord_values.Values(Path(str(self.path) + ".values"))
+        self.error = ""
+
+    def next_height(self) -> int:
+        return self.walker.next_height()
+
+    def step(self, rpc, budget: float) -> None:
+        """Walk on, never past the index's own next block."""
+        target = self.index.walker.next_height()
+        self.walker.step(rpc, target - 1 + WALK_SETTLE, budget)
+
+    def caught_up(self) -> bool:
+        return self.next_height() >= self.index.walker.next_height()
+
+    def same_inscriptions(self) -> str:
+        """"" when this walk's inscriptions are the index's at the same block, else what differs."""
+        main, mine = self.index.store, self.store
+        h = self.next_height() - 1
+        for k in ("next_number", "next_cursed"):
+            if main.meta(k) != mine.meta(k):
+                return f"{k} {mine.meta(k)} here, {main.meta(k)} in the index"
+        a = main.q("SELECT hash FROM block WHERE height=?", (h,))
+        b = mine.q("SELECT hash FROM block WHERE height=?", (h,))
+        if a != b:
+            return f"block {h} differs"
+        na, nb = main.q("SELECT COUNT(*) FROM insc")[0][0], mine.q("SELECT COUNT(*) FROM insc")[0][0]
+        if na != nb:
+            return f"{nb} inscriptions here, {na} in the index"
+        return ""
+
+    def take_over(self) -> None:
+        """Into the index's place, bringing the index's peer words, notes and stitches along."""
+        main = self.index.store
+        if self.walker.disk is not None:
+            self.walker.disk.close()
+            self.walker.disk = None
+        self.store.close()
+        db = sqlite3.connect(self.path, timeout=60, isolation_level=None)
+        try:
+            with main._lock:
+                main._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                db.execute("ATTACH DATABASE ? AS live", (str(main.path),))
+                db.execute("BEGIN IMMEDIATE")
+                for table in ("seen", "notes", "stitched"):
+                    db.execute(f"DELETE FROM main.{table}")
+                    db.execute(f"INSERT INTO main.{table} SELECT * FROM live.{table}")
+                for k in ("helped",):
+                    db.execute("INSERT OR REPLACE INTO main.meta SELECT * FROM live.meta WHERE k=?", (k,))
+                db.execute("COMMIT")
+                db.execute("DETACH DATABASE live")
+                db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        finally:
+            db.close()
+        for tail in (".seen", ".seen.tmp"):
+            try:
+                Path(str(self.path) + tail).unlink()
+            except FileNotFoundError:
+                pass
+        values = Path(str(self.path) + ".values")
+        self.index.install(self.path)
+        for tail in ("", "-wal", "-shm"):
+            try:
+                os.replace(str(values) + tail, str(main.path) + ".values" + tail)
+            except FileNotFoundError:
+                pass
+
+    def let_go(self) -> None:
+        if self.walker.disk is not None:
+            self.walker.disk.close()
+            self.walker.disk = None
+        self.store.close()
+        for tail in ("", "-wal", "-shm", ".seen", ".seen.tmp", ".values", ".values-wal", ".values-shm"):
+            try:
+                Path(str(self.path) + tail).unlink()
+            except FileNotFoundError:
+                pass
 
 
 class Runner:

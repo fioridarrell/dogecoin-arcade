@@ -88,6 +88,26 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-27 Dogecoin's token rule from PR #32, without cutting the index; a backfill beside it (Claude)
+The operator: "I would like to keep what we have index if we can and if we are missing anything, I'd like to use sad frogs PR
+to backfill". SadFrog's rule (PR #32: on Dogecoin a reinscription carries no DRC-20 operation, as nintondo reads it;
+doggy.market, on wonky-ord, has no reinscriptions at all, so it agrees) changes only tokens: inscriptions, numbers and
+where they are stay. Checked 2026-10-27: .25 and Strawberry number alike and match nintondo (ours one lower, counted
+from 0); Strawberry's copy has no reinscription marks before block 5,282,609 (walked before the mark), .25's fresh walk
+marks 49,292 reinscribed DRC-20 operations in 4.6M-4.726M alone, so both copies' DRC-20 balances counted them.
+- ord_rules: TOKENS_SKIP_REINSCRIPTIONS {"doge"}, tokens_in_reinscriptions, token_rules (2 there, else 1). No rules
+  bump: RULES_BY_NET stays doge 5.
+- Store meta token_rules / token_rules_from: a new index reads tokens the new way from its first block; one walked before
+  from its next block (`tokens_from`). Walker skips a reinscribed token operation where the chain says so.
+- Backfill (doginal_index.Backfill): on a walking index with tokens_from > base, on a machine of 8+ cores, a private
+  walk in `<file>.backfill` from the first block under the rule, half the walk's budget, never past the index's block,
+  never on the mesh. At the index's block: next_number, next_cursed, the last block's hash and the inscription count must
+  be the index's; then it takes over (Store.swap via install) with the index's seen/notes/stitched and its values file.
+  Otherwise it is let go and meta backfill_failed says why. .25 (4 cores) does not backfill; the panel says which blocks'
+  tokens were read the old way. Admin -> Ords shows the backfill's progress.
+- Tests: tests/test_doginal_index.py (PR #32's two, and four for the starting block, the takeover, the mismatch, small
+  machines).
+
 ### 2026-10-27 Kept and helped chains open for the walk at start (Claude)
 Lazy ord indexes (this morning) left a walking arcade idle after each restart until a page asked for that chain:
 The operator saw Strawberry's Dogecoin copy stuck at 56% (block 5,626,686). `state.ord_working()` asks every chain whose

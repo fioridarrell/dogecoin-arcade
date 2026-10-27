@@ -68,6 +68,15 @@ BRC20_STYLE = frozenset({"ltc-20"})
 #: Chains whose indexes number a reinscription (an inscription made on a coin that already carries one), as nintondo's
 #: indexers do (Dogecoin since rules 5; Bellscoin, whose official indexer IS nintondo's ord).
 NUMBERS_REINSCRIPTIONS = frozenset({"doge", "bel"})
+#: Chains whose token rules read no operation in a reinscription, though it is numbered: Dogecoin, as nintondo's DRC-20
+#: index reads it (SadFrog, PR #32, 2026-10-26: none of 15 reinscribed transfers in its histories, 12 of them backed by
+#: the sender's balance -- 65b82e23...i0, 314,000 dogi at block 4,741,449, the first found; wonky-ord, under
+#: doggy.market, makes no reinscription at all, so it never counts one either). Bellscoin's nintondo counts them (14 of
+#: 14 reinscribed "nook" mints), so it is not here.
+#: Not a rules bump (2026-10-27: "I would like to keep what we have index"): nothing else an index keeps changes,
+#: so an index walked before keeps its inscriptions; from its walk's block on it reads tokens this way
+#: (Store.tokens_from), and the walk behind that block is done again beside it to put its tokens right (Backfill).
+TOKENS_SKIP_REINSCRIPTIONS = frozenset({"doge"})
 
 
 def ord_lite(net: str) -> bool:
@@ -89,6 +98,16 @@ def every_input(net: str) -> bool:
 def token_protocol(net: str) -> str:
     """The "p" of `net`'s JSON tokens (TOKEN_PROTOCOLS)."""
     return TOKEN_PROTOCOLS.get(net or "", "drc-20")
+
+
+def tokens_in_reinscriptions(net: str) -> bool:
+    """Whether a reinscription's token operation counts on `net` (not on TOKENS_SKIP_REINSCRIPTIONS)."""
+    return (net or "") not in TOKENS_SKIP_REINSCRIPTIONS
+
+
+def token_rules(net: str) -> int:
+    """The token reading `net`'s index follows: 2 where reinscriptions carry no token operation, else 1."""
+    return 1 if tokens_in_reinscriptions(net) else 2
 
 
 def rules_for(net: str) -> int:

@@ -2615,6 +2615,16 @@ section.panel h2{margin-top:0}
     if (sn.said) bits.push(sn.said);
     if (sn.made) bits.push('serves a copy of its index at block ' + num(sn.made));
     if (r.rebuilt && r.rebuilt.why) bits.push('built again: ' + r.rebuilt.why);
+    // PR #32's token rule over the blocks walked before it (2026-10-27): walked again beside the index, which keeps serving.
+    var bf = r.backfill;
+    if (bf && bf.failed) bits.push('token backfill let go: ' + bf.failed);
+    else if (bf && bf.small && !bf.next) bits.push('DRC-20 tokens before block ' + num(bf.tokens_from) + ' were read the old way '
+      + '(reinscriptions counted); a machine under 8 cores does not walk the chain a second time to put them right');
+    else if (bf) bits.push('DRC-20 backfill (no token operation in a reinscription, as nintondo and doggy.market): '
+      + (bf.next ? 'walked again to block ' + num(bf.next) + ' of ' + num(bf.target)
+         + ' (' + Math.max(0, Math.min(100, 100 * (bf.next - bf.base) / Math.max(1, bf.target - bf.base))).toFixed(1) + '%)'
+         : 'starting') + '; tokens before block ' + num(bf.tokens_from) + ' read the old way until it is in'
+      + (bf.error ? ' — ' + bf.error : ''));
     return bits;
   }
 
