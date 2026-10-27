@@ -173,7 +173,7 @@ def test_the_wallet_is_asked_for_as_the_app_opens_and_no_hint_text():
     """2026-10-24: "Make sure the login pops up as soon as the PWA loads"; "Remove the touch and hold icons to move
     Text"."""
     home = (TEMPLATES / "home.html").read_text()
-    assert "if (!keys) arcadeUnlockSheet('');" in home and "askForWallet();" in home
+    assert "while (!keys) keys = await arcadeUnlockSheet('', true);" in home and "askForWallet();" in home
     assert "Touch and hold an icon to move it." not in home
 
 
@@ -237,3 +237,34 @@ def test_the_home_screen_is_always_portrait():
     assert "e.clientX" not in home.replace("loc(e.clientX, e.clientY)", ""), "every touch is read through loc()"
     assert ".getBoundingClientRect()" not in home.replace("var r = el.getBoundingClientRect();", ""), "every box through R()"
     assert "function paintRunning() {\n    orient();" in home
+
+
+def test_any_inscription_can_be_the_home_screens_background(public):
+    """2026-10-27: "Under the your arcade page on the PWA, you should be able to choose any inscription as the
+    background to your home screen": kept per account on the node, picked on /me, drawn behind the icons on /home."""
+    app, state = public
+    assert door.public_path("/account/homebg") and door.public_path("/account/homebg", "POST")
+    assert app.get("/account/homebg", headers=EDGE).json() == {"id": ""}
+    assert app.post("/account/homebg", headers=EDGE, json={"id": "ab" * 32 + "i0"}).status_code == 403, "sign in first"
+    assert _sign_in(app, SigningKey.generate(), headers=EDGE).status_code == 200
+    iid = "AB" * 32 + "i3"
+    assert app.post("/account/homebg", headers=EDGE, json={"id": iid}).json() == {"id": iid.lower()}
+    assert app.get("/account/homebg", headers=EDGE).json() == {"id": iid.lower()}
+    assert app.post("/account/homebg", headers=EDGE, json={"id": "javascript:alert(1)"}).status_code == 400
+    assert app.post("/account/homebg", headers=EDGE, json={"id": ""}).json() == {"id": ""}
+    me = (TEMPLATES / "me.html").read_text()
+    home = (TEMPLATES / "home.html").read_text()
+    assert 'id="homebg-pref"' in me and "drawBackground(" in home and "sandbox', 'allow-scripts'" in home
+
+
+def test_the_installed_app_cannot_be_used_until_the_wallet_is_unlocked():
+    """2026-10-27: "when the PWA opens the first thing that should open is the unlock wallet pop-up, and the
+    PWA should not be usable until the Wallet is unlocked": the sheet is asked for first, has no Cancel, and comes back
+    until the wallet opens."""
+    home = (TEMPLATES / "home.html").read_text()
+    base = (TEMPLATES / "base.html").read_text()
+    assert "while (!keys) keys = await arcadeUnlockSheet('', true);" in home
+    boot = home[home.index("  function boot() {"):]
+    assert boot.index("askForWallet();") < boot.index("fetch('/account/homeapps'"), "asked before the icons load"
+    assert "function arcadeUnlockSheet(why, required)" in base
+    assert "if (e.target === back && !required) done(null);" in base

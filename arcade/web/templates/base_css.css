@@ -133,6 +133,8 @@ button.danger{background:var(--bad);border-color:var(--bad);color:#fff}
 .askcard-back{position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.45);
   display:flex;align-items:center;justify-content:center;padding:16px}
 .askcard{max-width:440px;width:100%;margin:0}
+/* The PWA's unlock (2026-10-27): the app behind it is hidden, not only dimmed, until the wallet opens. */
+.askcard-required{background:var(--bg);backdrop-filter:blur(12px)}
 .askcard h3{margin-top:0}
 .mainnet-review{border:2px solid var(--bad)}
 .mainnet-review h3{display:flex;align-items:center;gap:8px}

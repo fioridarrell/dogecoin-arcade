@@ -88,6 +88,18 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-27 PWA: unlock first; any inscription as the home screen's background (Claude)
+The operator: "when the PWA opens the first thing that should open is the unlock wallet pop-up, and the PWA should not be
+usable until the Wallet is unlocked"; "Under the your arcade page on the PWA, you should be able to choose any
+inscription as the background to your home screen".
+- home.html asks for the wallet first in boot(), before the icons; base.html `arcadeUnlockSheet(why, required)`:
+  no Cancel, no closing by the backdrop or Escape, an opaque blurred cover (`.askcard-required`), a "Forgot your
+  password?" link to /restore; the home screen asks again until the wallet opens.
+- GET/POST /account/homebg (door PUBLIC_GET + PUBLIC_POST): one inscription id per account (setting homebg:<owner>).
+  me.html "Home screen background" panel (paste an id, preview, Use it / None); home.html draws it behind the icons:
+  an image as a cover background, anything else in a sandboxed frame that takes no touches.
+- Tests: tests/test_home_screen.py (two new).
+
 ### 2026-10-27 Lazy ord indexes and lazy wallets (Claude)
 The operator: "All these very large data sets can't be loading at the same time. They need to be lazy loaded and loaded
 when people actually visit the page that they are on. Same thing with wallets ... lazy loaded as the user selects the
@@ -101,12 +113,6 @@ rules 6, held its file and each page waited 60 s on it, and .25 stopped answerin
   chain and the first one. Others: address + `"lazy": true`, balance None. wallet.js `state(only)`, `filled(said, net)`;
   the Wallet reads a chain when it is picked (`fillNow`), the swap pages and Doginals tab ask for theirs by name.
 - Tests: test_ord_explorer (two new), test_chain_wallets (new), callers updated.
-
-### 2026-10-27 arcade-web raises its own open-file limit (Claude)
-.25 went down twice in an hour: "[Errno 24] Too many open files" at the usual soft limit of 1,024. Each request thread
-keeps a read connection (file + WAL) to every chain's ord index and ledger, and with a dozen chains ~50 threads ran
-out. `__main__._more_open_files()` lifts the soft limit to the hard one at start. The real fix (open a chain's index
-and wallet only when a page needs it) follows.
 
 ### 2026-10-27 Creator -> Names: claims only on a complete index; your names offered; a website wizard (Claude)
 The operator: "only allow claiming a name on a chain that has a complete name index so that we don't accidentally let people

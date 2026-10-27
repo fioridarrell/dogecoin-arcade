@@ -1467,7 +1467,10 @@ var ARCADE_SIGNED = {{ (account_here or False)|tojson }};
 var ARCADE_NODE_PLAYER = {{ ((not public) and (operator_here or false))|tojson }};
 var ARCADE_CHAIN = {network: {{ state.messaging.network|tojson }},
                     version: {{ state.messaging.params.pubkeyhash_version }}};
-function arcadeUnlockSheet(why){
+// `required` (the PWA, 2026-10-27: "when the PWA opens the first thing that should open is the unlock wallet
+// pop-up, and the PWA should not be usable until the Wallet is unlocked"): no Cancel, and nothing behind it answers
+// until the password opens the wallet; only a way to restore a forgotten one.
+function arcadeUnlockSheet(why, required){
   return new Promise(function(answer){
     var back = document.createElement('div');
     back.className = 'askcard-back';
@@ -1495,13 +1498,26 @@ function arcadeUnlockSheet(why){
     ok.type = 'submit'; ok.textContent = 'Unlock';
     var no = document.createElement('button');
     no.type = 'button'; no.className = 'ghost'; no.textContent = 'Cancel';
-    row.append(ok, no);
+    if (required) {
+      row.append(ok);
+      var lost = document.createElement('a');
+      lost.href = '/restore'; lost.className = 'muted'; lost.style.marginLeft = 'auto';
+      lost.textContent = 'Forgot your password?';
+      row.append(lost);
+      back.classList.add('askcard-required');
+      back.style.zIndex = '2147483646';
+    } else {
+      row.append(ok, no);
+    }
     card.append(h, p, user, pw, err, row);
     back.append(card);
     document.body.append(back);
     var done = function(v){ back.remove(); answer(v); };
     no.onclick = function(){ done(null); };
-    back.onclick = function(e){ if (e.target === back) done(null); };
+    back.onclick = function(e){ if (e.target === back && !required) done(null); };
+    if (required) {
+      back.addEventListener('keydown', function(e){ if (e.key === 'Escape') e.preventDefault(); });
+    }
     card.onsubmit = function(e){
       e.preventDefault();
       ok.disabled = true; ok.textContent = 'Unlocking\u2026'; err.hidden = true;

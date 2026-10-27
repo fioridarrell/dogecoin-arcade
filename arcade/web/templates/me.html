@@ -260,6 +260,54 @@
 })();
 </script>
 
+{#- 2026-10-27: "Under the your arcade page on the PWA, you should be able to choose any inscription as the
+    background to your home screen" (/account/homebg; drawn by home.html): kept for the account, on every device. #}
+<div class="panel" style="margin-top:14px" id="homebg-pref">
+  <h2 style="margin-top:0">Home screen background</h2>
+  <p class="muted" style="margin-top:0">Any inscription: a picture, or a page that moves. Paste its id (the long one ending in
+    <code>i0</code>, from Explore or your Wallet's NFTs).</p>
+  <div class="row" style="gap:8px;flex-wrap:wrap">
+    <input id="homebg-id" placeholder="inscription id, like 4b43…a9i0" autocomplete="off" spellcheck="false"
+           style="flex:1;min-width:0">
+    <button type="button" class="btn small" id="homebg-save">Use it</button>
+    <button type="button" class="btn small ghost" id="homebg-clear">None</button>
+  </div>
+  <p class="msg err" id="homebg-err" hidden></p>
+  <div id="homebg-preview" style="margin-top:10px;max-width:220px;aspect-ratio:9/16;border-radius:14px;overflow:hidden;
+       border:1px solid var(--line);display:none"></div>
+</div>
+<script>
+(function () {
+  var box = document.getElementById('homebg-id'), err = document.getElementById('homebg-err'),
+      pre = document.getElementById('homebg-preview'), ID = /^[0-9a-f]{64}i\d{1,6}$/;
+  function show(id) {
+    pre.replaceChildren();
+    pre.style.display = id ? 'block' : 'none';
+    if (!id) return;
+    var f = document.createElement('iframe');
+    f.src = '/content/' + id; f.title = 'Background preview'; f.setAttribute('sandbox', 'allow-scripts');
+    f.style.cssText = 'width:100%;height:100%;border:0;pointer-events:none;background:#000';
+    pre.append(f);
+  }
+  function save(id) {
+    err.hidden = true;
+    fetch('/account/homebg', {method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json'},
+                              body: JSON.stringify({id: id})})
+      .then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.detail || 'not saved'); return j; }); })
+      .then(function (j) { box.value = j.id; show(j.id); try { localStorage.setItem('arcade.homebg', j.id); } catch (e) {} })
+      .catch(function (e) { err.textContent = String(e.message || e); err.hidden = false; });
+  }
+  document.getElementById('homebg-save').onclick = function () {
+    var id = box.value.trim().toLowerCase();
+    if (!ID.test(id)) { err.textContent = 'That is not an inscription id (64 hex characters, i, a number).'; err.hidden = false; return; }
+    save(id);
+  };
+  document.getElementById('homebg-clear').onclick = function () { save(''); };
+  fetch('/account/homebg', {credentials: 'same-origin', cache: 'no-store'}).then(function (r) { return r.json(); })
+    .then(function (j) { box.value = j.id || ''; show(j.id || ''); }).catch(function () {});
+})();
+</script>
+
 {#- 2026-10-24: "The light mode dark mode, auto selector should be in the your arcade page" (base.html, LIGHT OR
     DARK): kept in this browser; every page and every window of the home screen follows at once. #}
 <div class="panel" style="margin-top:14px" id="theme-pref">
