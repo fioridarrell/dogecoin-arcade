@@ -346,7 +346,7 @@
 <script>
 (async () => {
   try {
-    const said = await (await fetch("/account", {cache: "no-store"})).json();
+    const said = await (await fetch("/account?chains=doge", {cache: "no-store"})).json();
     const d = (said.chains || []).find((c) => c.network === "doge");
     if (!d) return;
     const free = Number(d.spendable || 0), need = Number(d.doginal_lock_need || 0);

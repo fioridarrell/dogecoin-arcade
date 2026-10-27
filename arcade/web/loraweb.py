@@ -142,9 +142,8 @@ def register(app, state, *, admin_check: Callable) -> None:
                 if typed in name.lower() or typed == pid:
                     out.append({"key": f"{chain.network}-token-{pid}", "label": f"{name} \u00b7 {coin}"[:40],
                                 "note": f"token #{pid}"})
-        indexes = state.ord_indexes()
         for net, proto in (("main", "PRC-20"), ("doge", "DRC-20")):
-            index = indexes.get(net)
+            index = state.ord_index(net)                       # opened on this ask (lazy ord indexes, 2026-10-27)
             if index is None or not any(c.network == net for c in state.token_chains):
                 continue
             try:

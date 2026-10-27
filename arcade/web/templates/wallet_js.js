@@ -652,8 +652,21 @@ const coinsHex = (bytes) => [...new Uint8Array(bytes)]
   .map((b) => b.toString(16).padStart(2, "0")).join("");
 
 /** What the node knows about this account: address, coins, name. */
-export async function state() {
-  return (await fetch("/account")).json();
+/** The account as the node has it. A chain's balance is read only when asked for (lazy wallets, 2026-10-27):
+ *  `only` is a network or a list of them ("all" for every chain); the rest come back `lazy` with a null balance. */
+export async function state(only = "") {
+  const want = Array.isArray(only) ? only.filter(Boolean).join(",") : String(only || "");
+  return (await fetch("/account" + (want ? "?chains=" + encodeURIComponent(want) : ""))).json();
+}
+
+/** `said` with chain `network`'s row read in full, when it came back lazy. */
+export async function filled(said, network) {
+  const row = ((said && said.chains) || []).find((c) => c.network === network);
+  if (!row || !row.lazy) return said;
+  const got = await state(network);
+  const full = (got.chains || []).find((c) => c.network === network);
+  if (full) said.chains = said.chains.map((c) => (c.network === network ? full : c));
+  return said;
 }
 
 /** Wait for coins, counting what this node has already sent.
@@ -4377,6 +4390,7 @@ export async function fundsReader() {
   return async (give, get = null) => {
     try {
       if (!acct) return "";
+      acct = await filled(acct, give.network);
       const c = (acct.chains || []).find((x) => x.network === give.network);
       if (!c) return "";
       const kind = give.kind || "coin";

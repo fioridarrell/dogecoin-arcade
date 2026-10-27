@@ -107,7 +107,7 @@ def test_the_wallets_fee_needs_on_dogecoin_are_as_before(client, monkeypatch, tm
     from test_doginal_wallet import _doge_account
     app, state = client
     _doge_account(app, state, monkeypatch, tmp_path)
-    row = next(c for c in app.get("/account").json()["chains"] if c["network"] == "doge")
+    row = next(c for c in app.get("/account?chains=doge").json()["chains"] if c["network"] == "doge")
     assert row["doginal_send_need"] == _old_price(2, [(100_000, b"\x00" * 25)])
     assert row["doginal_lock_need"] == htlc.DOGINAL_RESERVE + _old_price(
         2, [(100_000, b"\x00" * 23), (htlc.DOGINAL_RESERVE, b"\x00" * 23)])

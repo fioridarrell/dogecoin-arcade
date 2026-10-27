@@ -169,7 +169,7 @@
       // A swap needs Dogecoin besides the Doginal (its lock's fee and reserve); a DOGE listing here costs the seller nothing.
       let swapShort = false, needText = "";
       try {
-        const acct = await (await fetch("/account", {cache: "no-store"})).json();
+        const acct = await (await fetch("/account?chains=" + encodeURIComponent(CHAIN.network), {cache: "no-store"})).json();
         const d = (acct.chains || []).find((c) => c.network === CHAIN.network);
         if (d && Number(d.spendable || 0) < Number(d.doginal_lock_need || 0)) {
           swapShort = true;

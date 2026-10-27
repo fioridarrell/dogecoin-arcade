@@ -48,7 +48,7 @@ def register(app, state, content=None) -> None:
     pictures: OrderedDict[str, bytes] = OrderedDict()
 
     def index():
-        idx = state.ord_indexes().get(M.NET)
+        idx = state.ord_index(M.NET)
         if idx is None:
             raise LookupError("this arcade does not read Pepecoin's ords")
         return idx
@@ -102,6 +102,13 @@ def register(app, state, content=None) -> None:
     # --- every name, every chain (the Browser) --------------------------------------------------------------------
 
     def indexes() -> dict:
+        """Every chain's index the Browser reads: asked to open (lazy ord indexes, 2026-10-27; a visit to the Browser
+        is what opens them), and those open now given."""
+        from ..doginal_index import STARTS
+        for chain in getattr(state, "all_chains", ()):
+            if chain.network in STARTS:
+                state.ord_index(chain.network, wait=0)
+        state.ord_index(M.NET)
         return dict(state.ord_indexes() or {})
 
     def all_sites() -> list[dict]:

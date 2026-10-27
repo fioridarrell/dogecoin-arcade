@@ -88,6 +88,26 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-27 Lazy ord indexes and lazy wallets (Claude)
+The operator: "All these very large data sets can't be loading at the same time. They need to be lazy loaded and loaded
+when people actually visit the page that they are on. Same thing with wallets ... lazy loaded as the user selects the
+Wallet that they want to view." That morning every request opened every chain's ord index; Dogecoin's, cut again for
+rules 6, held its file and each page waited 60 s on it, and .25 stopped answering.
+- state.py: `ord_indexes()` lists only the indexes open now and opens nothing. `ord_index(net, wait=1.5)` opens one
+  chain on a thread of its own (one per chain) and waits `wait` at most; a page goes on without it meanwhile. The
+  Runner walks what is open. Callers that read one chain use `ord_index`; Explore lists every chain (each opens when
+  picked); Names and the Browser open the chains they search.
+- GET /account reads a chain's balance only when asked (`?chains=doge,ltc` or `all`); by default the account's own
+  chain and the first one. Others: address + `"lazy": true`, balance None. wallet.js `state(only)`, `filled(said, net)`;
+  the Wallet reads a chain when it is picked (`fillNow`), the swap pages and Doginals tab ask for theirs by name.
+- Tests: test_ord_explorer (two new), test_chain_wallets (new), callers updated.
+
+### 2026-10-27 arcade-web raises its own open-file limit (Claude)
+.25 went down twice in an hour: "[Errno 24] Too many open files" at the usual soft limit of 1,024. Each request thread
+keeps a read connection (file + WAL) to every chain's ord index and ledger, and with a dozen chains ~50 threads ran
+out. `__main__._more_open_files()` lifts the soft limit to the hard one at start. The real fix (open a chain's index
+and wallet only when a page needs it) follows.
+
 ### 2026-10-27 Creator -> Names: claims only on a complete index; your names offered; a website wizard (Claude)
 The operator: "only allow claiming a name on a chain that has a complete name index so that we don't accidentally let people
 try to claim names that are already claimed"; "it should auto complete for you from the ones that you have in your

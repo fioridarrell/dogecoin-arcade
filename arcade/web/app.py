@@ -908,7 +908,7 @@ def create_app(state: AppState) -> FastAPI:
             """The chain's ord index, for its guard (no backwards tracing where there is one, 2026-10-22)."""
             if net not in _ORD_STARTS:
                 return None
-            return lambda: state.ord_indexes().get(net)
+            return lambda: state.ord_index(net)
         if getattr(state, "doge", None) is not None:
             fundinglib.GUARD = _doginals.Doginals(Path(state.home) / "doginals.sqlite", rpc_factory=state.doge.rpc,
                                                     index=_ord_index_of("doge"))
@@ -7085,7 +7085,7 @@ def create_app(state: AppState) -> FastAPI:
         if not net:
             return None
         try:
-            index = state.ord_indexes().get(net)
+            index = state.ord_index(net)
             said = index.delegate(inscription) if index is not None else None
         except Exception:                                   # noqa: BLE001 -- an index that cannot say: as before
             return None
@@ -10156,6 +10156,27 @@ def create_app(state: AppState) -> FastAPI:
         state.set_setting(f"homeapps:{owner}", {"pages": pages, "dock": dock})
         return JSONResponse({"pages": pages, "dock": dock, "saved": True})
 
+    HOME_BG = re.compile(r"[0-9a-f]{64}i\d{1,6}")
+
+    @app.get("/account/homebg")
+    def homebg_get(request: Request):
+        """The inscription behind this account's home screen, "" for none (2026-10-27: "Under the your arcade
+        page on the PWA, you should be able to choose any inscription as the background to your home screen")."""
+        owner = _favorites_owner(request)
+        kept = str(state.setting(f"homebg:{owner}") or "") if owner is not None else ""
+        return JSONResponse({"id": kept if HOME_BG.fullmatch(kept) else ""}, headers={"Cache-Control": "no-store"})
+
+    @app.post("/account/homebg")
+    def homebg_set(request: Request, payload: Any = Body(None)):
+        owner = _favorites_owner(request)
+        if owner is None:
+            raise HTTPException(403, "sign in first")
+        said = str((payload or {}).get("id") or "").strip().lower() if isinstance(payload, dict) else ""
+        if said and not HOME_BG.fullmatch(said):
+            return JSONResponse({"detail": "an inscription id: 64 hex characters, i, a number"}, status_code=400)
+        state.set_setting(f"homebg:{owner}", said)
+        return JSONResponse({"id": said})
+
     @app.get("/account/badges")
     def account_badges(request: Request):
         """The red counts of the tabs, by tab, for the home screen to keep fresh without reloading (2026-10-24:
@@ -12619,11 +12640,13 @@ def create_app(state: AppState) -> FastAPI:
         account = signed_in(request)
         if account is None:
             return _account_state(request)
+        # One answer per account AND per set of chains asked for (lazy wallets, 2026-10-27).
+        fkey = (account.pubkey, request.query_params.get("chains", ""))
         with _account_flight_lock:
-            flight = _account_flight.get(account.pubkey)
+            flight = _account_flight.get(fkey)
             first = flight is None
             if first:
-                flight = _account_flight[account.pubkey] = [threading.Event(), None]
+                flight = _account_flight[fkey] = [threading.Event(), None]
         if not first:
             if flight[0].wait(30) and flight[1] is not None:
                 return JSONResponse(flight[1])
@@ -12638,8 +12661,8 @@ def create_app(state: AppState) -> FastAPI:
         finally:
             flight[0].set()
             with _account_flight_lock:
-                if _account_flight.get(account.pubkey) is flight:
-                    del _account_flight[account.pubkey]
+                if _account_flight.get(fkey) is flight:
+                    del _account_flight[fkey]
 
     def _account_state(request: Request):
         """Everything the page needs to draw itself, and nothing else.
@@ -12764,7 +12787,15 @@ def create_app(state: AppState) -> FastAPI:
         # on each: what differs is the version byte, the index that is
         # read, and whether the coins are worth anything.
         said["chains"] = []
-        for one in _account_chains():
+        # Lazy wallets (2026-10-27: "all the wallets can't load at once that's too much. They need to be lazy
+        # loaded as the user selects the Wallet that they want to view"): a chain's balance is read only when the page
+        # asks for it (`?chains=doge,ltc`, or `all`); by default the account's own chain and the first one. Any other
+        # row comes back with its address and `"lazy": true`, balance None, for the page to ask again on selection.
+        asked = {n.strip() for n in str(request.query_params.get("chains", "")).split(",") if n.strip()}
+        everyone = "all" in asked
+        listed = _account_chains()
+        asked |= {chain.network} | ({listed[0].network} if listed else set())
+        for one in listed:
             here = _account_address(account.pubkey, one)
             row = {"network": one.network, "label": one.label, "coin": one.params.coin,
                    "version": one.params.pubkeyhash_version,
@@ -12779,6 +12810,10 @@ def create_app(state: AppState) -> FastAPI:
                    # This arcade's lock-fee terms here (node_trader.lock_fee, 2026-10-21): what the
                    # page writes into the legs it locks, {} when the fee is Off. Never the account's own.
                    "lock_fee": _lock_fee_on(one)}
+            if not everyone and one.network not in asked:
+                row.update({"lazy": True, "balance": None, "incoming": None, "spendable": None})
+                said["chains"].append(row)
+                continue
             if here:
                 try:
                     index = state.token_index(one)
@@ -14556,7 +14591,7 @@ def create_app(state: AppState) -> FastAPI:
         if one is None:
             return JSONResponse({"detail": "DRC-20 and PRC-20 are on Dogecoin and Pepecoin main"}, status_code=404)
         address = _own_address_asked(account, one, address)
-        index = state.ord_indexes().get(one.network)
+        index = state.ord_index(one.network)
         protocol = "drc-20" if one.is_doge else "prc-20"
         if index is None:
             return JSONResponse({"detail": "this arcade has no ord index of that chain"}, status_code=404)
@@ -14698,7 +14733,7 @@ def create_app(state: AppState) -> FastAPI:
                 seen_dg.add((net, asset))
         for (net, tick), rows in want.items():
             chain = next((c for c in state.token_chains if c.network == net), None)
-            index = state.ord_indexes().get(net)
+            index = state.ord_index(net)
             address = _account_address(account.pubkey, chain) if chain is not None else ""
             free = None
             problem = ""
@@ -14781,7 +14816,7 @@ def create_app(state: AppState) -> FastAPI:
                 raise ValueError(complaint)
             if to == address:
                 raise ValueError("that is this account's own address")
-            index = state.ord_indexes().get(chain.network)
+            index = state.ord_index(chain.network)
             if index is None:
                 raise ValueError("this arcade has no ord index of that chain")
             got = index.lookup({"what": "balances", "owner": address})
@@ -15081,7 +15116,7 @@ def create_app(state: AppState) -> FastAPI:
             return out
         out["name"] = made["spec"]
         out["valid"] = True
-        index = state.ord_indexes().get(chain)
+        index = state.ord_index(chain)
         if index is None:
             out["why"] = "This arcade does not read that chain's ords, so it cannot say whether the name is free"
             return out
@@ -15146,8 +15181,13 @@ def create_app(state: AppState) -> FastAPI:
         if not made:
             out["why"] = "A name, like yours.mesh or yours.pepe"
             return out
-        indexes = state.ord_indexes() or {}
-        nets = [mesh_web.NET] if mesh else list(indexes)
+        # Every chain a claim of it could be on, each opened now if it is not yet (lazy ord indexes, 2026-10-27).
+        from ..doginal_index import STARTS
+        nets = [mesh_web.NET] if mesh else [c.network for c in state.all_chains if c.network in STARTS]
+        for n in nets:
+            state.ord_index(n, wait=0)                         # all asked at once, then each waited for
+        indexes = {n: i for n in nets if (i := state.ord_index(n)) is not None}
+        nets = [n for n in nets if n in indexes]
         found = []
         for net in nets:
             index = indexes.get(net)
@@ -15181,7 +15221,14 @@ def create_app(state: AppState) -> FastAPI:
         from .. import doginals as doginalslib
         account = _signed_in_account(request)
         out, trouble = [], []
-        for net, index in (state.ord_indexes() or {}).items():
+        from ..doginal_index import STARTS
+        wanted = [c.network for c in state.token_chains if c.network in STARTS]
+        for net in wanted:
+            state.ord_index(net, wait=0)                       # all asked at once, then each waited for
+        for net in wanted:
+            index = state.ord_index(net)                       # opened on this page's ask (lazy, 2026-10-27)
+            if index is None:
+                continue
             chain = next((c for c in state.token_chains if c.network == net), None)
             address = _account_any_address(account.pubkey, chain) if chain is not None else ""
             if not address:
@@ -19231,7 +19278,7 @@ def create_app(state: AppState) -> FastAPI:
             if leg.kind != "token20":
                 raise ValueError("this route locks a DRC-20 / PRC-20 token")
             cut = (_trade_operator(said.get("leg"), chain) or (0, ""))[0]
-            index = state.ord_indexes().get(chain.network)
+            index = state.ord_index(chain.network)
             if index is None:
                 raise ValueError("this arcade has no ord index of that chain")
             got = index.lookup({"what": "balances", "owner": owner})
@@ -19560,7 +19607,7 @@ def create_app(state: AppState) -> FastAPI:
                     # Counted once a copy of the ord index has read the lock's note as valid and the lock's own.
                     from .. import htlc as htlclib, token20_swap as t20swap
                     redeem = bytes.fromhex(str(said.get("redeem") or ""))
-                    index = state.ord_indexes().get(chain.network)
+                    index = state.ord_index(chain.network)
                     if htlclib.parse(redeem) is None or index is None:
                         raise ValueError("name the lock script to read a token lock (and this arcade must read the "
                                          "chain's ord index)")
@@ -28273,7 +28320,7 @@ def create_app(state: AppState) -> FastAPI:
         if net not in STARTS or mode not in MODES:
             return JSONResponse({"detail": "a chain, and walk, help or off"}, status_code=400)
         state.set_setting(f"ord_index:{net}", mode)
-        index = state.ord_indexes().get(net)
+        index = state.ord_index(net)
         if index is not None:
             index._status_kept = None                  # worked out again at the next ask, with the new mode
         return JSONResponse({"ok": True, "net": net, "mode": mode})
@@ -28283,7 +28330,7 @@ def create_app(state: AppState) -> FastAPI:
         """Admin -> Ords -> Look up: an inscription id (where it is now) or txid:vout (what sits on it), from this
         arcade's own walk, or -- read only, or not walking -- a linked arcade that walks the chain (2026-10-20)."""
         _admin_check(request)
-        index = state.ord_indexes().get(net)
+        index = state.ord_index(net)
         if index is None:
             return JSONResponse({"detail": "this arcade does not read that chain"}, status_code=404)
         question = _ords_question(q)
@@ -28353,7 +28400,7 @@ def create_app(state: AppState) -> FastAPI:
         return JSONResponse(said, headers={"Cache-Control": "no-store"})
 
     def _ords_index(net: str):
-        index = state.ord_indexes().get(net)
+        index = state.ord_index(net)
         if index is None:
             raise HTTPException(status_code=404, detail="this arcade does not read that chain")
         return index
@@ -28405,7 +28452,7 @@ def create_app(state: AppState) -> FastAPI:
         this arcade's own walk (2026-10-20: "make sure that we are indexing the domains the correct way")."""
         _admin_check(request)
         from .. import ord_rules
-        index = state.ord_indexes().get(net)
+        index = state.ord_index(net)
         if index is None or index.mode() != "walk":
             return JSONResponse({"detail": "only an arcade that walks this chain keeps its names"}, status_code=409)
         return JSONResponse({**index.name_disagreements(), "readings": ord_rules.NAME_RULES},
@@ -28441,15 +28488,19 @@ def create_app(state: AppState) -> FastAPI:
     def _explore_chains() -> list[dict]:
         """The Explore tab's coins: each chain this arcade has an ord index of, in ord_chains.EXPLORE_ORDER, with its
         protocols and whether its index answers yet (walked here or by a linked arcade)."""
+        # Every chain listed; an index not open yet opens when its coin is picked (lazy, 2026-10-27), so this page
+        # opens none of them by itself.
+        from ..doginal_index import STARTS
         indexes = state.ord_indexes()
+        reads = {c.network for c in state.all_chains}
         out = []
         for net in ordchainslib.EXPLORE_ORDER:
-            index = indexes.get(net)
-            if index is None:
+            if net not in reads or net not in STARTS:
                 continue
+            index = indexes.get(net)
             try:
-                mode = index.mode()
-                answers = mode == "walk" or bool(index.walkers())
+                mode = index.mode() if index is not None else state.ord_mode(net)
+                answers = index is None or mode == "walk" or bool(index.walkers())
             except Exception:                              # noqa: BLE001
                 mode, answers = "off", False
             protocols = ordchainslib.explore_protocols(net)
@@ -28469,7 +28520,7 @@ def create_app(state: AppState) -> FastAPI:
     def _explore_index(request: Request, net: str):
         if _explore_limited(request):
             raise HTTPException(status_code=429, detail="Too many questions in a minute: wait a moment.")
-        index = state.ord_indexes().get(net)
+        index = state.ord_index(net)
         if index is None or net not in ordchainslib.EXPLORE_ORDER:
             raise HTTPException(status_code=404, detail="this arcade does not read that chain")
         return index
@@ -31448,9 +31499,8 @@ def create_app(state: AppState) -> FastAPI:
         from ..trade_orders import TICK20
         word = {"doge": "DRC-20", "main": "PRC-20"}
         out: list[dict[str, Any]] = []
-        indexes = state.ord_indexes()
         for net, proto in word.items():
-            index = indexes.get(net)
+            index = state.ord_index(net)
             if index is None or not any(c.network == net for c in state.token_chains):
                 continue
             mine: dict[str, dict] = {}
@@ -31497,9 +31547,8 @@ def create_app(state: AppState) -> FastAPI:
         typed = str(q or "").strip().lower()[:16]
         out: list[dict[str, Any]] = []
         if typed:
-            indexes = state.ord_indexes()
             for net, proto in (("main", "PRC-20"), ("doge", "DRC-20")):
-                index = indexes.get(net)
+                index = state.ord_index(net)
                 if index is None or not any(c.network == net for c in state.token_chains):
                     continue
                 try:

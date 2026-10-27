@@ -206,7 +206,7 @@ def test_a_coin_carrying_a_doginal_is_held_not_spendable(client, monkeypatch, tm
     inscription is held: left out of the big number, and said beside it."""
     app, state = client
     _doge_account(app, state, monkeypatch, tmp_path)
-    row = next(c for c in app.get("/account").json()["chains"] if c["network"] == "doge")
+    row = next(c for c in app.get("/account?chains=doge").json()["chains"] if c["network"] == "doge")
     assert row["inscribed"] == 200_000, "the two Doginals' coins (T1, T2)"
     assert row["spendable"] == row["balance"] - 200_000 - int(row.get("leaving") or 0) + int(row.get("incoming") or 0)
     assert row["spendable"] == 300_000_000, "the plain coin is still spendable"
@@ -247,7 +247,7 @@ def test_moving_a_doginal_needs_dogecoin_besides_it(client, monkeypatch, tmp_pat
     from arcade import htlc
     app, state = client
     _doge_account(app, state, monkeypatch, tmp_path)
-    row = next(c for c in app.get("/account").json()["chains"] if c["network"] == "doge")
+    row = next(c for c in app.get("/account?chains=doge").json()["chains"] if c["network"] == "doge")
     assert 1_000_000 < row["doginal_send_need"] < row["doginal_lock_need"]
     assert row["doginal_lock_need"] > htlc.DOGINAL_RESERVE, "the reserve and the lock's own fee"
     wallet = app.get("/me/wallet").text

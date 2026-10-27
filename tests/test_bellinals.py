@@ -164,7 +164,7 @@ def test_a_bellinal_is_sent_through_the_route(bel):
                                                       "inscription": INSCRIPTION, "to": DOGE_TWIN})
     assert refused.status_code == 400 and "script (P2SH)" in refused.json()["detail"], \
         "a D... is never paid on Bellscoin"
-    row = next(c for c in app.get("/account").json()["chains"] if c["network"] == "bel")
+    row = next(c for c in app.get("/account?chains=bel").json()["chains"] if c["network"] == "bel")
     assert 0 < row["doginal_send_need"] < 10_000, "what a send needs, at Bells' rate"
 
 

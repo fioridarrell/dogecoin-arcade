@@ -153,3 +153,26 @@ def test_a_litecoin_arrival_is_named_ltc_and_its_list_starts_where_the_index_doe
         db.conn.commit()
     said = app.get("/account/activity?chain=ltc").json()
     assert said["since"] == 3197300, said
+
+
+
+def test_a_wallets_balance_is_read_only_when_it_is_asked_for(client, monkeypatch):
+    """Lazy wallets (2026-10-27: "all the wallets can't load at once ... They need to be lazy loaded as the user
+    selects the Wallet that they want to view"): GET /account reads the account's own chain and the first one; any
+    other comes back with its address and `"lazy": true`, no balance, until asked for by `?chains=` (or `all`)."""
+    from test_me_page import _seat
+    from test_litecoin_network import _with_ltc
+    from arcade.script import b58check_encode
+    app, state = client
+    _with_ltc(state, monkeypatch, ready=True)
+    _seat(app)
+    address = b58check_encode(48, bytes(range(20)))
+    assert app.post("/account/address", json={"address": address, "chain": "ltc"}).status_code == 200
+    ltc = lambda said: next(c for c in said["chains"] if c["network"] == "ltc")      # noqa: E731
+    lazy = ltc(app.get("/account").json())
+    assert lazy["lazy"] is True and lazy["balance"] is None and lazy["address"] == address
+    for asked in ("/account?chains=ltc", "/account?chains=all"):
+        full = ltc(app.get(asked).json())
+        assert "lazy" not in full and full["balance"] == 0 and full["spendable"] == 0
+    page = app.get("/me/wallet").text
+    assert "async function fillNow()" in page, "the Wallet reads a chain's balance when it is picked"

@@ -72,7 +72,7 @@ def served(tmp_path_factory):
         doge=ChainContext(network="doge", role="ledger", label="Dogecoin", conf=Path("/nonexistent/dogecoin.conf")))
     state.set_setting("ord_index:main", "walk")
     state.set_setting("ord_index:doge", "walk")
-    indexes = state.ord_indexes()
+    indexes = {n: state.ord_index(n, wait=30) for n in ("main", "doge")}     # opened on demand (lazy, 2026-10-27)
     content: dict = {}
     ids = {"main": _fill(indexes["main"], 1, 3, "pepi", 45, content),
            "doge": _fill(indexes["doge"], 2, 2, "wow!", 3, content)}

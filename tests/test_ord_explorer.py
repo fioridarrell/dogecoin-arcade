@@ -194,7 +194,7 @@ def test_a_walker_from_before_the_explorer_answers_what_it_can(tmp_path, monkeyp
 def walking(client):
     app, state = client
     state.set_setting("ord_index:main", "walk")
-    index = state.ord_indexes()["main"]
+    index = state.ord_index("main", wait=30)                    # opened on demand (lazy, 2026-10-27)
     store = index.store
     store.x("INSERT OR IGNORE INTO ctypes (ct, ctype) VALUES (1, 'text/plain')")
     store.many("INSERT INTO insc (rid, tx, n, number, height, txpos, ct, proto, size, pieces, burned) "
@@ -265,3 +265,34 @@ def test_an_inscription_other_explorers_miss_carries_a_note(tmp_path):
     iid = "83d1cbea653d4c8e8f729dc1af8fea4802b27abdafde436524ff8882768d0a31i0"
     assert "Other explorers do not show this one" in dx.SEEN_ELSEWHERE["main"][iid]
     assert "pepeblocks" not in dx.SEEN_ELSEWHERE["main"][iid].lower(), "no outside index named"
+
+
+def test_ord_indexes_open_one_chain_at_a_time_and_only_when_asked(client):
+    """Lazy ord indexes (2026-10-27: "All these very large data sets can't be loading at the same time"):
+    nothing is open until a chain is asked for, and asking for one opens that one alone."""
+    app, state = client
+    state.set_setting("ord_index:main", "walk")
+    assert state.ord_indexes() == {}, "nothing opened by itself"
+    assert state.ord_index("main", wait=30) is not None
+    assert list(state.ord_indexes()) == ["main"]
+    assert state.ord_index("nosuchchain") is None
+
+
+def test_a_locked_index_never_holds_a_page_longer_than_its_wait(client, tmp_path):
+    """The index file held by another writer (a worker mid-reset, rules cut again): the page goes on without it in
+    about `wait` seconds instead of the 60 s sqlite would sit on the lock, and the index opens in the background."""
+    import sqlite3
+    import time
+    app, state = client
+    state.set_setting("ord_index:main", "walk")
+    holder = sqlite3.connect(str(pathlib.Path(state.home) / "ord-main.sqlite"), isolation_level=None)
+    holder.execute("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)")
+    holder.execute("BEGIN IMMEDIATE")
+    try:
+        t = time.monotonic()
+        assert state.ord_index("main", wait=0.5) is None
+        assert time.monotonic() - t < 3
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
+    assert state.ord_index("main", wait=90) is not None, "opened once the file was let go"

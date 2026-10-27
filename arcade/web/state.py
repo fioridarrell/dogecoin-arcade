@@ -1807,32 +1807,66 @@ class AppState:
             return 30
 
     def ord_indexes(self) -> dict:
-        """Our own ord index of each chain this arcade reads, its own Core or a borrowed one (arcade/doginal_index.py;
-        2026-10-20: the Ords tab, "controls to enable ord in for each chain"). One file each, ord-<net>.sqlite."""
-        if getattr(self, "home", None) is None:
-            return {}
+        """The ord indexes OPEN now, {net: DoginalIndex} (arcade/doginal_index.py; 2026-10-20: the Ords tab,
+        "controls to enable ord in for each chain"). One file each, ord-<net>.sqlite.
+
+        Lazy since 2026-10-27 (the operator: "All these very large data sets can't be loading at the same time. They need to
+        be lazy loaded and loaded when people actually visit the page that they are on"): nothing is opened here. A
+        chain's index opens the first time something needs that chain (`ord_index`), and from then on it walks and is
+        listed here. That morning every request opened every chain: Dogecoin's index, cut again for new rules, held its
+        file while every page waited 60 s on it, and .25 stopped answering."""
+        kept = getattr(self, "_ord_indexes", None)
+        return dict(kept) if kept else {}
+
+    def ord_index(self, net: str, wait: float = 1.5):
+        """Chain `net`'s ord index, opened now if it is not yet, or None (no such chain here, or still opening).
+
+        The opening runs on a thread of its own, one per chain: a file cut again for new rules or still locked by the
+        worker this one replaces can take minutes, and a page waits `wait` seconds at most before it is drawn without
+        the index ("not opened yet"); a later visit finds it open."""
+        open_now = self.ord_indexes().get(net) if net else None   # (what tests stand in for, too)
+        if open_now is not None:
+            return open_now
+        if getattr(self, "home", None) is None or not net:
+            return None
         kept = getattr(self, "_ord_indexes", None)
         if kept is None:
             kept = self._ord_indexes = {}
-        from ..doginal_index import STARTS, DoginalIndex
-        for chain in self.all_chains:
-            net = chain.network
-            if net in kept or net not in STARTS:
-                continue
-            try:
-                kept[net] = DoginalIndex(Path(self.home) / f"ord-{net}.sqlite", chain.rpc,
-                                         (lambda n=net: self.ord_mode(n)),
-                                         own_core=(lambda c=chain: not getattr(c, "borrowed", False)),
-                                         lenders=(lambda c=chain: self._ord_lenders(c)),
-                                         net=net, mweb=bool(getattr(chain.params, "mweb", False)),
-                                         cores=self.ord_cores, walk_share=self.ord_share,
-                                         fetch_allowed=(lambda n=net: bool(self.setting(f"ord_fetch:{n}"))))
-            except Exception:                                  # noqa: BLE001 -- e.g. the file still locked by the
-                # worker this one replaces, mid-reset (2026-10-21): this chain is opened again at the next ask, and
-                # the others go on meanwhile.
-                logging.getLogger("arcade.web").warning("ord index of %s not opened yet; asked again later", net,
-                                                         exc_info=True)
-        return dict(kept)
+        if net in kept:
+            return kept[net]
+        from ..doginal_index import STARTS
+        chain = next((c for c in self.all_chains if c.network == net), None)
+        if chain is None or net not in STARTS:
+            return None
+        lock = self.__dict__.setdefault("_ord_opening_lock", threading.Lock())
+        with lock:
+            opening = self.__dict__.setdefault("_ord_opening", {})
+            done = opening.get(net)
+            if done is None or (done.is_set() and net not in kept):
+                done = opening[net] = threading.Event()
+                threading.Thread(target=self._open_ord_index, args=(chain, done), daemon=True,
+                                 name=f"arcade-ord-open-{net}").start()
+        done.wait(wait)
+        return kept.get(net)
+
+    def _open_ord_index(self, chain, done) -> None:
+        from ..doginal_index import DoginalIndex
+        net = chain.network
+        try:
+            self._ord_indexes[net] = DoginalIndex(
+                Path(self.home) / f"ord-{net}.sqlite", chain.rpc,
+                (lambda n=net: self.ord_mode(n)),
+                own_core=(lambda c=chain: not getattr(c, "borrowed", False)),
+                lenders=(lambda c=chain: self._ord_lenders(c)),
+                net=net, mweb=bool(getattr(chain.params, "mweb", False)),
+                cores=self.ord_cores, walk_share=self.ord_share,
+                fetch_allowed=(lambda n=net: bool(self.setting(f"ord_fetch:{n}"))))
+        except Exception:                                      # noqa: BLE001 -- e.g. the file still locked by the
+            # worker this one replaces, mid-reset (2026-10-21): opened again at the next ask.
+            logging.getLogger("arcade.web").warning("ord index of %s not opened yet; asked again later", net,
+                                                     exc_info=True)
+        finally:
+            done.set()
 
     @staticmethod
     def _ord_lenders(chain) -> list:
@@ -1846,7 +1880,7 @@ class AppState:
 
     def doginal_index(self):
         """Dogecoin's ord index (the first one, 2026-10-20), or None on an arcade that reads no Dogecoin."""
-        return self.ord_indexes().get("doge")
+        return self.ord_index("doge")
 
     @property
     def trade_watch(self):

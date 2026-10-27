@@ -791,7 +791,7 @@ class NodeTrader:
             return self._doginal_seen(seen, leg, redeem, rpc)
         if leg.kind == "token20":
             from .token20_swap import token20_seen
-            index = self.state.ord_indexes().get(leg.network)
+            index = self.state.ord_index(leg.network)
             if index is None:
                 if seen is not None:
                     seen.confirmations = 0                # no ord index here: never counted

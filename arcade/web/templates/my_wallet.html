@@ -869,7 +869,11 @@ function drawHead() {
       const b = netButton(one, "");
       b.type = "button";
       b.setAttribute("aria-pressed", String(one.network === (c && c.network)));
-      b.onclick = () => { net = one.network; asset = null; keep(NET, net); drawAll(); };
+      b.onclick = async () => {
+        net = one.network; asset = null; keep(NET, net);
+        if (one.lazy) { drawAll(); await fillNow(); }   // the picked wallet's balance, read now (lazy wallets)
+        drawAll();
+      };
       nets.append(b);
     }
   }
@@ -2464,6 +2468,13 @@ async function dgLive(mine) {
 
 /* --- drawing it all ----------------------------------------------------- */
 
+// A wallet's balance is read only when it is picked (2026-10-27: "lazy loaded as the user selects the Wallet
+// that they want to view"): the node sends the rest without one.
+async function fillNow() {
+  const c = chainNow();
+  if (c && c.lazy) { try { said = await wallet.filled(said, c.network); } catch (e) { /* drawn as "—" */ } }
+}
+
 function drawAll() {
   drawHead();
   showTab(tab);
@@ -2471,9 +2482,10 @@ function drawAll() {
 
 async function refresh() {
   kindSeen = {};                       // a send moves the other address types' balances too
-  said = await wallet.state();
+  said = await wallet.state(net || "");
   await loadImports(true);
   if (!chainNow()) net = null;
+  await fillNow();
   drawHead();
   if (tab === "activity") await loadActivity();
   if (tab === "nfts") drawDoginals().catch(() => {});
@@ -2484,11 +2496,12 @@ $("shut").hidden = !!keys;
 // A read-back of this account's coins cut short (a restart) is finished on a Wallet visit; done chains cost nothing.
 if (!NODE_SIDE) fetch("/account/coins/backfill", {method: "POST", headers: {"Content-Type": "application/json"},
                                                   body: "{}"}).catch(() => {});
-said = await wallet.state();
 net = kept(NET, null);
+said = await wallet.state(net || "");
 if (!chains().some((c) => c.network === net)) {
   net = (chains().find((c) => c.mainnet) || chains()[0] || {}).network || null;
 }
+await fillNow();
 try { tab = sessionStorage.getItem("arcade.wallet.tab") || "activity"; } catch (e) {}
 await loadImports(true);
 drawAll();
