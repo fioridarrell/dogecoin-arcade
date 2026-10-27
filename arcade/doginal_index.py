@@ -467,7 +467,9 @@ def _pct(part: Any, whole: Any) -> float | None:
 
 
 #: Questions the explorer asks (2026-10-21) that a walking arcade from before does not know.
-NEWER_QUESTIONS = ("number", "ticks", "holders", "note", "ticklist", "mesh", "mesh_directory", "typed")
+#: The most coins one "names_on" question reads.
+NAMES_ON_MAX = 3000
+NEWER_QUESTIONS = ("number", "ticks", "holders", "note", "ticklist", "mesh", "mesh_directory", "typed", "names_on")
 
 
 def _first_page_of(token: dict | None) -> dict | None:
@@ -2849,6 +2851,8 @@ class DoginalIndex:
             return {"ticklist": self.ticklist()}
         if what == "mesh":                               # the .mesh web (arcade/mesh_web.py, 2026-10-26)
             return {"mesh": self.mesh(str(question.get("name") or ""))}
+        if what == "names_on":                           # the names a wallet holds (Creator -> Names, 2026-10-27)
+            return {"names_on": self.names_on(list(question.get("coins") or [])[:NAMES_ON_MAX])}
         if what == "mesh_directory":                     # "all": every name's site, not only .mesh (the PWA's Browser)
             return {"mesh_directory": self.mesh_directory(mesh_only=not question.get("all"))}
         if what == "moves":                              # a snapshot being checked: this walk's moves, chunk by chunk
@@ -3189,6 +3193,33 @@ class DoginalIndex:
                            if claims else None),
                 "later_claims": len(claims) - 1 if claims else 0}
         return out
+
+    def names_on(self, coins: list) -> list[dict]:
+        """The names whose first claim sits on one of `coins` ([txid, vout]): the names whoever holds those coins holds
+        (2026-10-27: "it should auto complete for you from the ones that you have in your wallet"). A name is
+        held when its claim is the first under some reading -- the spec's, else the next that counts it."""
+        if self.store.old_layout:
+            return []
+        out, seen = [], set()
+        for coin in coins:
+            try:
+                txid, vout = str(coin[0]).lower(), int(coin[1])
+                tx = bytes.fromhex(txid)
+            except (TypeError, ValueError, IndexError):
+                continue
+            rows = self.store.q("SELECT n.number, n.spec, n.json, n.doge2023, i.tx, i.n FROM at a "
+                                "JOIN names n ON n.rid = a.rid JOIN insc i ON i.rid = a.rid "
+                                "WHERE substr(a.tx, 1, 8)=? AND a.tx=? AND a.vout=?", (tx[:8], tx, vout))
+            for number, *readings, itx, n in rows:
+                for rule, nm in zip(ord_rules.NAME_RULES, readings):
+                    if not nm or nm in seen:
+                        continue
+                    first = self.store.q(f"SELECT MIN(number) FROM names WHERE {rule}=?", (nm,))
+                    if first and first[0][0] == number:
+                        seen.add(nm)
+                        out.append({"name": nm, "inscription": iid_of(itx, n), "reading": rule})
+                        break
+        return sorted(out, key=lambda r: r["name"])
 
     def name_disagreements(self, limit: int = 50) -> dict:
         """Names whose first claim is a different inscription under two readings, or that one reading has and another

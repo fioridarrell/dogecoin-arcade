@@ -15058,37 +15058,38 @@ def create_app(state: AppState) -> FastAPI:
     NAME_ENDINGS = {"doge": [".doge"], "main": [".pepe", ".pep", ".\U0001f438", ".ribbit", ".frog", ".kek"],
                     "test": [".pepe", ".pep"]}
 
-    @app.get("/account/ord/name")
-    def account_ord_name(request: Request, chain: str = "", name: str = ""):
-        """Creator -> Names (2026-10-26: "Build a p:dns inscriber in the creators tab"): is `name` a name that
-        counts, and is it free on `chain`? Under each reading (ord_rules.NAME_RULES) of the claim this page inscribes
-        -- {"p":"dns","op":"reg","name":...} -- what it would make and who, if anybody, claimed it first."""
-        from .. import ord_rules
-        _signed_in_account(request)
+    def _name_check(chain: str, name: str) -> dict:
+        """Is `name` a name that counts, and is it free on `chain`? Under each reading (ord_rules.NAME_RULES) of the
+        claim Creator -> Names inscribes -- {"p":"dns","op":"reg","name":...} -- what it would make and who, if anybody,
+        claimed it first. `ready`: the chain's name index is complete (2026-10-27: "only allow claiming a name on
+        a chain that has a complete name index"), and the blocks past it and the mempool were read for a claim of the
+        same name (arcade/name_check.py); a name is claimable only when `valid` and `ready` and not `taken`."""
+        from .. import name_check, ord_rules
+        from ..doginals import INDEX_READY_LAG
         said = name.strip()
         out: dict[str, Any] = {"name": said.lower(), "chain": chain, "endings": NAME_ENDINGS.get(chain, []),
-                               "readings": {}, "valid": False, "taken": False, "why": ""}
+                               "readings": {}, "valid": False, "taken": False, "ready": False, "why": ""}
         if not said:
             out["why"] = "Type a name, like yours.pepe"
-            return JSONResponse(out, headers={"Cache-Control": "no-store"})
+            return out
         made = {rule: ord_rules.normalise(rule, "json", said) for rule in ord_rules.NAME_RULES}
         label, _, ending = said.lower().rpartition(".")
         if not made["spec"]:
             out["why"] = ("A block map, not a name" if ending and ord_rules.is_block_map(ending)
                           else "One dot between the name and its ending; letters, digits and hyphens, a hyphen never "
                                "first or last, up to 63 characters each side")
-            return JSONResponse(out, headers={"Cache-Control": "no-store"})
+            return out
         out["name"] = made["spec"]
         out["valid"] = True
         index = state.ord_indexes().get(chain)
         if index is None:
             out["why"] = "This arcade does not read that chain's ords, so it cannot say whether the name is free"
-            return JSONResponse(out, headers={"Cache-Control": "no-store"})
+            return out
         try:
             found = index.lookup({"what": "name", "name": made["spec"]})
         except Exception as exc:                               # noqa: BLE001 -- said on the page
-            out["why"] = f"The index could not say just now: {str(exc)[:200]}"
-            return JSONResponse(out, headers={"Cache-Control": "no-store"})
+            out["why"] = f"The name index could not say just now: {str(exc)[:200]}"
+            return out
         answer = found.get("name") if isinstance(found.get("name"), dict) else {}   # DoginalIndex.answer: {"name": {...}}
         for rule, what in ord_rules.NAME_RULES.items():
             got = (answer.get("readings") or {}).get(rule) or {}
@@ -15096,7 +15097,40 @@ def create_app(state: AppState) -> FastAPI:
         out["taken"] = any(r["winner"] for r in out["readings"].values() if r["counts"])
         if found.get("node"):
             out["walk"] = "a linked arcade"
-        return JSONResponse(out, headers={"Cache-Control": "no-store"})
+        if out["taken"]:
+            return out
+        # Free in the index: only so far as the index has read, and only once it has read (nearly) the whole chain.
+        walked = int(found.get("walked_to") or 0)
+        holder = next((c for c in state.all_chains if c.network == chain), None)
+        try:
+            if holder is None:
+                raise name_check.NameCheckError("this arcade runs no Core for that chain")
+            with holder.rpc() as rpc:
+                tip = int(rpc.call("getblockcount"))
+                out["walked_to"], out["tip"] = walked, tip
+                if not walked or walked < tip - INDEX_READY_LAG:
+                    out["why"] = (f"The name index has read {walked:,} of {tip:,} blocks of this chain. Names can be "
+                                  f"claimed here once it has read the whole chain, so nobody claims a name that is "
+                                  f"already taken")
+                    return out
+                waiting = name_check.newest_claims(rpc, chain, walked, tip, made,
+                                                   mweb=bool(getattr(holder.params, "mweb", False)))
+        except Exception as exc:                               # noqa: BLE001 -- not free until it can be read
+            out["why"] = f"Could not read the newest blocks for claims of it just now: {str(exc)[:200]}"
+            return out
+        if waiting:
+            out["taken"], out["pending"] = True, waiting
+            out["why"] = (f"Somebody's claim of {made['spec']} is already in the {waiting}" if waiting == "mempool"
+                          else f"Somebody claimed {made['spec']} in {waiting}, which the index has not read yet")
+            return out
+        out["ready"] = True
+        return out
+
+    @app.get("/account/ord/name")
+    def account_ord_name(request: Request, chain: str = "", name: str = ""):
+        """Creator -> Names (2026-10-26: "Build a p:dns inscriber in the creators tab"): _name_check."""
+        _signed_in_account(request)
+        return JSONResponse(_name_check(chain, name), headers={"Cache-Control": "no-store"})
 
     def _mesh_site_for(account, name: str) -> dict:
         """A name's site as its holder's editor sees it (Creator -> Names -> Publish a site): who holds it, whether this
@@ -15138,6 +15172,32 @@ def create_app(state: AppState) -> FastAPI:
             out["why"] = (f"{made} is held by {out['holder']}, not by your address on {out['chain']}" if out["holder"]
                           else f"Nobody can say who holds {made} just now")
         return out
+
+    @app.get("/account/names")
+    def account_names(request: Request):
+        """The names this account's wallet holds on each chain this arcade reads ords of (2026-10-27: "When you
+        enter in your DNS name, it should auto complete for you from the ones that you have in your wallet"): its small
+        coins (doginals.POSTAGE_MAX) asked of the most complete name index ("names_on")."""
+        from .. import doginals as doginalslib
+        account = _signed_in_account(request)
+        out, trouble = [], []
+        for net, index in (state.ord_indexes() or {}).items():
+            chain = next((c for c in state.token_chains if c.network == net), None)
+            address = _account_any_address(account.pubkey, chain) if chain is not None else ""
+            if not address:
+                continue
+            try:
+                with contextlib.closing(state.token_index(chain).open()) as db:
+                    coins = [[c["txid"], int(c["vout"])] for c in utxoslib.unspent(db, address)
+                             if int(c["value"]) <= doginalslib.POSTAGE_MAX]
+                if not coins:
+                    continue
+                found = index.lookup({"what": "names_on", "coins": coins}).get("names_on") or []
+            except Exception as exc:                           # noqa: BLE001 -- that chain's names are left out
+                trouble.append(f"{chain.label}: {str(exc)[:120]}")
+                continue
+            out += [{**n, "chain": net} for n in found]
+        return JSONResponse({"names": out, "trouble": trouble}, headers={"Cache-Control": "no-store"})
 
     @app.get("/account/mesh/site")
     def account_mesh_site(request: Request, name: str = ""):
@@ -15214,6 +15274,14 @@ def create_app(state: AppState) -> FastAPI:
                 raise ValueError("choose a file to inscribe")
             kind = media.standard_type(str(said.get("content_type") or ""), str(said.get("name") or "")) \
                 or "application/octet-stream"
+            # A name claim goes out only when the name is free and the chain's name index complete (2026-10-27), the
+            # same check Creator -> Names makes, here so no page can skip it.
+            from .. import ord_rules
+            claim = ord_rules.name_claim(kind.encode(), content)
+            if claim and claim[0] == "json":
+                check = _name_check(chain.network, claim[1])
+                if not check["valid"] or check["taken"] or not check["ready"]:
+                    raise ValueError(check["why"] or f"{check['name']} is taken")
             p = oi.plan(chain.network, chain.params, kind, content, coin_key, address)
             spent = _flights.spent_by(account.pubkey, chain.network)
             extra = _flights.change_for(account.pubkey, chain.network)

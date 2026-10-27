@@ -88,6 +88,26 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-27 Creator -> Names: claims only on a complete index; your names offered; a website wizard (Claude)
+The operator: "only allow claiming a name on a chain that has a complete name index so that we don't accidentally let people
+try to claim names that are already claimed"; "it should auto complete for you from the ones that you have in your
+wallet"; "a wizard where someone can enter some HTML ... as long as it is not a .mesh ... inscribe a full website. With
+full res inscription content." Branch claude/site-wizard.
+- arcade/name_check.py: the blocks past the index's walk (at most GAP_MAX 40) and the mempool (at most 4,000 txs) read
+  from the chain's Core for a claim of the same name under any reading; blocks kept by hash.
+- app `_name_check` (behind /account/ord/name): `ready` only when the most complete index walked to within
+  doginals.INDEX_READY_LAG of the tip and nothing newer claims the name; `pending` "mempool" | "block N". The same check
+  in /account/ord/inscribe for any JSON p:dns reg body (400 when taken, pending or the index incomplete). Text claims
+  ("name.ending" as plain text) are not checked there.
+- DoginalIndex.names_on(coins) + lookup question "names_on" (in NEWER_QUESTIONS): names whose first claim sits on
+  those coins. /account/names (door PUBLIC_GET): the account's small coins on each chain asked of the most complete
+  index. Arcades that walk (Strawberry) need this release for other arcades to get answers.
+- create_name.html: "Inscribe a website" (name you hold, not .mesh -> HTML + files -> one approval): files the page or
+  its style sheets name are inscribed as they are (no shrinking), references become /content/<id>, then the page
+  (text/html), then the name's record with that page as {"id"} (other pages kept). Already-inscribed bytes are
+  reused (ord runs by sha256), the record always inscribed anew. Name boxes offer the wallet's names.
+- Tests: tests/test_name_check.py.
+
 ### 2026-10-26 Dogecoin rules 6: a reinscription's DRC-20 operation counts for nothing (Claude)
 dogi balances drifted from nintondo's DRC-20 index (doge-mainnet-tokens.nintondo.io): one holder showed 314,000 that
 nintondo never gave it, and ten more top holders were off by 1,000 to 452,750. Cause: rules 5 (2026-10-22) numbers

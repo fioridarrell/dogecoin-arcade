@@ -151,6 +151,7 @@ PUBLIC_PAGES = frozenset({
     "/account/ord/chains",            # the chains an ord is inscribed on here, each with its rules
     "/account/ord/name",              # is a name valid and free on a chain (Creator -> Names, 2026-10-26)
     "/account/mesh/site",             # a .mesh name's holder and pages, for its holder's editor (the .mesh web)
+    "/account/names",                 # the names this account's wallet holds (Creator -> Names autocomplete)
     "/account/arcades",               # the arcades on the mesh, for the Your arcade page's Arcades card
     "/account/favorites",             # the markets this account starred (Exchange, 2026-10-17)
     "/account/homeapps",              # the icons on this account's home screen, in its order (PWA, 2026-10-24)

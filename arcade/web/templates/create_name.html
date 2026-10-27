@@ -41,6 +41,62 @@
   <p class="muted" style="font-size:.84rem;margin:12px 0 0">What is inscribed: <code id="nm-body">{"p":"dns","op":"reg","name":"yours.pepe"}</code></p>
 </div>
 
+{# 2026-10-27: "a wizard where someone can enter some HTML into a text window along with the name that they have
+   claimed and as long as it is not a .mesh I want them to be able to inscribe a full website. With full res inscription
+   content." The HTML and every file it uses are inscribed as ords of their own, as they are (no shrinking); the page's
+   references to the files become /content/<id>; then the name's site record names the page ({"id"}). #}
+<div class="panel" id="ws-make">
+  <h3 style="margin:0 0 4px">Inscribe a website</h3>
+  <p class="muted" style="font-size:.86rem;margin:0 0 10px">For a name you hold that is not <b>.mesh</b>. Paste your
+    page's HTML and add the files it uses (pictures, styles, scripts, fonts, sound). Each file is inscribed full size,
+    exactly as it is, the page is changed to load them from the chain, and your name then opens the page in the
+    <a href="/browser" target="_blank" rel="noopener">Browser</a>.</p>
+  <ol class="ws-steps">
+    <li id="ws-s1" class="on"><b>1</b> Your name</li><li id="ws-s2"><b>2</b> Your page</li><li id="ws-s3"><b>3</b> Inscribe</li>
+  </ol>
+  <div id="ws-step1">
+    <div class="nm-grid">
+      <label>Your name <input id="ws-name" list="ws-names" autocomplete="off" autocapitalize="none" spellcheck="false"
+        placeholder="yours.pepe"><datalist id="ws-names"></datalist></label>
+      <label>Page <input id="ws-path" autocomplete="off" autocapitalize="none" spellcheck="false" value="/"
+        title="/ is the page your name opens; /about would be yours.pepe/about"></label>
+    </div>
+    <div class="my-names" id="ws-mine"></div>
+    <p class="muted mp-who" id="ws-who" style="padding:6px 0 0"></p>
+    <div class="row" style="margin-top:8px"><button type="button" id="ws-next1" disabled>Next</button></div>
+  </div>
+  <div id="ws-step2" hidden>
+    <div class="mp-cols wide">
+      <div>
+        <textarea id="ws-html" autocomplete="off" spellcheck="false" rows="16"
+          placeholder="<!doctype html>&#10;<title>My site</title>&#10;<img src=&quot;cat.png&quot;>"></textarea>
+        <label class="ws-files">Files the page uses <input type="file" id="ws-files" multiple></label>
+        <ul class="ws-refs" id="ws-refs"></ul>
+      </div>
+      <div class="mp-deck wide"><div class="mp-bar"><span>Preview</span><span class="mp-addr" id="ws-addr"></span></div>
+        <div class="mp-page" id="ws-preview"></div></div>
+    </div>
+    <p class="muted" id="ws-count" style="font-size:.84rem;margin:8px 0 0"></p>
+    <div class="row" style="margin-top:8px;gap:8px">
+      <button type="button" class="ghost" id="ws-back2">Back</button>
+      <button type="button" id="ws-next2" disabled>Next</button>
+    </div>
+  </div>
+  <div id="ws-step3" hidden>
+    <p style="margin:0 0 6px">These go on chain, in this order:</p>
+    <ol class="ws-list" id="ws-list"></ol>
+    <p class="muted" id="ws-cost" style="font-size:.86rem;margin:6px 0 0"></p>
+    <div class="row" style="margin-top:8px;gap:8px">
+      <button type="button" class="ghost" id="ws-back3">Back</button>
+      <button type="button" id="ws-go">Inscribe the website</button>
+    </div>
+    <div id="ws-progress" hidden>
+      <div class="ord-bar"><span id="ws-bar"></span></div>
+      <p class="muted" id="ws-says" style="margin:6px 0 0"></p>
+    </div>
+  </div>
+</div>
+
 {# The .mesh web (2026-10-26): the holder of a .mesh name publishes its page, MeshText for the T-Deck's Browser
    (docs/mesh-web.md). The newest page inscribed to the name's holder is the one that counts. Since the Browser (same
    day): any p:dns name's site, on its own chain; not .mesh, a page may be HTML or another inscription, uncapped. #}
@@ -53,10 +109,11 @@
     inscription, with no limit. The newest site you publish is the one that shows.
     <a href="/docs/mesh-web.md" target="_blank" rel="noopener">How sites work</a></p>
   <div class="nm-grid">
-    <label>Your name <input id="mp-name" autocomplete="off" autocapitalize="none" spellcheck="false"
-      placeholder="yours.mesh or yours.pepe"></label>
+    <label>Your name <input id="mp-name" list="mp-names" autocomplete="off" autocapitalize="none" spellcheck="false"
+      placeholder="yours.mesh or yours.pepe"><datalist id="mp-names"></datalist></label>
     <div class="muted mp-who" id="mp-who"></div>
   </div>
+  <div class="my-names" id="mp-mine"></div>
   <div id="mp-edit" hidden>
     <div class="mp-tabs" id="mp-tabs"></div>
     <div class="mp-kind" id="mp-kind" hidden>This page is
@@ -114,6 +171,18 @@
 .mp-deck.wide .mp-page{font-size:14px}
 .mp-page iframe{display:block;width:100%;height:100%;border:0;background:#fff}
 .mp-cols.wide{grid-template-columns:1fr 1fr}
+.ws-steps{display:flex;gap:8px;list-style:none;padding:0;margin:0 0 12px;font-size:.84rem;color:var(--muted)}
+.ws-steps li{padding:3px 10px;border:1px solid var(--line);border-radius:999px}
+.ws-steps li.on{color:var(--fg);border-color:var(--accent)}
+.ws-steps b{color:var(--accent);margin-right:4px}
+#ws-preview{padding:0}
+#ws-html{width:100%;box-sizing:border-box;font:13px/1.4 ui-monospace,monospace;min-height:280px}
+.ws-files{display:flex;flex-direction:column;gap:4px;font-size:.88rem;margin-top:8px}
+.ws-refs,.ws-list{margin:8px 0 0;padding-left:18px;font-size:.84rem}
+.ws-refs .miss{color:var(--bad)} .ws-refs .ok{color:var(--ok)}
+.ws-list .done{color:var(--ok)}
+.my-names{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 0;font-size:.82rem;align-items:center}
+.my-names button{padding:3px 10px;font-size:.82rem;border-radius:999px}
 .ord-bar{height:8px;border-radius:4px;background:var(--line);overflow:hidden;margin-top:10px}
 .ord-bar span{display:block;height:100%;width:0;background:var(--accent);transition:width .3s}
 </style>
@@ -153,7 +222,7 @@ function draw() {
   const name = wanted();
   $("nm-body").textContent = body(name || "yours.pepe");
   const c = checked;
-  $("nm-go").disabled = busy || !c || !c.valid || c.taken || c.name !== name.toLowerCase() || !chainOf($("nm-chain").value);
+  $("nm-go").disabled = busy || !c || !c.valid || c.taken || !c.ready || c.name !== name.toLowerCase() || !chainOf($("nm-chain").value);
   if (!c || !name) { $("nm-check").hidden = true; return; }
   $("nm-check").hidden = false;
   const v = $("nm-verdict");
@@ -214,7 +283,7 @@ function progress(said, name) {
 $("nm-go").onclick = async () => {
   say(""); news("");
   const c = chainOf($("nm-chain").value), name = checked && checked.name;
-  if (!c || !name || !checked.valid || checked.taken) return;
+  if (!c || !name || !checked.valid || checked.taken || !checked.ready) return;
   const bytes = new TextEncoder().encode(body(name));
   try {
     const held = await keysNow();
@@ -388,6 +457,225 @@ $("mp-go").onclick = async () => {
   } catch (e) { say(String(e.message || e)); }
   busy = false; drawPreview();
 };
+
+/* --- Inscribe a website (2026-10-27): HTML + its files, each a full-size ord; then the name's record --- */
+const TYPES = {html: "text/html;charset=utf-8", htm: "text/html;charset=utf-8", css: "text/css", js: "text/javascript",
+  mjs: "text/javascript", json: "application/json", txt: "text/plain;charset=utf-8", svg: "image/svg+xml",
+  png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", avif: "image/avif",
+  ico: "image/x-icon", woff2: "font/woff2", woff: "font/woff", ttf: "font/ttf", otf: "font/otf", mp3: "audio/mpeg",
+  ogg: "audio/ogg", wav: "audio/wav", mp4: "video/mp4", webm: "video/webm", glb: "model/gltf-binary", wasm: "application/wasm"};
+const typeOf = (f) => f.type || TYPES[(f.name.split(".").pop() || "").toLowerCase()] || "application/octet-stream";
+const shaOf = async (bytes) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
+const PLACEHOLDER = "/content/" + "0".repeat(64) + "i0";
+let ws = null, wsFiles = [], wsBusy = false, wsTimer = null;
+const wsPath = () => { const p = $("ws-path").value.trim().toLowerCase().replace(/^\/+|\/+$/g, ""); return "/" + p; };
+const PATH_OK = /^\/(?:[a-z0-9._-]{1,32}(?:\/[a-z0-9._-]{1,32}){0,3})?$/;
+
+function wsStep(n) {
+  for (const i of [1, 2, 3]) { $(`ws-step${i}`).hidden = i !== n; $(`ws-s${i}`).classList.toggle("on", i === n); }
+}
+/** A reference to a file next to the page ("cat.png", "./img/cat.png"), as typed; null for anything else (a web
+ *  address, /content/..., data:, #anchor). */
+function localRef(raw) {
+  const r = String(raw || "").trim();
+  if (!r || /^([a-z][a-z0-9+.-]*:|\/\/|\/|#|\{|\$)/i.test(r)) return null;
+  return r;
+}
+const refKey = (r) => r.replace(/^\.\//, "").split(/[?#]/)[0];
+/** Every local reference in HTML or CSS text, and the text with each one swapped by `swap(ref)` (undefined: kept). */
+function refsIn(text, swap = () => undefined) {
+  const found = new Set();
+  const one = (ref) => { const r = localRef(ref); if (r === null) return ref; found.add(refKey(r)); const to = swap(refKey(r)); return to === undefined ? ref : to; };
+  let out = String(text).replace(/\b(src|href|poster|data)\s*=\s*(["'])(.*?)\2/gi, (m, a, q, v) => `${a}=${q}${one(v)}${q}`);
+  out = out.replace(/\b(src|href|poster)\s*=\s*([^\s"'>]+)/gi, (m, a, v) => `${a}=${one(v)}`);
+  out = out.replace(/\bsrcset\s*=\s*(["'])(.*?)\1/gi, (m, q, v) => `srcset=${q}${v.split(",").map((part) => {
+    const bits = part.trim().split(/\s+/); if (bits[0]) bits[0] = one(bits[0]); return bits.join(" "); }).join(", ")}${q}`);
+  out = out.replace(/url\(\s*(["']?)([^"')]+)\1\s*\)/gi, (m, q, v) => `url(${q}${one(v)}${q})`);
+  return {refs: [...found], text: out};
+}
+const fileFor = (ref) => wsFiles.find((f) => f.path === ref) || wsFiles.find((f) => f.name === ref.split("/").pop());
+const isCSS = (f) => /^text\/css/.test(f.type);
+
+/** What goes on chain: the files the page (or a style sheet it uses) names, style sheets after the files they name,
+ *  then the page. Files nobody names are left out. */
+function wsPlan() {
+  const html = $("ws-html").value;
+  const used = new Set(), missing = new Set();
+  const walk = (refs) => refs.forEach((r) => { const f = fileFor(r); if (!f) { missing.add(r); return; } if (used.has(f)) return; used.add(f); if (isCSS(f)) walk(refsIn(f.text).refs); });
+  walk(refsIn(html).refs);
+  const files = [...used].sort((a, b) => isCSS(a) - isCSS(b));
+  return {html, files, missing: [...missing], unused: wsFiles.filter((f) => !used.has(f))};
+}
+function wsDraw() {
+  const plan = wsPlan();
+  $("ws-addr").textContent = ws ? ws.name + (wsPath() === "/" ? "" : wsPath()) : "";
+  $("ws-refs").innerHTML = plan.files.map((f) => `<li class="ok">${esc(f.path)} &mdash; ${commas(f.bytes.length)} bytes, ${esc(f.type)}</li>`).join("")
+    + plan.missing.map((r) => `<li class="miss">${esc(r)} &mdash; not added: add this file, or it will not load</li>`).join("")
+    + plan.unused.map((f) => `<li>${esc(f.path)} &mdash; the page does not use it, so it is left out</li>`).join("");
+  // The preview: every file in as a data: address (the page's own sandbox cannot reach this tab's blob: ones).
+  const asData = (f) => f.data;
+  const swapCSS = (f) => `data:text/css;base64,${btoa(unescape(encodeURIComponent(refsIn(f.text, (r) => { const g = fileFor(r); return g ? asData(g) : undefined; }).text)))}`;
+  const shown = refsIn(plan.html, (r) => { const f = fileFor(r); return f ? (isCSS(f) ? swapCSS(f) : asData(f)) : undefined; }).text;
+  clearTimeout(wsTimer);
+  wsTimer = setTimeout(() => {
+    $("ws-preview").innerHTML = `<iframe sandbox="allow-scripts" title="preview"></iframe>`;
+    $("ws-preview").querySelector("iframe").srcdoc = shown;
+  }, 300);
+  const max = Number((chainOf(ws && ws.chain) || {}).max_bytes || 400000);
+  const pageBytes = new TextEncoder().encode(refsIn(plan.html, (r) => fileFor(r) ? PLACEHOLDER : undefined).text).length;
+  const big = plan.files.filter((f) => f.bytes.length > max);
+  const total = plan.files.reduce((n, f) => n + f.bytes.length, 0) + pageBytes;
+  $("ws-count").textContent = `The page: ${commas(pageBytes)} bytes · ${plan.files.length} file(s), ${commas(total)} bytes in all`
+    + (pageBytes > max ? ` — the page is over the ${commas(max)} bytes one ord can hold` : "")
+    + (big.length ? ` — ${big.map((f) => f.path).join(", ")} over the ${commas(max)} bytes one ord can hold` : "");
+  $("ws-next2").disabled = wsBusy || !plan.html.trim() || pageBytes > max || big.length > 0;
+  return plan;
+}
+async function wsCheckName() {
+  const name = $("ws-name").value.trim(), path = wsPath();
+  ws = null; $("ws-next1").disabled = true; $("ws-who").textContent = "";
+  if (!name) return;
+  if (!PATH_OK.test(path)) { $("ws-who").textContent = "A page is / or short words of a-z 0-9 . _ - between slashes, like /about."; return; }
+  try {
+    const said = await getJSON(`/account/mesh/site?name=${encodeURIComponent(name)}`);
+    if ($("ws-name").value.trim() !== name) return;
+    if (said.mesh) { $("ws-who").textContent = "A .mesh name's site is plain text that a T-Deck can show: use Publish a site below."; return; }
+    if (!said.mine) { $("ws-who").textContent = said.why || "You do not hold that name."; return; }
+    if (!chainOf(said.chain)) { $("ws-who").textContent = `This arcade does not inscribe on ${said.chain}.`; return; }
+    ws = said;
+    const old = said.page && said.page.pages && said.page.pages[path];
+    $("ws-who").textContent = `You hold ${said.name} on ${chainOf(said.chain).label}.`
+      + (old ? ` The website replaces its page ${path}; its other pages stay.` : said.page ? " Its other pages stay." : "");
+    $("ws-next1").disabled = false;
+  } catch (e) { $("ws-who").textContent = e.message; }
+}
+let wsAsk = null;
+$("ws-name").oninput = $("ws-path").oninput = () => { clearTimeout(wsAsk); wsAsk = setTimeout(wsCheckName, 400); };
+$("ws-next1").onclick = () => { if (ws) { wsStep(2); wsDraw(); } };
+$("ws-back2").onclick = () => wsStep(1);
+$("ws-back3").onclick = () => { if (!wsBusy) wsStep(2); };
+$("ws-html").oninput = wsDraw;
+$("ws-files").onchange = async () => {
+  for (const file of $("ws-files").files) {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const path = file.webkitRelativePath ? file.webkitRelativePath.split("/").slice(1).join("/") : file.name;
+    const f = {name: file.name, path, type: typeOf(file), bytes};
+    f.data = `data:${f.type.split(";")[0]};base64,${b64(bytes)}`;
+    if (isCSS(f) || /^text\//.test(f.type)) f.text = new TextDecoder().decode(bytes);
+    wsFiles = wsFiles.filter((g) => g.path !== f.path).concat([f]);
+  }
+  $("ws-files").value = "";
+  wsDraw();
+};
+
+let wsReady = null;
+$("ws-next2").onclick = async () => {
+  say("");
+  const plan = wsDraw(), c = chainOf(ws.chain);
+  const pageBytes = new TextEncoder().encode(refsIn(plan.html, (r) => fileFor(r) ? PLACEHOLDER : undefined).text).length;
+  const pages = {...((ws.page && ws.page.pages) || {}), [wsPath()]: {id: "0".repeat(64) + "i0"}};
+  const recordBytes = new TextEncoder().encode(JSON.stringify({p: "mesh", name: ws.name, pages})).length;
+  const items = [...plan.files.map((f) => ({label: f.path, size: f.bytes.length, type: f.type})),
+                 {label: `the page ${wsPath()}`, size: pageBytes, type: "text/html;charset=utf-8"},
+                 {label: `${ws.name}'s site record (it names the page)`, size: recordBytes, type: "text/plain;charset=utf-8"}];
+  let quote = null;
+  try { quote = await getJSON("/account/ord/quote", {method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({chain: c.chain, files: items.map((i) => ({size: i.size, content_type: i.type}))})}); }
+  catch (e) { say(e.message); return; }
+  wsReady = {plan, items, quote};
+  $("ws-list").innerHTML = items.map((i, n) => `<li id="ws-i${n}">${esc(i.label)} &mdash; ${commas(i.size)} bytes</li>`).join("");
+  $("ws-cost").textContent = `${commas(items.length)} ords, ${commas(quote.txs)} transactions, about ${coins(quote.fees, c.chain)} in network fees`
+    + ` on ${c.label}. ${coins(quote.postage * items.length, c.chain)} stays yours as the ords' own coins.`;
+  wsStep(3);
+};
+
+/** One ord, start to end; one already inscribed (the same bytes, after a reload) is not paid for twice. */
+async function wsOrd(held, chain, name, type, bytes, onSay, again = false) {
+  const sha = await shaOf(bytes);
+  for (let tries = 0; ; tries++) {
+    let runs = [];
+    try { runs = (await getJSON("/account/ord/runs")).runs || []; } catch (e) {}
+    // `again`: a record is inscribed anew even when the same bytes went out before -- the NEWEST record counts
+    const known = runs.find((r) => r.chain === chain && r.sha256 === sha && !(again && r.done));
+    if (known && known.done) return known.inscription;
+    try {
+      const first = known ? {run: known.run, chain, name: known.name}
+        : await wallet.startOrd(held, {chain, content: b64(bytes), content_type: type, name});
+      return await wallet.inscribeOrd(held, first, async () => b64(bytes), onSay);
+    } catch (e) {
+      // the chain's mempool takes about 25 unconfirmed in a row: wait for a block and go on
+      if (!/mempool-chain|too-long|ancestor|descendant|txn-mempool-conflict/i.test(String(e.message || e)) || tries > 60) throw e;
+      onSay({wait: true, sent: 0, of: 1});
+      await new Promise((r) => setTimeout(r, 30000));
+    }
+  }
+}
+
+$("ws-go").onclick = async () => {
+  say(""); news("");
+  if (!ws || !wsReady || wsBusy) return;
+  const {plan, items, quote} = wsReady, c = chainOf(ws.chain), n = items.length;
+  const label = `Inscribe a website for ${ws.name} on ${c.label}: ${commas(n)} ords, about ${commas(quote.txs)} transactions `
+    + `signed here without asking again. ${coins(quote.postage * n, c.chain)} stays yours as the ords' own coins.`;
+  const ok = c.mainnet
+    ? await arcadeMainnetReview({label, network: quote.fees, data: 0, others: 0, operator: 0, total: quote.fees + quote.postage * n, chain: c.chain, estimate: true})
+    : await arcadeAsk(`Inscribe ${ws.name}'s website?`, `${label} Network fees: about ${coins(quote.fees, c.chain)}.`, "Inscribe");
+  if (!ok) return;
+  wsBusy = true; $("ws-go").disabled = true; $("ws-back3").disabled = true; $("ws-progress").hidden = false;
+  const stay = (e) => { e.preventDefault(); e.returnValue = ""; };
+  window.addEventListener("beforeunload", stay);
+  document.body.dataset.inscribing = "1";
+  const ids = new Map();
+  const at = (i, s) => {
+    $("ws-bar").style.width = `${Math.round(100 * (i + Math.min(Number(s.sent || 0), Number(s.of || 1)) / Number(s.of || 1)) / n)}%`;
+    $("ws-says").textContent = `${items[i].label}: ` + (s.wait ? "waiting for a block…" : `${commas(s.sent || 0)} of ${commas(s.of || 1)} sent…`) + " Keep this tab open.";
+  };
+  const done = (i, id) => { const li = $(`ws-i${i}`); li.classList.add("done"); li.innerHTML += ` &mdash; <code>${esc(id)}</code>`; };
+  try {
+    const held = await keysNow();
+    if (!held) throw new Error("open your wallet first");
+    const to = (r) => { const f = fileFor(r); return f && ids.has(f) ? `/content/${ids.get(f)}` : undefined; };
+    let i = 0;
+    for (const f of plan.files) {
+      const bytes = isCSS(f) ? new TextEncoder().encode(refsIn(f.text, to).text) : f.bytes;
+      const id = await wsOrd(held, c.chain, f.path, f.type, bytes, (s) => at(i, s));
+      ids.set(f, id); done(i, id); i++;
+    }
+    const page = new TextEncoder().encode(refsIn(plan.html, to).text);
+    const pageId = await wsOrd(held, c.chain, `${ws.name}${wsPath()}`, "text/html;charset=utf-8", page, (s) => at(i, s));
+    done(i, pageId); i++;
+    const pages = {...((ws.page && ws.page.pages) || {}), [wsPath()]: {id: pageId}};
+    const draft = await getJSON("/account/mesh/draft", {method: "POST", headers: {"Content-Type": "application/json"},
+                                                         body: JSON.stringify({name: ws.name, pages})});
+    const record = Uint8Array.from(atob(draft.content), (ch) => ch.charCodeAt(0));
+    const recordId = await wsOrd(held, c.chain, `${ws.name} site`, draft.content_type, record, (s) => at(i, s), true);
+    done(i, recordId);
+    $("ws-bar").style.width = "100%";
+    $("ws-says").textContent = "All sent.";
+    news(`Inscribed: ${ws.name}'s website. It opens in the Browser once its blocks are mined and read: ${ws.name}${wsPath() === "/" ? "" : wsPath()}`);
+  } catch (e) { say(String(e.message || e)); }
+  finally {
+    window.removeEventListener("beforeunload", stay);
+    delete document.body.dataset.inscribing;
+    wsBusy = false; $("ws-go").disabled = false; $("ws-back3").disabled = false;
+  }
+};
+
+/* --- the names this wallet holds, offered in both name boxes (2026-10-27) --- */
+async function loadMyNames() {
+  let names = [];
+  try { names = (await getJSON("/account/names")).names || []; } catch (e) { return; }
+  const label = (n) => `${n.name} (${(chainOf(n.chain) || {}).label || n.chain})`;
+  const fill = (list, box, input, rows, then) => {
+    $(list).innerHTML = rows.map((n) => `<option value="${esc(n.name)}">${esc(label(n))}</option>`).join("");
+    $(box).innerHTML = rows.length ? `<span class="muted">Your names:</span>` + rows.map((n) =>
+      `<button type="button" class="ghost" data-name="${esc(n.name)}" title="${esc(label(n))}">${esc(n.name)}</button>`).join("") : "";
+    $(box).onclick = (e) => { const b = e.target.closest("button[data-name]"); if (!b) return; $(input).value = b.dataset.name; then(); };
+  };
+  fill("mp-names", "mp-mine", "mp-name", names, loadSite);
+  fill("ws-names", "ws-mine", "ws-name", names.filter((n) => !n.name.endsWith(".mesh")), wsCheckName);
+}
+loadMyNames();
 </script>
 {% endif %}
 {% endblock %}
