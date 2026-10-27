@@ -28373,7 +28373,8 @@ def create_app(state: AppState) -> FastAPI:
                     if peer.get("sites") and time.time() - float(peer.get("at") or 0) < 300:
                         held.append({"node": node, "me": False, "tag": names.get(node, ""), "walked_to": int(peer["sites"])})
             row["copies"] = sorted(({**c, "frac": frac(c["walked_to"])} for c in held), key=lambda c: -(c["frac"] or 0))
-            row.update(tip=tip, tip_known=tip > base, title=getattr(chain, "title", "") or chain.label)
+            row.update(tip=tip, tip_known=tip > base, title=getattr(chain, "title", "") or chain.label,
+                       label=chain.label, icon=_coin_icon(net))
             rows.append(row)
         return {"chains": rows, "max_mb": state.sites_max_mb()}
 

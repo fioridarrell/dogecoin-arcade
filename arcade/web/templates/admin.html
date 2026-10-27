@@ -470,6 +470,9 @@
       for this arcade and linked ones; it needs that chain&rsquo;s full ord index (Keep the full index) and grows with
       the sites, a few KB a page. <b>Ask</b> (the default) keeps nothing and asks a linked arcade that hosts it.
       <b>Off</b> answers no searches of that chain.</p>
+    {# the chain picked as on the Ords tab (2026-10-27: "Add the same chain selection as ORD panel to DNS"); the
+       same choice on both tabs #}
+    <div class="ordcoins" id="sitescoins" role="tablist" aria-label="Chain"></div>
     <div id="sitesrows"></div>
     <div style="margin-top:8px"><label for="sitesmax">Largest each chain&rsquo;s index may grow: </label>
       <input autocomplete="off" id="sitesmax" type="number" min="50" step="50" style="width:8em;font-size:16px"> MB</div>
@@ -1734,11 +1737,11 @@ section.panel h2{margin-top:0}
 #ords .admintable td{white-space:normal;vertical-align:top}
 #ords .admintable td.ordwhat{white-space:nowrap}
 #ords select{min-width:6.5em;font-size:16px}
-#ords .ordcoins{display:flex;gap:10px;overflow-x:auto;padding:2px 0 6px}
-#ords .ordcoins button{padding:5px;border-radius:14px;border:2px solid transparent;background:none;flex:none;cursor:pointer}
-#ords .ordcoins button.on{border-color:var(--accent)}
-#ords .ordcoins img{width:42px;height:42px;display:block;border-radius:50%}
-#ords .ordcoins button.off img{opacity:.45}
+#ords .ordcoins,#sitescard .ordcoins{display:flex;gap:10px;overflow-x:auto;padding:2px 0 6px}
+#ords .ordcoins button,#sitescard .ordcoins button{padding:5px;border-radius:14px;border:2px solid transparent;background:none;flex:none;cursor:pointer}
+#ords .ordcoins button.on,#sitescard .ordcoins button.on{border-color:var(--accent)}
+#ords .ordcoins img,#sitescard .ordcoins img{width:42px;height:42px;display:block;border-radius:50%}
+#ords .ordcoins button.off img,#sitescard .ordcoins button.off img{opacity:.45}
 #ords .ordtitle{font-weight:700;font-size:1.12rem;margin:6px 0 2px}
 #ords .ordpct{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:12px 0}
 #ords .ordpct>div,#ords .ordcard{border:1px solid var(--line);border-radius:10px;padding:10px 12px}
@@ -2568,12 +2571,15 @@ section.panel h2{margin-top:0}
     // r.inner_word: what the inner ring counts -- 'agreeing' for the ord index; 'holding' for the sites search (Admin
     // -> DNS), whose copies cannot be compared chunk by chunk, so it says how many copies reach each stretch.
     var W = r.inner_word || 'agreeing';
+    // r.inner_need: how many copies the centre's share counts -- 3 agreeing for the ord index; 2 holding for the sites
+    // search (2026-10-27: "3 holding" matched nothing there, with at most a ring or two of copies).
+    var NEED = r.inner_need || 3;
     var runs = r.agree_runs || [], ready = Math.max(1, r.ready || 0), three = 0;
     var AGREE_COL = ['var(--line)', ORD_COLORS[0], ORD_COLORS[1], ORD_COLORS[2]];
     runs.forEach(function (run) {
       var s0 = run[0] / ready, e0 = run[1] / ready;
       if (e0 - s0 < 1e-4) return;
-      if (run[2] >= 3) three += e0 - s0;
+      if (run[2] >= NEED) three += e0 - s0;
       // edge to edge: a gap between runs showed the dark page through as black ticks (2026-10-22, 157 runs on PEP)
       svg += '<path d="' + arc(s0, e0, 76) + '" fill="none" stroke="' + AGREE_COL[run[2]]
         + '" stroke-width="7"><title>' + (run[2] ? run[2] + (run[2] >= 3 ? '+' : '') + ' arcade' + (run[2] === 1 ? '' : 's')
@@ -2582,7 +2588,7 @@ section.panel h2{margin-top:0}
     svg += '<text x="' + cx + '" y="' + (cy - 50) + '" text-anchor="middle" class="sub">' + W + '</text>';
     svg += '<text x="' + cx + '" y="' + (cy - 6) + '" text-anchor="middle" style="font:700 22px system-ui;fill:var(--fg)">'
       + Math.round(three * 100) + '%</text><text x="' + cx + '" y="' + (cy + 12) + '" text-anchor="middle" class="sub">'
-      + 'of the chain, 3 ' + W + '</text><text x="' + cx + '" y="' + (cy + 26) + '" text-anchor="middle" class="sub">'
+      + 'of the chain, ' + (r.inner_need ? NEED + '+' : NEED) + ' ' + W + '</text><text x="' + cx + '" y="' + (cy + 26) + '" text-anchor="middle" class="sub">'
       + (r.copies || []).length + ' arcade' + ((r.copies || []).length === 1 ? '' : 's') + ' holding</text></svg>';
     return svg;
   }
@@ -2832,15 +2838,33 @@ section.panel h2{margin-top:0}
       .catch(function (e) { $('kcsaid').textContent = e.message; });
   };
   // Sites search (2026-10-27): host, ask or off for each chain, and how big each hosted index is.
+  var SITES_DATA = null;
   function loadSites() {
     fetch('/admin/api/sites', {headers: {'Accept': 'application/json'}, cache: 'no-store'})
       .then(function (r) { return r.json(); })
-      .then(function (d) {
-        var box = $('sitesrows');
+      .then(function (d) { SITES_DATA = d; sitesDraw(); })
+      .catch(function () { $('sitessaid').textContent = 'Could not read the sites search.'; });
+  }
+  // One chain at a time, picked by its coin as on the Ords tab, and the same pick (ORD_PICK) on both tabs.
+  function sitesDraw() {
+        var d = SITES_DATA || {}, box = $('sitesrows'), coins = $('sitescoins');
         if (box.contains(document.activeElement)) return;              // choosing: redraw later
-        box.textContent = '';
+        box.textContent = ''; coins.textContent = '';
         if (document.activeElement !== $('sitesmax')) $('sitesmax').value = d.max_mb;
-        (d.chains || []).forEach(function (c) {
+        var all = d.chains || [];
+        if (!all.length) { box.appendChild(ordEl('p', 'muted', 'This arcade reads none of the chains that have sites.')); return; }
+        var shown = all.filter(function (x) { return x.net === ORD_PICK; })[0]
+          || all.filter(function (x) { return x.mode === 'host'; })[0] || all[0];
+        all.forEach(function (x) {
+          var b = ordEl('button', (x === shown ? 'on' : '') + (x.mode === 'off' ? ' off' : ''));
+          b.type = 'button'; b.title = x.title || x.chain; b.setAttribute('aria-label', x.title || x.chain);
+          b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', x === shown ? 'true' : 'false');
+          if (x.icon) { var img = document.createElement('img'); img.src = x.icon; img.alt = ''; b.appendChild(img); }
+          else b.textContent = x.label || x.chain || x.net;
+          b.onclick = function () { ORD_PICK = x.net; try { localStorage.setItem('ords.chain', x.net); } catch (e) { /* kept for this visit */ } sitesDraw(); };
+          coins.appendChild(b);
+        });
+        [shown].forEach(function (c) {
           var row = document.createElement('div');
           row.style.cssText = 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:4px 0';
           var name = document.createElement('b'); name.textContent = c.chain || c.net; name.style.minWidth = '9em';
@@ -2863,7 +2887,6 @@ section.panel h2{margin-top:0}
           row.appendChild(name); row.appendChild(pick); row.appendChild(said); box.appendChild(row);
           box.appendChild(sitesRings(c));
         });
-      }).catch(function () { $('sitessaid').textContent = 'Could not read the sites search.'; });
   }
   // The rings (2026-10-27: "Give it the same rings as the ord indexes"): each whole copy of a chain's sites
   // index, held by an arcade that hosts it, drawn by the Ords tab's ordRing() as far as it reaches; the inner ring
@@ -2884,7 +2907,8 @@ section.panel h2{margin-top:0}
     }
     if (at < R) runs.push([at, R, 0]);
     wrap.appendChild(ordEl('div', '', ordRing({net: 'sites-' + c.net, title: (c.chain || c.net) + ' sites search',
-                                               copies: copies, agree_runs: runs, ready: R, inner_word: 'holding'})));
+                                               copies: copies, agree_runs: runs, ready: R, inner_word: 'holding',
+                                               inner_need: 2})));
     wrap.appendChild(ordEl('div', '', copies.map(function (x, k) {
       return '<div style="display:flex;gap:8px;align-items:baseline;margin:4px 0"><span style="width:12px;height:12px;'
         + 'border-radius:3px;flex:none;background:' + (k < 3 ? ORD_COLORS[k] : 'var(--line)') + '"></span><span><b>'

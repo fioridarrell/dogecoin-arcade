@@ -88,6 +88,15 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-27 Admin -> DNS: the Ords tab's chain picker; the rings' centre counts 2 copies (Claude)
+The operator: "Add the same chain selection as ORD panel to DNS". The PR merge session found the centre read "0% / 3 holding"
+with two copies.
+- admin.html: the DNS tab picks one chain by its coin, like the Ords tab (#sitescoins, the .ordcoins CSS also applied
+  under #sitescard), and shares the pick (ORD_PICK, localStorage 'ords.chain') with Ords. sitesDraw() draws the chain
+  picked. /admin/api/sites rows carry icon and label.
+- ordRing(r) takes r.inner_need (default 3: the Ords tab is unchanged). The sites search passes 2, so with two copies
+  at 100% and 62% the centre says "62% of the chain, 2+ holding".
+
 ### 2026-10-27 Admin -> DNS: the sites search gets the ord indexes' rings (Claude)
 The operator: "Give it the same rings as the ord indexes." On claude/sites-search-dns (afe08d1).
 - sites_index.py: reach(), the block its index has read the site records up to (the walk's height once it has every
