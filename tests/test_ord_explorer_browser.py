@@ -146,6 +146,15 @@ def _shot(browser, name):
             pathlib.Path(folder) / name)
 
 
+def _no_welcome_sheet(browser):
+    """This test arcade has no PEP test, so Admin opens the first-run sheet over everything (welcoming new operators,
+    2026-10-27); these tests are about the explorer under it: "Later", now and whenever it opens."""
+    browser.execute_script("""
+      function later() { document.querySelectorAll('.askcard-back').forEach(function (b) {
+        if (b.querySelector('.wsheet')) b.remove(); }); }
+      later(); new MutationObserver(later).observe(document.body, {childList: true});""")
+
+
 def _open(browser, base, ids):
     browser.get(base + "/admin#ords")
     try:
@@ -154,6 +163,7 @@ def _open(browser, base, ids):
         pass
     browser.get(base + "/admin#ords")
     browser.refresh()                                    # the same address again is no reload: a fresh page
+    _no_welcome_sheet(browser)
     _pick_chain(_wait(browser, lambda d: d.find_elements(By.CSS_SELECTOR, "#ordcoins button") and d), "main")
     _wait(browser, lambda d: ids["main"][0] in _facts(d))
 
