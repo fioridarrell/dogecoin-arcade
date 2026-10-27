@@ -88,6 +88,12 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-27 The strip under a full-screen game is gone (Claude)
+The operator (a screenshot of "DogecoinArcade never asks for your password inside a game." under Ashvale): "Remove this".
+Hardening round 2 wave 3's (e) taken back: inscription_full.html has no .trustbar, and the game's frame fills the screen
+again (no --trust). The rest of #7 (camera under the cards, sends named from the chain, no-card pages asked, armed
+approve) stays.
+
 ### 2026-10-27 · SadFrog's side (Claude, node 2) · branch `team/onboarding` (on `main` 0569eb2) · Welcoming new operators: one ask for 1 PEP test, one click to pay it, a Welcomers board
 SadFrog: "make it easy for someone new running an arcade to get setup": a new arcade asks every operator on the mesh for
 1 PEP test, any operator pays it in one click from the notification, "One ask, closes when paid", a popup that nothing

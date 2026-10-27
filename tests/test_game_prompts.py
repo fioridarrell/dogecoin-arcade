@@ -26,16 +26,12 @@ def test_the_camera_layer_sits_under_the_arcades_cards():
     assert "!!document.querySelector('.askcard-back')" in doors, "hidden while a card is open"
 
 
-def test_a_game_in_full_screen_keeps_the_trusted_strip(client):
-    """(e) Full screen hid everything of the arcade's. The strip is outside the game's frame, after it, and says
-    what the arcade never asks inside a game; a picture in full screen has no frame and needs none."""
+def test_a_game_in_full_screen_has_no_strip_under_it(client):
+    """(e) taken back (2026-10-27: "Remove this"): no line of the arcade's under a game in full screen; the
+    game's frame fills the screen."""
     app, state = client
-    page, pic = "d1" * 32, "d2" * 32
+    page = "d1" * 32
     _inscribe(state, page, 70, MAKER, {})
-    _inscribe(state, pic, 71, MAKER, {}, kind="image/png")
     full = app.get(f"/inscriptions/{page}/full").text
-    frame_end = full.index("</iframe>")
-    strip = re.search(r'<div class="trustbar"[^>]*>([^<]*)</div>', full)
-    assert strip and strip.start() > frame_end, "the strip is the arcade's, outside the game's frame"
-    assert "never asks for your password inside a game" in strip.group(1)
-    assert 'class="trustbar"' not in app.get(f"/inscriptions/{pic}/full").text
+    assert 'class="trustbar"' not in full and "never asks for your password inside a game" not in full
+    assert "--trust" not in full

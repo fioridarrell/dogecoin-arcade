@@ -209,19 +209,10 @@ def test_d_a_card_over_a_game_focuses_cancel_and_arms_its_yes_after_a_moment(arc
 
 
 @pytest.mark.parametrize("viewport", [{"width": 1280, "height": 800}, {"width": 360, "height": 740}])
-def test_e_full_screen_keeps_a_trusted_strip_the_game_cannot_cover(arcade, viewport):
+def test_e_full_screen_is_the_game_alone(arcade, viewport):
+    """2026-10-27: the strip under a full-screen game is gone; the frame reaches the bottom of the screen."""
     chrome, base = arcade
     page = _open(chrome, base, GAME, viewport=viewport)
-    strip = page.locator(".trustbar")
-    assert strip.is_visible()
-    assert "never asks for your password inside a game" in strip.inner_text()
-    where = page.evaluate("""(() => {
-      var s = document.querySelector('.trustbar').getBoundingClientRect(),
-          f = document.querySelector('.inscription-frame').getBoundingClientRect(),
-          e = document.elementFromPoint(s.left + s.width / 2, s.top + s.height / 2);
-      return {gap: s.top - f.bottom, onTop: e === document.querySelector('.trustbar'),
-              inView: s.bottom <= innerHeight + 0.5 && s.top >= 0, whole: s.width >= innerWidth - 0.5,
-              cut: document.querySelector('.trustbar').scrollWidth > s.width + 1};
-    })()""")
-    assert where["gap"] >= -0.5, "the game's frame reaches under the strip: %s" % where
-    assert where["onTop"] and where["inView"] and where["whole"] and not where["cut"], where
+    assert page.locator(".trustbar").count() == 0
+    gap = page.evaluate("innerHeight - document.querySelector('.inscription-frame').getBoundingClientRect().bottom")
+    assert abs(gap) <= 1
