@@ -88,6 +88,10 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-27 Names website wizard: the example HTML links its picture as /content/<id> (Claude)
+The operator: "In the example HTML it should show content link not src link". The HTML box's example now reads
+`<img src="/content/4b435b86...i0">` (the Doge picture on me-seeks.mesh/show), not `<img src="cat.png">`.
+
 ### 2026-10-27 Creator -> Names website wizard: every file a page uses is a /content link (Claude)
 The operator: "There is a Files this page uses button that allows you to upload a file, but I don't know where that file is
 getting uploaded to all files that a page uses needs to be /content link".
