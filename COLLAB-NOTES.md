@@ -88,6 +88,15 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-27 Sites search: no size cap; each host says its index size (Claude)
+The operator: "Remove the longest each index may grow option on the dns tab. Anyone who decides they want to also index should
+know the size of the index before they choose to host. The size of all indexes should be broadcast to the network".
+The `sites_max_mb` setting, its cap in sites_index.py and the DNS tab's input are gone (POST /admin/api/sites
+{max_mb} is now a 400). A hosting arcade's ord hello says `sites_mb` beside `sites` (DoginalIndex.sites_mb hook, kept
+in heard() peers). Admin -> DNS: before Host, "Hosting takes about X MB, as on @tag" (the furthest-reaching copy that
+says its size; `host_mb` in GET /admin/api/sites), and each copy's size in the ring legend. Older arcades say no
+size: their copy shows without one.
+
 ### 2026-10-27 Install a node from Coins & chains; every chain's disk cost said across the mesh (Claude)
 The operator: "From the chains and coins tab, the operator should be able to decide to install a block chain node on the
 computer. The storage cost should also be displayed for chains"; "The size of all indexes should be broadcast to the

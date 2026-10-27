@@ -182,9 +182,16 @@ def test_a_host_says_how_far_its_index_reaches_and_admin_draws_every_copy(client
     index = _index(tmp_path / "w", chain) if (tmp_path / "w").mkdir() is None else None
     index.sites_reach = lambda: 4321
     assert index.hello()["sites"] == 4321
-    index.heard("peer-b", {"op": "hi", "mode": "walk", "walk": 9000, "rules": index.rules, "sites": 1234})
+    index.sites_mb = lambda: 12.345
+    assert index.hello()["sites_mb"] == 12.3, "and how big its copy is"
+    index.heard("peer-b", {"op": "hi", "mode": "walk", "walk": 9000, "rules": index.rules, "sites": 1234,
+                           "sites_mb": 812.5})
     monkeypatch.setattr(state, "ord_indexes", lambda: {"main": index})
     row = next(c for c in app.get("/admin/api/sites").json()["chains"] if c["net"] == "main")
-    assert [(c["node"], c["walked_to"], c["me"]) for c in row["copies"]] == [("peer-b", 1234, False)]
+    assert [(c["node"], c["walked_to"], c["me"], c["mb"]) for c in row["copies"]] == [("peer-b", 1234, False, 812.5)]
+    assert row["host_mb"]["mb"] == 812.5 and row["host_mb"]["node"] == "peer-b", \
+        "2026-10-27: an operator knows what hosting costs before choosing Host"
     index.sites_reach = None
-    assert "sites" not in index.hello(), "an arcade hosting none says nothing"
+    assert "sites" not in index.hello() and "sites_mb" not in index.hello(), "an arcade hosting none says nothing"
+    assert app.post("/admin/api/sites", json={"max_mb": 50}, headers={"X-Arcade-Admin": "1"}).status_code == 400, \
+        "no cap any more"

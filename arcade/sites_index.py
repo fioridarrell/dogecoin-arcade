@@ -48,8 +48,6 @@ FIELD_MAX = 600
 #: Records read a pass, and the bytes of one page read to index it.
 BATCH = 40
 READ_MAX = 400_000
-#: The operator's cap on the file, in MB (setting `sites_max_mb`): past it no new site is added.
-DEFAULT_MAX_MB = 4096
 #: A site's rows are rowid site_id * ROWS .. + ROWS - 1, so a site's pages go in one range delete.
 ROWS = 100
 #: The weights of the indexed columns, in the table's order (the unindexed ones count 0).
@@ -178,13 +176,13 @@ def any_query_of(said: str) -> str | None:
 # --------------------------------------------------------------------------- the index
 
 class SitesIndex:
-    """One chain's sites search. `ord_index()`: this chain's DoginalIndex (or None); `mode()`: host | ask | off;
-    `max_mb()`: the operator's cap."""
+    """One chain's sites search. `ord_index()`: this chain's DoginalIndex (or None); `mode()`: host | ask | off.
+    No cap on its size (2026-10-27): a host says how big its copy is in its ord hello, so an operator sees what
+    hosting costs before choosing Host."""
 
-    def __init__(self, path: Path, net: str, ord_index: Callable[[], Any], mode: Callable[[], str],
-                 max_mb: Callable[[], int] = lambda: DEFAULT_MAX_MB):
+    def __init__(self, path: Path, net: str, ord_index: Callable[[], Any], mode: Callable[[], str]):
         self.path, self.net = Path(path), net
-        self.ord_index, self.mode, self.max_mb = ord_index, mode, max_mb
+        self.ord_index, self.mode = ord_index, mode
         self._lock = threading.RLock()
         self._db: sqlite3.Connection | None = None
         self.problem = ""
@@ -228,9 +226,6 @@ class SitesIndex:
         if index is None or index.mode() != "walk":
             self.problem = "Hosting the sites search needs this chain's full ord index (Keep the full index)."
             return 60.0
-        if self.size_mb() > self.max_mb():
-            self.problem = f"The index is at its cap of {self.max_mb():,} MB: no new site is added."
-            return 300.0
         self.problem = ""
         until = time.monotonic() + budget
         after = int(self._meta("after_rid", "0") or 0)
@@ -380,7 +375,6 @@ class SitesIndex:
                     out["read_to"] = int(self._meta("after_rid", "0") or 0) - 1
                     out["reach"] = int(self._meta("reach", "0") or 0)
                 out["mb"] = round(self.size_mb(), 1)
-                out["max_mb"] = self.max_mb()
             except sqlite3.Error as exc:
                 out["problem"] = str(exc)[:200]
         return out

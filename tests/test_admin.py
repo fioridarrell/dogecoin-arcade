@@ -578,7 +578,7 @@ def test_the_sites_search_has_a_tab_of_its_own_called_dns(public):
     assert '<button type="button" role="tab" data-tab="dns">DNS</button>' in page
     dns = page[page.index('<div class="admintab" data-tab="dns"'):]
     dns = dns[:dns.index('<div class="admintab"', 10)]
-    assert 'id="sitescard"' in dns and 'id="sitesrows"' in dns and 'id="sitesmax"' in dns
+    assert 'id="sitescard"' in dns and 'id="sitesrows"' in dns and 'id="sitesmax"' not in dns
     ords = page[page.index('<div class="admintab" data-tab="ords"'):]
     ords = ords[:ords.index('<div class="admintab"', 10)]
     assert 'id="sitescard"' not in ords

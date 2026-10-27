@@ -1901,6 +1901,8 @@ class AppState:
             self._ord_indexes[net].sites_search = self._sites_hook(net)
             self._ord_indexes[net].sites_reach = (
                 lambda n=net: (self.sites_index(n).reach() or None) if self.sites_mode(n) == "host" else None)
+            self._ord_indexes[net].sites_mb = (
+                lambda n=net: self.sites_index(n).size_mb() if self.sites_mode(n) == "host" else None)
         except Exception:                                      # noqa: BLE001 -- e.g. the file still locked by the
             # worker this one replaces, mid-reset (2026-10-21): opened again at the next ask.
             logging.getLogger("arcade.web").warning("ord index of %s not opened yet; asked again later", net,
@@ -1927,13 +1929,6 @@ class AppState:
         chosen = str(self.setting(f"sites_index:{net}") or DEFAULT_MODE)
         return chosen if chosen in MODES else DEFAULT_MODE
 
-    def sites_max_mb(self) -> int:
-        from ..sites_index import DEFAULT_MAX_MB
-        try:
-            return max(50, int(self.setting("sites_max_mb") or DEFAULT_MAX_MB))
-        except (TypeError, ValueError):
-            return DEFAULT_MAX_MB
-
     def sites_index(self, net: str):
         """Chain `net`'s sites search index (its file opens when first used), or None for a chain this arcade does not
         read."""
@@ -1945,8 +1940,7 @@ class AppState:
         kept = self.__dict__.setdefault("_sites_indexes", {})
         if net not in kept:
             kept[net] = SitesIndex(Path(self.home) / f"sites-{net}.sqlite", net,
-                                   (lambda n=net: self.ord_indexes().get(n)), (lambda n=net: self.sites_mode(n)),
-                                   self.sites_max_mb)
+                                   (lambda n=net: self.ord_indexes().get(n)), (lambda n=net: self.sites_mode(n)))
         return kept[net]
 
     def sites_working(self) -> dict:

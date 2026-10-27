@@ -28471,16 +28471,24 @@ def create_app(state: AppState) -> FastAPI:
                               if tip > base else None)
             held = []
             if row.get("mode") == "host" and row.get("reach"):
-                held.append({"node": "this arcade", "me": True, "tag": me_tag, "walked_to": row["reach"]})
+                held.append({"node": "this arcade", "me": True, "tag": me_tag, "walked_to": row["reach"],
+                             "mb": row.get("mb")})
             if ords is not None:
                 for node, peer in list(ords.chunks.peers.items()):
                     if peer.get("sites") and time.time() - float(peer.get("at") or 0) < 300:
-                        held.append({"node": node, "me": False, "tag": names.get(node, ""), "walked_to": int(peer["sites"])})
+                        mb = peer.get("sites_mb")
+                        held.append({"node": node, "me": False, "tag": names.get(node, ""), "walked_to": int(peer["sites"]),
+                                     "mb": float(mb) if isinstance(mb, (int, float)) and mb >= 0 else None})
             row["copies"] = sorted(({**c, "frac": frac(c["walked_to"])} for c in held), key=lambda c: -(c["frac"] or 0))
+            # What hosting costs (2026-10-27: "Anyone who decides they want to also index should know the size
+            # of the index before they choose to host"): the size of the furthest-reaching copy that says its size.
+            sized = [c for c in row["copies"] if c.get("mb") is not None]
+            row["host_mb"] = ({"mb": sized[0]["mb"], "tag": sized[0]["tag"], "node": sized[0]["node"], "me": sized[0]["me"],
+                               "frac": sized[0]["frac"]} if sized else None)
             row.update(tip=tip, tip_known=tip > base, title=getattr(chain, "title", "") or chain.label,
                        label=chain.label, icon=_coin_icon(net))
             rows.append(row)
-        return {"chains": rows, "max_mb": state.sites_max_mb()}
+        return {"chains": rows}
 
     @app.post("/admin/api/sites")
     def admin_sites_set(request: Request, payload: Any = Body(None)):
@@ -28488,15 +28496,6 @@ def create_app(state: AppState) -> FastAPI:
         from ..doginal_index import STARTS
         from ..sites_index import MODES
         said = payload if isinstance(payload, dict) else {}
-        if "max_mb" in said:
-            try:
-                most = int(said["max_mb"])
-            except (TypeError, ValueError):
-                most = 0
-            if not 50 <= most <= 1_000_000:
-                return JSONResponse({"detail": "from 50 MB to 1,000,000 MB"}, status_code=400)
-            state.set_setting("sites_max_mb", most)
-            return JSONResponse({"ok": True, "max_mb": most})
         net, mode = str(said.get("net") or ""), said.get("mode")
         if net not in STARTS or mode not in MODES:
             return JSONResponse({"detail": "a chain, and host, ask or off"}, status_code=400)
