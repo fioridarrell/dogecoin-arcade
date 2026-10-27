@@ -106,7 +106,8 @@ function go(address, how) {
     } else if (p.url) {
       show('<iframe sandbox="allow-scripts allow-pointer-lock" src="' + esc(p.url) + '" title="' + esc(p.name) + '"></iframe>', "Document: Done (" + p.chain + ", sandboxed)", p.title || p.name);
     } else {
-      show(meshtext("# Not found\n" + (p.detail || "") + "\n\n=> " + home() + " Go home"), "Document: not found", "Not found");
+      var also = (p.suggest || []).map(function (n) { return "=> " + n + (s.rest.indexOf("/") > 0 ? s.rest.slice(s.rest.indexOf("/")) : "") + " Did you mean " + n + "?"; }).join("\n");
+      show(meshtext("# Not found\n" + (p.detail || "") + "\n\n" + (also ? also + "\n" : "") + "=> " + home() + " Go home"), "Document: not found", "Not found");
     }
   }).catch(function () { show(meshtext("# Not found\nThis arcade did not answer.\n\n=> directory The directory"), "Document: not found", "Not found"); });
 }

@@ -140,7 +140,15 @@ def register(app, state, content=None) -> None:
                          "choices": [{"chain": n, "page": s["page"]["id"], "holder": s.get("holder")}
                                      for n, s in with_page]}
         if not found:
-            return 404, {**out, "detail": f"Nobody has claimed {name}" + (f" on {chain}" if chain else "") + "."}
+            # a mistyped name (2026-10-26: "mee-seeks.mesh" for me-seeks.mesh) is offered the sites it is closest to
+            import difflib
+            try:
+                close = difflib.get_close_matches(name, sorted({n["name"] for n in all_sites()}), n=3, cutoff=0.75)
+            except Exception:                            # noqa: BLE001 -- no directory now: no suggestions
+                close = []
+            # said in the words too: the Browser card already inscribed shows `detail` and nothing else
+            return 404, {**out, "detail": f"Nobody has claimed {name}" + (f" on {chain}" if chain else "") + "."
+                         + (f" Did you mean {' or '.join(close)}?" if close else ""), "suggest": close}
         net, said = (with_page or found)[0]
         page = said.get("page")
         out.update({"chain": net, "holder": said.get("holder"), "claim": said.get("claim")})

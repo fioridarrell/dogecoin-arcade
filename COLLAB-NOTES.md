@@ -116,6 +116,8 @@ record whose pages are MeshText, HTML or another inscription; small pictures dra
 - Follow-up: the new me-seeks.mesh record (three transactions, a chunked inscription) never counted: a page's holder
   was read at output 0 of its first reveal, which only passes a chunked ord on. DoginalIndex._mesh_page now asks who
   holds the page where it sits (`at`); the same coin for a page that never moved.
+- Follow-up: a mistyped name ("mee-seeks.mesh", the operator on the PWA) answers 404 with `suggest` (difflib over the sites
+  directory) and "Did you mean ...?" in `detail`, which the inscribed Browser card already shows; /browser links them.
 
 ### 2026-10-26 The T-Deck builds its own letters; ord coins never spent (Claude)
 The operator: "Can't the T-Deck build the transaction?" / "Is it going to protect ord coins from spending?" -- a letter over

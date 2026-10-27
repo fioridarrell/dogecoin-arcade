@@ -238,6 +238,8 @@ def test_the_browser_finds_a_site_on_any_chain(client, tmp_path, monkeypatch):
     assert app.get(frog["url"], follow_redirects=False).headers["location"] == f"/content/{IID}"
     assert app.get("/r/site/me-seeks.mesh").json()["chain"] == "main"
     assert app.get("/r/site/nobody.pepe").status_code == 404 and app.get("/r/site/not-a-name").status_code == 400
+    typo = app.get("/r/site/Mee-seeks.mesh").json()                    # 2026-10-26, the operator on the PWA
+    assert typo["suggest"] == ["me-seeks.mesh"] and "Did you mean me-seeks.mesh?" in typo["detail"]
     page = app.get("/browser/shop.pepe", headers={"host": "app.example.com", "cf-ray": "x"})
     assert page.status_code == 200 and "<title>Browser</title>" in page.text, "the Browser is a public page"
     from arcade.web import door
