@@ -71,6 +71,11 @@
         <textarea id="ws-html" autocomplete="off" spellcheck="false" rows="16"
           placeholder="<!doctype html>&#10;<title>My site</title>&#10;<img src=&quot;cat.png&quot;>"></textarea>
         <label class="ws-files">Files the page uses <input type="file" id="ws-files" multiple></label>
+        <p class="muted" style="font-size:.8rem;margin:4px 0 0">Every file a page uses comes from the chain, as a
+          <code>/content/&lt;inscription id&gt;</code> link. A file you add here stays in this browser until you inscribe:
+          it is inscribed as an ord of its own, and the page's link to it (<code>cat.png</code>) becomes
+          <code>/content/&lt;its id&gt;</code>. A file already inscribed needs no adding: link it as
+          <code>/content/&lt;id&gt;</code>.</p>
         <ul class="ws-refs" id="ws-refs"></ul>
       </div>
       <div class="mp-deck wide"><div class="mp-bar"><span>Preview</span><span class="mp-addr" id="ws-addr"></span></div>
@@ -179,7 +184,7 @@
 #ws-html{width:100%;box-sizing:border-box;font:13px/1.4 ui-monospace,monospace;min-height:280px}
 .ws-files{display:flex;flex-direction:column;gap:4px;font-size:.88rem;margin-top:8px}
 .ws-refs,.ws-list{margin:8px 0 0;padding-left:18px;font-size:.84rem}
-.ws-refs .miss{color:var(--bad)} .ws-refs .ok{color:var(--ok)}
+.ws-refs .miss{color:var(--bad)} .ws-refs .ok{color:var(--ok)} .ws-refs li,.ws-list li{overflow-wrap:anywhere}
 .ws-list .done{color:var(--ok)}
 .my-names{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 0;font-size:.82rem;align-items:center}
 .my-names button{padding:3px 10px;font-size:.82rem;border-radius:999px}
@@ -493,6 +498,30 @@ function refsIn(text, swap = () => undefined) {
   out = out.replace(/url\(\s*(["']?)([^"')]+)\1\s*\)/gi, (m, q, v) => `url(${q}${one(v)}${q})`);
   return {refs: [...found], text: out};
 }
+/** 2026-10-27: "all files that a page uses needs to be /content link". The files the page or a style sheet
+ *  LOADS (src, poster, data, srcset, url(), <link href>, @import) that are neither a file added here nor on chain:
+ *  {chain: ["/content/<id>", ...], outside: ["https://...", "/img/cat.png", ...], local: ["cat.png", ...]}. A link to follow (<a href>) is not a
+ *  file the page loads and is not looked at. */
+const ON_CHAIN = /^\/content\/[0-9a-f]{64}(?:i\d+)?$/i;   // an ord (…i0) or an arcade-native id (a bare txid)
+function loadsIn(text) {
+  const chain = new Set(), outside = new Set(), local = new Set();
+  const one = (raw) => {
+    const r = String(raw || "").trim();
+    if (r && localRef(r) !== null) { local.add(refKey(r)); return; }
+    if (!r || /^(data:|blob:|#|about:)/i.test(r)) return;
+    (ON_CHAIN.test(r.split(/[?#]/)[0]) ? chain : outside).add(r);
+  };
+  const s = String(text);
+  for (const m of s.matchAll(/\b(?:src|poster|data)\s*=\s*(?:(["'])(.*?)\1|([^\s"'>]+))/gi)) one(m[2] ?? m[3]);
+  for (const m of s.matchAll(/\bsrcset\s*=\s*(["'])(.*?)\1/gi)) m[2].split(",").forEach((part) => one(part.trim().split(/\s+/)[0]));
+  for (const m of s.matchAll(/url\(\s*(["']?)([^"')]+)\1\s*\)/gi)) one(m[2]);
+  for (const m of s.matchAll(/@import\s+(["'])(.*?)\1/gi)) one(m[2]);
+  for (const m of s.matchAll(/<link\b[^>]*>/gi)) {
+    const h = m[0].match(/\bhref\s*=\s*(?:(["'])(.*?)\1|([^\s"'>]+))/i);
+    if (h) one(h[2] ?? h[3]);
+  }
+  return {chain: [...chain], outside: [...outside], local: [...local]};
+}
 const fileFor = (ref) => wsFiles.find((f) => f.path === ref) || wsFiles.find((f) => f.name === ref.split("/").pop());
 const isCSS = (f) => /^text\/css/.test(f.type);
 
@@ -504,13 +533,23 @@ function wsPlan() {
   const walk = (refs) => refs.forEach((r) => { const f = fileFor(r); if (!f) { missing.add(r); return; } if (used.has(f)) return; used.add(f); if (isCSS(f)) walk(refsIn(f.text).refs); });
   walk(refsIn(html).refs);
   const files = [...used].sort((a, b) => isCSS(a) - isCSS(b));
-  return {html, files, missing: [...missing], unused: wsFiles.filter((f) => !used.has(f))};
+  const chain = new Set(), outside = new Set(), loaded = new Set();
+  for (const text of [html, ...files.filter(isCSS).map((f) => f.text)]) {
+    const l = loadsIn(text);
+    l.chain.forEach((r) => chain.add(r)); l.outside.forEach((r) => outside.add(r)); l.local.forEach((r) => loaded.add(r));
+  }
+  // a link to follow (<a href="about">) that names no file added here is a link, kept as it is
+  const links = [...missing].filter((r) => !loaded.has(r));
+  return {html, files, missing: [...missing].filter((r) => loaded.has(r)), links, unused: wsFiles.filter((f) => !used.has(f)), chain: [...chain], outside: [...outside]};
 }
 function wsDraw() {
   const plan = wsPlan();
   $("ws-addr").textContent = ws ? ws.name + (wsPath() === "/" ? "" : wsPath()) : "";
-  $("ws-refs").innerHTML = plan.files.map((f) => `<li class="ok">${esc(f.path)} &mdash; ${commas(f.bytes.length)} bytes, ${esc(f.type)}</li>`).join("")
-    + plan.missing.map((r) => `<li class="miss">${esc(r)} &mdash; not added: add this file, or it will not load</li>`).join("")
+  $("ws-refs").innerHTML = plan.files.map((f) => `<li class="ok">${esc(f.path)} &mdash; ${commas(f.bytes.length)} bytes, ${esc(f.type)}: inscribed, then linked as /content/&lt;its id&gt;</li>`).join("")
+    + plan.chain.map((r) => `<li class="ok">${esc(r)} &mdash; already on chain</li>`).join("")
+    + plan.missing.map((r) => `<li class="miss">${esc(r)} &mdash; not added: add this file</li>`).join("")
+    + plan.links.map((r) => `<li>${esc(r)} &mdash; a link, kept as it is</li>`).join("")
+    + plan.outside.map((r) => `<li class="miss">${esc(r)} &mdash; not on chain: add the file here, or link it as /content/&lt;inscription id&gt;</li>`).join("")
     + plan.unused.map((f) => `<li>${esc(f.path)} &mdash; the page does not use it, so it is left out</li>`).join("");
   // The preview: every file in as a data: address (the page's own sandbox cannot reach this tab's blob: ones).
   const asData = (f) => f.data;
@@ -528,7 +567,10 @@ function wsDraw() {
   $("ws-count").textContent = `The page: ${commas(pageBytes)} bytes · ${plan.files.length} file(s), ${commas(total)} bytes in all`
     + (pageBytes > max ? ` — the page is over the ${commas(max)} bytes one ord can hold` : "")
     + (big.length ? ` — ${big.map((f) => f.path).join(", ")} over the ${commas(max)} bytes one ord can hold` : "");
-  $("ws-next2").disabled = wsBusy || !plan.html.trim() || pageBytes > max || big.length > 0;
+  if (plan.missing.length || plan.outside.length)
+    $("ws-count").textContent += ` — every file the page uses must be on chain (${commas(plan.missing.length + plan.outside.length)} not yet)`;
+  $("ws-next2").disabled = wsBusy || !plan.html.trim() || pageBytes > max || big.length > 0
+    || plan.missing.length > 0 || plan.outside.length > 0;
   return plan;
 }
 async function wsCheckName() {
@@ -630,7 +672,7 @@ $("ws-go").onclick = async () => {
     $("ws-bar").style.width = `${Math.round(100 * (i + Math.min(Number(s.sent || 0), Number(s.of || 1)) / Number(s.of || 1)) / n)}%`;
     $("ws-says").textContent = `${items[i].label}: ` + (s.wait ? "waiting for a block…" : `${commas(s.sent || 0)} of ${commas(s.of || 1)} sent…`) + " Keep this tab open.";
   };
-  const done = (i, id) => { const li = $(`ws-i${i}`); li.classList.add("done"); li.innerHTML += ` &mdash; <code>${esc(id)}</code>`; };
+  const done = (i, id) => { const li = $(`ws-i${i}`); li.classList.add("done"); li.innerHTML += ` &mdash; <a href="/content/${esc(id)}" target="_blank" rel="noopener"><code>/content/${esc(id)}</code></a>`; };
   try {
     const held = await keysNow();
     if (!held) throw new Error("open your wallet first");

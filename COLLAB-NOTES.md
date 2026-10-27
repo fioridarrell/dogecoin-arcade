@@ -88,6 +88,18 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-27 Creator -> Names website wizard: every file a page uses is a /content link (Claude)
+The operator: "There is a Files this page uses button that allows you to upload a file, but I don't know where that file is
+getting uploaded to all files that a page uses needs to be /content link".
+- create_name.html: a note under "Files the page uses" says where a file goes. It stays in the browser until you
+  inscribe, then becomes an ord of its own, and the page's link to it becomes /content/<its id>. Each file's row says
+  so; step 3 links each done ord as /content/<id>.
+- `loadsIn` reads what the page and its style sheets LOAD (src, poster, data, srcset, url(), <link href>, @import).
+  Each item is a file added here, a /content/<id> (an ord ...i0 or a bare arcade txid: "already on chain"), or
+  data:/blob:/#. Anything else, like an outside https:// or a /path off chain, and any file not added, keeps Next
+  disabled. A link to follow (<a href="about">) is shown as "a link, kept as it is".
+- Browser-checked on a mock of the page; tests/test_web, test_mesh_web, test_name_check and fastgate pass.
+
 ### 2026-10-27 Creator -> Names: one chain's name index failing no longer hides the others (Claude)
 Found checking the live wizard on Strawberry: "Inscribe a website" said "no linked arcade walks this chain yet" for
 ribbit.pepe. `_mesh_site_for` asks every chain that reads ords, and Pepecoin testnet's lookup raised (no walker
