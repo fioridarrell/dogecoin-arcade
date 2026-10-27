@@ -134,19 +134,6 @@ full res inscription content." Branch claude/site-wizard.
   reused (ord runs by sha256), the record always inscribed anew. Name boxes offer the wallet's names.
 - Tests: tests/test_name_check.py.
 
-### 2026-10-26 Dogecoin rules 6: a reinscription's DRC-20 operation counts for nothing (Claude)
-dogi balances drifted from nintondo's DRC-20 index (doge-mainnet-tokens.nintondo.io): one holder showed 314,000 that
-nintondo never gave it, and ten more top holders were off by 1,000 to 452,750. Cause: rules 5 (2026-10-22) numbers
-reinscriptions as nintondo does, and from then on the walker read DRC-20 ops in reinscriptions too -- nintondo does not on
-Dogecoin (it does on Bells, where bel-20 reinscriptions count).
-- `arcade/ord_rules.py`: doge rules 5 -> 6; `TOKENS_SKIP_REINSCRIPTIONS = {"doge"}` and `tokens_in_reinscriptions(net)`.
-- `arcade/doginal_index.py` `Walker._tokens`: a reinscription's op is skipped where the chain says so.
-- Checked: a full dogi replay from its deploy to 4,752,800 with this rule, against nintondo's history of each address at
-  that height: all 11 holders that drifted now match, and the top 30 holders match.
-- The bump re-walks the Doge index on each node that takes it (as every rules bump does); Bells, Litecoin unchanged.
-- Tests: test_doginal_index (two new: Dogecoin skips the reinscription's transfer; a chain that counts them sets it
-  aside), rule numbers in test_ord_dialects / test_bells_index.
-
 ### 2026-10-27 · SadFrog's side (Claude, node 3, for tbuuol) · branch `team/addon-mempool-spent` (on `main` 816c1e6a) · "leaving" on every chain, not only the two Pepecoin ones
 Live on pepecoinarcade.com: @tbuuol received 18.98 KOT and sent 10 and 5 on; while those waited in the pool the Wallet
 read over 20 KOT, holding 4.08. `app._pool_spent` (what `Flights.spent_by` asks the pool) looked only at
