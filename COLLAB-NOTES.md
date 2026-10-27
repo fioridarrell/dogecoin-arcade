@@ -88,6 +88,224 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-26 Dogecoin rules 6: a reinscription's DRC-20 operation counts for nothing (Claude)
+dogi balances drifted from nintondo's DRC-20 index (doge-mainnet-tokens.nintondo.io): one holder showed 314,000 that
+nintondo never gave it, and ten more top holders were off by 1,000 to 452,750. Cause: rules 5 (2026-10-22) numbers
+reinscriptions as nintondo does, and from then on the walker read DRC-20 ops in reinscriptions too -- nintondo does not on
+Dogecoin (it does on Bells, where bel-20 reinscriptions count).
+- `arcade/ord_rules.py`: doge rules 5 -> 6; `TOKENS_SKIP_REINSCRIPTIONS = {"doge"}` and `tokens_in_reinscriptions(net)`.
+- `arcade/doginal_index.py` `Walker._tokens`: a reinscription's op is skipped where the chain says so.
+- Checked: a full dogi replay from its deploy to 4,752,800 with this rule, against nintondo's history of each address at
+  that height: all 11 holders that drifted now match, and the top 30 holders match.
+- The bump re-walks the Doge index on each node that takes it (as every rules bump does); Bells, Litecoin unchanged.
+- Tests: test_doginal_index (two new: Dogecoin skips the reinscription's transfer; a chain that counts them sets it
+  aside), rule numbers in test_ord_dialects / test_bells_index.
+
+### 2026-10-27 · SadFrog's side (Claude, node 3, for tbuuol) · branch `team/addon-mempool-spent` (on `main` 816c1e6a) · "leaving" on every chain, not only the two Pepecoin ones
+Live on pepecoinarcade.com: @tbuuol received 18.98 KOT and sent 10 and 5 on; while those waited in the pool the Wallet
+read over 20 KOT, holding 4.08. `app._pool_spent` (what `Flights.spent_by` asks the pool) looked only at
+`state.messaging`/`state.ledger`; every other chain got an empty pool, so after `FLIGHT_GRACE` (12 s) a coin a waiting
+send had spent was no longer "leaving" and counted again beside the send's change, until the block. Kotia's slow blocks
+showed it; DOGE, LTC, Bells, Luckycoin and Wojakcoin should do the same (read from the code, not seen there).
+- `pool_coins.PoolCoins` also keeps what each read transaction spends and every txid in the pool (`spent()`), from the
+  watcher's pool thread that already reads every chain's pool every 5 s -- never the Core on a page draw (a DOGE pool of
+  thousands).
+- `pool_coins.pool_spent` (used by `_pool_spent` for every chain but the two Pepecoin ones): those spends, plus this
+  node's own sends among txids not read yet (`Flights.spent_in`). A pool not read for 60 s raises, so `spent_by` counts
+  the flights instead, as for a node it cannot ask.
+- Tests: test_pool_coins (new case), test_flights_pool, test_account_mainnet, test_pending_view, test_account_take,
+  test_account_claim, test_doginal_wallet, test_web: 300 passed. The browser suites were not run (too slow on node 3).
+
+### 2026-10-26 · SadFrog's side (Claude, node 2) · branch `team/hardening-r2-wave3` · Arcade Hardening round 2, wave 3: honest prompts
+Wave 3 of "Arcade Hardening, Round 2": the two issues where a player can be tricked into approving something. One
+commit per issue, each with its own tests.
+
+- **#5 blind signing** (`b112d833`): the wallet now builds every text it signs, and never signs one the arcade hands it.
+  - `coins.js` no longer exports `signMessage`. `signWords` signs three fixed shapes only: `realtimeWords` (mesh
+    `arcade-<chain>`, a 64-hex node id, expiry at most 25 h ahead), `grantWords` (seller id, at most 90 days) and
+    `topupWords` (chain, txid, seller id or ""). The words must name the key's own address and no field may hold a
+    newline. The magic is fixed in the page and no longer read from the server.
+  - All 7 places that signed now go through these: `realtimeProof`, `realtimeProofThere`, `llmGrant` (in apps), the
+    LLM tab's grant and top-up, admin's "Sign once", and `service.CertRoom.join` (which checks the same shape with
+    its own magic).
+  - The wallet keeps the first node id it sees on this origin. A different one shows the exact words (`arcadeAsk`'s
+    new `verbatim`) and signs only on a click; with no dialog, nothing is signed.
+  - Server checks are unchanged: they already rebuilt each text from their own data. `/realtime/hello`,
+    `/account/llm/grant` and `/account/llm/topup` no longer send `magic`.
+  - Left: an arcade hostile from a player's first visit can still name another node in a realtime certificate (at
+    most about a day, testnet mesh). `coinsDigest` still signs the server's `asker` host (a hashed, one-minute,
+    lookup-only digest; checking `location.host` would break visits under another name).
+- **#7 prompts over games** (`3807c153`), all five pieces:
+  - (a) The camera layer is at z-index 50 (`MEDIA_Z`): over the game's frame, under the arcade's cards, and hidden
+    while any card is open.
+  - (b) `pageSends()` only answers requests from the page framed here (`arcadeFramed`), and names the requester from
+    the chain (`arcadeRequester`: the game card's name and the publisher's @tag, else the address). The game's
+    `label` is no longer shown to players; its `note` shows as `The page says: "…"`. The inscribe card names it the
+    same way.
+  - (c) A page with no game card is asked with the Wallet access card, and a yes is kept per page. A frame with no
+    inscription id is asked every time. `_game_of_page` returns `{game: false, publisher, address}` for it.
+  - (d) `arcadeAsk` focuses Cancel. On a page that frames an inscription, the approve button stays disabled for
+    800 ms (`arcadeArm`).
+  - (e) Full screen keeps a trusted strip under the game's frame: "🔒 <brand> never asks for your password inside a
+    game". The frame is shortened by its height, so the game can't draw over it.
+  - Behaviour change: shops and mintpads now ask for wallet access once per page before their first mint or send.
+    The operator's approvals page still shows "calling itself <label>" (the operator's view, marked as the page's
+    own words).
+- Docs: `inscription-api.md` (players no longer see `label`), `games.md` (the strip and the cards).
+- Tests: new test_blind_signing (9), test_game_prompts (2) and test_game_prompts_browser (6). The browser tests that
+  click approve now wait for it to be enabled; the inscribe_bridge and page_autosign tests allow wallet access for
+  their no-card page first.
+
+### 2026-10-26 · SadFrog's side (Claude, node 2) · branch `team/digibyte` (on `main` 366b78e) · DigiByte as an add-on chain, DigiByte ordinals; Kotia script addresses
+The operator's "Eventually, we want to add Digi bite" (2026-10-18), done the way of the Bells/Lucky/Kotia/Wojakcoin branches.
+Three commits, each self-contained, plus this entry:
+- **54c2083 DigiByte (DGB).** `DIGIBYTE` = `LITECOIN` with DigiByte Core 9.26.7's chainparams: P2PKH 30 (`D`, the same byte as
+  Dogecoin's: the same key gives the same `D...` string on both chains, so nothing is refused for it), P2SH 63 (`S`), WIF 128,
+  bech32 `dgb`, ports 14022/12024. **`pow_algo=""`:** five algorithms, picked by version bits; a borrowed block is proved by hash,
+  merkle root and linkage, and Admin says the work is the sharer's word (the existing rawchain rule, first used here). BIP65/CSV/
+  SegWit buried at 4,394,880, so `cltv_enforced` stays True and swaps lock (at an `S` address). Floor 24,462,000. Swaps and takes
+  `None`. Checked on a DigiByte 9.26.7 node: block 0, `getdeploymentinfo` (Taproot 21,168,000, DigiDollar/AlgoLock 23,869,440),
+  the arcade's own `D`/`S`/`dgb1q`/`dgb1p` encodings valid, WIF 128 signs and verifies. **A `3` address (v5) is refused by the
+  node although chainparams still list it as SCRIPT_ADDRESS_OLD**, so the payee check refuses it too.
+  - `txbuild.SCRIPTHASH_VERSIONS += 63`: without it an `S` payee got a key-hash script.
+  - **DigiByte ordinals** follow reallyshadydev/wonky-ord-digibyte (`first_inscription_height` 0, the first input's script,
+    0 parts is nothing, a new inscription only when none sits at offset 0) and digibyteordinals.js (240-byte parts): Doginals
+    dialect, `STARTS["dgb"]=0`, reinscriptions not numbered, MOVED and swappable, Creator -> Ords. Its index is off until
+    Admin -> Ords, and from block 0 it is a 24-million-block walk.
+  - Browser tables, BIG 1,000 DGB, badge `G`, `coin-dgb.png` (DigiByte Core's Qt icon), docs `digibyte.md`, `tests/test_digibyte.py`
+    with a real block (24,450,197, sha256d, fetched from a peer with `getblockfrompeer`).
+- **b3b1440 Kotia script addresses (a fix, apart from DigiByte).** Kotia's P2SH 45 was in neither `SCRIPTHASH_VERSIONS` nor
+  `unpayable_versions`, so `_check_address` let a `K...` script address through and `p2pkh_script` paid it as a key hash: lost
+  coins. 45 is no chain's key byte, so it is added; a test now holds every chain's P2SH byte to "paid as a script or refused".
+- **0feeefa DigiByte tokens are `dgb-20`.** wonky-ord-digibyte runs DRC-20's code under its own `"p"` (src/drc20/params.rs
+  `PROTOCOL_LITERAL = "dgb-20"`). Without `TOKEN_PROTOCOLS["dgb"]` the index read `drc-20` inscriptions as DigiByte tokens and
+  missed every `dgb-20` one. No index has walked DigiByte yet, so no rules bump.
+- **Tests:** the 63 files the change touches, on this branch and on `main` 2d15953 side by side: no failure on the branch that is
+  not on `main`. Main's own six fail here too: test_docs (twice: the private DECISIONS.md is not in the mirror),
+  test_doginals_exchange, test_doginal_swap, test_escrow_web and test_ord_slim (one each). Rebased onto 366b78e (2026-10-27): the DigiByte, ord, table, wallet, docs and web files (796 tests)
+  pass but for main's own three (test_docs twice, test_ord_slim once), which fail on `main` 816c1e6 the same way.
+- **Needs from the other side:** apply the two commits like the Wojakcoin branch. A node that wants DigiByte runs digibyted 9.26.7
+  with `~/.digibyte/digibyte.conf` (`txindex=1`, RPC on 127.0.0.1:14022). Open question: a scanned first-envelope height for the
+  DGB ord index would shorten the walk, but changing `STARTS` needs a new protocol word, so it stays at the indexer's 0.
+
+### 2026-10-26 · SadFrog's side (Claude, node 2) · branch `team/ltc-ord` · Litecoin's ords read as ord-litecoin reads them
+SadFrog asked for Litecoin ordinals to match chikun.market. ord.chikun.market (also ordinalslite.com) and litescribe's
+ordliteverse.com both run stock ynohtna92/ord-litecoin 0.20, and they agree with each other exactly. Our walk recorded
+no Taproot inscriptions on Litecoin at all; #24 fixed that, and this makes the rest match ord itself. Rules: Litecoin 6,
+main and test.
+
+- **`arcade/ord_envelope.py`:** envelope.rs, tag.rs and inscription.rs `pointer()` ported. It reads every input's
+  tapscript; a script that does not parse drops its input; OP_1NEGATE and OP_1..16 count as pushes (pushnum); it
+  handles stutter, incomplete, duplicate and unrecognized even fields, and the body after the first even empty push.
+  Its tests are envelope.rs's own.
+- **`Walker._ord_block`** (`ord_rules.ORD_LITE`), inscription_updater.rs:
+  - witness envelopes alone (ord-litecoin never sees the Doginals kind);
+  - ord's nine curses, in its order;
+  - cursed numbers below zero before the jubilee (2,608,704; testnet 3,096,576), "vindicated" and numbered on after;
+  - numbered where they land, in litoshi order; a pointer inside the outputs moves a new one;
+  - unbound (a worthless input, an unknown even field) has no place;
+  - what lands past the outputs floats to the coinbase (indexed last) and is numbered after the rest of the block;
+    past the coinbase's outputs it is lost. The fees for that are read only in a block that needs them.
+  - ord's charms are kept in a `charm` table, and numbers are looked up by `insc_num_lite`.
+- **LTC-20** (`"p":"ltc-20"`) by BRC-20's rules: no shortest body, and a cursed inscription is no token operation.
+  Whether vindicated ones count, as chikun counts them, is not yet checked against /v1/ltc20 transactions.
+
+**Checked against ord.chikun.market, every inscription in order and every number:**
+- From Litecoin's first inscription block, walked with this code to 2,470,500, then whole blocks compared one
+  inscription at a time: 2,425,370 / 2,425,898 / 2,425,902 / 2,426,272 / 2,431,418 / **2,467,075 and 2,467,078 (the
+  first cursed)** / 2,470,485. That is 1,978 inscriptions, 0 wrong.
+- After the jubilee (counter seeded from chikun, sampled numbers): 2,608,704 (the jubilee: 1,645 of 1,645 in order),
+  2,620,839 (1,055), 2,700,000 (293), 2,721,818 (245), 3,201,097 (84), 3,201,257.
+
+Tests: `tests/test_ord_envelope.py` (11), `tests/test_ord_lite.py` (6: curses, landing, pointer, unbound, the
+coinbase, the jubilee, a reinscription on a cursed sat, stitched == walked). Older tests that used Litecoin for the
+Doginals kind now use Luckycoin. The ord, Bells, explorer, web and public suites give 556 passed.
+`test_a_lender_that_goes_quiet_rests_and_the_other_lanes_go_on` failed once under load and passes alone, on main too.
+
+### 2026-10-26 · SadFrog's side (Claude, node 2) · branch `team/explore-pr` · Explore: every chain's ords, tokens, assets and known collections
+SadFrog: "lets make an explore tab that has tabs for every coin the node has ordinals/omni on ... a user should be able
+to look up known collections, inscription id's, inscription numbers, file types"; then "pepinals, doginals and bellinals
+collections pulled from known collections and searchable from our indexes and arcades - the known collections should be
+shared across arcades to be agreed upon" (over the mesh, not on chain); then "sorting and filters and lazy loading one
+at a time on demand". Running on node 2 since 10-25.
+
+- **The Explore tab** (`/explore`, open to anybody, GET only, 120 questions a minute per visitor):
+  - a tab per coin this arcade has an ord index of (`ord_chains.EXPLORE_ORDER`: Dogecoin, Pepecoin, Bellscoin,
+    Litecoin, then the rest);
+  - a protocol menu per coin: ords, the chain's -20 tokens (`ord_rules.token_protocol`), Omni on Litecoin (a
+    placeholder until OmniLite is wired), and "Arcade assets (Omni)", the arcade's own tokens and NFTs from the
+    chain's ledger;
+  - search by number (negative ones too), id, txid:vout, address or name, and a large viewer with previous/next;
+  - pages of one content type (`DoginalIndex.typed`, a NEWER_QUESTION: counts nothing, reads windows by number);
+  - token pages with holder lists.
+  The Admin -> Ords explorer's questions sit behind `/explore/api/*`, sharing `_ords_question` (minus the ones that
+  count a whole chain). A linked arcade's answer gets its holder from this arcade's own Core (`_own_owners`). Bytes
+  posing as a content type are said as unreadable.
+- **Known collections** (`arcade/known_collections.py`, `arcade/mesh/collectionshare.py`):
+  - **Import:** from Nintondo's public search API (`/pub/collections`, `/pub/search`). It is the operator's opt-in
+    (Admin -> Ords -> Known collections, off by default), since the 2026-10-15 rule stopped reading ords from outside
+    APIs. One request a second per host, resumable, refreshed daily.
+  - **Demand mode (the default):** every collection is listed (name, supply, holders, height, number range), and a
+    collection's pieces are fetched only when someone opens it. "all" imports everything (~885k pieces: Dogecoin 700k,
+    Bells 156k, Pepecoin 27.5k; about 310 MB).
+  - **Fingerprint:** `sha256(chain\nslug\n + sorted ids)`.
+  - **Agreement over the mesh** (frame kind "kc"): arcades trade per-chain digests and indexes, and count agreement as
+    the arcades holding the same fingerprint. A list fetched from a peer comes in 60 KB parts and is kept only if it
+    hashes to the fingerprint. In demand mode the mesh fetches only held or wanted collections.
+  - **In Explore:** collections are searchable with sorting (size, name, holders, newest, agreed) and filters (source,
+    complete, size, agreement), loaded 30 at a time as you scroll. A collection's pieces come 48 at a time; one not
+    fetched yet shows "Fetching from Nintondo: N of M" while it comes. The viewer says "In collection: Name #k".
+
+Tests: `tests/test_explore.py`, `tests/test_known_collections.py`, plus the explorer, index, web, public, admin and mesh
+files: 517 passed before the search work, and its own 36 since. One mesh test failed once under heavy load and passed
+on every rerun.
+
+### 2026-10-26 · SadFrog's side (Claude, node 2) · branch `team/hardening-r2-wave2` · Arcade Hardening round 2, wave 2: accounts
+Wave 2 of "Arcade Hardening, Round 2", the account issues from the 2026-10-25 review. SadFrog's decisions: "12-character
+minimum for new passwords, and existing short-password users are asked to change"; sessions "14 days, renewed by use,
+plus 'sign out everywhere'". One commit per issue, each with its own tests.
+
+- **#12 passwords** (`6d3b74b0`): a new password is at least 12 characters, counted as a person counts them, wherever
+  one is chosen: sign-up, the game door, restore, join (the node's own and keep-a-copy), and the admin password.
+  - An account's password never reaches the node, so for accounts the floor is in the browser (`signin.js
+    MIN_PASSWORD`, `wallet_js.js` before every `seal`). The operator's password is also refused by the node
+    (`accounts.MIN_PASSWORD`, `Credentials.set`, `/admin/api/password`).
+  - A shorter existing password still signs in. That tab then shows a "Set a new password" bar (dismissible, nothing
+    stored but a mark in sessionStorage).
+  - This supersedes D-157's "nothing here will stop you".
+  - A gap remains: the only change-password path for accounts is /restore, which needs the twelve words. A re-seal of
+    the wallet already open in the tab would close it.
+- **#13 sessions** (`20ca2a02`): `SESSION_DAYS` 14, renewed by use.
+  - The DB is written at most once a day. The cookie is now sent again on renewal by `_SessionRenewal`; before, it
+    kept its first max_age.
+  - Existing sessions take 16 days off once, at the first open (`user_version` 1).
+  - `POST /auth/logout-everywhere` and a "Sign out everywhere" button on /me.
+  - A re-sealed wallet (`/account/vault`) or a changed operator password ends the account's OTHER sessions.
+- **#6 sign-in relay** (`52eb598e`): the browser signs its own address (`location.origin`) in the login text, and the
+  node refuses one signed for any address not its own (`_signs_in_here`). Its own addresses are:
+  - `public_hosts`;
+  - the hostnames in its cloudflared config;
+  - localhost and loopback on its own machine;
+  - the IP a LAN connection arrived at.
+  The pages host is never one of them. Nonce and expiry are unchanged. **Before release: every name a node serves must
+  be in `public_hosts` or its tunnel config.** A node behind Caddy or nginx serving several names (pepecoinarcade.com
+  with ashvale.party) would otherwise refuse sign-ins on the unlisted ones.
+- **#15 split accounts** (`dac5a509`): `GET /signup/<name>` also asks other arcades (`_vault_elsewhere`, at most
+  2.5 s, 20 uncached checks per client per 5 minutes) and says "@x already has an account on <host>: sign in
+  instead".
+  - `POST /signup` refuses a name another arcade holds under a different key (at most 4 s; the same key is the same
+    person bringing their account). With no arcade answering, sign-up goes ahead as before.
+  - The join page and the game door say "Played on another arcade? Sign in".
+  - Admin -> People & brand lists names held elsewhere under another key, read-only, paced at one ask per arcade per
+    30 s.
+  - Open: an announced arcade answering for every name could block fresh sign-ups of unclaimed names. A claim on the
+    chain still wins, and the refusal names the host, but there is no way yet to distrust a host.
+
+Tests: `test_password_floor.py`, `test_session_life.py`, 12 new in `test_auth_web.py` / `test_accounts.py` /
+`test_tunnel.py`, and `test_split_names.py`, plus every sign-in, sign-up, door, session, password, web, public and admin
+file: 681 passed. The only failure is `test_signup_browser`'s /tmp upload, which snap Firefox can't read on this
+machine.
+
 ### 2026-10-27 arcade-web raises its own open-file limit (Claude)
 .25 went down twice in an hour: "[Errno 24] Too many open files" at the usual soft limit of 1,024. Each request thread
 keeps a read connection (file + WAL) to every chain's ord index and ledger, and with a dozen chains ~50 threads ran
