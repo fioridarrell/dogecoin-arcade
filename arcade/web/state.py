@@ -1849,6 +1849,19 @@ class AppState:
         done.wait(wait)
         return kept.get(net)
 
+    def ord_working(self) -> dict:
+        """The indexes the Runner steps: every chain this arcade keeps or helps scan (Admin -> Ords "Keep the full
+        index" / "Help scan") asked to open -- that is the operator's choice, not a page's -- plus any other chain a page
+        opened. Without this, lazy opening (2026-10-27) left a walking arcade idle after each restart until somebody
+        visited that chain (the operator saw Strawberry's Dogecoin copy stop at 56%)."""
+        from ..doginal_index import STARTS
+        for chain in getattr(self, "all_chains", ()):
+            net = chain.network
+            if net in STARTS and net not in (getattr(self, "_ord_indexes", None) or {}) \
+                    and self.ord_mode(net) in ("walk", "help"):
+                self.ord_index(net, wait=0)
+        return self.ord_indexes()
+
     def _open_ord_index(self, chain, done) -> None:
         from ..doginal_index import DoginalIndex
         net = chain.network

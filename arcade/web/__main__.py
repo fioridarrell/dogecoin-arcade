@@ -281,7 +281,7 @@ def main(argv: list[str] | None = None) -> int:
     # of it; each chain switched on or off in Admin -> Ords.
     try:
         from ..doginal_index import Runner
-        Runner(state.ord_indexes).start()
+        Runner(state.ord_working).start()              # the kept and helped chains open in the background
     except Exception as exc:
         print(f"  the ord indexes did not start: {exc}")
 

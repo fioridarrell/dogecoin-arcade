@@ -88,6 +88,12 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-27 Kept and helped chains open for the walk at start (Claude)
+Lazy ord indexes (this morning) left a walking arcade idle after each restart until a page asked for that chain:
+The operator saw Strawberry's Dogecoin copy stuck at 56% (block 5,626,686). `state.ord_working()` asks every chain whose
+Admin -> Ords mode is Keep the full index or Help scan to open (in the background, as before) and gives the Runner
+those plus whatever pages opened. Watch-only and off chains still open only when a page needs them.
+
 ### 2026-10-27 Names website wizard: the example HTML links its picture as /content/<id> (Claude)
 The operator: "In the example HTML it should show content link not src link". The HTML box's example now reads
 `<img src="/content/4b435b86...i0">` (the Doge picture on me-seeks.mesh/show), not `<img src="cat.png">`.

@@ -296,3 +296,19 @@ def test_a_locked_index_never_holds_a_page_longer_than_its_wait(client, tmp_path
         holder.execute("ROLLBACK")
         holder.close()
     assert state.ord_index("main", wait=90) is not None, "opened once the file was let go"
+
+
+def test_a_chain_this_arcade_keeps_opens_for_the_walk_without_a_visit(client):
+    """Lazy opening is for pages; a chain the operator set to Keep the full index (or Help scan) is opened for the
+    Runner at once (2026-10-27: Strawberry's Dogecoin walk sat idle after a restart until somebody visited)."""
+    app, state = client
+    state.set_setting("ord_index:main", "walk")
+    import time
+    state.ord_working()
+    for _ in range(300):
+        if "main" in state.ord_indexes():
+            break
+        time.sleep(0.1)
+    assert "main" in state.ord_working()
+    state.set_setting("ord_index:doge", "off")
+    assert "doge" not in state.ord_working(), "a chain switched off is never opened for the walk"
