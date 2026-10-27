@@ -80,7 +80,7 @@
     must too. <b>Share</b> (on unless you untick it) lets other arcades use a Core that runs here: they can
     read blocks and the mempool and send transactions people signed, never touch this node's wallet.</p>
   <div class="tablewrap"><table class="admintable">
-    <thead><tr><th>Chain</th><th>Core</th><th>Share</th><th>Faucet</th><th>Now</th></tr></thead>
+    <thead><tr><th>Chain</th><th>Core</th><th>Share</th><th>Faucet</th><th>Now</th><th>Node here</th></tr></thead>
     <tbody id="chainrows"></tbody>
   </table></div>
   <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
@@ -1976,6 +1976,7 @@ section.panel h2{margin-top:0}
     });
 
     drawChains(d.chains || {});
+    loadNodes();
 
     // faucet + switches
     $('faucetdaily').value = d.faucet.daily ? coins(d.faucet.daily) : '';
@@ -2100,6 +2101,55 @@ section.panel h2{margin-top:0}
   }
 
   var CORE_WORDS = {here: 'Runs here', borrow: 'Borrow a shared Core', off: 'Off'};
+  // Install a node (2026-10-27: "From the chains and coins tab, the operator should be able to decide to install a
+  // block chain node on the computer. The storage cost should also be displayed for chains"): /admin/api/cores/install.
+  var NODES = null;
+  function gb(b) { return b >= 1e9 ? (b / 1e9).toFixed(b >= 1e11 ? 0 : 1) + ' GB' : Math.max(1, Math.round(b / 1e6)) + ' MB'; }
+  function loadNodes() {
+    fetch('/admin/api/cores/install', {credentials: 'same-origin', cache: 'no-store'}).then(function (r) { return r.json(); })
+      .then(function (d) { NODES = d; document.querySelectorAll('td.nodecell').forEach(function (td) { fillNode(td); }); })
+      .catch(function () {});
+  }
+  function nodeCell(r) {
+    var td = document.createElement('td'); td.className = 'nodecell muted'; td.dataset.net = r.net; td.dataset.now = r.now;
+    fillNode(td);
+    return td;
+  }
+  function fillNode(td) {
+    td.textContent = '';
+    var x = NODES && NODES.rows && NODES.rows[td.dataset.net];
+    if (!x) { td.textContent = NODES ? '' : '…'; return; }
+    var st = x.storage, bits = [];
+    bits.push(st ? 'takes about ' + gb(st.bytes) + (st.who === 'this arcade' ? ' here' : ' (as on ' + st.who + ')')
+                 : 'storage not reported by any linked arcade yet');
+    if (x.ord && x.ord.bytes) bits.push('its full ord index about ' + gb(x.ord.bytes));
+    var line = document.createElement('div'); line.textContent = bits.join(' · '); td.appendChild(line);
+    var j = x.job;
+    if (j && j.state === 'working') {
+      td.appendChild(text('div', j.step + (j.total ? ' ' + Math.round(100 * (j.done || 0) / j.total) + '%' : '')));
+      setTimeout(loadNodes, 2000);
+      return;
+    }
+    if (j && j.state === 'failed') td.appendChild(text('div', 'install failed: ' + j.step, 'idx-bad'));
+    if (j && j.state === 'done') td.appendChild(text('div', j.step));
+    if (td.dataset.now === 'here' || x.installed) { if (x.installed) td.appendChild(text('div', 'installed by this arcade')); return; }
+    if (!x.available) { td.appendChild(text('div', x.why || 'cannot be installed here')); return; }
+    var free = NODES.free || 0, need = st ? st.bytes : 0;
+    var b = document.createElement('button'); b.type = 'button'; b.className = 'small'; b.textContent = 'Install a node';
+    b.disabled = !!(need && free < need);
+    b.title = need && free < need ? 'Not enough free disk' : '';
+    b.onclick = function () {
+      if (!confirm('Install ' + td.dataset.net.toUpperCase() + ' Core ' + x.version + ' on this machine?\n\nDownload: ' + gb(x.download)
+                   + '\nStorage once synced: ' + (need ? 'about ' + gb(need) : 'not known yet') + '\nFree on this disk: ' + gb(free)
+                   + '\n\nIt downloads the official release, checks its SHA-256, starts the node and syncs the whole chain '
+                   + '(hours to days). The arcade reloads to read it.')) return;
+      b.disabled = true;
+      call('/admin/api/cores/install', {net: td.dataset.net}).then(function () { loadNodes(); })
+        .catch(function (e) { b.disabled = false; say(e.message, 'err'); });
+    };
+    td.appendChild(b);
+    td.appendChild(text('div', gb(free) + ' free here'));
+  }
   function drawChains(c) {
     var tb = $('chainrows'); tb.textContent = '';
     (c.rows || []).forEach(function (r) {
@@ -2166,12 +2216,13 @@ section.panel h2{margin-top:0}
         said.appendChild(rb);
       }
       tr.appendChild(said);
+      tr.appendChild(nodeCell(r));
       tb.appendChild(tr);
     });
     var un = c.unknown || [];
     if (un.length) {
       var tr2 = document.createElement('tr');
-      var td2 = document.createElement('td'); td2.colSpan = 5; td2.className = 'muted';
+      var td2 = document.createElement('td'); td2.colSpan = 6; td2.className = 'muted';
       td2.textContent = 'Also shared by linked arcades, needing a newer version of this arcade: '
         + un.map(function (u) { return u[0] + ' (' + u[1] + ')'; }).join(', ');
       tr2.appendChild(td2); tb.appendChild(tr2);
@@ -2685,6 +2736,10 @@ section.panel h2{margin-top:0}
           + ordEsc(ordName((copies.filter(function (c) { return c.node === r.walkers[0].node; })[0]) || {node: r.walkers[0].node})) : '') + '.'
       : 'This arcade takes <b>no part</b> in this chain’s ords.';
     box.appendChild(ordEl('div', 'muted', what));
+    // What keeping the full index takes (arcade/disk_sizes.py, 2026-10-27): here, or as a linked arcade reports it.
+    if (r.storage && r.storage.bytes) box.appendChild(ordEl('div', 'muted', 'Keeping the full index takes about '
+      + (r.storage.bytes >= 1e9 ? (r.storage.bytes / 1e9).toFixed(1) + ' GB' : Math.round(r.storage.bytes / 1e6) + ' MB')
+      + (r.storage.who === 'this arcade' ? ' here' : ' (as on ' + ordEsc(r.storage.who) + ')') + '.'));
     // The coin values the walk keeps on disk (2026-10-25): chunks walked before they were kept, brought in by the lanes.
     var vals = r.values;
     if (r.mode === 'walk' && vals && vals.behind_chunks > vals.brought_in)

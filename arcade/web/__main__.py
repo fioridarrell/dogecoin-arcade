@@ -284,6 +284,14 @@ def main(argv: list[str] | None = None) -> int:
         Runner(state.ord_working).start()              # the kept and helped chains open in the background
     except Exception as exc:
         print(f"  the ord indexes did not start: {exc}")
+    # The Cores this arcade installed itself (Admin -> Coins & chains -> Install a node, arcade/core_install.py): started
+    # again with the arcade when they are not running.
+    try:
+        from ..core_install import start_installed
+        for net in start_installed(state):
+            print(f"  started the {net} node this arcade installed")
+    except Exception as exc:
+        print(f"  the nodes this arcade installed did not start: {exc}")
     # The sites search of each chain this arcade hosts (arcade/sites_index.py; Admin -> Ords -> Sites search), fed by
     # that chain's ord walk.
     try:

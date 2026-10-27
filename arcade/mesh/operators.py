@@ -32,6 +32,8 @@ import re
 import time
 from typing import Any, Callable
 
+from ..disk_sizes import clean as clean_disk
+
 log = logging.getLogger("arcade.mesh")
 
 #: A public name an arcade is published under, as a page would show it: letters, digits, dots, hyphens, an optional port.
@@ -81,6 +83,8 @@ class OperatorsShare:
             "version": str(header.get("version") or "")[:40],
             "hosts": [h for h in hosts[:4] if isinstance(h, str) and _HOST.match(h)],
             "lora": header.get("lora") is True,
+            # What its chains take on its disk (arcade/disk_sizes.py, 2026-10-27): its word, shown as "about".
+            "disk": clean_disk(header.get("disk")),
             "at": time.time()}
         if "sites" in header and self.heard is not None:
             from ..affiliates import clean_sites

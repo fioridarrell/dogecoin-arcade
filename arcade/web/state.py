@@ -1858,6 +1858,21 @@ class AppState:
         done.wait(wait)
         return kept.get(net)
 
+    def disk_sizes(self):
+        """This arcade's own disk measurements (arcade/disk_sizes.py), one for the process."""
+        sizes = self.__dict__.get("_disk_sizes")
+        if sizes is None:
+            from ..disk_sizes import Sizes
+            sizes = self._disk_sizes = Sizes(self)
+        return sizes
+
+    def disk_estimate(self, net: str) -> dict:
+        """{core, ord: {bytes, who}}: this arcade's own figure, or the largest a linked arcade reported."""
+        from ..disk_sizes import estimate
+        operators = getattr(getattr(self, "mesh", None), "operators", None)
+        peers = dict(getattr(operators, "peers", {}) or {}) if operators is not None else {}
+        return estimate(net, self.disk_sizes().own(), peers)
+
     def ord_working(self) -> dict:
         """The indexes the Runner steps: every chain this arcade keeps or helps scan (Admin -> Ords "Keep the full
         index" / "Help scan") asked to open -- that is the operator's choice, not a page's -- plus any other chain a page

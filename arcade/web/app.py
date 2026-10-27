@@ -28367,6 +28367,9 @@ def create_app(state: AppState) -> FastAPI:
                 "agreed_pct": round(100 * (st.get("agreed") or 0) / ready, 2) if ready else 0.0,
                 # What the index takes on disk, its write-ahead log included (2026-10-20).
                 "disk": _index_bytes(index),
+                # What keeping it takes, here or as a linked arcade reports (arcade/disk_sizes.py, 2026-10-27:
+                # the storage cost known before an operator chooses to keep an index).
+                "storage": state.disk_estimate(net).get("ord"),
             })
         import os
         import shutil
@@ -29480,6 +29483,35 @@ def create_app(state: AppState) -> FastAPI:
                 if supply not in state.FAUCET_SUPPLIES:
                     raise ValueError(f"{net}: the faucet is stocked by \"button\" or \"auto\"")
                 state.set_setting(f"faucet_supply:{net}", supply)
+
+    @app.get("/admin/api/cores/install")
+    def admin_cores_install_get(request: Request):
+        """Coins & chains (2026-10-27: "the operator should be able to decide to install a block chain node on the
+        computer. The storage cost should also be displayed for chains"): for each add-on chain, whether its official
+        Core can be installed here, the storage it takes (here or as a linked arcade reports), any install under way,
+        and this disk's free space (arcade/core_install.py, arcade/disk_sizes.py)."""
+        from .. import core_install
+        _admin_check(request)
+        nets = [n for n, p in NETWORKS.items() if p.addon]
+        return JSONResponse(core_install.summary(state, nets, lambda n: NETWORKS[n]),
+                            headers={"Cache-Control": "no-store"})
+
+    @app.post("/admin/api/cores/install")
+    def admin_cores_install(request: Request, payload: Any = Body(None)):
+        """Install `net`'s Core here: downloaded, checked against its pinned SHA-256, its config written, started, and
+        the arcade reloaded to read it."""
+        from .. import core_install
+        _admin_check(request, write=True)
+        net = str((payload or {}).get("net") or "") if isinstance(payload, dict) else ""
+        params = NETWORKS.get(net)
+        if params is None or not params.addon:
+            return JSONResponse({"detail": "not a chain that can be installed here"}, status_code=400)
+        need = (state.disk_estimate(net).get("core") or {}).get("bytes")
+        try:
+            job = core_install.installer(state).start(net, params, core_install.free_bytes(Path(state.home)), need)
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        return JSONResponse({"ok": True, "job": job})
 
     @app.post("/admin/api/cores")
     def admin_cores(request: Request, payload: Any = Body(None)):

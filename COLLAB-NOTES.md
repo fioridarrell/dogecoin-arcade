@@ -88,6 +88,25 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-27 Install a node from Coins & chains; every chain's disk cost said across the mesh (Claude)
+The operator: "From the chains and coins tab, the operator should be able to decide to install a block chain node on the
+computer. The storage cost should also be displayed for chains"; "The size of all indexes should be broadcast to the
+network so that users can decide based on what the storage cost will be". Asked how: the arcade installs it.
+- arcade/core_install.py: RELEASES pinned 2026-10-27 per chain and machine (x86_64, aarch64) -- Dogecoin 1.14.9,
+  Litecoin 0.21.5.8 (main and testnet), Bellscoin 3.0.0-rc2, Luckycoin 5.0.1, Wojakcoin 1.21.3.0, DigiByte 9.26.7. Each
+  SHA-256 compared with the release's published sums (Bellscoin has none; Luckycoin none for x86_64: pinned as
+  downloaded). Kotia NOT_OFFERED (x86_64-only v2.4, newer than the 1.0.0 the arcade was written for). Install: download,
+  check the pin, unpack under ~/.dogecoinarcade/cores/, write ~/<node_dir>/<node_conf> (server, txindex, prune=0, RPC
+  on 127.0.0.1 with a random password; never over an existing config), setting core_installed:<net>, core:<net>=here,
+  start (systemd-run --user unit arcade-core-<name>, Restart=on-failure, so a restart of the arcade never stops it;
+  else a daemon of its own), then the supervisor's HUP reload. __main__ starts installed Cores that are not running.
+  GET/POST /admin/api/cores/install (write check); refused with less free disk than the chain's storage estimate.
+- arcade/disk_sizes.py: each chain's Core folder and ord index measured every 6 h on a thread; operator hello "me"
+  gains `disk` {net: {core, ord}} (operators.py keeps it cleaned); state.disk_estimate(net) = this arcade's figure or
+  the largest a linked arcade said. Coins & chains: a "Node here" column (storage, free disk, Install a node, progress);
+  Ords: "Keeping the full index takes about X (as on @tag)".
+- Tests: tests/test_core_install.py (10).
+
 ### 2026-10-27 Admin -> Ords never waits for a count (Claude)
 The operator: "The admin ORD tab loads painfully slow". A first status after a restart summed tables of tens of millions of
 rows (block, insc) -- on .25's disk for minutes, with every Ords request queued behind it (400 s seen today).
