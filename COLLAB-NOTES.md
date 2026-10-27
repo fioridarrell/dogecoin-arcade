@@ -88,6 +88,30 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-26 The Browser: every name's site; pictures on .mesh pages (Claude)
+The operator: "Instead of mesh browser call the app browser. When it's installed on a T deck it should be the .mesh domains
+only; when it is opened on the PWA or website it should be able to explore all p:dns names", "small size images on
+.mesh ... load from the top to the bottom". His picks: holder's site with no limits; every chain the arcade reads; a
+record whose pages are MeshText, HTML or another inscription; small pictures drawn top-down.
+- mesh_web: `site_name` (spec reading, else JSON; never a block map), `page_kind`, `pictures_of`; a .mesh record stays
+  3,000 bytes of MeshText; any other name's is up to RECORD_MAX (ord_rules.PROTOCOL_MAX, what the indexer reads a "p"
+  from) and its pages may be {"html"} or {"id"}. DoginalIndex.mesh() takes any name (holder: spec; not .mesh, the first
+  reading with a claim); mesh_directory(mesh_only=False) via `{"what": "mesh_directory", "all": true}`.
+- arcade/mesh_picture.py: MESH PICTURE (u8 v1, u16 w, u16 h, u8 colours, RGB565 palette, bands of zlib rows of about
+  170 bytes each); <= 300x200, 16 colours (exact when a picture has <= 16; median cut + k-means otherwise), <= 8 KB.
+  Needs Pillow: added to the [lora] extra and Admin -> Meshtastic's install list (not a required module).
+- meshweb.py: /r/mesh/picture/<id> (made from what /content serves, so screened; kept 200), /r/sites, /r/site/<addr>
+  (?chain=, 300 + choices when on several chains), /site/<chain>/<name>/<path> (HTML with CONTENT_HEADERS sandbox;
+  an {"id"} page redirects to /content), /browser (arcade/web/browser.html, the same file as the App Store card).
+  door: /browser and /site public shapes; /site/ in PAGES_DOOR (the card runs on the pages host).
+- Creator -> Names: "Publish a site" for any name the account holds, on that name's chain; page type picker (not
+  .mesh); picture previews.
+- arcade/lora from arcade-lora 92f88e3: PIC_REQ 0x1F / PIC 0x24 (PROTOCOL.md). Firmware device-ui d179b43: ui.picture,
+  Joiner::prefix, bands inflated straight into an LVGL I4 image as parts arrive, 16 kept on flash.
+- me-seeks.mesh has a /show page (record fdeb30e6...i0) with four pictures inscribed by @strawberry (the operator asked):
+  Doge d.4b435b86...i0 (made locally with Qwen-Image), sunset d737d773...i0, T-Deck 328c7745...i0, button e3c4c364...i0.
+- Tests: tests/test_mesh_web.py (any-name sites, pictures, routes); arcade-lora test_c_apps/test_c_client/test_gateway.
+
 ### 2026-10-26 The T-Deck builds its own letters; ord coins never spent (Claude)
 The operator: "Can't the T-Deck build the transaction?" / "Is it going to protect ord coins from spending?" -- a letter over
 LoRa was MAIL_POST up, a three-part OFFER down, SIGN up, SENT down; now it is one BROADCAST up and one SENT down.

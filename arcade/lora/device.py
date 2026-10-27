@@ -119,6 +119,19 @@ class DeviceClient:
             status, body = status & 0x7F, zlib.decompress(body)
         return {"status": status, "page": page, "note": note, "body": body.decode("utf-8", "replace")}
 
+    def picture(self, iid: str) -> dict:
+        """A picture on a .mesh page, piece by piece (PROTOCOL.md PIC): {"status", "note", "body"}. Needs no sign-in."""
+        body, offset = b"", 0
+        while True:
+            r = F.Reader(self.request(F.PIC_REQ, F.Writer().str(iid).u16(offset).done(), want=(F.PIC,)).body)
+            status, total, at, note, piece = r.u8(), r.u16(), r.u16(), r.str(), r.bytes()
+            if status != F.PIC_OK:
+                return {"status": status, "note": note, "body": b""}
+            body += piece
+            offset = at + len(piece)
+            if offset >= total or not piece:
+                return {"status": status, "note": note, "body": body}
+
     def coins(self, network: str) -> list[dict]:
         index = self._index(network)
         r = F.Reader(self.request(F.COINS_REQ, bytes([index]), want=(F.COINS,)).body)

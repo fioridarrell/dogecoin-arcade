@@ -382,6 +382,33 @@ class Gateway:
             body = body[:room]
         self.reply(node, F.PAGE, msg.id, head + len(body).to_bytes(2, "big") + body)
 
+    def on_pic_req(self, node, msg):
+        """A piece of a picture on a .mesh page (2026-10-26: "like the old school Internet used to work where the
+        image would load from the top to the bottom"): the mesh picture from `offset`, as much as one message holds.
+        Its bands are made to fill about one part each, so the T-Deck draws each part as it comes in."""
+        r = F.Reader(msg.body)
+        iid, offset = r.str()[:80], r.u16()
+        pictures = self.__dict__.setdefault("_pictures", {})
+        got = pictures.get(iid)
+        if got is None:
+            try:
+                code, got = self._public().mesh_picture(iid)
+            except Exception as exc:                     # noqa: BLE001 -- the arcade did not answer
+                log.info("mesh picture %s: %s", iid, exc)
+                code, got = 503, {"detail": "The arcade did not answer"}
+            if code == 200:
+                if len(pictures) > 50:
+                    pictures.clear()
+                pictures[iid] = got
+        if not isinstance(got, (bytes, bytearray)):
+            note = str((got or {}).get("detail") or "no such picture").encode()[:80].decode("utf-8", "ignore")
+            return self.reply(node, F.PIC, msg.id, F.Writer().u8(F.PIC_MISSING).u16(0).u16(offset).str(note).done()
+                              + (0).to_bytes(2, "big"))
+        head = F.Writer().u8(F.PIC_OK).u16(len(got)).u16(offset).str("").done()
+        room = F.MAX_PARTS * F.MAX_BODY - len(head) - 2
+        piece = bytes(got[offset:offset + room])
+        self.reply(node, F.PIC, msg.id, head + len(piece).to_bytes(2, "big") + piece)
+
     def on_coins_req(self, node, msg):
         dev = self._device(node, msg)
         if dev is None:
@@ -600,7 +627,7 @@ class Gateway:
 
     HANDLERS = {
         F.HELLO: on_hello, F.LOGIN: on_login, F.PING: on_ping,
-        F.BAL_REQ: on_bal_req, F.TOK_REQ: on_tok_req, F.PAGE_REQ: on_page_req, F.RESEND: on_resend, F.COINS_REQ: on_coins_req, F.SEND_REQ: on_send_req,
+        F.BAL_REQ: on_bal_req, F.TOK_REQ: on_tok_req, F.PAGE_REQ: on_page_req, F.PIC_REQ: on_pic_req, F.RESEND: on_resend, F.COINS_REQ: on_coins_req, F.SEND_REQ: on_send_req,
         F.SIGN: on_sign, F.BROADCAST: on_broadcast, F.ADDR: on_addr,
         F.WHO_REQ: on_who_req, F.WATCH: on_watch,
         F.MAIL_POST: on_mail_post, F.MAIL_ACK: on_mail_ack, F.MAIL_POLL: on_mail_poll,

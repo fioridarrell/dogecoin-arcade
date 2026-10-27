@@ -74,6 +74,17 @@ class ArcadeSession:
         except ValueError:
             return r.status_code, {"detail": r.text[:200]}
 
+    def mesh_picture(self, iid: str) -> tuple[int, bytes | dict]:
+        """A picture on a .mesh page as a T-Deck draws it (the arcade's /r/mesh/picture/<id>): (HTTP status, its bytes,
+        or the answer saying why not). Public."""
+        r = self.http.get("/r/mesh/picture/" + iid)
+        if r.status_code == 200:
+            return 200, r.content
+        try:
+            return r.status_code, r.json()
+        except ValueError:
+            return r.status_code, {"detail": r.text[:200]}
+
     def coins(self, network: str, spendable: bool = True) -> list[dict]:
         """This account's coins on a chain; `spendable` (the default for a T-Deck, which builds its own transactions):
         only those a transaction may take -- none carrying an inscription, none the arcade could not check."""

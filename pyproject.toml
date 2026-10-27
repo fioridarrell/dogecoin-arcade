@@ -59,8 +59,9 @@ web = [
 push = ["cryptography>=42"]
 # The LoRa (Meshtastic) gateway (arcade/lora, web/lora.py; 2026-10-24): only an arcade with a radio plugged in needs
 # these, and Admin -> Meshtastic installs them at the node machine. coincurve because the gateway's device_keys
-# (base58, hash160) imports it.
-lora = ["meshtastic==2.7.11", "coincurve==21.0.0"]
+# (base58, hash160) imports it. pillow because the arcade a gateway asks makes the pictures on .mesh pages small for a
+# T-Deck (arcade/mesh_picture.py, 2026-10-26).
+lora = ["meshtastic==2.7.11", "coincurve==21.0.0", "pillow>=10.0"]
 dev = ["pytest>=8.3", "httpx>=0.27", "selenium>=4.20", "pillow>=10.0", "cryptography>=42"]
 
 [project.scripts]

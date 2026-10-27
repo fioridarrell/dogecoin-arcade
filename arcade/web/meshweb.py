@@ -5,26 +5,47 @@
 * GET /r/mesh/<name>[/path]         one page: its MeshText and where it comes from. `?have=<page id>` answers
                                     {"unchanged": true} when the asker's copy is the newest (the T-Deck's cache over LoRa)
 * GET /meshweb[/<name>[/path]]      the same pages drawn in a browser at the T-Deck's size, to look at without one
+* GET /r/mesh/picture/<id>          a picture on a page, as a T-Deck draws it (arcade/mesh_picture.py)
 
-Answered by the most complete walk of Pepecoin mainnet (DoginalIndex.lookup): this arcade's, or a linked arcade's.
+The Browser (2026-10-26: "Instead of mesh browser call the app browser ... on the PWA or website it should be able
+to explore all p:dns names"), every name's site on every chain this arcade reads:
+
+* GET /r/sites                      every site, newest first, each with its chain
+* GET /r/site/<name>[/path]         one page, from whichever chain has the name's site (`?chain=` to say which); a name
+                                    with a site on more than one chain answers 300 with the `choices`
+* GET /site/<chain>/<name>/[path]   an HTML page of a site, sandboxed like an inscription; an inscription page goes to
+                                    /content/<id>; a MeshText page is drawn
+* GET /browser[/<address>]          the Browser in a web page: the same file the App Store's Browser card is
+
+Answered by the most complete walk of each chain (DoginalIndex.lookup): this arcade's, or a linked arcade's.
 """
 from __future__ import annotations
 
 import html
+import pathlib
 import time
+from collections import OrderedDict
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
+from .. import mesh_picture as MP
 from .. import mesh_web as M
+from . import content as contentlib
 
 #: How long the directory is kept before it is asked again (every page of it is read off the chain once, then kept).
 DIRECTORY_KEEP = 60.0
+#: Mesh pictures kept made (an inscription never changes, so neither does its picture).
+PICTURES_KEPT = 200
+#: The Browser: one file, served at /browser and inscribed as the App Store's Browser card.
+BROWSER_FILE = pathlib.Path(__file__).with_name("browser.html")
 
 
-def register(app, state) -> None:
+def register(app, state, content=None) -> None:
     kept: dict[str, Any] = {}
+    pictures: OrderedDict[str, bytes] = OrderedDict()
 
     def index():
         idx = state.ord_indexes().get(M.NET)
@@ -75,7 +96,98 @@ def register(app, state) -> None:
         if path not in pages:
             return 404, {**out, "detail": f"{name} has no page {path}."}
         out["body"] = pages[path]
+        out["pictures"] = [iid for iid, _alt in M.pictures_of(pages[path])]
         return 200, out
+
+    # --- every name, every chain (the Browser) --------------------------------------------------------------------
+
+    def indexes() -> dict:
+        return dict(state.ord_indexes() or {})
+
+    def all_sites() -> list[dict]:
+        at, names = kept.get("all", (0.0, None))
+        if names is None or time.time() - at > DIRECTORY_KEEP:
+            names = []
+            for net, idx in indexes().items():
+                try:
+                    found = idx.lookup({"what": "mesh_directory", "all": True}).get("mesh_directory") or []
+                except Exception:                        # noqa: BLE001 -- a chain not read just now: the others
+                    continue
+                names += [{**n, "chain": net} for n in found]
+            names.sort(key=lambda n: -(n.get("height") or 0))
+            kept["all"] = (time.time(), names)
+        return names
+
+    def any_site(address: str, chain: str = "") -> tuple[int, dict]:
+        name, path = M.split_address(address, any_name=True)
+        if not name:
+            return 400, {"detail": "not a name: label.ending, like yours.mesh or yours.pepe", "address": address}
+        found = []
+        nets = indexes()
+        for net, idx in nets.items():
+            if chain and net != chain:
+                continue
+            try:
+                said = idx.lookup({"what": "mesh", "name": name}).get("mesh") or {}
+            except Exception:                            # noqa: BLE001
+                continue
+            if said.get("claim"):
+                found.append((net, said))
+        with_page = [(n, s) for n, s in found if s.get("page")]
+        out: dict[str, Any] = {"name": name, "path": path}
+        if len(with_page) > 1:
+            return 300, {**out, "detail": f"{name} has a site on more than one chain",
+                         "choices": [{"chain": n, "page": s["page"]["id"], "holder": s.get("holder")}
+                                     for n, s in with_page]}
+        if not found:
+            return 404, {**out, "detail": f"Nobody has claimed {name}" + (f" on {chain}" if chain else "") + "."}
+        net, said = (with_page or found)[0]
+        page = said.get("page")
+        out.update({"chain": net, "holder": said.get("holder"), "claim": said.get("claim")})
+        if not page:
+            return 404, {**out, "detail": f"{name} has no site yet."}
+        pages = page.get("pages") or {}
+        out.update({"page": page["id"], "number": page["number"], "size": page["size"], "sha256": page["sha256"],
+                    "paths": sorted(pages), "title": M.title_of(pages.get("/", ""))})
+        if path not in pages:
+            return 404, {**out, "detail": f"{name} has no page {path}."}
+        kind, value = M.page_kind(pages[path])
+        out["kind"] = kind
+        if kind == "text":
+            out["body"] = value
+            out["pictures"] = [iid for iid, _alt in M.pictures_of(value)]
+        else:
+            out["url"] = f"/site/{quote(net)}/{quote(name)}{path if path != '/' else '/'}"
+            if kind == "id":
+                out["inscription"] = value
+        return 200, out
+
+    # before /r/mesh/{address:path}, which would take the path for a page
+    @app.get("/r/mesh/picture/{iid}")
+    def mesh_picture(iid: str):
+        """A picture on a page as a T-Deck draws it: a mesh picture made from the inscription (as /content serves it,
+        screened the same way), kept once made."""
+        iid = str(iid or "").strip().lower()
+        if not M.INSCRIPTION.match(iid):
+            return JSONResponse({"detail": "not an inscription id"}, status_code=400)
+        body = pictures.get(iid)
+        if body is None:
+            if content is None:
+                return JSONResponse({"detail": "this arcade serves no inscriptions"}, status_code=503)
+            answer = content(iid)
+            kind = str(answer.headers.get("content-type", ""))
+            if getattr(answer, "status_code", 0) != 200 or not kind.startswith("image/"):
+                return JSONResponse({"detail": "that inscription is not a picture this arcade can show"},
+                                    status_code=404)
+            try:
+                body = MP.make(bytes(answer.body))
+            except MP.PictureError as exc:
+                return JSONResponse({"detail": str(exc)}, status_code=422)
+            pictures[iid] = body
+            while len(pictures) > PICTURES_KEPT:
+                pictures.popitem(last=False)
+        return Response(body, media_type="application/octet-stream",
+                        headers={**contentlib.CORS, "Cache-Control": "public, max-age=86400"})
 
     @app.get("/r/mesh")
     def mesh_directory():
@@ -95,9 +207,51 @@ def register(app, state) -> None:
             out["unchanged"] = True
         return JSONResponse(out, status_code=code, headers={"Cache-Control": "no-store"})
 
+    @app.get("/r/sites")
+    def sites_directory():
+        try:
+            return JSONResponse({"names": all_sites()}, headers={"Cache-Control": "no-store"})
+        except (LookupError, ValueError) as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=503)
+
+    @app.get("/r/site/{address:path}")
+    def site_page(address: str, chain: str = "", have: str = ""):
+        try:
+            code, out = any_site(address, chain)
+        except (LookupError, ValueError) as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=503)
+        if code == 200 and have and have == out.get("page") and "body" in out:
+            out = {k: v for k, v in out.items() if k != "body"}
+            out["unchanged"] = True
+        return JSONResponse(out, status_code=code, headers={**contentlib.CORS, "Cache-Control": "no-store"})
+
+    @app.get("/site/{chain}/{address:path}")
+    def site_served(chain: str, address: str):
+        """A site's page on its own: HTML sandboxed as an inscription is (no cookies, nothing of the arcade's to reach);
+        an inscription page is that inscription; MeshText is drawn."""
+        code, out = any_site(address, chain)
+        if code != 200:
+            return HTMLResponse(f"<!doctype html><meta charset=utf-8><p>{html.escape(out.get('detail', ''))}</p>",
+                                status_code=code, headers=contentlib.CONTENT_HEADERS)
+        if out.get("inscription"):
+            return RedirectResponse(f"/content/{quote(out['inscription'])}", status_code=307)
+        if out["kind"] == "html":
+            idx = indexes().get(chain)
+            said = idx.lookup({"what": "mesh", "name": out["name"]}).get("mesh") or {}
+            value = M.page_kind((said.get("page") or {}).get("pages", {}).get(out["path"]))[1]
+            return HTMLResponse(value, headers={**contentlib.CONTENT_HEADERS, "Cache-Control": "no-store"})
+        page = (f"<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
+                f"<title>{html.escape(out.get('title') or out['name'])}</title>{draw(out['body'], out['name'], '/browser/')}")
+        return HTMLResponse(page, headers={**contentlib.CONTENT_HEADERS, "Cache-Control": "no-store"})
+
+    @app.get("/browser", response_class=HTMLResponse)
+    @app.get("/browser/{address:path}", response_class=HTMLResponse)
+    def browser(address: str = ""):
+        return HTMLResponse(BROWSER_FILE.read_text(), headers={"Cache-Control": "no-cache"})
+
     # --- in a browser ---------------------------------------------------------------------------------------------
 
-    def draw(text: str, here: str) -> str:
+    def draw(text: str, here: str, base: str = "/meshweb/") -> str:
         """MeshText as HTML: what the T-Deck shows, line by line."""
         out, pre = [], False
         for line in str(text).splitlines():
@@ -113,9 +267,13 @@ def register(app, state) -> None:
                 parts = s[2:].strip().split(None, 1)
                 if parts:
                     target = parts[0]
-                    href = "/meshweb/" + (here + target if target.startswith("/") else target.removeprefix("mesh://"))
+                    href = base + (here + target if target.startswith("/") else target.removeprefix("mesh://"))
                     label = parts[1] if len(parts) > 1 else target
                     out.append(f'<p class="l"><a href="{html.escape(href)}">{html.escape(label)}</a></p>')
+            elif M.PICTURE_LINE.match(s.strip()):
+                got = M.PICTURE_LINE.match(s.strip())
+                out.append(f'<p class="pic"><img src="/content/{html.escape(got.group(2).lower())}" '
+                           f'alt="{html.escape(got.group(1))}" style="max-width:100%;image-rendering:pixelated"></p>')
             elif s.startswith("### "):
                 out.append(f"<h3>{html.escape(s[4:])}</h3>")
             elif s.startswith("## "):
@@ -161,7 +319,7 @@ body{{margin:0;min-height:100vh;background:#0b0b0a;color:var(--fg);font:14px/1.4
   <div class="status">{html.escape(status)}</div>
 </div>
 <p class="note">A .mesh page, drawn at the size of a DogecoinArcade T-Deck (320 &times; 240). On the T-Deck it opens in
-the Mesh Browser from the App Store, over WiFi or LoRa.</p>
+the Browser from the App Store, over WiFi or LoRa. <a href="/browser">The Browser</a> opens every name's site.</p>
 </body></html>"""
         return HTMLResponse(doc, headers={"Cache-Control": "no-store"})
 

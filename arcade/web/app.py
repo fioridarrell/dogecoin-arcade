@@ -14919,28 +14919,43 @@ def create_app(state: AppState) -> FastAPI:
         return JSONResponse(out, headers={"Cache-Control": "no-store"})
 
     def _mesh_site_for(account, name: str) -> dict:
-        """A .mesh name as its holder's editor sees it (Creator -> Names -> Publish a page): who holds it, whether this
-        account does (its Pepecoin mainnet address), and the pages that count now."""
+        """A name's site as its holder's editor sees it (Creator -> Names -> Publish a site): who holds it, whether this
+        account does, and the pages that count now. A .mesh name lives on Pepecoin mainnet; any other p:dns name
+        (2026-10-26, the Browser) on whichever chain this arcade reads that has a claim of it -- the one where this
+        account holds it, if any."""
         from .. import mesh_web
-        made = mesh_web.name_of(name)
+        made = mesh_web.site_name(name)
+        mesh = mesh_web.is_mesh(made)
         out: dict[str, Any] = {"name": made, "claim": None, "holder": None, "mine": False, "page": None, "why": "",
-                               "max": mesh_web.SITE_MAX}
+                               "max": mesh_web.SITE_MAX if mesh else mesh_web.RECORD_MAX, "mesh": mesh,
+                               "chain": mesh_web.NET if mesh else "", "address": ""}
         if not made:
-            out["why"] = "A .mesh name, like yours.mesh"
+            out["why"] = "A name, like yours.mesh or yours.pepe"
             return out
-        main = next((c for c in state.all_chains if c.network == mesh_web.NET), None)
-        out["address"] = _account_any_address(account.pubkey, main) if main is not None else ""
-        index = state.ord_indexes().get(mesh_web.NET)
-        if index is None:
-            out["why"] = "This arcade does not read Pepecoin's ords"
+        indexes = state.ord_indexes() or {}
+        nets = [mesh_web.NET] if mesh else list(indexes)
+        found = []
+        for net in nets:
+            index = indexes.get(net)
+            if index is None:
+                continue
+            said = index.lookup({"what": "mesh", "name": made}).get("mesh") or {}
+            if not said.get("claim"):
+                continue
+            chain = next((c for c in state.all_chains if c.network == net), None)
+            mine = _account_any_address(account.pubkey, chain) if chain is not None else ""
+            found.append({"chain": net, "address": mine, "claim": said.get("claim"), "holder": said.get("holder"),
+                          "page": said.get("page"), "mine": bool(said.get("holder")) and said.get("holder") == mine})
+        if not found:
+            if mesh and indexes.get(mesh_web.NET) is None:
+                out["why"] = "This arcade does not read Pepecoin's ords"
+            else:
+                out["why"] = f"Nobody has claimed {made} yet: claim it above first"
             return out
-        said = index.lookup({"what": "mesh", "name": made}).get("mesh") or {}
-        out.update(claim=said.get("claim"), holder=said.get("holder"), page=said.get("page"))
-        out["mine"] = bool(out["holder"]) and out["holder"] == out["address"]
-        if not out["claim"]:
-            out["why"] = f"Nobody has claimed {made} yet: claim it above first"
-        elif not out["mine"]:
-            out["why"] = (f"{made} is held by {out['holder']}, not by your Pepecoin address" if out["holder"]
+        pick = next((f for f in found if f["mine"]), found[0])
+        out.update(pick)
+        if not out["mine"]:
+            out["why"] = (f"{made} is held by {out['holder']}, not by your address on {out['chain']}" if out["holder"]
                           else f"Nobody can say who holds {made} just now")
         return out
 
@@ -14955,8 +14970,8 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.post("/account/mesh/draft")
     def account_mesh_draft(request: Request, payload: Any = Body(None)):
-        """The bytes of a page for a .mesh name this account holds ({name, pages: {path: MeshText}}), checked the way the
-        resolver reads them (mesh_web.make); the tab then inscribes them as an ord on Pepecoin mainnet."""
+        """The bytes of a site for a name this account holds ({name, pages: {path: MeshText | {html} | {id}}}), checked
+        the way the resolver reads them (mesh_web.make); the tab then inscribes them as an ord on the name's chain."""
         from .. import mesh_web
         account = _signed_in_account(request)
         said = payload if isinstance(payload, dict) else {}
@@ -14964,15 +14979,15 @@ def create_app(state: AppState) -> FastAPI:
         if not isinstance(pages, dict):
             return JSONResponse({"detail": "pages: {path: text}"}, status_code=400)
         try:
-            body = mesh_web.make(str(said.get("name") or ""), {str(k): str(v) for k, v in pages.items()})
+            body = mesh_web.make(str(said.get("name") or ""),
+                                 {str(k): (v if isinstance(v, dict) else str(v)) for k, v in pages.items()})
         except mesh_web.MeshError as exc:
             return JSONResponse({"detail": str(exc)}, status_code=400)
         site = _mesh_site_for(account, str(said.get("name") or ""))
         if not site["mine"]:
             return JSONResponse({"detail": site["why"] or "this account does not hold that name"}, status_code=403)
-        return JSONResponse({"content": base64.b64encode(body).decode(), "size": len(body), "chain": mesh_web.NET,
-                             "content_type": "text/plain;charset=utf-8", "name": site["name"],
-                             "max": mesh_web.SITE_MAX})
+        return JSONResponse({"content": base64.b64encode(body).decode(), "size": len(body), "chain": site["chain"],
+                             "content_type": "text/plain;charset=utf-8", "name": site["name"], "max": site["max"]})
 
     @app.post("/account/ord/inscribe")
     def account_ord_inscribe(request: Request, payload: Any = Body(None)):
@@ -33383,7 +33398,8 @@ def create_app(state: AppState) -> FastAPI:
     tdecklink.register(app, state)
     # The .mesh web (meshweb.py, 2026-10-26): pages a .mesh name's holder inscribes, for the T-Deck's browser.
     from . import meshweb
-    meshweb.register(app, state)
+    # pictures for a T-Deck are made from what /content serves: screened the same way (arcade/moderation.py)
+    meshweb.register(app, state, content=lambda iid: _inscription_content(iid))
     # The LLM service (llmweb.py, 2026-10-23): Admin -> LLM, the Exchange's LLM tab, and /v1 for API keys.
     from . import llmweb
     llmweb.register(app, state, signed_in=signed_in, account_address=_account_address, account_chain=_account_chain,

@@ -28,7 +28,9 @@ from pathlib import Path
 log = logging.getLogger("arcade.lora")
 
 #: The extra's pins, as the gateway was tested with (arcade-lora's venv on .25, 2026-10-24).
-PACKAGES = ("meshtastic==2.7.11", "coincurve==21.0.0")
+#: pillow (2026-10-26): pictures on .mesh pages made small for a T-Deck (arcade/mesh_picture.py); without it the gateway
+#: still runs and a picture says why it cannot come, so it is not one of the MODULES the panel insists on.
+PACKAGES = ("meshtastic==2.7.11", "coincurve==21.0.0", "pillow>=10.0")
 MODULES = ("meshtastic", "coincurve", "nacl", "httpx")
 DEFAULTS = {"enabled": False, "port": "", "name": "arcade gateway", "chains": None, "beacon": False, "assets": []}
 #: Tokens the T-Decks see (2026-10-26: "a search bar that auto complete just like in the public token exchange

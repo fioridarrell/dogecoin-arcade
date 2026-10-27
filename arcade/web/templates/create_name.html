@@ -41,21 +41,27 @@
   <p class="muted" style="font-size:.84rem;margin:12px 0 0">What is inscribed: <code id="nm-body">{"p":"dns","op":"reg","name":"yours.pepe"}</code></p>
 </div>
 
-{# The .mesh web (2026-10-26): the holder of a .mesh name publishes its page, MeshText for the T-Deck's Mesh
-   Browser (docs/mesh-web.md). The newest page inscribed to the name's holder is the one that counts. #}
+{# The .mesh web (2026-10-26): the holder of a .mesh name publishes its page, MeshText for the T-Deck's Browser
+   (docs/mesh-web.md). The newest page inscribed to the name's holder is the one that counts. Since the Browser (same
+   day): any p:dns name's site, on its own chain; not .mesh, a page may be HTML or another inscription, uncapped. #}
 <div class="panel" id="mp-make">
-  <h3 style="margin:0 0 4px">Publish a .mesh page</h3>
-  <p class="muted" style="font-size:.86rem;margin:0 0 10px">A page for a .mesh name you hold, read on T-Decks in the
-    Mesh Browser and at <a href="/meshweb" target="_blank" rel="noopener">/meshweb</a>. Plain text like the web in
-    1990: <code># heading</code>, <code>* item</code>, <code>=&gt; other.mesh Link</code>. The newest page you publish
-    is the one that shows. <a href="/docs/mesh-web.md" target="_blank" rel="noopener">How pages work</a></p>
+  <h3 style="margin:0 0 4px">Publish a site</h3>
+  <p class="muted" style="font-size:.86rem;margin:0 0 10px">A site for a name you hold, read in the
+    <a href="/browser" target="_blank" rel="noopener">Browser</a>. A <b>.mesh</b> site is for T-Decks too: plain text
+    like the web in 1990 (<code># heading</code>, <code>* item</code>, <code>=&gt; other.mesh Link</code>,
+    <code>![a picture](inscription id)</code>), at most 3,000 bytes. Any other name's pages can also be HTML or another
+    inscription, with no limit. The newest site you publish is the one that shows.
+    <a href="/docs/mesh-web.md" target="_blank" rel="noopener">How sites work</a></p>
   <div class="nm-grid">
-    <label>Your .mesh name <input id="mp-name" autocomplete="off" autocapitalize="none" spellcheck="false"
-      placeholder="yours.mesh"></label>
+    <label>Your name <input id="mp-name" autocomplete="off" autocapitalize="none" spellcheck="false"
+      placeholder="yours.mesh or yours.pepe"></label>
     <div class="muted mp-who" id="mp-who"></div>
   </div>
   <div id="mp-edit" hidden>
     <div class="mp-tabs" id="mp-tabs"></div>
+    <div class="mp-kind" id="mp-kind" hidden>This page is
+      <select id="mp-kind-pick"><option value="text">MeshText</option><option value="html">HTML</option>
+        <option value="id">an inscription (its id)</option></select></div>
     <div class="mp-cols">
       <textarea id="mp-text" autocomplete="off" spellcheck="false" rows="14"></textarea>
       <div class="mp-deck"><div class="mp-bar"><span>Home</span><span class="mp-addr" id="mp-addr"></span></div>
@@ -102,6 +108,12 @@
 .mp-page blockquote{margin:0 0 4px;padding-left:6px;border-left:2px solid #2c2a25;color:#9b948a}
 .mp-page pre{margin:2px 0 6px;font:11px/1.2 ui-monospace,monospace;white-space:pre;overflow:auto}
 .mp-status{padding:2px 6px;border-top:1px solid #2c2a25;font-size:10px;color:#9b948a}
+.mp-page .pic img{display:block;max-width:100%;image-rendering:pixelated}
+.mp-kind{margin:0 0 8px;font-size:.86rem}
+.mp-deck.wide{width:100%;height:360px}
+.mp-deck.wide .mp-page{font-size:14px}
+.mp-page iframe{display:block;width:100%;height:100%;border:0;background:#fff}
+.mp-cols.wide{grid-template-columns:1fr 1fr}
 .ord-bar{height:8px;border-radius:4px;background:var(--line);overflow:hidden;margin-top:10px}
 .ord-bar span{display:block;height:100%;width:0;background:var(--accent);transition:width .3s}
 </style>
@@ -236,13 +248,17 @@ loadChains();
 /* --- the .mesh web: publish a page (docs/mesh-web.md) --- */
 const MAX_FRAME_BODY = 195;                      // one LoRa part (PROTOCOL.md)
 let site = null, pages = {"/": ""}, at = "/", siteTimer = null;
+const PIC = /^!\[([^\]]*)\]\(\s*([0-9a-fA-F]{64}[iI]\d{1,6})\s*\)\s*$/;
+const kindOf = (v) => (v && typeof v === "object") ? (typeof v.html === "string" ? "html" : "id") : "text";
+const valueOf = (v) => kindOf(v) === "text" ? (v || "") : kindOf(v) === "html" ? v.html : (v.id || "");
 function meshHTML(text, here) {
   const out = []; let pre = false;
   for (const line of String(text).split("\n")) {
     if (line.startsWith("```")) { out.push(pre ? "</pre>" : "<pre>"); pre = !pre; continue; }
     if (pre) { out.push(esc(line)); continue; }
-    const s = line.trimEnd();
-    if (s.startsWith("=>")) {
+    const s = line.trimEnd(), pic = s.trim().match(PIC);
+    if (pic) out.push(`<p class="pic"><img src="/content/${esc(pic[2].toLowerCase())}" alt="${esc(pic[1])}"></p>`);
+    else if (s.startsWith("=>")) {
       const [target, ...rest] = s.slice(2).trim().split(/\s+/);
       if (target) out.push(`<p><a data-to="${esc(target)}">${esc(rest.join(" ") || target)}</a></p>`);
     } else if (s.startsWith("### ")) out.push(`<h3>${esc(s.slice(4))}</h3>`);
@@ -263,22 +279,41 @@ function drawSite() {
   $("mp-tabs").innerHTML = tabs.map((p) => `<button type="button" data-path="${esc(p)}" class="${p === at ? "on" : "ghost"}">${esc(p)}</button>`).join("")
     + `<button type="button" class="ghost" data-add="1">+ page</button>`
     + (at !== "/" ? `<button type="button" class="ghost" data-drop="1">Remove ${esc(at)}</button>` : "");
-  $("mp-text").value = pages[at] || "";
+  $("mp-text").value = valueOf(pages[at]);
+  $("mp-kind").hidden = !site || site.mesh;
+  $("mp-kind-pick").value = kindOf(pages[at]);
+  document.querySelector(".mp-deck").classList.toggle("wide", !!site && !site.mesh);
+  document.querySelector(".mp-cols").classList.toggle("wide", !!site && !site.mesh);
   drawPreview();
 }
 function drawPreview() {
   const name = (site && site.name) || "";
   $("mp-addr").textContent = name + (at === "/" ? "" : at);
-  $("mp-preview").innerHTML = meshHTML(pages[at] || "", name);
+  const kind = kindOf(pages[at]), value = valueOf(pages[at]);
+  if (kind === "html") {
+    $("mp-preview").innerHTML = `<iframe sandbox="allow-scripts" title="preview"></iframe>`;
+    $("mp-preview").querySelector("iframe").srcdoc = value;
+  } else if (kind === "id") {
+    $("mp-preview").innerHTML = /^[0-9a-f]{64}i\d{1,6}$/.test(value.trim().toLowerCase())
+      ? `<iframe sandbox="allow-scripts" src="/content/${esc(value.trim().toLowerCase())}" title="preview"></iframe>`
+      : `<p>The id of an inscription: 64 hex characters, i, a number.</p>`;
+  } else $("mp-preview").innerHTML = meshHTML(value, name);
   const n = siteBytes(), max = (site && site.max) || 3000;
-  const parts = Math.ceil(n / MAX_FRAME_BODY);
+  const parts = Math.ceil(n / MAX_FRAME_BODY), pics = String(value).split("\n").filter((l) => PIC.test(l.trim())).length;
   $("mp-status").textContent = `Document: Done (${commas(n)} bytes)`;
-  $("mp-count").textContent = `${commas(n)} of ${commas(max)} bytes for the whole site · ${Object.keys(pages).length} page(s) · `
-    + `about ${parts} LoRa part${parts === 1 ? "" : "s"} (roughly ${Math.max(5, parts * 3)} s by radio, instant over WiFi)`
+  $("mp-count").textContent = `${commas(n)} of ${commas(max)} bytes for the whole site · ${Object.keys(pages).length} page(s)`
+    + (site && site.mesh ? ` · about ${parts} LoRa part${parts === 1 ? "" : "s"} (roughly ${Math.max(5, parts * 3)} s by radio, instant over WiFi)`
+      + (pics ? ` · ${pics} picture${pics === 1 ? "" : "s"} on this page, each up to about a minute more by radio, drawn from the top down` : "") : "")
     + (n > max ? " — too big: shorten it" : "");
-  $("mp-go").disabled = busy || !site || !site.mine || n > max || !(pages["/"] || "").trim();
+  $("mp-go").disabled = busy || !site || !site.mine || n > max || !valueOf(pages["/"]).trim();
 }
-$("mp-text").oninput = () => { pages[at] = $("mp-text").value; drawPreview(); };
+const setPage = (kind, value) => { pages[at] = kind === "text" ? value : kind === "html" ? {html: value} : {id: value.trim().toLowerCase()}; };
+$("mp-text").oninput = () => { setPage(kindOf(pages[at]), $("mp-text").value); drawPreview(); };
+$("mp-kind-pick").onchange = () => {
+  const kind = $("mp-kind-pick").value;
+  setPage(kind, kind === "html" ? `<!doctype html>\n<title>${at === "/" ? (site && site.name) : at.slice(1)}</title>\n<h1>Hello</h1>\n` : "");
+  drawSite();
+};
 $("mp-tabs").onclick = (e) => {
   const b = e.target.closest("button"); if (!b) return;
   if (b.dataset.path) { at = b.dataset.path; drawSite(); return; }
@@ -295,7 +330,7 @@ $("mp-preview").onclick = (e) => {
   const a = e.target.closest("a[data-to]"); if (!a) return;
   const to = a.dataset.to;
   if (to.startsWith("/") && to in pages) { at = to; drawSite(); }
-  else window.open("/meshweb/" + to.replace(/^mesh:\/\//, ""), "_blank", "noopener");
+  else window.open("/browser/" + to.replace(/^mesh:\/\//, ""), "_blank", "noopener");
 };
 function loadSite() {
   clearTimeout(siteTimer);
@@ -307,7 +342,7 @@ function loadSite() {
       const said = await getJSON(`/account/mesh/site?name=${encodeURIComponent(name)}`);
       if ($("mp-name").value.trim() !== name) return;
       site = said;
-      $("mp-who").textContent = said.mine ? `You hold ${said.name}.` + (said.page ? ` Its page now: inscription #${commas(said.page.number)}.` : " No page yet.")
+      $("mp-who").textContent = said.mine ? `You hold ${said.name} on ${(chainOf(said.chain) || {}).label || said.chain}.` + (said.page ? ` Its site now: inscription #${commas(said.page.number)}.` : " No site yet.")
         : (said.why || "");
       if (!said.mine) return;
       pages = said.page ? {...said.page.pages} : {"/": `# ${said.name}\n\nWelcome to my corner of the mesh.\n\n=> /about About\n`};
@@ -320,18 +355,18 @@ $("mp-name").oninput = loadSite;
 $("mp-go").onclick = async () => {
   say(""); news("");
   if (!site || !site.mine) return;
-  const c = chainOf("main");
-  if (!c) { say("This arcade does not inscribe on Pepecoin mainnet."); return; }
+  const c = chainOf(site.chain);
+  if (!c) { say(`This arcade does not inscribe on ${site.chain}.`); return; }
   try {
     const draft = await getJSON("/account/mesh/draft", {method: "POST", headers: {"Content-Type": "application/json"},
                                                          body: JSON.stringify({name: site.name, pages})});
     const held = await keysNow();
     if (!held) return;
-    const first = await wallet.startOrd(held, {chain: draft.chain, content: draft.content, content_type: draft.content_type, name: `${site.name} page`});
+    const first = await wallet.startOrd(held, {chain: draft.chain, content: draft.content, content_type: draft.content_type, name: `${site.name} site`});
     const k = first.costs, shown = await wallet.checked(first, held);
     const network = Number(shown.fee || 0) + Number(k.reveal_fees || 0);
-    const label = `Publish ${site.name}'s page (${commas(draft.size)} bytes) on ${c.label}: ${commas(first.of)} transactions. `
-      + `${coins(k.postage, c.chain)} stays yours as the page's own coin.`;
+    const label = `Publish ${site.name}'s site (${commas(draft.size)} bytes) on ${c.label}: ${commas(first.of)} transactions. `
+      + `${coins(k.postage, c.chain)} stays yours as the site's own coin.`;
     if (!(await arcadeMainnetReview({label, network, data: 0, others: 0, operator: 0, total: network + Number(k.postage), chain: c.chain}))) return;
     busy = true; drawPreview();
     const stay = (e) => { e.preventDefault(); e.returnValue = ""; };
@@ -345,7 +380,7 @@ $("mp-go").onclick = async () => {
         $("mp-bar").style.width = `${Math.round(100 * Math.min(sent, of) / of)}%`;
         $("mp-says").textContent = s.done ? "All sent." : `${commas(sent)} of ${commas(of)} sent… keep this tab open.`;
       });
-      news(`Published: ${site.name}'s page is inscription ${id}. It shows once its block is mined and read.`);
+      news(`Published: ${site.name}'s site is inscription ${id}. It shows once its block is mined and read.`);
     } finally {
       window.removeEventListener("beforeunload", stay);
       delete document.body.dataset.inscribing;

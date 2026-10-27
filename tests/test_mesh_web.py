@@ -43,7 +43,9 @@ def test_a_page_is_json_p_mesh_with_its_name_and_pages():
                                                                                      ("/c", "/c")]
     assert M.split_address("mesh://Me-Seeks.mesh/About/") == ("me-seeks.mesh", "/about")
     assert M.split_address("me-seeks.mesh") == ("me-seeks.mesh", "/")
-    for bad in ({"p": "mesh", "name": "x.pepe", "pages": {"/": "hi"}},            # not .mesh
+    for bad in ({"p": "mesh", "name": "x.mesh", "pages": {"/": {"html": "<b>hi</b>"}}},  # .mesh: MeshText only
+                {"p": "mesh", "name": "x.mesh", "pages": {"/": "a" * 3100}},           # .mesh: one LoRa message
+                {"p": "mesh", "name": "123.pepemap", "pages": {"/": "hi"}},            # a block map is no name
                 {"p": "dns", "name": "x.mesh", "pages": {"/": "hi"}},
                 {"p": "mesh", "name": "x.mesh", "pages": {"no slash": "hi"}},
                 {"p": "mesh", "name": "x.mesh"}):
@@ -149,7 +151,7 @@ def test_only_the_names_holder_gets_a_draft_to_publish(client, tmp_path, monkeyp
     a_address = b58check_encode(56, b"\xaa" * 20)
     assert index.mesh("me-seeks.mesh")["holder"] == a_address
     stranger = app.get("/account/mesh/site", params={"name": "me-seeks.mesh"}).json()
-    assert not stranger["mine"] and "not by your Pepecoin address" in stranger["why"]
+    assert not stranger["mine"] and "not by your address on main" in stranger["why"]
     assert app.post("/account/mesh/draft", json={"name": "me-seeks.mesh", "pages": {"/": "# Mine?"}}).status_code == 403
     said = app.post("/account/address", json={"address": a_address, "chain": "main"})
     assert said.status_code == 200, said.text
@@ -161,3 +163,108 @@ def test_only_the_names_holder_gets_a_draft_to_publish(client, tmp_path, monkeyp
     too_big = app.post("/account/mesh/draft", json={"name": "me-seeks.mesh", "pages": {"/": "x" * 4000}})
     assert too_big.status_code == 400 and "at most" in too_big.json()["detail"]
     assert app.post("/account/mesh/draft", json={"name": "other.mesh", "pages": {"/": "# No"}}).status_code == 403
+
+
+# --------------------------------------------------------------------------- sites on any name, pictures (2026-10-26)
+
+IID = "ab" * 32 + "i0"
+
+
+def test_any_name_has_a_site_of_text_html_or_inscriptions_and_no_lora_cap():
+    big = "<!doctype html><title>Big</title>" + "x" * 20_000
+    body = M.make("Shop.Pepe", {"/": "# Hi\n![a frog](" + IID.upper() + ")", "/big": {"html": big}, "/game": {"id": IID}})
+    page = M.parse(body)
+    assert page["name"] == "shop.pepe" and page["pages"]["/big"] == {"html": big} and page["pages"]["/game"] == {"id": IID}
+    assert M.title_of(page["pages"]["/big"]) == "Big" and M.title_of(page["pages"]["/game"]) == ""
+    assert M.pictures_of(page["pages"]["/"]) == [(IID, "a frog")] and M.title_of(page["pages"]["/"]) == "Hi"
+    with pytest.raises(M.MeshError, match="MeshText"):
+        M.make("x.mesh", {"/": {"html": "<b>no</b>"}})
+    with pytest.raises(M.MeshError, match="record is at most"):
+        M.make("x.pepe", {"/": "y" * (M.RECORD_MAX + 1)})
+    assert len(M.make("x.mesh", {"/": "# Hi\n![pic](" + IID + ")"})) < M.SITE_MAX   # a picture costs its line only
+
+
+def test_a_mesh_picture_draws_from_the_top_in_bands_of_one_lora_part():
+    io = pytest.importorskip("io")
+    Image = pytest.importorskip("PIL.Image")
+    from arcade import mesh_picture as MP
+    photo = Image.radial_gradient("L").resize((640, 480)).convert("RGB")
+    raw = io.BytesIO()
+    photo.save(raw, "PNG")
+    body = MP.make(raw.getvalue())
+    w, h, colours, rows = MP.read(body)
+    assert (w, h) == (267, 200) and len(rows) == 200 and 1 <= len(colours) <= 16 and len(body) <= MP.PICTURE_MAX
+    at, used = 6 + 2 * len(colours), 0
+    while at < len(body):                                 # every band fits one LoRa part
+        n, length = body[at], int.from_bytes(body[at + 1:at + 3], "big")
+        assert length <= MP.BAND_BYTES or n == 1
+        at += 3 + length
+        used += n
+    assert used == h
+    sprite = Image.new("RGBA", (24, 24), (0, 0, 0, 0))
+    sprite.putpixel((3, 4), (255, 0, 0, 255))
+    raw = io.BytesIO()
+    sprite.save(raw, "PNG")
+    w, h, colours, rows = MP.read(MP.make(raw.getvalue()))
+    assert (w, h) == (24, 24), "small pictures are never made bigger"
+    assert colours[rows[4][3]] == MP.rgb565(255, 0, 0) and colours[rows[0][0]] == MP.rgb565(*MP.BACKGROUND)
+    with pytest.raises(MP.PictureError):
+        MP.make(b"not a picture")
+
+
+def test_the_browser_finds_a_site_on_any_chain(client, tmp_path, monkeypatch):
+    app, state = client
+    chain = Chain()
+    claim = _ins(0, _j({"p": "dns", "op": "reg", "name": "shop.pepe"}), A)
+    site = _ins(1, M.make("shop.pepe", {"/": "# Shop\n=> /deals Deals", "/deals": {"html": "<title>Deals</title><b>50%</b>"},
+                                       "/frog": {"id": IID}}), A)
+    chain.add([claim, site])
+    index = _index(tmp_path, chain)
+    mesh_chain, _c, page_a, _b = _story()
+    mesh_index = _index(tmp_path / "m", mesh_chain) if (tmp_path / "m").mkdir() is None else None
+    monkeypatch.setattr(state, "ord_indexes", lambda: {"doge": index, "main": mesh_index})
+    every = app.get("/r/sites").json()["names"]
+    assert {(n["chain"], n["name"]) for n in every} == {("doge", "shop.pepe"), ("main", "me-seeks.mesh")}
+    assert [n["name"] for n in app.get("/r/mesh").json()["names"]] == ["me-seeks.mesh"], "the T-Deck: .mesh only"
+    front = app.get("/r/site/shop.pepe").json()
+    assert front["chain"] == "doge" and front["kind"] == "text" and front["body"].startswith("# Shop")
+    deals = app.get("/r/site/shop.pepe/deals").json()
+    assert deals["kind"] == "html" and deals["url"] == "/site/doge/shop.pepe/deals" and deals["title"] == "Shop"
+    served = app.get(deals["url"])
+    assert served.status_code == 200 and "<b>50%</b>" in served.text
+    assert "sandbox" in served.headers["content-security-policy"], "a site's HTML gets nothing of the arcade's"
+    frog = app.get("/r/site/shop.pepe/frog").json()
+    assert frog["kind"] == "id" and frog["inscription"] == IID
+    assert app.get(frog["url"], follow_redirects=False).headers["location"] == f"/content/{IID}"
+    assert app.get("/r/site/me-seeks.mesh").json()["chain"] == "main"
+    assert app.get("/r/site/nobody.pepe").status_code == 404 and app.get("/r/site/not-a-name").status_code == 400
+    page = app.get("/browser/shop.pepe", headers={"host": "app.example.com", "cf-ray": "x"})
+    assert page.status_code == 200 and "<title>Browser</title>" in page.text, "the Browser is a public page"
+    from arcade.web import door
+    assert door.public_path("/site/doge/shop.pepe/deals") and door.public_path("/browser")
+
+
+def test_a_picture_for_the_tdeck_comes_from_what_content_serves(client, monkeypatch):
+    io = pytest.importorskip("io")
+    Image = pytest.importorskip("PIL.Image")
+    app, state = client
+    raw = io.BytesIO()
+    Image.new("RGB", (40, 30), (0, 200, 0)).save(raw, "PNG")
+    from fastapi.responses import Response
+    import arcade.web.app as webapp  # noqa: F401
+    seen = []
+
+    def fake(key, *a, **k):
+        seen.append(key)
+        return Response(raw.getvalue(), media_type="image/png") if key == IID else Response(b"hi", media_type="text/plain")
+    route = next(r for r in app.app.routes if getattr(r, "path", "") == "/r/mesh/picture/{iid}")
+    cells = dict(zip(route.endpoint.__code__.co_freevars, route.endpoint.__closure__))
+    monkeypatch.setattr(cells["content"], "cell_contents", fake)
+    got = app.get(f"/r/mesh/picture/{IID}")
+    assert got.status_code == 200
+    from arcade import mesh_picture as MP
+    assert MP.read(got.content)[:2] == (40, 30)
+    app.get(f"/r/mesh/picture/{IID}")
+    assert seen == [IID], "made once, then kept"
+    assert app.get("/r/mesh/picture/" + "cd" * 32 + "i0").status_code == 404
+    assert app.get("/r/mesh/picture/nope").status_code == 400

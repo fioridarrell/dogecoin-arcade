@@ -353,3 +353,21 @@ def test_a_page_goes_compressed_only_to_a_t_deck_that_reads_it(pair, monkeypatch
     new = dev.page("x.mesh", zlib_ok=True)
     assert old["body"] == new["body"] == body and old["status"] == new["status"] == F.PAGE_OK
     assert len(sent) < plain, (len(sent), plain)
+
+
+def test_a_picture_comes_in_pieces_and_needs_no_sign_in(pair, monkeypatch):
+    """A picture on a .mesh page (PROTOCOL.md PIC_REQ/PIC, 2026-10-26): the arcade's mesh picture, one message's worth
+    from each offset the T-Deck asks for, read from the arcade once."""
+    gw, dev = pair
+    picture = bytes(range(256)) * 30                       # 7,680 bytes: three messages
+    asked = []
+
+    def mesh_picture(self, iid):
+        asked.append(iid)
+        return (200, picture) if iid == "ab" * 32 + "i0" else (404, {"detail": "not a picture"})
+    monkeypatch.setattr(FakeArcade, "mesh_picture", mesh_picture, raising=False)
+    got = dev.picture("ab" * 32 + "i0")
+    assert got["status"] == F.PIC_OK and got["body"] == picture
+    assert asked == ["ab" * 32 + "i0"], "the gateway asked the arcade once for every piece"
+    missing = dev.picture("cd" * 32 + "i0")
+    assert missing["status"] == F.PIC_MISSING and "not a picture" in missing["note"]

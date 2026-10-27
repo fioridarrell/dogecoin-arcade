@@ -1,8 +1,12 @@
-# The .mesh web: pages for the T-Deck
+# The .mesh web, and a site on any name
 
 A small web for the LoRa mesh, made the way the web was in 1990: plain text, headings, lists and links, nothing else.
 Every page belongs to a `.mesh` name, and the wallet holding the name decides what its page says. A DogecoinArcade
-T-Deck reads pages in the **Mesh Browser** app (from its App Store), over WiFi or by radio.
+T-Deck reads pages in the **Browser** app (from its App Store), over WiFi or by radio.
+
+The same **Browser** on the PWA and the website (`/browser`) opens the site of **any** name: `.mesh`, `.pepe`, `.doge`
+and every other ending, on every chain the arcade reads. Those sites are not limited the way `.mesh` ones are; see
+[Sites on any name](#sites-on-any-name).
 
 ## A name
 
@@ -42,11 +46,26 @@ Each page is plain text, one line at a time:
 | `* item` | a list item |
 | `> words` | a quote |
 | `=> other.mesh/path Label` | a link to another site; `=> /path Label` is a page of this site |
+| `![What it shows](inscription id)` | a picture: any image inscription |
 | ```` ``` ```` | starts or ends preformatted text, kept exactly (ASCII art) |
 | anything else | a paragraph line |
 
-There are no pictures, colours, fonts or scripts. The T-Deck draws every page in its own font on a 320 × 240 screen.
+There are no colours, fonts or scripts. The T-Deck draws every page in its own font on a 320 × 240 screen.
 Short lines read best.
+
+## Pictures
+
+A picture is its own inscription, so it does not count toward the 3,000 bytes. Put any image inscription on a page:
+
+```
+![Sunset over the lake](d737d773afcafa0b445def80f4dc43fc596cf185eac93941702675df384ac260i0)
+```
+
+A browser shows the inscription itself. A T-Deck gets it the way the web drew pictures in 1994, **from the top down**:
+the arcade makes it at most 300 × 200 in 16 colours, in bands of rows that each fill about one LoRa part, so every part
+that arrives draws a few more rows. At most about 8 KB, about a minute by radio and instant over WiFi. A T-Deck keeps
+the last 16 pictures it read and never asks for those again. Small, flat pictures (pixel art, 16 colours or fewer)
+come through exactly and in a few hundred bytes.
 
 ```
 # Me-Seeks
@@ -61,10 +80,29 @@ Hello from the T-Deck web!
 
 ## Reading pages
 
-- **On a T-Deck:** the Mesh Browser asks a gateway, over WiFi or LoRa. A page it has already read comes from its own
+- **On a T-Deck:** the Browser asks a gateway, over WiFi or LoRa. A page it has already read comes from its own
   memory unless the site changed. Any site can be set as its homepage.
 - **In a browser:** `https://app.dogecoinarcade.com/meshweb/yours.mesh` shows a page at the T-Deck's size.
   `/meshweb` lists every site.
 - **For programs:** `GET /r/mesh` is the directory (every name with a page, newest first);
   `GET /r/mesh/yours.mesh/about` is one page as JSON: `body` (its MeshText), `title`, `paths`, `page` (the
-  inscription), `holder`. Add `?have=<page>` and an unchanged site answers `{"unchanged": true}` without its body.
+  inscription), `holder`, `pictures`. Add `?have=<page>` and an unchanged site answers `{"unchanged": true}` without
+  its body. `GET /r/mesh/picture/<inscription id>` is a picture as a T-Deck draws it (the format is in
+  `arcade/mesh_picture.py`).
+
+## Sites on any name
+
+Any p:dns name can have a site, made the same way: a `{"p":"mesh","name":"yours.pepe","pages":{...}}` inscription to
+the address holding the name, on the chain the name lives on. The newest one by the holder counts. **Creator → Names →
+Publish a site** writes it for you. Read in the Browser on the PWA and the website, so not limited for LoRa:
+
+- no 3,000-byte cap: the record can be up to 64 KB, and its pages can be inscriptions of their own of any size;
+- a page can be MeshText (pictures and all), **HTML** (`{"html": "<!doctype html>..."}`), or **another inscription**
+  (`{"id": "<inscription id>"}`: a page, a picture, a game);
+- HTML runs sandboxed, the way every inscription does: it reaches nothing of the arcade's and sends no cookies. Use
+  relative links between its pages (`about`, not `/about`).
+
+For programs: `GET /r/sites` lists every site on every chain, each with its `chain`; `GET /r/site/yours.pepe/about`
+is one page (`kind`: `text` with `body`, or `html` / `id` with a `url` to show it in a frame); `?chain=` picks the
+chain when a name has a site on more than one (it answers 300 with the `choices` otherwise). A page of a site on its
+own is `/site/<chain>/yours.pepe/about`.

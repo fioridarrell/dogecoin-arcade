@@ -2604,8 +2604,8 @@ class DoginalIndex:
             return {"ticklist": self.ticklist()}
         if what == "mesh":                               # the .mesh web (arcade/mesh_web.py, 2026-10-26)
             return {"mesh": self.mesh(str(question.get("name") or ""))}
-        if what == "mesh_directory":
-            return {"mesh_directory": self.mesh_directory()}
+        if what == "mesh_directory":                     # "all": every name's site, not only .mesh (the PWA's Browser)
+            return {"mesh_directory": self.mesh_directory(mesh_only=not question.get("all"))}
         if what == "moves":                              # a snapshot being checked: this walk's moves, chunk by chunk
             from .ord_snapshot import MOVES_SAMPLE, moves_digest
             chunks = [int(c) for c in (question.get("chunks") or [])[:MOVES_SAMPLE]]
@@ -2921,8 +2921,11 @@ class DoginalIndex:
                             (mesh_web.SCAN,))
 
     def _mesh_holder(self, name: str) -> tuple[str | None, str | None]:
-        """(the name's first claim, the address holding that claim now) under the spec reading."""
-        win = (self.name(name)["readings"].get("spec") or {}).get("winner")
+        """(the name's first claim, the address holding that claim now) under the spec reading; a name that is not
+        .mesh, the first reading that has a claim of it (the JSON reading's names the spec leaves out)."""
+        readings = self.name(name)["readings"]
+        rules = ["spec"] if mesh_web.is_mesh(name) else list(ord_rules.NAME_RULES)
+        win = next(((readings.get(r) or {}).get("winner") for r in rules if (readings.get(r) or {}).get("winner")), None)
         if not win or not win.get("output"):
             return (win or {}).get("inscription"), None
         txid, vout = win["output"].split(":")
@@ -2945,9 +2948,10 @@ class DoginalIndex:
                 "size": len(body), "sha256": mesh_web.digest(body)}
 
     def mesh(self, name: str) -> dict:
-        """A .mesh name's site: who holds the name, and the newest page inscribed to that holder (the operator chose "Latest
-        by the holder"). {"page": None} when the holder has inscribed none, {"holder": None} when nobody holds it."""
-        made = mesh_web.name_of(name)
+        """A name's site (.mesh, or any p:dns name since 2026-10-26): who holds the name, and the newest page inscribed
+        to that holder (the operator chose "Latest by the holder"). {"page": None} when the holder has inscribed none,
+        {"holder": None} when nobody holds it."""
+        made = mesh_web.site_name(name)
         out: dict = {"name": made, "claim": None, "holder": None, "page": None}
         if not made or self.store.old_layout:
             return out
@@ -2960,8 +2964,9 @@ class DoginalIndex:
                     break
         return out
 
-    def mesh_directory(self) -> list[dict]:
-        """Every .mesh name with a page that counts, newest page first: the web's front door, as in 1994."""
+    def mesh_directory(self, mesh_only: bool = True) -> list[dict]:
+        """Every .mesh name with a page that counts, newest page first: the web's front door, as in 1994. `mesh_only`
+        False: every name's site."""
         if self.store.old_layout:
             return []
         holders: dict[str, str | None] = {}
@@ -2971,7 +2976,7 @@ class DoginalIndex:
                 page = mesh_web.parse(self._mesh_body(iid_of(row[0], row[1])))
             except Exception:                            # noqa: BLE001
                 continue
-            if page is None or page["name"] in done:
+            if page is None or page["name"] in done or (mesh_only and not mesh_web.is_mesh(page["name"])):
                 continue
             if page["name"] not in holders:
                 holders[page["name"]] = self._mesh_holder(page["name"])[1]
