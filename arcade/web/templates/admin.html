@@ -2645,6 +2645,7 @@ section.panel h2{margin-top:0}
     if (sn.said) bits.push(sn.said);
     if (sn.made) bits.push('serves a copy of its index at block ' + num(sn.made));
     if (r.rebuilt && r.rebuilt.why) bits.push('built again: ' + r.rebuilt.why);
+    if (r.stale) bits.push('the numbers kept from before; working them out again');
     // PR #32's token rule over the blocks walked before it (2026-10-27): walked again beside the index, which keeps serving.
     var bf = r.backfill;
     if (bf && bf.failed) bits.push('token backfill let go: ' + bf.failed);

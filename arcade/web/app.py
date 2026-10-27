@@ -28330,7 +28330,7 @@ def create_app(state: AppState) -> FastAPI:
             if net not in STARTS:
                 continue
             index = indexes.get(net)
-            st = index.status() if index is not None else {"mode": "off", "base": STARTS[net]}
+            st = index.status(quick=True) if index is not None else {"mode": "off", "base": STARTS[net]}
             # The mode as set now, never the status kept for 20 s (2026-10-22: the four choices "are not
             # registering the clicks" -- the redraw after a click showed the kept mode and turned the choice back).
             st = {**st, "mode": state.ord_mode(net)}
@@ -28459,7 +28459,7 @@ def create_app(state: AppState) -> FastAPI:
             ords = state.ord_indexes().get(net)
             base, tip = STARTS[net], 0
             try:
-                tip = int((ords.status() if ords is not None else {}).get("tip") or 0) \
+                tip = int((ords.status(quick=True) if ords is not None else {}).get("tip") or 0) \
                     or int(state.chain_sync(chain).get("blocks") or 0)
             except Exception:                                  # noqa: BLE001 -- not answering: no percentages
                 tip = 0

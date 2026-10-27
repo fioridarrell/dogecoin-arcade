@@ -2736,13 +2736,23 @@ class DoginalIndex:
     STATUS_SECONDS = 20.0
     COUNTS_SECONDS = 120.0
 
-    def status(self) -> dict:
+    def status(self, quick: bool = False) -> dict:
         """Kept STATUS_SECONDS; while it is being worked out again, everybody else gets the last one at once instead of
-        working it out too (2026-10-20: Admin tabs piled up on it and held the threads that serve pages)."""
+        working it out too (2026-10-20: Admin tabs piled up on it and held the threads that serve pages).
+
+        `quick` (Admin -> Ords and DNS, 2026-10-27: "The admin ORD tab loads painfully slow"): never waits. The
+        status is worked out on a thread of its own; meanwhile the last one is given -- this run's, or the one kept in
+        the index file from before a restart (`stale`) -- or, the very first time, what is known without a count. On
+        .25 a first status after a restart summed tables of tens of millions of rows on a busy disk for minutes, and
+        every Ords request waited behind it."""
         kept = getattr(self, "_status_kept", None)
         if kept and time.monotonic() - kept[0] < self.STATUS_SECONDS:
             return kept[1]
         lock = self.__dict__.setdefault("_status_lock", threading.Lock())
+        if quick:
+            if lock.acquire(blocking=False):
+                threading.Thread(target=self._status_behind, args=(lock,), name="ord-status", daemon=True).start()
+            return kept[1] if kept else self._status_last()
         if not lock.acquire(blocking=kept is None):
             return kept[1]
         try:
@@ -2751,6 +2761,32 @@ class DoginalIndex:
             return said
         finally:
             lock.release()
+
+    def _status_behind(self, lock) -> None:
+        try:
+            said = self._status()
+            self._status_kept = (time.monotonic(), said)
+            try:
+                self.store.set_meta("status_last", said)
+            except Exception:                                  # noqa: BLE001 -- kept in memory all the same
+                pass
+        except Exception as exc:                               # noqa: BLE001 -- the last one stands; tried again
+            log.warning("ord index %s: status: %s", self.net, exc)
+        finally:
+            lock.release()
+
+    def _status_last(self) -> dict:
+        """Before this run's first status is worked out: the one kept from before (marked stale), or what is known
+        without counting anything."""
+        try:
+            kept = self.store.meta("status_last")
+        except Exception:                                      # noqa: BLE001
+            kept = None
+        if isinstance(kept, dict) and kept.get("net") == self.net:
+            return {**kept, "mode": self.mode(), "stale": True}
+        return {"net": self.net, "mode": self.mode(), "base": self.base, "tip": self.tip, "levels": {}, "covered": 0,
+                "ready": 0, "agreed": 0, "one": 0, "differ": 0, "holders": [], "walkers": [], "peers": {},
+                "lanes": [], "leases": [], "walk": None, "error": self.error, "stale": True, "counting": True}
 
     def _counts(self) -> dict:
         """The index's totals. A walking index's (inscriptions, tokens, holders, names) are never waited for: worked out

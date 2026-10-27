@@ -1679,3 +1679,31 @@ def test_a_small_machine_keeps_its_index_and_says_its_old_tokens_are_not_walked_
     assert not (tmp_path / "walk.sqlite.backfill").exists()
     said = index.status()["backfill"]
     assert said["small"] and said["next"] is None and said["tokens_from"] == dx.BASE + 2
+
+
+def test_a_quick_status_never_waits_and_remembers_the_last_one(tmp_path, monkeypatch):
+    """2026-10-27: "The admin ORD tab loads painfully slow". Admin asks quick: the status is worked out behind,
+    the first ask is answered at once, and after a restart the last one kept in the file is given (stale) at once."""
+    import threading
+    chain, *_ = _reinscribed_transfer_chain()
+    index = _walker(tmp_path, chain)
+    index.walker.step(chain, dx.BASE + 3, budget=60)
+    slow = threading.Event()
+    real = dx.DoginalIndex._status
+    def slow_status(self):
+        slow.wait(5)
+        return real(self)
+    monkeypatch.setattr(dx.DoginalIndex, "_status", slow_status)
+    first = index.status(quick=True)
+    assert first["stale"] and first["net"] == "doge", "answered at once, before any count"
+    slow.set()
+    for _ in range(100):
+        if getattr(index, "_status_kept", None):
+            break
+        threading.Event().wait(0.05)
+    assert not index.status(quick=True).get("stale")
+    index.store.close()
+    again = _walker(tmp_path, chain)
+    monkeypatch.setattr(dx.DoginalIndex, "_status", lambda self: (threading.Event().wait(5), real(self))[1])
+    kept = again.status(quick=True)
+    assert kept["stale"] and kept.get("walk"), "the status kept from before the restart, at once"

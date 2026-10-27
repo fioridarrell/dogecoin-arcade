@@ -88,6 +88,13 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-27 Admin -> Ords never waits for a count (Claude)
+The operator: "The admin ORD tab loads painfully slow". A first status after a restart summed tables of tens of millions of
+rows (block, insc) -- on .25's disk for minutes, with every Ords request queued behind it (400 s seen today).
+`DoginalIndex.status(quick=True)` (Admin -> Ords and the DNS tab's tip): worked out on a thread of its own; meanwhile
+this run's last one, or the one kept in meta `status_last` from before a restart (`stale`), or a count-less first one.
+The panel says "the numbers kept from before; working them out again" while stale. Tests: test_doginal_index (new).
+
 ### 2026-10-27 The strip under a full-screen game is gone (Claude)
 The operator (a screenshot of "DogecoinArcade never asks for your password inside a game." under Ashvale): "Remove this".
 Hardening round 2 wave 3's (e) taken back: inscription_full.html has no .trustbar, and the game's frame fills the screen
