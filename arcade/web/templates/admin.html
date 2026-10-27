@@ -80,7 +80,7 @@
     must too. <b>Share</b> (on unless you untick it) lets other arcades use a Core that runs here: they can
     read blocks and the mempool and send transactions people signed, never touch this node's wallet.</p>
   <div class="tablewrap"><table class="admintable">
-    <thead><tr><th>Chain</th><th>Core</th><th>Share</th><th>Faucet</th><th>Now</th><th>Node here</th></tr></thead>
+    <thead><tr><th>Chain</th><th>Core</th><th>Share</th><th>Faucet</th><th>Now</th></tr></thead>
     <tbody id="chainrows"></tbody>
   </table></div>
   <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
@@ -1818,6 +1818,7 @@ section.panel h2{margin-top:0}
 .wallet .addr{font-size:.8rem;word-break:break-all}
 .tunsteps{padding-left:22px;display:grid;gap:12px}
 #chainrows select{min-width:150px}
+#chainrows tr.noderow td{border-top:0;padding-top:0;font-size:.84rem}
 #chainrows input[type=checkbox]{width:auto;margin:0}
 .idx-bad{color:var(--bad, #c0392b)}
 .idx-rows{font-size:.76rem;white-space:pre-wrap;word-break:break-all;max-height:180px;overflow:auto;background:var(--code);padding:6px;border-radius:6px}
@@ -2110,6 +2111,7 @@ section.panel h2{margin-top:0}
   }
   function nodeCell(r) {
     var td = document.createElement('td'); td.className = 'nodecell muted'; td.dataset.net = r.net; td.dataset.now = r.now;
+    td.colSpan = 5;
     fillNode(td);
     return td;
   }
@@ -2121,7 +2123,7 @@ section.panel h2{margin-top:0}
     bits.push(st ? 'takes about ' + gb(st.bytes) + (st.who === 'this arcade' ? ' here' : ' (as on ' + st.who + ')')
                  : 'storage not reported by any linked arcade yet');
     if (x.ord && x.ord.bytes) bits.push('its full ord index about ' + gb(x.ord.bytes));
-    var line = document.createElement('div'); line.textContent = bits.join(' · '); td.appendChild(line);
+    var line = document.createElement('span'); line.textContent = 'Node here: ' + bits.join(' · '); td.appendChild(line);
     var j = x.job;
     if (j && j.state === 'working') {
       td.appendChild(text('div', j.step + (j.total ? ' ' + Math.round(100 * (j.done || 0) / j.total) + '%' : '')));
@@ -2145,8 +2147,9 @@ section.panel h2{margin-top:0}
       call('/admin/api/cores/install', {net: td.dataset.net}).then(function () { loadNodes(); })
         .catch(function (e) { b.disabled = false; say(e.message, 'err'); });
     };
+    b.style.marginLeft = '10px';
     td.appendChild(b);
-    td.appendChild(text('div', gb(free) + ' free here'));
+    td.appendChild(text('span', ' ' + gb(free) + ' free on this disk'));
   }
   function drawChains(c) {
     var tb = $('chainrows'); tb.textContent = '';
@@ -2214,13 +2217,16 @@ section.panel h2{margin-top:0}
         said.appendChild(rb);
       }
       tr.appendChild(said);
-      tr.appendChild(nodeCell(r));
       tb.appendChild(tr);
+      if (r.optional) {                                // the node line under each add-on chain (Install a node)
+        var nr = document.createElement('tr'); nr.className = 'noderow';
+        nr.appendChild(nodeCell(r)); tb.appendChild(nr);
+      }
     });
     var un = c.unknown || [];
     if (un.length) {
       var tr2 = document.createElement('tr');
-      var td2 = document.createElement('td'); td2.colSpan = 6; td2.className = 'muted';
+      var td2 = document.createElement('td'); td2.colSpan = 5; td2.className = 'muted';
       td2.textContent = 'Also shared by linked arcades, needing a newer version of this arcade: '
         + un.map(function (u) { return u[0] + ' (' + u[1] + ')'; }).join(', ');
       tr2.appendChild(td2); tb.appendChild(tr2);

@@ -175,4 +175,4 @@ def test_the_admin_routes(public):
     assert app.post("/admin/api/cores/install", headers={**LOCAL, **WRITE}, json={"net": "main"}).status_code == 400
     assert app.post("/admin/api/cores/install", headers={**LOCAL, **WRITE}, json={"net": "kot"}).status_code == 400
     page = app.get("/admin", headers=LOCAL).text
-    assert "<th>Node here</th>" in page and "function loadNodes()" in page
+    assert "function loadNodes()" in page
