@@ -86,7 +86,9 @@ function remember() {
   });
 }
 var store = function (k, v) { if (v === undefined) return kept ? kept.getItem(k) : null; return kept ? kept.setItem(k, v) : Promise.reject(new Error("not ready")); };
-var home = function () { return store("browserhome") || "directory"; };
+// The homepage unless the reader picked another (2026-10-27): the Me-Seeks search engine, itself an inscription.
+var DEFAULT_HOME = "me-seeks.pep";
+var home = function () { return store("browserhome") || DEFAULT_HOME; };
 function marks() { try { var m = JSON.parse(store("bookmarks") || "[]"); return Array.isArray(m) ? m : []; } catch (e) { return []; } }
 function saveMarks(m) {
   return Promise.resolve(store("bookmarks", JSON.stringify(m))).catch(function () { $("status").textContent = "Could not save your bookmarks just now."; });
@@ -103,9 +105,12 @@ function drawPanel() {
     return '<div class="row"><a data-to="' + esc(b.a) + '">' + esc(b.t || b.a) + (b.t && b.t !== b.a ? " <small>" + esc(b.a) + "</small>" : "")
       + '</a><button class="x" data-drop="' + i + '" title="Remove" aria-label="Remove">&times;</button></div>';
   }).join("");
-  $("panel").innerHTML = "<h2>Homepage</h2><p>" + (h === "directory" ? "The directory" : '<a data-to="' + esc(h) + '">' + esc(h) + "</a>") + "</p>"
+  $("panel").innerHTML = "<h2>Homepage</h2><p>" + (h === "directory" ? '<a data-to="directory">The directory</a>' : '<a data-to="' + esc(h) + '">' + esc(h) + "</a>")
+    + (h === DEFAULT_HOME ? " <small>(the default)</small>" : "") + "</p>"
     + '<p>' + (at && at !== h ? '<button class="act" id="sethome">Make ' + esc(at === "directory" ? "the directory" : at) + " home</button>" : "")
+    + (h !== DEFAULT_HOME ? '<button class="act" id="defhome">Use ' + esc(DEFAULT_HOME) + "</button>" : "")
     + (h !== "directory" ? '<button class="act" id="nohome">Use the directory</button>' : "") + "</p>"
+    + '<p><a data-to="directory">Every site (the directory)</a></p>'
     + "<h2>Bookmarks</h2>" + (rows || '<p class="note">None yet. Tap the star in the address bar to bookmark a page.</p>')
     + '<p class="note">' + (kept === local ? (framed ? "Kept in this tab only: no wallet answered." : "Kept in this browser.")
                                          : "Kept by your wallet, on every device you use it from.") + "</p>";
@@ -172,12 +177,22 @@ function go(address, how) {
       show(meshtext(p.body), "Document: Done (" + p.body.length + " bytes, " + p.chain + ")", p.title || p.name);
     } else if (p.url) {
       show('<iframe sandbox="allow-scripts allow-pointer-lock" src="' + esc(p.url) + '" title="' + esc(p.name) + '"></iframe>', "Document: Done (" + p.chain + ", sandboxed)", p.title || p.name);
+    } else if (how === "start" && address === DEFAULT_HOME) {
+      go("directory", "start");
     } else {
       var also = (p.suggest || []).map(function (n) { return "=> " + n + (s.rest.indexOf("/") > 0 ? s.rest.slice(s.rest.indexOf("/")) : "") + " Did you mean " + n + "?"; }).join("\n");
       show(meshtext("# Not found\n" + (p.detail || "") + "\n\n" + (also ? also + "\n" : "") + "=> " + home() + " Go home"), "Document: not found", "Not found");
     }
   }).catch(function () { show(meshtext("# Not found\nThis arcade did not answer.\n\n=> directory The directory"), "Document: not found", "Not found"); });
 }
+// A site shown in the frame may open another name here (a search result, a link to a friend's site): it posts
+// {arcade: "browser", go: "name.pepe/page"} to this window. Only the frame we drew may ask.
+window.addEventListener("message", function (e) {
+  var f = $("view").querySelector("iframe"), m = e.data || {};
+  if (!f || e.source !== f.contentWindow || m.arcade !== "browser" || typeof m.go !== "string") return;
+  var to = m.go.trim().replace(/^mesh:\/\//, "");
+  if (/^([a-z0-9-]+:)?[^\s\/:]+\.[^\s\/]+(\/\S*)?$/i.test(to) || to === "directory") go(to);
+});
 $("view").onclick = function (e) { var a = e.target.closest("a[data-to]"); if (a) go(a.dataset.to); };
 $("go").onclick = function () { go($("addr").value); };
 $("addr").onkeydown = function (e) { if (e.key === "Enter") go($("addr").value); };
@@ -201,6 +216,7 @@ $("panel").onclick = function (e) {
   else if (x) { var m = marks(); m.splice(Number(x.dataset.drop), 1); saveMarks(m).then(function () { drawPanel(); drawStar(); }); drawPanel(); }
   else if (e.target.id === "sethome") setHome(at);
   else if (e.target.id === "nohome") setHome("directory");
+  else if (e.target.id === "defhome") setHome(DEFAULT_HOME);
 };
 $("home").oncontextmenu = makeHome;
 var held; $("home").onpointerdown = function () { held = setTimeout(makeHome, 700); };

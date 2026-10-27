@@ -223,7 +223,9 @@ def test_the_browser_finds_a_site_on_any_chain(client, tmp_path, monkeypatch):
     mesh_chain, _c, page_a, _b = _story()
     mesh_index = _index(tmp_path / "m", mesh_chain) if (tmp_path / "m").mkdir() is None else None
     monkeypatch.setattr(state, "ord_indexes", lambda: {"doge": index, "main": mesh_index})
-    every = app.get("/r/sites").json()["names"]
+    listed = app.get("/r/sites")
+    assert listed.headers["access-control-allow-origin"] == "*", "an inscribed page (a search engine) reads the list"
+    every = listed.json()["names"]
     assert {(n["chain"], n["name"]) for n in every} == {("doge", "shop.pepe"), ("main", "me-seeks.mesh")}
     assert [n["name"] for n in app.get("/r/mesh").json()["names"]] == ["me-seeks.mesh"], "the T-Deck: .mesh only"
     front = app.get("/r/site/shop.pepe").json()

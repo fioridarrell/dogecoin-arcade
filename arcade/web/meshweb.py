@@ -229,7 +229,9 @@ def register(app, state, content=None) -> None:
     @app.get("/r/sites")
     def sites_directory():
         try:
-            return JSONResponse({"names": all_sites()}, headers={"Cache-Control": "no-store"})
+            # readable by inscribed pages (their opaque origin makes every fetch cross-origin): 2026-10-27, the
+            # me-seeks.pep search engine is an inscription that searches every site
+            return JSONResponse({"names": all_sites()}, headers={**contentlib.CORS, "Cache-Control": "no-store"})
         except (LookupError, ValueError) as exc:
             return JSONResponse({"detail": str(exc)}, status_code=503)
 

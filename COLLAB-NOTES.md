@@ -88,6 +88,18 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-27 Browser: me-seeks.pep is the default homepage; sites may open other names; /r/sites readable by pages (Claude)
+The operator: "Make me-seeks.pep the default homepage for the browser". me-seeks.pep will be the Me-Seeks search engine, an
+inscription.
+- browser.html: DEFAULT_HOME = "me-seeks.pep", used unless the reader picked a homepage. If it is not published yet,
+  opening on it shows the directory instead of "Not found". The panel offers "Use me-seeks.pep", "Use the directory",
+  and a link to every site.
+- A site in the Browser's frame may post {arcade: "browser", go: "name.pepe/page"} to open another name, so a search
+  result or a link to a friend's site opens in the Browser. Only the frame the Browser drew is listened to.
+- meshweb.py /r/sites: Access-Control-Allow-Origin * like /r/site, so an inscribed page can read the list.
+- Tests: test_mesh_web (the header). Browser-checked with a stand-in me-seeks.pep: it opens as home, searches, and a
+  result opens in the Browser.
+
 ### 2026-10-27 Browser 1.3: bookmarks and a homepage (Claude)
 The operator: "We need bookmarks and we need to be able to set the homepage on the PWA and Web version of the browser."
 - arcade/web/browser.html (served at /browser; the same file is the App Store's Browser card): a star in the address bar
