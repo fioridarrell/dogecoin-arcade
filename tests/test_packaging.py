@@ -42,3 +42,15 @@ def test_the_bridges_the_viewer_loads_are_shipped():
     for name in ("storage.js", "node.js"):
         assert (TEMPLATES / name).is_file()
         assert any(fnmatch.fnmatch(f"templates/{name}", g) for g in globs), name
+
+
+def test_every_data_file_beside_the_code_is_shipped():
+    """arcade/web/browser.html (the Browser, 2026-10-26) sat beside meshweb.py, not under templates/: /browser answered
+    500 on Strawberry, an installed node, the first time it ran there. Any file in arcade/web that is not code has to be
+    claimed too."""
+    globs = _shipped_globs()
+    web = ROOT / "arcade" / "web"
+    left_out = sorted(p.name for p in web.iterdir()
+                      if p.is_file() and p.suffix not in (".py", ".pyc") and not p.name.startswith(".")
+                      and not any(fnmatch.fnmatch(p.name, g) for g in globs))
+    assert left_out == [], f"not in package-data, so a pip install lacks: {left_out}"

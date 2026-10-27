@@ -90,7 +90,8 @@ packages = ["arcade", "arcade.messaging", "arcade.mesh", "arcade.web", "arcade.l
 "arcade.web" = ["templates/*.html", "templates/*.js", "templates/*.css", "templates/*.md",
                 "templates/*.png", "templates/brands/*/*.png",
                 "docs/*.md", "docs/*/*.md",
-                "vendor/*.js", "vendor/*/*.js", "vendor/*.md"]
+                "vendor/*.js", "vendor/*/*.js", "vendor/*.md",
+                "browser.html"]                                     # the Browser (meshweb.py, 2026-10-26)
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

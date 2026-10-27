@@ -111,6 +111,8 @@ record whose pages are MeshText, HTML or another inscription; small pictures dra
 - me-seeks.mesh has a /show page (record fdeb30e6...i0) with four pictures inscribed by @strawberry (the operator asked):
   Doge d.4b435b86...i0 (made locally with Qwen-Image), sunset d737d773...i0, T-Deck 328c7745...i0, button e3c4c364...i0.
 - Tests: tests/test_mesh_web.py (any-name sites, pictures, routes); arcade-lora test_c_apps/test_c_client/test_gateway.
+- Follow-up the same evening: /browser answered 500 on Strawberry (an installed node): arcade/web/browser.html was not
+  in package-data. Added, with tests/test_packaging.py checking every non-code file in arcade/web.
 
 ### 2026-10-26 The T-Deck builds its own letters; ord coins never spent (Claude)
 The operator: "Can't the T-Deck build the transaction?" / "Is it going to protect ord coins from spending?" -- a letter over
