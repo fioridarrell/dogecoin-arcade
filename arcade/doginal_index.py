@@ -470,7 +470,8 @@ def _pct(part: Any, whole: Any) -> float | None:
 #: Questions the explorer asks (2026-10-21) that a walking arcade from before does not know.
 #: The most coins one "names_on" question reads.
 NAMES_ON_MAX = 3000
-NEWER_QUESTIONS = ("number", "ticks", "holders", "note", "ticklist", "mesh", "mesh_directory", "typed", "names_on")
+NEWER_QUESTIONS = ("number", "ticks", "holders", "note", "ticklist", "mesh", "mesh_directory", "typed", "names_on",
+                   "sites_search")
 
 
 def _first_page_of(token: dict | None) -> dict | None:
@@ -2933,6 +2934,12 @@ class DoginalIndex:
             return {"names_on": self.names_on(list(question.get("coins") or [])[:NAMES_ON_MAX])}
         if what == "mesh_directory":                     # "all": every name's site, not only .mesh (the PWA's Browser)
             return {"mesh_directory": self.mesh_directory(mesh_only=not question.get("all"))}
+        if what == "sites_search":                       # the sites search (arcade/sites_index.py, 2026-10-27)
+            hook = self.sites_search
+            if hook is None:
+                raise ValueError("this arcade does not host the sites search of this chain")
+            return {"sites_search": hook(str(question.get("q") or "")[:200], int(question.get("page") or 0),
+                                         int(question.get("per") or 10))}
         if what == "moves":                              # a snapshot being checked: this walk's moves, chunk by chunk
             from .ord_snapshot import MOVES_SAMPLE, moves_digest
             chunks = [int(c) for c in (question.get("chunks") or [])[:MOVES_SAMPLE]]
@@ -3335,6 +3342,42 @@ class DoginalIndex:
             cache.clear()
         cache[iid] = body
         return body
+
+    #: The sites search this arcade hosts for this chain (arcade/sites_index.py): (q, page, per) -> its answer; None
+    #: when it hosts none. Set by the web state.
+    sites_search = None
+
+    def mesh_records_after(self, rid: int, limit: int = 40) -> list:
+        """The "p":"mesh" site records inscribed after row `rid`, oldest first (insc_mesh): (tx, n, number, height,
+        rid). The sites search reads every one, in order."""
+        if self.store.old_layout:
+            return []
+        return self.store.q("SELECT tx, n, number, height, rid FROM insc WHERE proto = 'mesh' AND rid > ? "
+                            "ORDER BY rid LIMIT ?", (int(rid), int(limit)))
+
+    def site_record(self, row: tuple) -> dict | None:
+        """A site record row (mesh_records_after), when it counts: made to the address holding its name now -- the
+        rule the Browser reads sites by (`mesh`). {"id", "number", "height", "name", "pages", ...} or None."""
+        tx, n = row[0], row[1]
+        try:
+            page = mesh_web.parse(self._mesh_body(iid_of(tx, n)))
+        except Exception:                                # noqa: BLE001 -- not readable now
+            return None
+        if page is None:
+            return None
+        return self._mesh_page(row, page["name"], self._mesh_holder(page["name"])[1])
+
+    def read_inscription(self, iid: str) -> tuple[str, bytes]:
+        """(content type, body) of an inscription of this chain, read as the site pages are."""
+        reader = self.mesh_reader
+        if reader is None:
+            from . import funding
+            guard = (getattr(funding, "GUARD_BY_NET", None) or {}).get(self.net)
+            reader = guard.content if guard is not None else None
+        if reader is None:
+            raise ValueError("this arcade reads no inscriptions of this chain")
+        ctype, body = reader(iid)[:2]
+        return str(ctype or ""), bytes(body)
 
     def _mesh_pages(self) -> list:
         """The "p":"mesh" inscriptions, newest first (insc_mesh)."""

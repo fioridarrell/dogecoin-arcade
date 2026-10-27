@@ -151,24 +151,30 @@ function show(html, status, named) {
   $("status").textContent = status; document.title = (named ? named + " · " : "") + "Browser"; drawStar();
   $("back").disabled = !back.length; $("fwd").disabled = !fwd.length;
 }
-function directory() {
-  return fetch("/r/sites").then(function (r) { return r.json(); }).then(function (d) {
-    var names = d.names || [], lines = ["# The Browser"], m = marks();
-    if (m.length) { lines.push("## Your bookmarks"); m.forEach(function (b) { lines.push("=> " + b.a + " " + (b.t || b.a)); }); lines.push("## Every site"); }
-    lines.push("Every name with a site, newest first. Type any name above: .mesh, .pepe, .doge, ...", "");
-    names.forEach(function (n) { lines.push("=> " + n.chain + ":" + n.name + " " + n.name + (n.title ? " - " + n.title : "") + "  (" + n.chain + ")"); });
-    if (!names.length) lines.push("Nobody has published a site yet. Claim a name and publish one from the arcade's Creator tab.");
-    show(meshtext(lines.join("\n")), "Document: Done (" + names.length + " sites)", "");
+// The directory a page at a time (2026-10-27: "The directory at some point will be millions of pages long"):
+// "directory" is its first page, "directory/2" the second.
+function directory(n) {
+  n = Math.max(1, n || 1);
+  return fetch("/r/sites?page=" + (n - 1) + "&per=50").then(function (r) { return r.json(); }).then(function (d) {
+    var names = d.names || [], pages = d.pages || 1, lines = ["# The Browser"], m = marks();
+    if (n === 1 && m.length) { lines.push("## Your bookmarks"); m.forEach(function (b) { lines.push("=> " + b.a + " " + (b.t || b.a)); }); lines.push("## Every site"); }
+    lines.push("Every name with a site, newest first" + (d.total ? " (" + Number(d.total).toLocaleString() + ")" : "")
+      + (pages > 1 ? ", page " + n + " of " + pages : "") + ". Type any name above: .mesh, .pepe, .doge, ...", "");
+    names.forEach(function (x) { lines.push("=> " + x.chain + ":" + x.name + " " + x.name + (x.title ? " - " + x.title : "") + "  (" + x.chain + ")"); });
+    if (!names.length) lines.push(n > 1 ? "No more sites." : "Nobody has published a site yet. Claim a name and publish one from the arcade's Creator tab.");
+    if (pages > 1) { lines.push(""); if (n > 1) lines.push("=> directory" + (n > 2 ? "/" + (n - 1) : "") + " Previous page"); if (n < pages) lines.push("=> directory/" + (n + 1) + " Next page"); }
+    show(meshtext(lines.join("\n")), "Document: Done (" + names.length + " sites" + (pages > 1 ? ", page " + n + " of " + pages : "") + ")", "");
   });
 }
 function go(address, how) {
   address = String(address || "").trim().replace(/^mesh:\/\//, "").replace(/\/+$/, "");
   if (!address) return;
   if (how !== "back" && how !== "fwd" && how !== "reload") { if (at && at !== address) back.push(at); fwd = []; }
-  at = address; $("addr").value = address === "directory" ? "" : address;
+  var listing = address.match(/^directory(?:\/(\d+))?$/);
+  at = address; $("addr").value = listing ? "" : address;
   if (atBrowser && how !== "start") try { history.replaceState(null, "", "/browser/" + (address === "directory" ? "" : address)); } catch (e) {}
   $("status").textContent = "Contacting " + address + "…";
-  if (address === "directory") { directory().catch(function () { show(meshtext("# Not found\nThis arcade did not answer."), "Document: not found"); }); return; }
+  if (listing) { directory(Number(listing[1] || 1)).catch(function () { show(meshtext("# Not found\nThis arcade did not answer."), "Document: not found"); }); return; }
   var s = siteOf(address);
   fetch("/r/site/" + s.rest + (s.chain ? "?chain=" + encodeURIComponent(s.chain) : "")).then(function (r) { return r.json(); }).then(function (p) {
     if (p.choices) {

@@ -102,7 +102,29 @@ Publish a site** writes it for you. Read in the Browser on the PWA and the websi
 - HTML runs sandboxed, the way every inscription does: it reaches nothing of the arcade's and sends no cookies. Use
   relative links between its pages (`about`, not `/about`).
 
-For programs: `GET /r/sites` lists every site on every chain, each with its `chain`; `GET /r/site/yours.pepe/about`
+For programs: `GET /r/sites?page=0&per=50` lists every site on every chain, newest first, a page at a time
+(`total`, `pages`), each with its `chain`; `GET /r/site/yours.pepe/about`
 is one page (`kind`: `text` with `body`, or `html` / `id` with a `url` to show it in a frame); `?chain=` picks the
 chain when a name has a site on more than one (it answers 300 with the `choices` otherwise). A page of a site on its
 own is `/site/<chain>/yours.pepe/about`.
+
+A site shown in the Browser can open another name in it: post `{arcade: "browser", go: "yours.pepe/about"}` to
+`window.parent`. Only the frame the Browser drew is listened to.
+
+## Searching every site
+
+**Me-Seeks** (`me-seeks.pep`, the Browser's homepage unless you pick another) searches every site. It is an
+inscription that asks `GET /r/search?q=frog&page=0`: 10 results a page (`results`: `name`, `path`, `address`,
+`chain`, `title`, `snippet`; `total`, `pages`). The words that matched sit between `\x02` and `\x03` in the snippet;
+draw it as text, never as markup.
+
+The index lives on the arcades that choose to host it: **Admin → Ords → Sites search**, per chain, **Host**, **Ask a
+linked arcade** (the default) or **Off**. Hosting needs that chain's full ord index ("Keep the full index"), and keeps
+every page's title, description, headings and words in `sites-<chain>.sqlite`, a few KB a page, up to the size you
+set. Every hosting arcade builds it from the chain alone, by the same rule the Browser reads sites by, so any two give
+the same answers. An arcade that does not host asks a linked one that does.
+
+**Being found.** What counts most is your name, then your page's `<title>`, its `<meta name="description">` (shown as
+the snippet when it matches), its headings and its words. A word counts at most eight times a page, so repeating it
+does not help. A site's front page comes before its other pages. A newer site record replaces the old one in the
+index when it is mined and read.

@@ -284,6 +284,13 @@ def main(argv: list[str] | None = None) -> int:
         Runner(state.ord_working).start()              # the kept and helped chains open in the background
     except Exception as exc:
         print(f"  the ord indexes did not start: {exc}")
+    # The sites search of each chain this arcade hosts (arcade/sites_index.py; Admin -> Ords -> Sites search), fed by
+    # that chain's ord walk.
+    try:
+        from ..sites_index import Runner as SitesRunner
+        SitesRunner(state.sites_working).start()
+    except Exception as exc:
+        print(f"  the sites search did not start: {exc}")
 
     # A collection that was being inscribed when the process last stopped
     # carries on from the piece after the last one written down.

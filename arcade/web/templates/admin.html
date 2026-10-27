@@ -394,6 +394,21 @@
     </div>
     <div id="kcsaid" class="muted" style="font-size:.84rem;margin-top:6px"></div>
   </div>
+  {# 2026-10-27: a search engine of every published site ("The directory at some point will be millions of pages
+     long"; "It should be an option for the operator to host The sites index. Just like ords are an option") --
+     arcade/sites_index.py, asked at /r/search (Me-Seeks, me-seeks.pep). #}
+  <div class="ordcard" id="sitescard">
+    <h3>Sites search</h3>
+    <p class="muted" style="margin-top:0;font-size:.84rem">A search engine of every site on a chain: each page&rsquo;s
+      title, description, headings and words, kept in a file of its own. <b>Host</b> keeps it here and answers searches
+      for this arcade and linked ones; it needs that chain&rsquo;s full ord index (Keep the full index) and grows with
+      the sites, a few KB a page. <b>Ask</b> (the default) keeps nothing and asks a linked arcade that hosts it.
+      <b>Off</b> answers no searches of that chain.</p>
+    <div id="sitesrows"></div>
+    <div style="margin-top:8px"><label for="sitesmax">Largest each chain&rsquo;s index may grow: </label>
+      <input autocomplete="off" id="sitesmax" type="number" min="50" step="50" style="width:8em;font-size:16px"> MB</div>
+    <div id="sitessaid" class="muted" style="font-size:.84rem;margin-top:6px"></div>
+  </div>
   {# 2026-10-21: "In the ord admin panel The Explorer on the bottom should be picked by the coin type at the top
      you should be able to search by number as well as TXID utxo:index. Or whatever it is already. Below the search
      should display ord 0 of the chain that is selected with arrows to navigate by ord number. Below that should be PRC
@@ -2808,9 +2823,48 @@ section.panel h2{margin-top:0}
       .then(function (j) { $('kcsaid').textContent = j.mode === 'all' ? 'Fetching every collection.' : 'Fetching collections when opened.'; loadKnown(); })
       .catch(function (e) { $('kcsaid').textContent = e.message; });
   };
+  // Sites search (2026-10-27): host, ask or off for each chain, and how big each hosted index is.
+  function loadSites() {
+    fetch('/admin/api/sites', {headers: {'Accept': 'application/json'}, cache: 'no-store'})
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var box = $('sitesrows');
+        if (box.contains(document.activeElement)) return;              // choosing: redraw later
+        box.textContent = '';
+        if (document.activeElement !== $('sitesmax')) $('sitesmax').value = d.max_mb;
+        (d.chains || []).forEach(function (c) {
+          var row = document.createElement('div');
+          row.style.cssText = 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:4px 0';
+          var name = document.createElement('b'); name.textContent = c.chain || c.net; name.style.minWidth = '9em';
+          var pick = document.createElement('select'); pick.style.fontSize = '16px';
+          [['host', 'Host'], ['ask', 'Ask a linked arcade'], ['off', 'Off']].forEach(function (o) {
+            var opt = document.createElement('option'); opt.value = o[0]; opt.textContent = o[1];
+            if (o[0] === 'host' && !c.walks && c.mode !== 'host') { opt.disabled = true; opt.textContent += ' (needs Keep the full index)'; }
+            pick.appendChild(opt);
+          });
+          pick.value = c.mode;
+          pick.onchange = function () {
+            call('/admin/api/sites', {net: c.net, mode: pick.value})
+              .then(function () { $('sitessaid').textContent = (c.chain || c.net) + ': ' + pick.options[pick.selectedIndex].textContent + '.'; loadSites(); })
+              .catch(function (e) { $('sitessaid').textContent = e.message; pick.value = c.mode; });
+          };
+          var said = document.createElement('span'); said.className = 'muted'; said.style.fontSize = '.84rem';
+          said.textContent = c.mode === 'host' ? (c.problem || (Number(c.sites || 0).toLocaleString() + ' sites, '
+              + Number(c.pages || 0).toLocaleString() + ' pages, ' + Number(c.mb || 0).toLocaleString() + ' MB'))
+            : c.mode === 'ask' ? 'searches are asked of a linked arcade that hosts it' : 'no searches of this chain';
+          row.appendChild(name); row.appendChild(pick); row.appendChild(said); box.appendChild(row);
+        });
+      }).catch(function () { $('sitessaid').textContent = 'Could not read the sites search.'; });
+  }
+  $('sitesmax').onchange = function () {
+    call('/admin/api/sites', {max_mb: Number($('sitesmax').value)})
+      .then(function (j) { $('sitessaid').textContent = 'At most ' + Number(j.max_mb).toLocaleString() + ' MB.'; })
+      .catch(function (e) { $('sitessaid').textContent = e.message; });
+  };
   function loadOrds(force) {
     if (!force && !document.querySelector('.admintab[data-tab="ords"].on')) return;
     loadKnown();
+    loadSites();
     if (document.activeElement && document.activeElement.id === 'ordcores') return;   // typing: redraw later
     fetch('/admin/api/ords', {headers: {'Accept': 'application/json'}, cache: 'no-store'}).then(function (r) { return r.json(); })
       .then(function (d) {

@@ -227,13 +227,39 @@ def register(app, state, content=None) -> None:
         return JSONResponse(out, status_code=code, headers={"Cache-Control": "no-store"})
 
     @app.get("/r/sites")
-    def sites_directory():
+    def sites_directory(page: int = 0, per: int = 50):
+        """Every name with a site, newest first, `per` a page (2026-10-27: "The directory at some point will be
+        millions of pages long"): from this arcade's sites search where it hosts one (every site, a page at a time),
+        else from the ord indexes (the newest records they scan). Readable by inscribed pages, as /r/site is
+        (2026-10-27, the me-seeks.pep search engine is an inscription)."""
+        page, per = max(0, int(page or 0)), max(1, min(int(per or 50), 200))
+        headers = {**contentlib.CORS, "Cache-Control": "no-store"}
         try:
-            # readable by inscribed pages (their opaque origin makes every fetch cross-origin): 2026-10-27, the
-            # me-seeks.pep search engine is an inscription that searches every site
-            return JSONResponse({"names": all_sites()}, headers={**contentlib.CORS, "Cache-Control": "no-store"})
+            hosted = list(state.sites_working().values()) if hasattr(state, "sites_working") else []
+            if hosted:
+                lists = [s.directory(0, (page + 1) * per) for s in hosted]
+                names = sorted((n for d in lists for n in d["names"]), key=lambda n: -(n.get("height") or 0))
+                total = sum(d["total"] for d in lists)
+                return JSONResponse({"names": names[page * per:(page + 1) * per], "total": total, "page": page,
+                                     "pages": (total + per - 1) // per}, headers=headers)
+            names = all_sites()
+            return JSONResponse({"names": names[page * per:(page + 1) * per], "total": len(names), "page": page,
+                                 "pages": (len(names) + per - 1) // per}, headers=headers)
         except (LookupError, ValueError) as exc:
-            return JSONResponse({"detail": str(exc)}, status_code=503)
+            return JSONResponse({"detail": str(exc)}, status_code=503, headers=headers)
+
+    @app.get("/r/search")
+    def sites_search(q: str = "", page: int = 0, chain: str = ""):
+        """The sites search (arcade/sites_index.py; Me-Seeks, me-seeks.pep, asks this): 10 results a page, every site
+        on every chain this arcade reads (or `chain`), from this arcade's index or a linked arcade's. A result's
+        snippet marks its matching words with \\x02 and \\x03: draw it as text, never as markup."""
+        headers = {**contentlib.CORS, "Cache-Control": "no-store"}
+        if not q.strip():
+            return JSONResponse({"detail": "search for some words: ?q=frog"}, status_code=400, headers=headers)
+        try:
+            return JSONResponse(state.sites_search(q[:200], page, chain), headers=headers)
+        except (LookupError, ValueError) as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=503, headers=headers)
 
     @app.get("/r/site/{address:path}")
     def site_page(address: str, chain: str = "", have: str = ""):

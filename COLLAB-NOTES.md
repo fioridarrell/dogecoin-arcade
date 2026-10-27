@@ -88,6 +88,32 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-27 Sites search: an index of every site that operators may host; /r/search; the directory paged (Claude)
+The operator: "how we could make a simple search engine that searches all of the published domains"; "The directory at some
+point will be millions of pages long"; "It should be an option for the operator to host The sites index. Just like
+ords are an option"; "Will they be able to search engine optimization to their web3site".
+- NEW arcade/sites_index.py: per chain, sites-<net>.sqlite with FTS5, one row per page (name words, title, meta
+  description, h1-h3, words; scripts and styles left out; a word counted at most 8 times a page; 50 pages a site).
+  Fed by the chain's own ord walk in inscription order. A record counts only when the name's holder made it
+  (DoginalIndex.site_record, the Browser's rule), and a newer one replaces the name's rows. Ranking is BM25 with the
+  name weighted most, then the title, description, headings and words, plus a boost when the name or title matches
+  and for a site's front page. Runner thread started in web/__main__.py. Size cap via setting sites_max_mb (4096).
+- doginal_index.py: mesh_records_after(rid, limit), site_record(row), read_inscription(iid); question
+  "sites_search" answered by a hosting arcade (hook DoginalIndex.sites_search, set by web state), and added to
+  NEWER_QUESTIONS.
+- web/state.py: sites_mode (setting sites_index:<net>: host | ask | off, default ask), sites_index, sites_working,
+  sites_search. A hosting arcade answers from its own index; any other asks the chain's walkers in turn until one hosts.
+- meshweb.py: GET /r/search?q=&page=&chain= (CORS *), and GET /r/sites?page=&per= paged (from the hosted index when
+  there is one, else the ord indexes' newest records).
+- Admin -> Ords: a "Sites search" card, with Host / Ask a linked arcade / Off per chain and the size cap.
+  GET/POST /admin/api/sites. Host is refused unless that chain is "Keep the full index".
+- browser.html: the directory 50 at a time ("directory/2").
+- docs: arcade/web/docs/mesh-web.md "Searching every site", including what makes a site found.
+- Tests: tests/test_sites_index.py (7). Checked by hand against a real index of today's live sites (ribbit.pepe's
+  inscribed HTML found by "lily pad").
+- Next, not in this: inscribing me-seeks.pep (the search page) as @strawberry. A hosting arcade only has results
+  once its operator picks Host for Pepecoin main.
+
 ### 2026-10-27 Browser: me-seeks.pep is the default homepage; sites may open other names; /r/sites readable by pages (Claude)
 The operator: "Make me-seeks.pep the default homepage for the browser". me-seeks.pep will be the Me-Seeks search engine, an
 inscription.

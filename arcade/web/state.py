@@ -1874,6 +1874,7 @@ class AppState:
                 net=net, mweb=bool(getattr(chain.params, "mweb", False)),
                 cores=self.ord_cores, walk_share=self.ord_share,
                 fetch_allowed=(lambda n=net: bool(self.setting(f"ord_fetch:{n}"))))
+            self._ord_indexes[net].sites_search = self._sites_hook(net)
         except Exception:                                      # noqa: BLE001 -- e.g. the file still locked by the
             # worker this one replaces, mid-reset (2026-10-21): opened again at the next ask.
             logging.getLogger("arcade.web").warning("ord index of %s not opened yet; asked again later", net,
@@ -1890,6 +1891,92 @@ class AppState:
         from ..mesh import coreshare
         return [(peer, (lambda p=peer: coreshare.lent_rpc(p, chain.params)), lanes)
                 for peer, lanes in coreshare.lenders(chain.network)]
+
+    # ------------------------------------------------------------------ the sites search (arcade/sites_index.py)
+
+    def sites_mode(self, net: str) -> str:
+        """host | ask | off for one chain's sites search (Admin -> Ords -> Sites search; 2026-10-27: "It should
+        be an option for the operator to host The sites index. Just like ords are an option"). Ask by default."""
+        from ..sites_index import DEFAULT_MODE, MODES
+        chosen = str(self.setting(f"sites_index:{net}") or DEFAULT_MODE)
+        return chosen if chosen in MODES else DEFAULT_MODE
+
+    def sites_max_mb(self) -> int:
+        from ..sites_index import DEFAULT_MAX_MB
+        try:
+            return max(50, int(self.setting("sites_max_mb") or DEFAULT_MAX_MB))
+        except (TypeError, ValueError):
+            return DEFAULT_MAX_MB
+
+    def sites_index(self, net: str):
+        """Chain `net`'s sites search index (its file opens when first used), or None for a chain this arcade does not
+        read."""
+        from ..doginal_index import STARTS
+        from ..sites_index import SitesIndex
+        if not net or net not in STARTS or getattr(self, "home", None) is None \
+                or not any(c.network == net for c in getattr(self, "all_chains", ())):
+            return None
+        kept = self.__dict__.setdefault("_sites_indexes", {})
+        if net not in kept:
+            kept[net] = SitesIndex(Path(self.home) / f"sites-{net}.sqlite", net,
+                                   (lambda n=net: self.ord_indexes().get(n)), (lambda n=net: self.sites_mode(n)),
+                                   self.sites_max_mb)
+        return kept[net]
+
+    def sites_working(self) -> dict:
+        """The chains whose sites search this arcade hosts, {net: SitesIndex}, each one's ord index asked to open."""
+        out = {}
+        for chain in getattr(self, "all_chains", ()):
+            if self.sites_mode(chain.network) == "host" and (index := self.sites_index(chain.network)) is not None:
+                self.ord_index(chain.network, wait=0)
+                out[chain.network] = index
+        return out
+
+    def _sites_hook(self, net: str):
+        """What an ord index answers linked arcades' "sites_search" with: this arcade's index when it hosts it."""
+        def answer(q: str, page: int, per: int) -> dict:
+            index = self.sites_index(net)
+            if index is None or self.sites_mode(net) != "host":
+                raise ValueError("this arcade does not host the sites search of this chain")
+            return index.search(q, page, per)
+        return answer
+
+    def sites_search(self, q: str, page: int = 0, chain: str = "") -> dict:
+        """A search of every site on `chain` (or on every chain this arcade reads), 10 a page: this arcade's own
+        index where it hosts it, else a linked arcade's that does. {"results", "total", "page", "pages", "trouble"}."""
+        from ..doginal_index import STARTS
+        from ..sites_index import PER_PAGE, merge
+        page = max(0, min(int(page or 0), 99))
+        want = (page + 1) * PER_PAGE
+        nets = [chain] if chain else [c.network for c in getattr(self, "all_chains", ()) if c.network in STARTS]
+        answers, trouble = [], []
+        for net in nets:
+            if self.sites_mode(net) == "off":
+                continue
+            index = self.ord_index(net)
+            mine = self.sites_index(net)
+            if mine is not None and self.sites_mode(net) == "host" and index is not None and index.mode() == "walk":
+                answers.append(mine.search(q, 0, want))
+                continue
+            share = getattr(index, "share", None) if index is not None else None
+            if share is None or not hasattr(share, "ask"):
+                trouble.append(f"{net}: no linked arcade to ask")
+                continue
+            for node, _height in index.walkers():
+                try:
+                    answers.append(share.ask({"what": "sites_search", "q": q, "page": 0, "per": want},
+                                             node=node)["sites_search"])
+                    break
+                except Exception as exc:                      # noqa: BLE001 -- that arcade hosts none: the next
+                    said = str(exc)
+                    if not trouble or not trouble[-1].startswith(net):
+                        trouble.append(f"{net}: {said[:120]}")
+            else:
+                if not any(t.startswith(net) for t in trouble):
+                    trouble.append(f"{net}: no linked arcade hosts the sites search yet")
+        out = merge(answers, page, PER_PAGE)
+        out.update(q=str(q or "")[:200], trouble=trouble if not answers else [])
+        return out
 
     def doginal_index(self):
         """Dogecoin's ord index (the first one, 2026-10-20), or None on an arcade that reads no Dogecoin."""

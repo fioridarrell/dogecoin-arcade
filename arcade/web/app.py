@@ -28331,6 +28331,48 @@ def create_app(state: AppState) -> FastAPI:
             index._status_kept = None                  # worked out again at the next ask, with the new mode
         return JSONResponse({"ok": True, "net": net, "mode": mode})
 
+    @app.get("/admin/api/sites")
+    def admin_sites(request: Request):
+        """Admin -> Ords -> Sites search (arcade/sites_index.py; 2026-10-27: "It should be an option for the
+        operator to host The sites index. Just like ords are an option"): each chain's mode, and how big the index is
+        where this arcade hosts it."""
+        _admin_check(request)
+        from ..doginal_index import STARTS
+        rows = []
+        for chain in state.all_chains:
+            net = chain.network
+            if net not in STARTS:
+                continue
+            index = state.sites_index(net)
+            row = index.status() if index is not None else {"net": net, "mode": state.sites_mode(net)}
+            row.update(chain=ordchainslib.chain_name(net), walks=state.ord_mode(net) == "walk")
+            rows.append(row)
+        return {"chains": rows, "max_mb": state.sites_max_mb()}
+
+    @app.post("/admin/api/sites")
+    def admin_sites_set(request: Request, payload: Any = Body(None)):
+        _admin_check(request, write=True)
+        from ..doginal_index import STARTS
+        from ..sites_index import MODES
+        said = payload if isinstance(payload, dict) else {}
+        if "max_mb" in said:
+            try:
+                most = int(said["max_mb"])
+            except (TypeError, ValueError):
+                most = 0
+            if not 50 <= most <= 1_000_000:
+                return JSONResponse({"detail": "from 50 MB to 1,000,000 MB"}, status_code=400)
+            state.set_setting("sites_max_mb", most)
+            return JSONResponse({"ok": True, "max_mb": most})
+        net, mode = str(said.get("net") or ""), said.get("mode")
+        if net not in STARTS or mode not in MODES:
+            return JSONResponse({"detail": "a chain, and host, ask or off"}, status_code=400)
+        if mode == "host" and state.ord_mode(net) != "walk":
+            return JSONResponse({"detail": "Hosting the sites search needs this chain's full ord index: choose "
+                                           "Keep the full index for it first."}, status_code=400)
+        state.set_setting(f"sites_index:{net}", mode)
+        return JSONResponse({"ok": True, "net": net, "mode": mode})
+
     @app.get("/admin/api/ords/lookup")
     def admin_ords_lookup(request: Request, net: str = "doge", q: str = ""):
         """Admin -> Ords -> Look up: an inscription id (where it is now) or txid:vout (what sits on it), from this
