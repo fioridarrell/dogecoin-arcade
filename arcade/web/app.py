@@ -15188,12 +15188,16 @@ def create_app(state: AppState) -> FastAPI:
             state.ord_index(n, wait=0)                         # all asked at once, then each waited for
         indexes = {n: i for n in nets if (i := state.ord_index(n)) is not None}
         nets = [n for n in nets if n in indexes]
-        found = []
+        found, trouble = [], []
         for net in nets:
             index = indexes.get(net)
             if index is None:
                 continue
-            said = index.lookup({"what": "mesh", "name": made}).get("mesh") or {}
+            try:
+                said = index.lookup({"what": "mesh", "name": made}).get("mesh") or {}
+            except Exception as exc:                           # noqa: BLE001 -- one chain's index must not hide the others
+                trouble.append(f"{net}: {str(exc)[:160]}")
+                continue
             if not said.get("claim"):
                 continue
             chain = next((c for c in state.all_chains if c.network == net), None)
@@ -15203,6 +15207,8 @@ def create_app(state: AppState) -> FastAPI:
         if not found:
             if mesh and indexes.get(mesh_web.NET) is None:
                 out["why"] = "This arcade does not read Pepecoin's ords"
+            elif trouble:
+                out["why"] = "The name index could not say just now (" + "; ".join(trouble) + ")"
             else:
                 out["why"] = f"Nobody has claimed {made} yet: claim it above first"
             return out

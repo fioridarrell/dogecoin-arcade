@@ -246,6 +246,28 @@ def test_the_browser_finds_a_site_on_any_chain(client, tmp_path, monkeypatch):
     assert door.public_path("/site/doge/shop.pepe/deals") and door.public_path("/browser")
 
 
+def test_one_chains_index_failing_does_not_hide_a_name_on_another(client, tmp_path, monkeypatch):
+    """2026-10-27, Strawberry: Pepecoin testnet's lookup said "no linked arcade walks this chain yet" and the website
+    wizard showed that for ribbit.pepe, claimed on Pepecoin mainnet."""
+    from test_doginal_wallet import _seat
+    app, state = client
+    _seat(app)
+    chain = Chain()
+    chain.add([_ins(0, _j({"p": "dns", "op": "reg", "name": "shop.pepe"}), A)])
+    index = _index(tmp_path, chain)
+
+    class Unwalked:
+        def lookup(self, question):
+            raise ValueError("no linked arcade walks this chain yet")
+    monkeypatch.setitem(dx.STARTS, "regtest", 0)               # the test arcade's second chain reads ords too
+    monkeypatch.setattr(state, "ord_indexes", lambda: {"main": index, "regtest": Unwalked()})
+    site = app.get("/account/mesh/site", params={"name": "shop.pepe"}).json()
+    assert site["chain"] == "main" and site["claim"], site["why"]
+    monkeypatch.setattr(state, "ord_indexes", lambda: {"regtest": Unwalked()})
+    alone = app.get("/account/mesh/site", params={"name": "shop.pepe"}).json()
+    assert not alone["claim"] and "could not say just now" in alone["why"] and "Nobody has claimed" not in alone["why"]
+
+
 def test_a_picture_for_the_tdeck_comes_from_what_content_serves(client, monkeypatch):
     io = pytest.importorskip("io")
     Image = pytest.importorskip("PIL.Image")

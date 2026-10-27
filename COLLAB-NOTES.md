@@ -88,6 +88,14 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-27 Creator -> Names: one chain's name index failing no longer hides the others (Claude)
+Found checking the live wizard on Strawberry: "Inscribe a website" said "no linked arcade walks this chain yet" for
+ribbit.pepe. `_mesh_site_for` asks every chain that reads ords, and Pepecoin testnet's lookup raised (no walker
+linked), so the claim on Pepecoin mainnet was never reached.
+- app.py `_mesh_site_for`: each chain's lookup in its own try; a failing chain is skipped. If no chain has a claim and
+  one failed, the page says "The name index could not say just now (...)", not "Nobody has claimed".
+- Tests: tests/test_mesh_web.py (one new).
+
 ### 2026-10-27 PWA: unlock first; any inscription as the home screen's background (Claude)
 The operator: "when the PWA opens the first thing that should open is the unlock wallet pop-up, and the PWA should not be
 usable until the Wallet is unlocked"; "Under the your arcade page on the PWA, you should be able to choose any
