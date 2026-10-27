@@ -88,6 +88,18 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-27 Browser 1.3: bookmarks and a homepage (Claude)
+The operator: "We need bookmarks and we need to be able to set the homepage on the PWA and Web version of the browser."
+- arcade/web/browser.html (served at /browser; the same file is the App Store's Browser card): a star in the address bar
+  bookmarks the page. A bookmarks button opens a panel with the homepage ("Make X home", "Use the directory"), the
+  bookmarks (open, remove), and where they are kept. Bookmarks also head the directory page. Holding Home or
+  right-clicking it still makes the page home.
+- Kept in the card by arcade.storage (/r/storage.js, the wallet's memory of the card, the same on every device). At
+  /browser, where no wallet frames the page, they are kept in this browser's localStorage. Before 1.3, the card's
+  homepage used localStorage, which a sandboxed card does not have, so it was never remembered.
+- The Go button hides under 480 px (Enter or the keyboard's Go key does the same) so the bar fits on a phone.
+- Browser-checked at /browser and framed by a stand-in wallet: both remember bookmarks and the homepage across a reload.
+  The card still has to be inscribed again as Browser 1.3.
 ### 2026-10-27 Dogecoin's token rule from PR #32, without cutting the index; a backfill beside it (Claude)
 The operator: "I would like to keep what we have index if we can and if we are missing anything, I'd like to use sad frogs PR
 to backfill". SadFrog's rule (PR #32: on Dogecoin a reinscription carries no DRC-20 operation, as nintondo reads it;
