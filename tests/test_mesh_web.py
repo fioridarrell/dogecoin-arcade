@@ -268,3 +268,19 @@ def test_a_picture_for_the_tdeck_comes_from_what_content_serves(client, monkeypa
     assert seen == [IID], "made once, then kept"
     assert app.get("/r/mesh/picture/" + "cd" * 32 + "i0").status_code == 404
     assert app.get("/r/mesh/picture/nope").status_code == 400
+
+
+def test_a_page_counts_where_it_landed_not_at_its_first_reveal_output(tmp_path):
+    """2026-10-26: me-seeks.mesh's /show record took three transactions; the inscription landed on the last reveal, and
+    output 0 of the first only carried it on (to the next piece's lock). It counts by who holds it now."""
+    chain = Chain()
+    claim = _ins(0, _j({"p": "dns", "op": "reg", "name": "me-seeks.mesh"}), A)
+    lock = b"\xa9\x14" + b"\xcc" * 20 + b"\x87"                  # the next piece's lock, as a chunked reveal pays
+    first = _ins(1, M.make("me-seeks.mesh", {"/": "# Landed"}), lock)
+    chain.add([claim, first])
+    last = _tx_to([(first[1], 0, SIG)], [(100_000, A)])           # the last reveal: the ord comes to rest at A
+    chain.add([last])
+    chain.add([])
+    index = _index(tmp_path, chain)
+    got = index.mesh("me-seeks.mesh")
+    assert got["page"] and got["page"]["id"] == f"{first[1]}i0" and got["page"]["pages"] == {"/": "# Landed"}

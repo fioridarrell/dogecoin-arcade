@@ -2917,7 +2917,7 @@ class DoginalIndex:
 
     def _mesh_pages(self) -> list:
         """The "p":"mesh" inscriptions, newest first (insc_mesh)."""
-        return self.store.q("SELECT tx, n, number, height FROM insc WHERE proto = 'mesh' ORDER BY rid DESC LIMIT ?",
+        return self.store.q("SELECT tx, n, number, height, rid FROM insc WHERE proto = 'mesh' ORDER BY rid DESC LIMIT ?",
                             (mesh_web.SCAN,))
 
     def _mesh_holder(self, name: str) -> tuple[str | None, str | None]:
@@ -2932,8 +2932,11 @@ class DoginalIndex:
         return win["inscription"], self._owner_at(txid, int(vout))
 
     def _mesh_page(self, row: tuple, name: str | None, holder: str | None) -> dict | None:
-        """One page row, when it is a page of `name` (any name: None) inscribed to `holder`."""
-        tx, n, number, height = row
+        """One page row, when it is a page of `name` (any name: None) held by `holder` where it sits now. Where it
+        sits, not its reveal's first output (2026-10-26: a record of three transactions -- a chunked inscription --
+        lands on its LAST reveal; output 0 of the first only passes it on to the next piece, so the newest
+        me-seeks.mesh site never counted). For a page that never moved the two are the same coin."""
+        tx, n, number, height, rid = row
         iid = iid_of(tx, n)
         try:
             body = self._mesh_body(iid)
@@ -2942,7 +2945,9 @@ class DoginalIndex:
         page = mesh_web.parse(body)
         if page is None or (name is not None and page["name"] != name):
             return None
-        if holder is None or self._owner_at(bytes(tx).hex(), 0) != holder:
+        at = self.store.q("SELECT tx, vout FROM at WHERE rid = ?", (rid,))
+        where = (bytes(at[0][0]).hex(), int(at[0][1])) if at else (bytes(tx).hex(), 0)
+        if holder is None or self._owner_at(*where) != holder:
             return None
         return {"id": iid, "number": number, "height": height, "name": page["name"], "pages": page["pages"],
                 "size": len(body), "sha256": mesh_web.digest(body)}
