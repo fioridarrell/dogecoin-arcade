@@ -16,6 +16,7 @@
   <button type="button" role="tab" data-tab="safety">Safety</button>
   <button type="button" role="tab" data-tab="network">Network</button>
   <button type="button" role="tab" data-tab="ords">Ords</button>
+  <button type="button" role="tab" data-tab="dns">DNS</button>
   <button type="button" role="tab" data-tab="imports">Wallet imports</button>
   <button type="button" role="tab" data-tab="llm">LLM</button>
   <button type="button" role="tab" data-tab="meshtastic">Meshtastic</button>
@@ -394,21 +395,6 @@
     </div>
     <div id="kcsaid" class="muted" style="font-size:.84rem;margin-top:6px"></div>
   </div>
-  {# 2026-10-27: a search engine of every published site ("The directory at some point will be millions of pages
-     long"; "It should be an option for the operator to host The sites index. Just like ords are an option") --
-     arcade/sites_index.py, asked at /r/search (Me-Seeks, me-seeks.pep). #}
-  <div class="ordcard" id="sitescard">
-    <h3>Sites search</h3>
-    <p class="muted" style="margin-top:0;font-size:.84rem">A search engine of every site on a chain: each page&rsquo;s
-      title, description, headings and words, kept in a file of its own. <b>Host</b> keeps it here and answers searches
-      for this arcade and linked ones; it needs that chain&rsquo;s full ord index (Keep the full index) and grows with
-      the sites, a few KB a page. <b>Ask</b> (the default) keeps nothing and asks a linked arcade that hosts it.
-      <b>Off</b> answers no searches of that chain.</p>
-    <div id="sitesrows"></div>
-    <div style="margin-top:8px"><label for="sitesmax">Largest each chain&rsquo;s index may grow: </label>
-      <input autocomplete="off" id="sitesmax" type="number" min="50" step="50" style="width:8em;font-size:16px"> MB</div>
-    <div id="sitessaid" class="muted" style="font-size:.84rem;margin-top:6px"></div>
-  </div>
   {# 2026-10-21: "In the ord admin panel The Explorer on the bottom should be picked by the coin type at the top
      you should be able to search by number as well as TXID utxo:index. Or whatever it is already. Below the search
      should display ord 0 of the chain that is selected with arrows to navigate by ord number. Below that should be PRC
@@ -472,6 +458,25 @@
    arcade/coinlist.py, arcade/coinwalk.py): what is known for certain about each imported wallet, the shared walk that
    finds the rest (every block read by two arcades, canaries in every part), the arcades that read for walks, the last
    walks, the reconcile with other arcades, and the settings. No Core rescans. #}
+<div class="admintab" data-tab="dns" aria-label="DNS">
+{#- 2026-10-27: "Make it a new admin tab called DNS" -- the p:dns names' sites, and their search (below). #}
+  {# 2026-10-27: a search engine of every published site ("The directory at some point will be millions of pages
+     long"; "It should be an option for the operator to host The sites index. Just like ords are an option") --
+     arcade/sites_index.py, asked at /r/search (Me-Seeks, me-seeks.pep). #}
+  <section class="panel" id="sitescard">
+    <h2 style="margin-top:0">Sites search</h2>
+    <p class="muted" style="margin-top:0;font-size:.84rem">A search engine of every site on a chain: each page&rsquo;s
+      title, description, headings and words, kept in a file of its own. <b>Host</b> keeps it here and answers searches
+      for this arcade and linked ones; it needs that chain&rsquo;s full ord index (Keep the full index) and grows with
+      the sites, a few KB a page. <b>Ask</b> (the default) keeps nothing and asks a linked arcade that hosts it.
+      <b>Off</b> answers no searches of that chain.</p>
+    <div id="sitesrows"></div>
+    <div style="margin-top:8px"><label for="sitesmax">Largest each chain&rsquo;s index may grow: </label>
+      <input autocomplete="off" id="sitesmax" type="number" min="50" step="50" style="width:8em;font-size:16px"> MB</div>
+    <div id="sitessaid" class="muted" style="font-size:.84rem;margin-top:6px"></div>
+  </section>
+</div>
+
 <div class="admintab" data-tab="imports" aria-label="Wallet imports">
 <style>
 .wim .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin:10px 0 4px}
@@ -2864,7 +2869,6 @@ section.panel h2{margin-top:0}
   function loadOrds(force) {
     if (!force && !document.querySelector('.admintab[data-tab="ords"].on')) return;
     loadKnown();
-    loadSites();
     if (document.activeElement && document.activeElement.id === 'ordcores') return;   // typing: redraw later
     fetch('/admin/api/ords', {headers: {'Accept': 'application/json'}, cache: 'no-store'}).then(function (r) { return r.json(); })
       .then(function (d) {
@@ -3197,6 +3201,14 @@ section.panel h2{margin-top:0}
   }
   loadOperators(); setInterval(function () { if (!document.hidden) loadOperators(); }, 30000);
   setInterval(function () { if (!document.hidden) loadOrds(); }, 15000);   // the server keeps its answer 20 s
+  // The DNS tab (2026-10-27): the sites search, loaded when it opens and kept fresh while it is open.
+  function loadDns(force) {
+    if (!force && !document.querySelector('.admintab[data-tab="dns"].on')) return;
+    loadSites();
+  }
+  setInterval(function () { if (!document.hidden) loadDns(); }, 15000);
+  document.querySelectorAll('.admintabs button[data-tab="dns"]').forEach(function (b) { b.addEventListener('click', function () { loadDns(true); }); });
+  if (location.hash === '#dns') loadDns(true);
   document.querySelectorAll('.admintabs button[data-tab="ords"]').forEach(function (b) { b.addEventListener('click', loadOrds); });
   document.querySelectorAll('.saveswitches').forEach(function (b) { b.onclick = saveSwitches; });
 

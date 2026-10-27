@@ -526,3 +526,16 @@ def test_overview_has_no_balance_or_notification_cards_and_an_arcades_panel(publ
     assert 'id="arcades"' in page and 'id="arcrows"' in page and "/admin/api/arcades" in page
     assert "Ord indexes" in page and 'src="/coin-pep.png"' in page, "the legend draws the arcade's own coin"
     assert 'id="wallets"' in page and page.count("d.wallets.forEach") == 1, "the Coins tab's list stays"
+
+
+def test_the_sites_search_has_a_tab_of_its_own_called_dns(public):
+    """2026-10-27: "Make it a new admin tab called DNS" -- the Sites search card left the Ords tab."""
+    app, _ = public
+    page = app.get("/admin", headers=LOCAL).text
+    assert '<button type="button" role="tab" data-tab="dns">DNS</button>' in page
+    dns = page[page.index('<div class="admintab" data-tab="dns"'):]
+    dns = dns[:dns.index('<div class="admintab"', 10)]
+    assert 'id="sitescard"' in dns and 'id="sitesrows"' in dns and 'id="sitesmax"' in dns
+    ords = page[page.index('<div class="admintab" data-tab="ords"'):]
+    ords = ords[:ords.index('<div class="admintab"', 10)]
+    assert 'id="sitescard"' not in ords

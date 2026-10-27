@@ -88,6 +88,11 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-27 Admin -> DNS: the Sites search in a tab of its own (Claude)
+The operator: "Make it a new admin tab called DNS". The Sites search card moved out of Ords into a new DNS tab (after Ords),
+loaded when the tab opens (#dns too) and every 15 s while it is open; loadOrds no longer loads it. Next (asked of the
+Web Browser session): the same rings as the ord indexes, one per hosted copy.
+
 ### 2026-10-27 Sites search: an index of every site that operators may host; /r/search; the directory paged (Claude)
 The operator: "how we could make a simple search engine that searches all of the published domains"; "The directory at some
 point will be millions of pages long"; "It should be an option for the operator to host The sites index. Just like
