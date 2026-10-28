@@ -1107,6 +1107,48 @@ def test_an_envelope_begun_in_an_earlier_chunk_is_followed_back_and_zeroed_when_
     assert _dump(stitched) == _dump(walked)
 
 
+def test_following_envelopes_back_stops_at_its_deadline_and_the_chunk_waits_for_a_later_pass(tmp_path):
+    """2026-10-28: Bellscoin's walk stood still 14 hours while its lanes finished two chunks of early 2024 -- ~8,400
+    envelopes begun before each, followed back a coin at a time from a hard disk, on the walk's own thread. Past its
+    deadline a chunk is left unfinished (its block notes kept) and finished at a later pass; and an envelope a chunk
+    carries on is known to the next chunk at once, with no follow-back through the Core."""
+    import time as _time
+    from arcade import ord_notes
+    ord_notes._GENESIS.clear()
+    chain = Chain()
+    a = _tx([(FUND, 0, _envelope(b"image/jpeg", parts=((2, b"\xff\xd8" + b"J" * 200),), total=3))], [100_000], tag=b"a")
+    chain.add([a])
+    chain.add([])
+    chain.add([])
+    chain.add([])
+    b = _tx([(a[1], 0, _more(((1, b"K" * 200),)))], [100_000], tag=b"b")
+    chain.add([b])
+    c = _tx([(b[1], 0, _more(((0, b"L" * 200),)))], [100_000], tag=b"c")
+    chain.add([c])
+    chain.add([])
+    chain.add([])
+    blocks = [rawchain.read_block(raw) for _h, raw in chain.blocks]
+    asked = []
+    lookup = lambda txid: asked.append(txid) or chain.txs[txid]          # noqa: E731
+    with pytest.raises(ord_notes.OutOfTime):
+        ord_notes.finish([ord_notes.one_block(x) for x in blocks[4:8]], lookup, deadline=_time.monotonic() - 1)
+    assert not asked, "stopped before the Core was asked"
+    ord_notes.finish([ord_notes.one_block(x) for x in blocks[0:4]], lookup)
+    second = ord_notes.finish([ord_notes.one_block(x) for x in blocks[4:8]], lookup)
+    assert not asked, "the image carried on past chunk 0: known in chunk 1 without a follow-back"
+    assert b"K" * 200 not in second, "and still zeroed"
+
+    ord_notes._GENESIS.clear()
+    index = dx.DoginalIndex(tmp_path / "late.sqlite", lambda: chain, lambda: "walk")
+    for h in range(4, 8):
+        index.store.note_block(dx.BASE + h, ord_notes.one_block(blocks[h]))
+    assert index.store.finish_notes(1, chain, deadline=_time.monotonic() - 1) is False
+    assert index.store.notes_of(1) is None
+    assert len(index.store.q("SELECT height FROM pnote")) == 4, "its block notes kept for the next pass"
+    assert index.store.finish_notes(1, chain)[0], "finished at a later ask"
+    assert ord_notes.unpack(index.store.notes_of(1)[0]) == second and not index.store.q("SELECT height FROM pnote")
+
+
 def test_a_small_machine_never_fetches_the_whole_index(tmp_path, monkeypatch):
     """2026-10-20: .25 (four cores, a spinning disk, the live site) fetched two 6 GB copies at once and the site stopped
     answering. A machine under BIG_FROM_CORES walks on instead, and says so; nor does it ask a holder to make one."""
@@ -1707,3 +1749,24 @@ def test_a_quick_status_never_waits_and_remembers_the_last_one(tmp_path, monkeyp
     monkeypatch.setattr(dx.DoginalIndex, "_status", lambda self: (threading.Event().wait(5), real(self))[1])
     kept = again.status(quick=True)
     assert kept["stale"] and kept.get("walk"), "the status kept from before the restart, at once"
+
+
+def test_the_lanes_of_a_walking_arcade_keep_within_reach_of_its_walk(tmp_path, monkeypatch):
+    """2026-10-28, Bellscoin on node 2: lanes at block 243,000, the walk at 44,500, their notes let go past
+    NOTES_MAX_BYTES long before the walk got there. A walking arcade's lane more than LANES_AHEAD chunks ahead is let
+    go, and its lanes take no chunk beyond that; helping without walking, they cover the chain as before."""
+    monkeypatch.setattr("os.cpu_count", lambda: 20)
+    monkeypatch.setattr(dx, "LANES_AHEAD", 2)
+    chain = _busy_chain(24)                                   # six chunks of four
+    index = dx.DoginalIndex(tmp_path / "w.sqlite", lambda: chain, lambda: "walk", cores=lambda: 3)
+    index.tip = int(chain.call("getblockcount"))
+    monkeypatch.setattr(index.walker, "step", lambda rpc, tip, budget, notes=None: None)
+    index.chunks.lanes[:] = [{"c": 5, "at": dx.chunk_range(5)[0], "via": ""}]
+    index._walk(chain, 0)
+    assert index.chunks.lanes and max(l["c"] for l in index.chunks.lanes) <= 2, index.chunks.lanes
+    assert all(l["c"] != 5 for l in index.chunks.lanes), "the far lane let go"
+    helper = dx.DoginalIndex(tmp_path / "h.sqlite", lambda: chain, lambda: "help", cores=lambda: 3)
+    for _ in range(8):
+        helper.step()
+    assert len(helper.store.all_words(6)) == 6, "a helper covers the whole chain, LANES_AHEAD or not"
+

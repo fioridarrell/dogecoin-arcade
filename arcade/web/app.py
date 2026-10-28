@@ -7073,7 +7073,8 @@ def create_app(state: AppState) -> FastAPI:
                     return contentlib._missing("its delegate names a delegate of its own")
                 read = said["delegate"]
             try:
-                ctype, body = guard.content(read)
+                # A delegate the index named is not followed on again (once, as ord does).
+                ctype, body = guard.content(read) if said is None else guard.content(read, follow=False)
             except Exception:                               # noqa: BLE001 -- not on this chain, or not readable now
                 continue
             # The same rules as the arcade's own pieces (content.content): a type it renders, else a download.
@@ -28221,6 +28222,7 @@ def create_app(state: AppState) -> FastAPI:
             "push": {"available": push is not None,
                      "devices": (len(push.subscribed()) if push is not None else 0)},
             "selling": {"auto_update": bool(state.setting("auto_update", True)),
+                        "update_channel": state.setting(updatelib.CHANNEL_SETTING, "live"),
                         "auto_sell": bool(state.setting("auto_sell", True)),
                         "auto_fill": bool(state.setting("auto_fill", True)),
                         "node_trades": _node_trades(),
@@ -29339,6 +29341,11 @@ def create_app(state: AppState) -> FastAPI:
             for flag in ("auto_update", "auto_sell", "auto_fill", "node_trades"):
                 if flag in said:
                     state.set_setting(flag, bool(said[flag]))
+            if "update_channel" in said:
+                # main live or main test (arcade/update.py CHANNELS), read by the updater at its next check
+                if said["update_channel"] not in updatelib.CHANNELS:
+                    raise ValueError("the update channel is live or test")
+                state.set_setting(updatelib.CHANNEL_SETTING, said["update_channel"])
             if isinstance(said.get("turn"), dict):
                 # The call relay (2026-10-23, "Cloudflare TURN"): tried before it is kept, so a wrong key says so.
                 t, kept = said["turn"], state.setting("turn") or {}

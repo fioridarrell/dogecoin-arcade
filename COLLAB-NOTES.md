@@ -88,6 +88,133 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-28 Merged SadFrog's PRs #41-#45 (Claude)
+The operator: "Yes, please do that" (review and merge #41-#45, test them with #40 and the lender share, release together on
+his go). #43's question (keep _GENESIS on disk): left for a follow-up. #44 is the node's half of the update channel;
+the publisher's half (refs/heads/test, source-test.*) is not built yet, so a node set to test follows live. Note for
+that work: update.py hands the test URLs to the CHECKOUT's own installer.fetch_source_archive, which before #44 takes
+two arguments only -- the first switch to test on an archive install must come from a node already on #44 code.
+Their own notes follow.
+
+### 2026-10-28 · SadFrog's side (Claude, node 2) · branch `team/bells-notes-budget` (on `main` 393efce) · Bellinals walk stood still 14 h; coin-set reads too slow to finish
+SadFrog: "whats going on with bellinals on node2 - it was indexed well and now its not indexing - or progressing". The
+walk sat at block 44,205 from 09:52 EDT 10-27, across six restarts, with Admin -> Ords showing a stale status.
+- **The lanes' follow-backs held the walk** (60b57a8, `ord_notes.finish`, `Store.finish_notes`, `DoginalIndex._help`).
+  - Two lanes finished chunks 2208 and 2209 (blocks 243,270-243,470, early 2024). Each carries ~8,400 envelopes begun
+    before it: 300-piece images, followed back ~37 pieces each, a `getrawtransaction` at a time (~200 ms on this disk).
+  - That is hours a chunk, on the walk's own thread and before its turn; `_GENESIS` lives in memory, so each restart
+    began again.
+  - Reproduced on a copy: one `index.step(20)` ran 25 minutes without returning. With this branch every pass returns in
+    ~50 s, and the walk went 44,211 -> 44,415 in 8 passes.
+  - Fix: `finish(deadline=...)` raises `OutOfTime` before a follow-back once past the deadline, never inside one.
+    `finish_notes` returns False and keeps the block notes; the lane stays on its chunk (FINISH_SECONDS 20 a pass).
+  - Envelopes a chunk carries on go into `_GENESIS`, so the next chunk needs no follow-back for them.
+    `GENESIS_KEPT` 500,000 (was 200,000).
+- **A coin-set read that times out is not asked again** (56b74a0 watcher, 274cb23 `coinscan.Lender`).
+  - #37's once-more read-back started `scantxoutset` on Bellscoin every pass. Its coin set does not read inside
+    SCAN_SECONDS here; the Core reads on, and each pass started another, without end.
+  - Timed out, it is now marked "too slow" (the watcher) or NotLent (the sharer). A Core that cannot be reached is still
+    asked at the next pass.
+- **Tests:**
+  - New: test_doginal_index (deadline, chunk kept, next chunk without a follow-back), test_utxo_seed (too slow),
+    test_coinscan (not lent again). All three fail on `main`.
+  - Ord, coin, watcher, web and admin tests: 491 passed. test_ord_slim's layout-1 test fails on `main` too: SQLite
+    3.37 here has no `unhex`.
+- **For you:**
+  - A merge, if you agree.
+  - Your call whether `_GENESIS` should be kept on disk, so a restart does not follow chunks back again.
+  - Admin -> Ords showed the 23:42 status all night: the ord-counts thread was in a COUNT(*) over `insc` (18 M rows).
+### 2026-10-28 · SadFrog's side (Claude, node 2) · branch `team/update-channel` (on `main` 393efce) · Main live / main test toggle (Team HQ, due 10-27)
+SadFrog chose "a signed test channel": test nodes get every push to main, live nodes a nightly promote, and both
+stay signed with the release key. This branch is the node's half. **The publisher's half is yours**, and until it
+exists every node stays on live (a node set to test says "the test channel is not published yet: following live").
+- **The node** (arcade/update.py):
+  - `update_channel` in settings.json, "live" (default) or "test", picked in Admin -> Overview -> This node.
+    `/admin/api/settings` takes nothing else.
+  - On test it reads `refs/heads/test` of /repo (git installs: fetch origin test, then `merge --ff-only`; `_resync`
+    to that branch when its history was rewritten). It also reads `source-test.rev`,
+    `source-test.manifest.json` and `source-test.tar.gz` (archive installs; the archive is held to the test
+    manifest's sha256, as live's is).
+  - `installer.fetch_source_archive` takes `archive_url` and `revision_url`; their defaults are live's, as before.
+  - Moved from test back to live, a node is ahead of live. `check()` then says no update until live catches up:
+    git asks `merge-base --is-ancestor`, an archive install relies on the downgrade refusal. Otherwise every check
+    would reinstall and restart, dropping players, or try to go back.
+  - The update status carries `channel` and `note`; Admin shows "on the test channel".
+- **What the publisher would do** (my suggestion; your call):
+  - On every push to main, sign and publish the test channel: push the filtered history to /repo's `test` branch,
+    and write `source-test.tar.gz`, `source-test.rev` and `source-test.manifest.json`, signed with the same key.
+  - Once a day (e.g. 03:00 UTC), promote test to live when the day had no trouble: no hold set, and test nodes still
+    on test's release. Promoting means /repo master = test, and the three files copied to their live names. A held
+    day is not promoted.
+  - Live is always an ancestor of test (promote by fast-forward), so a test node never has to go back.
+- **Tests:** seven new in test_update, one new in test_admin. Updater, installer, watcher and admin: 117 passed. The
+  4 test_installer failures are on `main` too: this machine has no python3.12-venv.
+### 2026-10-28 · SadFrog's side (Claude, node 2) · branch `team/ord-walk-batch` (on `main` 393efce) · Bellinals walk at ~250 blocks an hour
+SadFrog, on an ETA of months for Bellinals: "look at speeding it up - I'm sure other people running bellinals index did
+not wait 120 days". Bellscoin's walk was near block 44,500, where blocks hold 2,000-5,000 inscriptions each (bel-20
+mints), at ~0.07 blocks/s live against ~0.37 walked alone on a copy.
+- **A block's token, balance and pending rows are read once and written once** (792dc20, `_Block`, `walk_block`).
+  - Each bel-20 mint read, deleted and wrote again the same token row and its minter's balance: ~25 statements an
+    inscription, 70% of the walk's time in SQLite.
+  - `_Block` keeps the rows it read or wrote. The tables read only through it (`DEFERRED`: pending, tok, bal, xfer,
+    names, charm) are written at the block's end, in `executemany` batches; the undo records are as before.
+  - 42,000 statements a block -> 13,700. 60 blocks walked by both give the same blocks, inscriptions and undo records.
+- **A walking arcade's lanes keep within reach of its walk** (fa49e9f, `LANES_AHEAD`, `_walk`, `_help`).
+  - The lanes were at block 243,000 with the walk at 44,500. Their notes (2.4 MB a chunk on Bellscoin) were let go past
+    NOTES_MAX_BYTES, ~220 chunks kept, so the walk reached chunks with none and read them itself, while each pass gave
+    the far lanes their time first.
+  - Now a lane more than 100 chunks past the walk is let go and lanes take no chunk beyond. Helpers (not walking) cover
+    the whole chain as before.
+- **Tests:** new test_doginal_index test for the lanes (fails on `main`). test_doginal_index, test_bells_index,
+  test_bellinals, test_ord_lite: 83 passed.
+- **Not measured:** the whole-pass gain. Side-by-side pass timings on a copy stalled on Bellscoin RPC fetches (memory
+  pressure on node 2). Node 2 runs this from 12:44 EDT 10-28 on top of `team/bells-notes-budget`, with its Bells Core
+  dbcache cut from 10 GB to 1 GB and the ord share at 100%.
+- **For you:** a merge, if you agree. Your call whether `LANES_AHEAD` should follow NOTES_MAX_BYTES and the chain's
+  chunk size instead of a fixed 100.
+
+### 2026-10-27 · SadFrog's side (Claude, node 2) · branch `team/explore-viewer` (on `main` c903042) · Explore: a collection's piece shows in the viewer, and the viewer waits to be asked
+SadFrog: "when you are on explore and click a collection, you see the inscriptions successfully, but when you click it,
+it successfully scrolls up to the card to view the inscriptions (which should be minimized until an inscription is
+clicked to view) but doesnt actually show the inscription in question".
+- **Why:** the tiles come from `/content/<id>` (the chain), the viewer from `/explore/api/inscription?id=` (this
+  arcade's ord index). On node 2 the Bells index had walked to block 44,205 and the Belinal Ducks sit near 888,000, so
+  the answer had no inscription and drawOne drew "No inscription #0 yet" -- the last number, not the piece clicked.
+- **Now (explore.html):** `showId(id, scroll, hint)` keeps what is asked in `X.want`; a tile passes its name, its
+  collection and the collection's number for it. When the index has no answer for that id, the viewer draws the
+  content from `/content/<id>` (as the tile did) with Name, In collection, Number "(as the collection lists it)",
+  Chain, Inscription id, and a line saying how far this arcade has indexed the chain. A number asked for, or a search,
+  clears `X.want` and draws as before.
+- **Hidden until asked:** `#xpview` starts `hidden`; picking a chain hides it again (no more `showNumber(0)` on every
+  chain switch); a tile, a link, the search box, `?id=` or `?n=` shows it.
+- **Seen, not fixed here (for a later change):** on node 2 a fresh collection page asks for 48 pieces the arcade has not
+  kept, each read from a Core two at a time (doginals `_READING`) and tried guard by guard: one took 225 s, and while
+  they wait they hold the web server's worker threads. Some Dogecoin "bone" pieces come back as an empty download.
+- **Checked:** node 2's live Explore page in headless Chromium with this script swapped in (reads only): the viewer is
+  hidden at load, a Belinal Ducks tile opens it with the duck and its facts. tests/test_explore.py asserts both;
+  test_explore, test_ord_explorer(+_browser) and test_page_scripts pass.
+### 2026-10-28 · SadFrog's side (Claude, node 2) · branch `team/explore-content` (on `main` c903042) · Pieces read from the chain: a delegate's content, and no waiting behind other chains
+Two things seen on node 2's Explore while fixing the viewer (team/explore-viewer), SadFrog: "Fix the slow and empty
+collection pictures next".
+- **Empty pieces (doginals.py):** the Dogecoin "bone" pieces came back as an empty download. Each is a Doginal with no
+  body and a delegate tag (11) naming one 3 MB video; while the ord index has not walked that far, `/content` reads the
+  piece from the chain (`_chain_inscription` -> `Doginals.content`), and that reader read only the envelope's own empty
+  body. Now `read(rpc, id, ..., dialect)` gives (type, bytes, delegate), the delegate from the same tag reading as the
+  index's walk (`doginal_index.carry`; a Taproot reveal's from `births_of`), and `Doginals.content(id, follow=True)`
+  gives the delegate's content and type, once (Pepecoin: a delegate naming its own is no content, as ord-pepecoin).
+  `_chain_inscription` passes `follow=False` when the index already named the delegate. `content()` and
+  `witness_content()` say what they said before. A kept read with no type and no bytes (a delegate read before this) is
+  read again rather than served empty for good.
+- **Slow pieces:** `/content` tries every chain's guard in turn, and each waited for one of two reading turns shared
+  by all chains (`_READING`, 25 s) before finding out the piece was not on its chain. A Bells piece on node 2 took
+  225 s while a collection page of 48 waited, each holding a web worker. Now a guard asks its node
+  `getrawtransaction <txid>` first and says "not on this chain" at once (0.09 s on node 2's Dogecoin for a Bells duck),
+  and each guard has its own two turns (`self._reading`), so one node's queue is not another's.
+- **Checked:** on node 2's real Dogecoin and Bells nodes: a bone piece now gives video/mp4, 3,087,142 bytes; a Belinal
+  Duck asked of the Dogecoin guard is refused in 0.09 s, and read by the Bells guard in 0.65 s. Tests:
+  tests/test_inscription_trace.py (the delegate, the kept empty read, the quick refusal and per-chain turns);
+  test_taproot_content's read count is one more (the check). Every test file touching `/content` or Doginals passes.
+
 ### 2026-10-28 A fifth of every fee on a borrowed chain to the lending arcade (Claude)
 The operator: "On a borrowed chain 20% of all fees should go to the operator who is loaning the chain"; a share under the
 chain's minimum: "Raise it to the minimum and also have the operator be able to raise their fees as they want above the
