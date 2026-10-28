@@ -54,7 +54,11 @@ a.llm-card:hover{transform:translateY(-2px);box-shadow:0 2px 4px rgba(0,0,0,.05)
 .llm-keys .h{font-size:.72rem;font-weight:650;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
 .llm-pre{margin:0;background:#141a26;color:#e3e8f1;padding:14px 16px;border-radius:12px;font-size:.8rem;line-height:1.6;overflow-x:auto}
 .llm-empty{padding:26px;border:1px dashed var(--line);border-radius:16px;color:var(--muted);text-align:center}
-@media (max-width:640px){.llm-keys{grid-template-columns:1fr 1fr}.llm-keys .h{display:none}}
+.llm-keys .lbl{display:none}
+/* A phone (2026-10-27: a key's "Spends" read as somebody else's key): one key a card, every field named. */
+@media (max-width:640px){.llm-keys{grid-template-columns:1fr;gap:2px}.llm-keys .h{display:none}
+  .llm-keys .lbl{display:inline;color:var(--muted)}.llm-keys .k1{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}
+  .llm-keys .llm-btn{margin-top:6px;justify-self:start}}
 </style>
 
 {#- 2026-10-23: "The model exchange should just have cards for each of the models listed and the user credits
@@ -627,15 +631,20 @@ $("llm-send-pay").addEventListener("click", async () => {
       offer = await w.offerSend(p.to, amount, net);
     }
     const shown = await w.checked(offer, keys);
-    const ok = window.arcadeAsk ? await arcadeAsk(`Pay ${amount} ${short(p.label)} to ${sellerName(o)}?`,
-      `For LLM credit, to ${p.to}. ${shown.says}`, "Yes, send it") : confirm(`Pay ${amount} ${short(p.label)}?`);
+    // Said plainly (2026-10-27: "I don't understand why all these addresses"): who is paid, the fee, and the
+    // change that stays in the wallet; the outputs word for word only under the details.
+    const coinsOf = shown.coinsOf || ((v) => String(v));
+    const why = `For LLM credit with ${sellerName(o)}. Network fee ${coinsOf(BigInt(shown.fee || 0))}`
+      + (shown.change ? `; ${coinsOf(BigInt(shown.change))} stays in your wallet as change.` : ".")
+      + `\n\nDetails: ${shown.says}`;
+    const ok = window.arcadeAsk ? await arcadeAsk(`Pay ${amount} ${short(p.label)} to ${sellerName(o)}?`, why, "Yes, send it")
+      : confirm(`Pay ${amount} ${short(p.label)}?`);
     if (!ok) return;
     const done = await w.confirm(keys, offer);
-    // Built in the wallet from this payment, this chain, this address and the seller picked here; this arcade's
-    // words are asked for its own id only, and held to everything else (2026-10-26, issue #5: llmTopupSign).
-    const words = o.here ? await getJSON(`/account/llm/topup?seller=${encodeURIComponent(o.seller)}&leg=${encodeURIComponent(leg)}&txid=${done.txid}`) : null;
-    const sig = await w.llmTopupSign(keys.on[net], {seller: o.seller, here: !!o.here, network: net, txid: done.txid}, words);
-    keepPending([...pending(), {seller: o.seller, leg, txid: done.txid, sig, at: Date.now()}]);
+    // Kept the moment it is sent, before anything else can fail (2026-10-27: @apple's 600 PEP reached @strawberry and
+    // was never counted -- the claim was made after the signing, and lost with it). Signed and claimed from here on,
+    // again and again until the seller has counted it.
+    keepPending([...pending(), {seller: o.seller, here: !!o.here, leg, net, txid: done.txid, sig: "", at: Date.now()}]);
     $("llm-topup-said").textContent = "Sent. It counts as soon as the seller's node sees it, usually within seconds…";
     claimPending();
   } catch (err) { toast(err.message || String(err)); }
@@ -649,6 +658,15 @@ async function claimPending() {
     let list = pending();
     for (const t of [...list]) {
       try {
+        if (!t.sig) {
+          // Built in the wallet from this payment, this chain, this address and the seller picked here; this arcade's
+          // words are asked for its own id only, and held to everything else (2026-10-26, issue #5: llmTopupSign).
+          const net = t.net || legNet(t.leg);
+          const {w, keys} = await keysFor(net, "Your wallet signs which payment is your credit.");
+          const words = t.here ? await getJSON(`/account/llm/topup?seller=${encodeURIComponent(t.seller)}&leg=${encodeURIComponent(t.leg)}&txid=${t.txid}`) : null;
+          t.sig = await w.llmTopupSign(keys.on[net], {seller: t.seller, here: !!t.here, network: net, txid: t.txid}, words);
+          keepPending(list.map((x) => (x.txid === t.txid ? t : x)));
+        }
         const got = await postJSON("/account/llm/topup", {seller: t.seller, leg: t.leg, txid: t.txid, sig: t.sig});
         list = list.filter((x) => x.txid !== t.txid);
         toast(got.again ? "That payment was already counted." : `Credit added: ${got.text || ""}`);
@@ -656,10 +674,15 @@ async function claimPending() {
         const o = book.offers.find((x) => x.seller === t.seller); if (o) loadCredit(o);
       } catch (err) {
         const m = String(err.message || err);
-        if (Date.now() - t.at > 6 * 3600e3 || /already counted|not sent from|another token|does not go|nothing to|not valid|does not check/.test(m)) {
-          list = list.filter((x) => x.txid !== t.txid); toast("Top-up not counted: " + m);
-        } else if (picked && picked.seller === t.seller) {
-          $("llm-topup-said").textContent = m;
+        // A paid claim is never dropped without being said: it stays, retried, and the seller's reason is shown
+        // (2026-10-27: dropping on a reason silently lost a paid top-up). Only a payment counted already ends it,
+        // or three days of trying.
+        if (/already counted/.test(m) || Date.now() - t.at > 72 * 3600e3) {
+          list = list.filter((x) => x.txid !== t.txid);
+          toast((/already counted/.test(m) ? "Top-up: " : "Top-up not counted, tell the seller (txid " + t.txid.slice(0, 12) + "…): ") + m);
+        } else {
+          if (!picked || picked.seller === t.seller) $("llm-topup-said").textContent = "Your payment is waiting to be counted: " + m;
+          if (/does not check|not sent from|does not go|another token|not valid/.test(m)) t.sig = "";   // signed again next try
         }
       }
     }
@@ -779,9 +802,9 @@ function drawKeys() {
   book.offers.forEach((o) => [{leg: "auto", label: "any of its coins"}].forEach((p) => on.push(`<option value="${esc(o.seller)}|${esc(p.leg)}">${esc(sellerName(o))} · ${esc(short(p.label))}</option>`)));
   const keep = $("llm-key-on").value; $("llm-key-on").innerHTML = on.join(""); if (keep) $("llm-key-on").value = keep;
   const name = (sid) => { const o = book.offers.find((x) => x.seller === sid); return o ? sellerName(o) : sid.slice(0, 10) + "…"; };
-  $("llm-keys").innerHTML = keys.length ? `<span class="h">Key</span><span class="h">Name</span><span class="h">Spends</span><span class="h">Last used</span><span></span>` +
-    keys.map((k) => `<code>…${esc(k.tail)}</code><span style="overflow-wrap:anywhere">${esc(k.name || "—")}</span><span>${esc(name(k.seller))} · ${esc(k.leg === "auto" ? "any coin" : k.leg)}</span>
-      <span style="color:var(--muted)">${k.used ? new Date(k.used * 1000).toLocaleString() : "never"}</span>
+  $("llm-keys").innerHTML = keys.length ? `<span class="h">Your key</span><span class="h">Name</span><span class="h">Spends your credit with</span><span class="h">Last used</span><span></span>` +
+    keys.map((k) => `<span class="k1"><span class="lbl">Your key </span><code>…${esc(k.tail)}</code></span><span style="overflow-wrap:anywhere"><span class="lbl">Name: </span>${esc(k.name || "—")}</span><span><span class="lbl">Spends your credit with </span>${esc(name(k.seller))} · ${esc(k.leg === "auto" ? "any coin" : k.leg)}</span>
+      <span style="color:var(--muted)"><span class="lbl">Last used: </span>${k.used ? new Date(k.used * 1000).toLocaleString() : "never"}</span>
       <button type="button" class="llm-btn bad" data-drop="${esc(k.hash)}" style="height:36px">Revoke</button>`).join("") : "";
   // The key just made goes into the example, with a model of the seller it spends at (2026-10-23: "When a user
   // generates a key, it should auto populate into the curl command example").
