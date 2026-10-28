@@ -337,6 +337,33 @@ class BlockWatcher:
             if chain.network in backfilling or not self.state.chain_ready(chain):
                 continue
             self._watch_accounts_on(chain, backfilling)
+            if chain.borrowed and chain.network not in backfilling:
+                self._collect_coinscan(chain, backfilling)
+
+    def _collect_coinscan(self, chain, backfilling: set) -> None:
+        """A borrowed chain's coins below its index, from the sharer's coin-set read (coinscan.collect), on a thread
+        of its own: the addresses still owed an answer, asked again until answered."""
+        from .. import coinscan as coinscanlib
+        if not coinscanlib._owed(self.state, chain.network):
+            return
+        index = self.state.token_index(chain)
+        tip = index.indexed_height() or 0
+        if not tip:
+            return                                             # the floor still ahead: nothing below it to file yet
+        asked_at = self.__dict__.setdefault("_coinscan_asked_at", {})
+
+        def run() -> None:
+            backfilling.add(chain.network)
+            try:
+                with chain.rpc() as rpc:
+                    if coinscanlib.collect(self.state, chain, index, rpc, upto=tip, asked_at=asked_at):
+                        self.state.bump_generation()
+            except Exception:                                  # noqa: BLE001 -- asked again at the next pass
+                log.warning("%s: collecting the sharer's coin-set read failed", chain.params.label, exc_info=True)
+            finally:
+                backfilling.discard(chain.network)
+
+        threading.Thread(target=run, name=f"arcade-{chain.network}-coinscan", daemon=True).start()
 
     def _keep_utxo_sets(self) -> None:
         """KOTIA ONLY for now (Params.full_utxo_set, arcade/utxoset.py, 2026-10-25): the chain's whole unspent set,
@@ -510,17 +537,48 @@ class BlockWatcher:
         # Once per chain (2026-10-18): the addresses watched before the Core's coin set was asked, read back
         # from it too, so coins they got below the floor show. Then `utxo_seeded:<net>` says it is done.
         seeded_key = f"utxo_seeded:{chain.network}"
+        # And the addresses watched before the index read its first block (2026-10-27: 101 DGB paid to an account in
+        # blocks 24,460,559 and 24,460,603, below DigiByte's floor of 24,462,000, which no arcade had reached): their
+        # read-back asked the coin set for coins "up to block 0", filed none, and was marked done. Read back once more
+        # from an index that has blocks; `utxo_seeded_early:<net>` names the first block it was done over, so an index
+        # begun again from another floor is read back again.
+        early_key = f"utxo_seeded_early:{chain.network}"
         with contextlib.closing(index.open()) as db:
+            tip = index.indexed_height() or 0
+            first = db.conn.execute("SELECT MIN(height) FROM block").fetchone()[0]
             fresh = sorted(set(wanted) - utxoslib.watching(db))
-            again = [] if self.state.setting(seeded_key) or chain.borrowed else \
-                sorted(utxoslib.watching(db) - set(fresh))
+            if chain.borrowed:
+                # No Core here to ask: the sharer's coin-set read is asked instead, once for each address
+                # (coinscan.collect, 2026-10-28), unless the operator said no (`ask_coinscan` false). The first time,
+                # every address watched already; then each one as it is watched.
+                again = []
+                if (self.state.setting("ask_coinscan", True) is not False
+                        and not getattr(chain.params, "full_utxo_set", False)):      # Kotia: the lent set has them
+                    from .. import coinscan as coinscanlib
+                    every = f"coinscan_all:{chain.network}"
+                    if self.state.setting(every):
+                        coinscanlib.owe(self.state, chain.network, fresh)
+                    else:
+                        coinscanlib.owe(self.state, chain.network, utxoslib.watching(db) | set(fresh))
+                        self.state.set_setting(every, "owed")
+            elif not self.state.setting(seeded_key):
+                again = sorted(utxoslib.watching(db) - set(fresh))
+            elif tip and self.state.setting(early_key) != str(first):
+                again = [r[0] for r in db.conn.execute("SELECT address FROM watched WHERE since <= 0 ORDER BY address")]
+            else:
+                again = []
             if not fresh and not again:
                 return
-            tip = index.indexed_height() or 0
             for address in fresh:
                 utxoslib.watch(db, address, tip, f"account {wanted[address][:12]} (derived)")
-            first = db.conn.execute("SELECT MIN(height) FROM block").fetchone()[0]
             db.conn.commit()
+        if not tip:
+            # No block read yet (the chain's floor still ahead): nothing to read back to. Watched now, read back once
+            # the index has its first block (`again` above, as an address watched before).
+            if fresh:
+                log.info("watching %d more accounts' %s addresses; read back once its index has a block",
+                         len(fresh), chain.params.label)
+            return
         if getattr(chain.params, "full_utxo_set", False) and (not chain.borrowed or index.coins_from_set()):
             # KOTIA ONLY, its Core run here: the whole unspent set already holds their coins, and their history starts
             # now; nothing is read back (tbuuol 2026-10-25: no rescan, and none a user can set off). _keep_utxo_sets
@@ -543,6 +601,7 @@ class BlockWatcher:
                             filed = utxoslib.seed_from_core(index, rpc, chain.params, set(fresh) | set(again), tip)
                             if again:
                                 self.state.set_setting(seeded_key, "no scantxoutset" if filed is None else "done")
+                                self.state.set_setting(early_key, str(first))
                         except Exception:                      # noqa: BLE001 -- a scan already running: next pass
                             log.warning("%s coin-set read-back failed", chain.params.label, exc_info=True)
                     if filed is None and fresh:

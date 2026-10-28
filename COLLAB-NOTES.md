@@ -88,6 +88,90 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-28 Merged SadFrog's PRs #37, #38, #39 (Claude)
+The operator: "Merge all 3 and release"; on #39's privacy cost (a sharer learns which addresses a borrower's accounts hold):
+"I don't think it's a concern at all. It's a public Blockchain." So `lend_coinscan` / `ask_coinscan` stay on by default.
+Their own notes follow.
+
+### 2026-10-28 · SadFrog's side (Claude) · branch `team/lender-coinscan` (on `team/dgb-readback`, PR #37) · a sharer reads its coin set for borrowers
+Follows #37: a borrowing arcade still had no way to find a coin paid below its floor on any chain (no Core to ask; a
+sharer serves no `scantxoutset`). #37 lowered DigiByte's floor for the coins of that day; this is the general fix.
+SadFrog agreed after we weighed the costs below.
+- `arcade/coinscan.py` (new):
+  - **Sharer, `Lender`:** answers `arcade_coinscan` (coreshare SERVED; mesh/service.py `lent_scan`).
+    - Addresses from every borrower wait in one queue; one `scantxoutset` reads them, at most once every
+      SCAN_GAP 600 s per chain.
+    - Answered at once, never held for a scan: what is known so far, the addresses still waiting, and how long until
+      the next read.
+    - Limits: 100 addresses an ask, 500 waiting in all. An answer is kept an hour for collection, then forgotten.
+      Addresses are never logged.
+  - **Borrower, `collect` (watcher `_collect_coinscan`):** owes each watched address one ask (`coinscan_owed:<net>`:
+    every address watched already, once, then each as it is watched).
+    - Checks: files a coin only when its own proved block shows that output paying that address that amount, and
+      `gettxout` (mempool left out) says it is unspent.
+    - Retries: an older sharer, or a Core with no coin set, is asked again after 6 h; "too often" is asked again
+      after 5 min.
+    - Kotia is left out: it has the lent unspent set.
+- **coreshare `_answer`:** one `arcade_coinscan` request a minute per borrower (SCAN_ASK_EVERY), at most 5 parts in it.
+- **Operator switches:** settings `lend_coinscan` and `ask_coinscan`, on unless set false. There is no Admin box for them
+  yet; yours to place if you want one.
+- **Cost, in docs/shared-cores.md ("Coins paid below a borrower's floor"):** the sharer learns which addresses a
+  borrower's accounts hold, where reading whole blocks says nothing. That a coin was left out stays the sharer's word.
+- **Tests:** tests/test_coinscan.py (new, 8).
+  - The sharer's queue, gap, bounds, expiry and "no coin set".
+  - The borrower files only coins its blocks bear out and still unspent.
+  - Retries after an older sharer refuses.
+  - The per-borrower rate across a real mesh link.
+  - The watcher owing and collecting once.
+  - Either switch.
+  - Mesh, coin, watcher, Kotia, DigiByte, web and admin tests: 490 passed.
+- Wanted from the other side: a look, and a merge if you agree. It needs #37 first, as it builds on that branch.
+
+### 2026-10-28 · SadFrog's side (Claude) · branch `team/dgb-readback` (on `main` 2647b07) · coins paid below a floor no arcade has reached yet; DigiByte floor 24,450,000
+SadFrog: 101 DGB was sent to an account on dogecoinarcade.com (two payments, blocks 24,460,559 and 24,460,603) and its Wallet
+shows nothing, though the coins are on the chain. DigiByte's floor is 24,462,000 and the chain is still below it, so
+every arcade's DigiByte index has no block yet. A newly watched address was read back from the Core's coin set "up to
+block 0" (`seed_from_core(..., upto=0)` files nothing), and `utxo_seeded:dgb` was set to "done" anyway: once the index
+reached the floor, these coins would never be filed. Seen on a SadFrog node too: "reading back blocks None..0", read-back
+filed 0, `utxo_seeded:dgb` "done".
+- `watcher._watch_accounts_on`: an address is still watched while the index has no block, but its read-back waits until
+  the index has one. A node that marked it done before this fix reads back once more the addresses watched before its
+  index's first block (`since <= 0`); `utxo_seeded_early:<net>` remembers which first block that was done over.
+- `/account/coins/backfill`: an address is no longer marked "nothing to read" (`backfilled:<net>:<addr>` = 0) while the
+  chain's index has no block.
+- **DigiByte's floor 24,462,000 -> 24,450,000** (config.DGB_MAINNET_FLOOR, docs/digibyte.md): the tip on 10-25 when
+  DigiByte was added, rounded up to the next ten thousand only. Every arcade but the sharer borrows DigiByte today, and
+  a sharer serves no `scantxoutset` (coreshare.SERVED), so a borrowing arcade finds a coin below its floor in no way at
+  all: only a lower floor lets its index walk those blocks. An index already begun at 24,462,000 is set aside and
+  rebuilt from the new floor, as on any floor move (chain.IndexFromAnotherFloor); about 11,300 blocks over the mesh.
+- **Borrowed DigiByte blocks were refused from the floor on** (`rawchain.too_easy`): DigiByte's five algorithms each
+  keep their own difficulty, so an honest block is often far easier than the one under it, and a SadFrog node's
+  borrowed index stopped at block 24,450,003 ("its difficulty fell more than 4x in one block"). No borrower had walked
+  DigiByte before: the old floor was never reached. On a chain whose work is not checked (`pow_algo` "": DigiByte,
+  Kotia) the bits prove nothing, so the fall is no longer checked there; every other chain keeps it.
+- Tests: three new in tests/test_utxo_seed.py (they fail on `main`, pass here); test_digibyte's floor, and a borrowed
+  block far easier than the one under it (fails on `main`).
+- Wanted from the other side: a look, and a merge if you agree. Once it runs on dogecoinarcade.com, its DigiByte index
+  walks from 24,450,000 and that account's 101 DGB shows with no step by anybody. Every other chain reads back once
+  more only the addresses watched before its index's first block: one `scantxoutset` per chain, once (none borrowed).
+- Not done here, for you to decide: a sharer answering a bounded, rate-limited coin-set read for a borrower, so a coin
+  paid below any floor is found on a borrowed chain too.
+### 2026-10-27 · SadFrog's side (Claude, node 2) · branch `team/wallet-coins` (on `main` 2647b07) · The Wallet's coins in one picker
+SadFrog, with a screenshot of the Wallet card's coin row running out of the card at 14 coins: "Can you re work the ui
+to fit the ever growing list of coins?"
+- **my_wallet.html (account and operator Wallet):** the row of coin icons (`.wl-seg#nets`) is now one button showing
+  the coin picked (icon, ticker, name, e.g. "DGB · DigiByte") and a menu (`#nets`, role listbox) with every coin as a
+  tile: icon, ticker, name, in a grid of `repeat(auto-fill,minmax(88px,1fr))`, so a coin added later is one more tile
+  and never widens the card. A coin still syncing (WAITING) is a greyed tile reading "syncing N%". A coin without an
+  icon shows its letter in a disc. The menu closes on a pick, a click outside, or Escape; at phone width it stays
+  inside the card. Picking a coin does what the old icon did (`net`, `keep(NET)`, lazy fill, `drawAll`).
+- `netButton` and the `.wl-seg` styles went with the old row (nothing else on the page used them). wallet.html's own
+  `#nets` bar is untouched.
+- **Checked:** headless Chromium at 1100 and 390 px with 14 coins: no page errors, no sideways scroll, the pick lands.
+  tests/test_web.py asserts the picker; test_web, test_page_scripts, test_dogecoin_network and every test touching the
+  Wallet page pass (517).
+- **Needs from the other side:** apply the commit.
+
 ### 2026-10-27 LLM credits per model (Claude)
 The operator: "Credits should not be shared across models each model has their own credit, and those credits are stored by
 The operator of that model"; "If an operator has multiple LLM's on their computer, they should all be able to be priced
