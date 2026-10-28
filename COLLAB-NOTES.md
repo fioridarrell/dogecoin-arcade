@@ -91,7 +91,7 @@ coding agent, so it is written for agents first and people second.
 ### 2026-10-28 Merged SadFrog's PR #40 (Claude)
 The operator asked who the fee goes to (the home node's operator, on that chain) and decided: on a BORROWED chain 20% of every
 fee goes to the operator lending the chain, a share under the dust line raised to it, and operators may set any fee above
-the minimum (#40's per-chain amount already allows that). The split is the next entry. Order batches keep paying the fee.
+the minimum (#40's per-chain amount already allows that). The split is the next entry. Order batches stay charged as before (the operator has not decided otherwise).
 Their own notes follow.
 
 ### 2026-10-28 · SadFrog's side (Claude, node 2) · branch `team/picture-inscribe` (on `main` c903042) · AI pictures inscribed from the LLM tab; the inscription fee per chain, on ords too
