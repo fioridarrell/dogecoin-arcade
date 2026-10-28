@@ -899,3 +899,14 @@ def test_the_first_credit_prices_keep_what_pictures_cost(pictures):
     client.post("/admin/api/llm/images", headers=h, json={"rates": {MODEL: {"px": "0.2"}}})
     client.post("/admin/api/llm", headers=h, json={"credit_prices": [{"leg": "main-coin", "label": "PEP", "per": "5"}]})
     assert imagegen.config(state)["rates"][MODEL]["px"] == "0.2", "a rate the operator set is never changed"
+
+
+def test_a_model_sold_only_in_credits_is_on_the_book(arcade):
+    """A seller with credit prices and no old per-token asks is still offered (found by the page rebuild, 2026-10-27)."""
+    client, state, pubkey, seen = arcade
+    url = llm.config(state)["url"]
+    h = {"X-Arcade-Admin": "1"}
+    client.post("/admin/api/llm", headers=h, json={"on": True, "url": url, "models": ["tiny"], "prices": [],
+                                                   "credit_prices": [{"leg": "main-coin", "label": "PEP", "per": "1"}]})
+    (o,) = client.get("/account/llm/offers").json()["offers"]
+    assert [m["id"] for m in o["models"]] == ["tiny"] and not o["free"] and o["credit_prices"][0]["per"] == "1"

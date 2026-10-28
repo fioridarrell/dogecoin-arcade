@@ -792,13 +792,6 @@ class Seller:
                 to = ""
             if to:
                 prices.append({**p, "to": to})
-        if text and not prices and not free:
-            text = False                                        # its coins' chains are away just now
-            if not pictures:
-                return None
-        about = self.about() or {}
-        load = self.load()
-        load["word"] = self.word(load)
         from . import llm_credits as cr
         # Credits per model (llm_credits.py): what one credit costs in each coin or token this arcade accepts -- the only
         # ones a buyer is shown -- and what each model charges in credits.
@@ -816,6 +809,15 @@ class Seller:
         cps = with_to(cr.credit_prices_for(cfg, icfg, False) if cfg.get("models") else cr.credit_prices_for(cfg, icfg, True))
         if pictures and not cfg.get("credit_prices"):
             pictures = {**pictures, "credit_prices": with_to(cr.credit_prices_for(cfg, icfg, True))}
+        # Sold in credits (credit_prices) or by the old per-token asks; neither reachable means its coins' chains are
+        # away just now.
+        if text and not free and not (prices or (cps if cfg.get("credit_prices") else [])):
+            text = False
+            if not pictures:
+                return None
+        about = self.about() or {}
+        load = self.load()
+        load["word"] = self.word(load)
 
         def model_row(m: str) -> dict:
             rate = cr.text_rate(cfg, m)

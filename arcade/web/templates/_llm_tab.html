@@ -1,205 +1,387 @@
-{#- The Exchange's LLM tab (arcade/llm.py, web/llmweb.py; 2026-10-23, approved mock-up "LLM Exchange Mock-up"):
-    the LLM service book across the mesh, a top-up paid straight to the seller, a chat, and API keys for the buyer's own
-    programs. Everything is drawn from /account/llm/offers by the script below. #}
+{#- The Exchange's AI tab (arcade/llm.py, arcade/llm_credits.py, web/llmweb.py), rebuilt to the operator's approved "AI
+    marketplace" mock-up (2026-10-27): one card per model with its price in credits and the credits you hold for it;
+    a model's own page to chat or make pictures, buy that model's credits (kept by its operator, never shared across
+    models) and make API keys. Everything is drawn from /account/llm/offers by the script below. #}
 <style>
-.llm-head{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-end;margin:6px 0 12px}
-.llm-head p{margin:2px 0 0;color:var(--muted);font-size:.9rem}
-.llm-chips{display:flex;gap:6px;flex-wrap:wrap}
-.llm-chips button{font:inherit;font-size:.82rem;height:34px;padding:0 13px;border-radius:999px;border:1px solid var(--line);background:var(--panel);color:var(--fg);cursor:pointer}
-.llm-chips button.on{background:var(--accent);border-color:var(--accent);color:var(--accent-fg);font-weight:650}
-.llm-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(320px,100%),1fr));gap:14px}
-.llm-card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px;display:flex;flex-direction:column;gap:12px;min-width:0;box-shadow:0 1px 2px rgba(0,0,0,.04),0 8px 24px rgba(0,0,0,.04)}
-.llm-card.picked{border:2px solid var(--accent);padding:17px}
-a.llm-card{color:inherit;text-decoration:none;transition:transform .12s,box-shadow .12s}
-a.llm-card:hover{transform:translateY(-2px);box-shadow:0 2px 4px rgba(0,0,0,.05),0 12px 28px rgba(0,0,0,.08)}
-.llm-card .mname{font-size:1.05rem;font-weight:700;overflow-wrap:anywhere}
-.llm-kind{font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:2px 8px;border-radius:999px;background:var(--code);color:var(--muted)}
-.llm-stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
-.llm-stats div{background:var(--code);border-radius:10px;padding:8px 10px;min-width:0}
-.llm-stats small{display:block;color:var(--muted);font-size:.72rem}.llm-stats b{font-size:.92rem;overflow-wrap:anywhere}
-.llm-card .who{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
-.llm-card .who small{display:block;color:var(--muted);font-size:.8rem}
-.llm-pill{font-size:.75rem;font-weight:650;padding:3px 9px;border-radius:999px;background:color-mix(in srgb,var(--ok) 15%,var(--panel));color:var(--ok);white-space:nowrap}
-.llm-model{padding:9px 11px;border-radius:10px;background:var(--code);display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:.88rem}
-.llm-model code{font-weight:650;overflow-wrap:anywhere}
-.llm-prices{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:4px 14px;font-size:.88rem}
-.llm-prices .h{font-size:.72rem;font-weight:650;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
-.llm-prices>span{padding:3px 0;border-top:1px solid var(--line)}.llm-prices>.h{border-top:0}
-.llm-foot{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding-top:10px;border-top:1px solid var(--line);margin-top:auto}
-.llm-foot small{display:block;color:var(--muted);font-size:.75rem}
-.llm-btn{font:inherit;height:42px;padding:0 16px;border-radius:10px;border:1px solid var(--line);background:var(--panel);color:var(--accent);font-weight:650;cursor:pointer}
-.llm-btn.go{background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}
-.llm-btn.bad{color:#a33;border-color:color-mix(in srgb,#a33 35%,var(--line))}
-.llm-btn:disabled{opacity:.55;cursor:default}
-.llm-row{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start;margin-top:16px}
-.llm-panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px 20px;display:flex;flex-direction:column;gap:12px;min-width:0;box-shadow:0 1px 2px rgba(0,0,0,.04),0 8px 24px rgba(0,0,0,.04)}
-.llm-panel h3{margin:0;font-size:1.05rem}.llm-panel p.sub{margin:0;color:var(--muted);font-size:.88rem}
-.llm-panel label{display:flex;flex-direction:column;gap:5px;font-size:.8rem;font-weight:650;min-width:0}
-.llm-panel input,.llm-panel select,.llm-panel textarea{font:inherit;font-weight:400;width:100%;min-width:0;max-width:100%;box-sizing:border-box;height:42px;padding:0 11px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--fg)}
-.llm-panel textarea{height:auto;padding:10px 12px;resize:vertical}
-.llm-note{padding:9px 11px;border-radius:10px;background:var(--code);font-size:.86rem}
-.llm-chat{flex:999 1 520px;padding:0;overflow:hidden;gap:0}
-.llm-chat .top{padding:14px 18px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center}
-.llm-msgs{padding:16px;display:flex;flex-direction:column;gap:12px;min-height:260px;max-height:60vh;overflow:auto}
-.llm-me{align-self:flex-end;max-width:82%;background:var(--accent);color:var(--accent-fg);border-radius:16px 16px 4px 16px;padding:9px 13px;white-space:pre-wrap;overflow-wrap:anywhere}
-.llm-it{align-self:flex-start;max-width:82%;display:flex;flex-direction:column;gap:4px}
-.llm-it>div{background:var(--bg);border:1px solid var(--line);border-radius:16px 16px 16px 4px;padding:9px 13px;white-space:pre-wrap;overflow-wrap:anywhere}
-.llm-it details{font-size:.8rem;color:var(--muted)}
-.llm-it small{color:var(--muted);font-size:.75rem;padding-left:4px}
-.llm-send{padding:12px 14px;border-top:1px solid var(--line);display:flex;gap:10px;align-items:flex-end}
-.llm-send textarea{flex:1 1 auto;height:64px;min-height:46px}
-.llm-copy{display:flex;gap:8px}.llm-copy code{flex:1 1 auto;min-width:0;height:42px;display:flex;align-items:center;padding:0 11px;border-radius:10px;background:var(--code);border:1px solid var(--line);font-size:.86rem;overflow-x:auto;white-space:nowrap}
-.llm-copy code.fresh{background:color-mix(in srgb,#e6b400 16%,var(--panel));border-color:color-mix(in srgb,#e6b400 45%,var(--line))}
-.llm-keys{display:grid;grid-template-columns:minmax(0,.6fr) minmax(0,1.2fr) minmax(0,1.3fr) minmax(0,.8fr) 90px;gap:8px 12px;align-items:center;font-size:.86rem}
-.llm-keys .h{font-size:.72rem;font-weight:650;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
-.llm-pre{margin:0;background:#141a26;color:#e3e8f1;padding:14px 16px;border-radius:12px;font-size:.8rem;line-height:1.6;overflow-x:auto}
-.llm-empty{padding:26px;border:1px dashed var(--line);border-radius:16px;color:var(--muted);text-align:center}
-.llm-keys .lbl{display:none}
-/* A phone (2026-10-27: a key's "Spends" read as somebody else's key): one key a card, every field named. */
-@media (max-width:640px){.llm-keys{grid-template-columns:1fr;gap:2px}.llm-keys .h{display:none}
-  .llm-keys .lbl{display:inline;color:var(--muted)}.llm-keys .k1{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}
-  .llm-keys .llm-btn{margin-top:6px;justify-self:start}}
+.aim{--aim-r:18px;--aim-sel:color-mix(in srgb,var(--accent) 13%,var(--panel));display:flex;flex-direction:column;gap:14px;min-width:0}
+.aim *{box-sizing:border-box}
+.aim button{font:inherit;cursor:pointer;filter:none}
+.aim button:disabled{cursor:default}
+:where(.aim) label{margin:0;font-size:inherit;color:inherit;font-weight:inherit}
+.aim textarea,.aim input:not([type=checkbox]):not([type=file]){font:inherit;font-size:16px;min-height:0;width:100%;min-width:0;color:var(--fg);
+  background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px 14px;outline:none}
+.aim textarea:focus,.aim input:focus{border-color:var(--accent)}
+.aim textarea{resize:none;line-height:1.45;font-family:inherit}
+.aim-lbl{display:block;font-size:.74rem;font-weight:700;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;margin:0 0 8px}
+.aim-fine{margin:0;font-size:.8rem;color:var(--muted);line-height:1.45;text-align:center}
+.aim .aim-h{margin:0;font-size:1.65rem;font-weight:800;letter-spacing:-.02em;text-transform:none;color:var(--fg)}
+.aim-sub{margin:4px 0 0;color:var(--muted);font-size:.92rem;line-height:1.45}
+.aim-empty{padding:26px;border:1px dashed var(--line);border-radius:var(--aim-r);color:var(--muted);text-align:center}
+.aim-note{padding:12px 14px;border-radius:14px;background:var(--code);font-size:.88rem;line-height:1.45}
+/* buttons */
+.aim-big{min-height:54px;width:100%;border-radius:16px;border:0;background:var(--accent);color:var(--accent-fg);font-weight:800!important;
+  font-size:1.02rem;display:flex;align-items:center;justify-content:center;gap:10px;padding:0 16px;text-decoration:none}
+.aim-big:disabled{opacity:.6}
+.aim-big.wait{background:var(--aim-sel);color:var(--accent);border:2px solid var(--accent);opacity:1}
+.aim-ghost{min-height:44px;padding:0 14px;border-radius:12px;border:1px solid var(--line);background:transparent;color:var(--fg);font-weight:700;
+  display:inline-flex;align-items:center;justify-content:center;gap:6px;text-decoration:none;font-size:.9rem}
+.aim-ghost.bad{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 40%,var(--line))}
+.aim-round{width:44px;height:44px;border-radius:22px;border:1px solid var(--line);background:var(--panel);color:var(--fg);display:grid;place-items:center;flex:none;padding:0}
+.aim-pill{min-height:44px;padding:0 14px;border-radius:22px;border:1px solid var(--line);background:var(--panel);color:var(--fg);font-weight:700;font-size:.86rem;
+  display:inline-flex;align-items:center;white-space:nowrap;flex:none}
+.aim-pill.got{border-color:color-mix(in srgb,var(--ok) 45%,var(--line));color:var(--ok)}
+.aim-pill.want{background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}
+.aim-spin{animation:aimspin 1s linear infinite;flex:none}
+@keyframes aimspin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.aim-spin{animation-duration:3s}}
+/* the marketplace */
+.aim-search{display:flex;align-items:center;gap:10px;min-height:48px;padding:0 14px;border-radius:14px;background:var(--panel);border:1px solid var(--line)}
+.aim .aim-search input{border:0!important;background:transparent!important;padding:0!important;height:46px}
+.aim-tabs{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.aim-tabs button,.aim-chipc{min-height:44px;padding:0 16px;border-radius:22px;border:1px solid var(--line);background:transparent;color:var(--fg);font-weight:700;font-size:.9rem}
+.aim-tabs button[aria-pressed="true"],.aim-tabs button[aria-selected="true"]{background:var(--fg);border-color:var(--fg);color:var(--bg)}
+.aim-sort{display:flex;gap:6px;align-items:center;margin-left:auto;font-size:.85rem;color:var(--muted)}
+.aim .aim-sort select{height:44px;border-radius:12px;border:1px solid var(--line);background:var(--panel);color:var(--fg);padding:0 8px;width:auto;font:inherit}
+.aim-chips{display:flex;gap:8px;overflow-x:auto;padding-bottom:2px;scrollbar-width:none}
+.aim-chipc{display:inline-flex;align-items:center;gap:7px;flex:none;min-height:40px;padding:0 12px;font-size:.84rem}
+.aim-chipc.on{background:var(--aim-sel);border:2px solid var(--accent);color:var(--fg)}
+.aim-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(360px,100%),1fr));gap:12px}
+.aim-card{display:flex;gap:14px;align-items:center;padding:16px;border-radius:var(--aim-r);background:var(--panel);border:1px solid var(--line);color:var(--fg)!important;
+  text-decoration:none;min-width:0;transition:transform .12s,box-shadow .12s}
+.aim-card:hover{transform:translateY(-1px);box-shadow:0 8px 24px rgba(0,0,0,.08)}
+.aim-mark{width:52px;height:52px;border-radius:14px;display:grid;place-items:center;flex:none;font-weight:800;font-size:1.25rem;color:#15130f}
+.aim-mark.sm{width:40px;height:40px;border-radius:12px;font-size:1rem}
+.aim-card .mid{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.aim-card .nm{display:flex;align-items:center;gap:8px;min-width:0}
+.aim-card .nm b{font-size:1rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.aim-card .by{font-size:.82rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.aim-card .have{font-size:.78rem;color:var(--muted)}.aim-card .have.got{color:var(--ok)}
+.aim-card .px{text-align:right;flex:none;display:flex;flex-direction:column;align-items:flex-end}
+.aim-card .px b{font-weight:800;font-size:1.08rem;color:var(--accent)}
+.aim-card .px small{font-size:.74rem;color:var(--muted);max-width:92px;line-height:1.25}
+.aim-tag{font-size:.66rem;font-weight:800;letter-spacing:.03em;padding:3px 7px;border-radius:6px;white-space:nowrap;flex:none}
+.aim .ex-star{min-width:44px;min-height:44px}
+/* a model's page */
+.aim-top{display:flex;align-items:center;gap:6px;min-width:0}
+.aim-top .who{flex:1 1 0;min-width:0;display:flex;flex-direction:column}
+.aim-top .who b{font-size:1.05rem;overflow-wrap:anywhere}
+.aim-top .who span{font-size:.8rem;color:var(--muted)}
+.aim-top .acts{display:flex;align-items:center;gap:6px;flex:none}
+@media (max-width:420px){.aim-top .ex-star{display:none}.aim-top .aim-pill{padding:0 11px}}
+.aim-load{display:flex;gap:6px 10px;flex-wrap:wrap;align-items:center;font-size:.8rem;color:var(--muted)}
+.aim-dot{width:8px;height:8px;border-radius:4px;display:inline-block;margin-right:5px;vertical-align:1px}
+.aim-view{display:flex;flex-direction:column;gap:14px;min-width:0}
+/* chat */
+.aim-chat{background:var(--panel);border:1px solid var(--line);border-radius:var(--aim-r);overflow:hidden;gap:0}
+.aim-msgs{padding:18px 14px;display:flex;flex-direction:column;gap:14px;min-height:300px;height:min(62vh,640px);overflow:auto;background:var(--bg)}
+.aim-me{align-self:flex-end;max-width:82%;background:var(--accent);color:var(--accent-fg);padding:11px 14px;border-radius:18px 18px 4px 18px;
+  white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.45}
+.aim-it{align-self:flex-start;max-width:88%;display:flex;flex-direction:column;gap:5px;min-width:0}
+.aim-it>.say{background:var(--panel);border:1px solid var(--line);padding:11px 14px;border-radius:18px 18px 18px 4px;overflow-wrap:anywhere;line-height:1.5;min-width:0}
+.aim-it>.say:empty{display:none}
+.aim-it>.say>:first-child{margin-top:0}.aim-it>.say>:last-child{margin-bottom:0}
+.aim-it details{font-size:.8rem;color:var(--muted);padding-left:4px}
+.aim-it details span{white-space:pre-wrap}
+.aim-it small{font-size:.74rem;color:var(--muted);padding-left:4px}
+.aim-think{display:flex;align-items:center;gap:10px;background:var(--panel);border:1px solid var(--line);padding:11px 16px;border-radius:18px 18px 18px 4px;width:fit-content}
+.aim-think i{display:flex;gap:5px}.aim-think i b{width:7px;height:7px;border-radius:4px;background:var(--accent);animation:aimdot 1.2s infinite ease-in-out}
+.aim-think i b:nth-child(2){animation-delay:.2s}.aim-think i b:nth-child(3){animation-delay:.4s}
+@keyframes aimdot{0%,100%{opacity:.25}50%{opacity:1}}
+.aim-hello{margin:auto;max-width:340px;text-align:center;color:var(--muted);font-size:.9rem;line-height:1.5}
+.aim-compose{padding:10px 12px 12px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:8px;background:var(--panel)}
+.aim-busy{font-size:.78rem;color:var(--muted);text-align:center}
+.aim-sugg{display:flex;gap:8px;overflow-x:auto;scrollbar-width:none}
+.aim-sugg button{flex:none;min-height:40px;padding:0 13px;border-radius:20px;background:var(--bg);border:1px solid var(--line);color:var(--fg);font-size:.84rem;font-weight:600}
+.aim-sugg button:disabled{opacity:.4}
+.aim-line{display:flex;align-items:flex-end;gap:8px}
+.aim .aim-line textarea{flex:1;min-height:48px;max-height:140px;border-radius:24px;padding:12px 16px;background:var(--bg)}
+.aim-send{width:48px;height:48px;border-radius:24px;border:0;background:var(--accent);display:grid;place-items:center;flex:none;padding:0;color:var(--accent-fg)}
+.aim-send.stop{background:var(--aim-sel);border:2px solid var(--accent);color:var(--accent)}
+.aim-tools{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.aim-toggle{display:inline-flex;align-items:center;gap:8px;min-height:44px;font-size:.84rem;font-weight:650;color:var(--muted);cursor:pointer}
+.aim-toggle input{width:20px;height:20px;margin:0;accent-color:var(--accent)}
+/* pictures */
+.aim-tabs2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.aim-tabs2 button{min-height:44px;border-radius:14px;border:1px solid var(--line);background:transparent;color:var(--fg);font-weight:700;font-size:.92rem}
+.aim-tabs2 button[aria-selected="true"]{background:var(--fg);border-color:var(--fg);color:var(--bg)}
+.aim-stage{position:relative;width:100%;aspect-ratio:6/5;max-height:70vh;border-radius:22px;overflow:hidden;background:var(--code);border:1px solid var(--line)}
+.aim-stage img{width:100%;height:100%;object-fit:contain;display:block}
+.aim-stage .empty{position:absolute;inset:0;display:grid;place-items:center;color:var(--muted);font-size:.9rem;text-align:center;padding:20px}
+.aim-stage .busy{position:absolute;inset:0;background:color-mix(in srgb,var(--bg) 80%,transparent);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;text-align:center;padding:16px}
+.aim-stage .busy b{font-size:1.05rem;font-weight:800}.aim-stage .busy span{font-size:.84rem;color:var(--muted)}
+.aim-stage .tools{position:absolute;left:10px;right:10px;bottom:10px;display:flex;gap:8px}
+.aim-stage .tools>*{flex:1;min-height:44px;border-radius:22px;border:0;background:rgba(15,14,12,.82);color:#f3efe7;font-weight:700;font-size:.88rem;
+  display:flex;align-items:center;justify-content:center;text-decoration:none}
+.aim-stage .tools .ins{color:#f2c14e}
+.aim-up{display:flex;gap:12px;align-items:center;padding:10px;border-radius:16px;background:var(--panel);border:1px solid var(--line);flex-wrap:wrap}
+.aim-up img{width:64px;height:64px;border-radius:12px;object-fit:cover;border:1px solid var(--line)}
+.aim-up .txt{flex:1 1 140px;min-width:0;display:flex;flex-direction:column;gap:2px;font-size:.82rem;color:var(--muted)}
+.aim-up .txt b{color:var(--fg);font-size:.9rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.aim-file{position:relative;overflow:hidden}
+.aim-file input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%}
+.aim-pick{min-height:96px;border:2px dashed var(--line);border-radius:16px;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:4px;
+  color:var(--muted);font-weight:700;text-align:center;padding:12px}
+.aim-shapes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.aim-shapes button,.aim-sides button,.aim-coins button,.aim-packs button{background:var(--panel);border:1px solid var(--line);color:var(--fg);border-radius:16px;padding:0}
+.aim-shapes button{min-height:70px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;font-weight:700;font-size:.84rem}
+.aim-shapes i{display:block;border:2px solid var(--muted);border-radius:3px}
+.aim-sides{display:grid;grid-template-columns:repeat(auto-fit,minmax(54px,1fr));gap:6px}
+.aim-sides button{min-height:44px;border-radius:12px;font-size:.82rem;font-weight:700}
+.aim [aria-checked="true"]{background:var(--aim-sel)!important;border:2px solid var(--accent)!important}
+.aim-shapes [aria-checked="true"] i{border-color:var(--accent)}
+.aim-sizehead{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.aim-sizehead b{font-size:.95rem}
+.aim-exact summary{cursor:pointer;font-size:.84rem;color:var(--muted);min-height:36px;display:flex;align-items:center}
+.aim-exact .wh{display:flex;gap:8px;align-items:center;margin-top:6px}
+.aim-gal{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.aim-gal figure{margin:0;display:flex;flex-direction:column;gap:5px;min-width:0}
+.aim-gal img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:12px;border:1px solid var(--line);display:block}
+.aim-gal figcaption{font-size:.76rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.aim-gal .acts{display:flex;flex-wrap:wrap;gap:4px 10px;font-size:.76rem}
+.aim-gal .acts a,.aim-gal .acts button{min-height:32px;display:inline-flex;align-items:center;background:none;border:0;padding:0;box-shadow:none;color:var(--accent);font-weight:650;font-size:.76rem}
+.aim-gal .acts .del{color:var(--bad)}
+/* buy */
+.aim-coins{display:grid;grid-template-columns:repeat(auto-fill,minmax(72px,1fr));gap:8px}
+.aim-coins button{min-height:76px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px}
+.aim-coins button span{font-size:.72rem;font-weight:700;color:var(--muted);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 4px}
+.aim-coins [aria-checked="true"] span{color:var(--accent)}
+.aim-ic{border-radius:50%;flex:none;display:block}
+.aim-tok{border-radius:50%;background:#000;border:1px solid #3a362f;color:#f3efe7;display:grid;place-items:center;font-weight:800;letter-spacing:.02em;flex:none}
+.aim-packs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.aim-packs button{display:flex;flex-direction:column;align-items:flex-start;text-align:left;padding:14px 16px;border-radius:18px;min-height:110px}
+.aim-packs .n{font-size:1.5rem;font-weight:800;letter-spacing:-.02em}
+.aim-packs .u{font-size:.76rem;color:var(--muted);font-weight:600}
+.aim-packs .c{margin-top:8px;font-size:.95rem;font-weight:700;color:var(--accent);overflow-wrap:anywhere}
+.aim-packs .g{font-size:.76rem;color:var(--muted)}
+.aim-have{display:flex;justify-content:space-between;gap:10px;font-size:.92rem;color:var(--muted)}
+.aim-have b{color:var(--fg);font-weight:650;text-align:right}
+/* keys */
+.aim-fresh{padding:14px;border-radius:16px;background:color-mix(in srgb,#e6b400 12%,var(--panel));border:1px solid color-mix(in srgb,#e6b400 45%,var(--line));display:flex;flex-direction:column;gap:10px}
+.aim-fresh>b{font-size:.84rem;color:var(--accent)}
+.aim-copy{display:flex;gap:8px;align-items:center;min-width:0}
+.aim-copy code{flex:1;min-width:0;overflow-x:auto;white-space:nowrap;font-size:.84rem;padding:12px;border-radius:12px;background:var(--bg);border:1px solid var(--line)}
+.aim-pre{margin:0;padding:14px;border-radius:14px;background:#0a0908;border:1px solid #24221d;color:#d8d2c6;font-size:.76rem;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere}
+.aim-keys{display:flex;flex-direction:column;gap:8px}
+.aim-key{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:14px;background:var(--panel);border:1px solid var(--line);flex-wrap:wrap}
+.aim-key .txt{flex:1 1 200px;min-width:0;display:flex;flex-direction:column;gap:2px;font-size:.8rem;color:var(--muted)}
+.aim-key .txt b{font-size:.92rem;color:var(--fg);overflow-wrap:anywhere}
+.aim-key .txt code{background:none;padding:0;color:var(--muted);font-weight:400}
+.aim-make{display:flex;gap:8px;flex-wrap:wrap}
+.aim-make input{flex:1 1 200px}
+.aim-make .aim-big{flex:1 1 160px;width:auto}
+/* the pay question */
+.aim-sheet-back{position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.5);display:flex;align-items:flex-end;justify-content:center}
+.aim-sheet{width:100%;max-width:480px;max-height:92vh;overflow:auto;background:var(--panel);color:var(--fg);border-top:1px solid var(--line);border-radius:28px 28px 0 0;
+  padding:14px 22px calc(26px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:16px}
+@media (min-width:700px){.aim-sheet-back{align-items:center}.aim-sheet{border-radius:28px;border:1px solid var(--line)}}
+.aim-sheet .grab{width:40px;height:5px;border-radius:3px;background:var(--line);align-self:center}
+.aim-sheet .hd{display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center}
+.aim-sheet h2{margin:0;font-size:1.9rem;font-weight:800;letter-spacing:-.02em}
+.aim-sheet .hd p{margin:0;color:var(--muted)}.aim-sheet .hd p b{color:var(--fg)}
+.aim-rows{border-radius:16px;background:var(--bg);border:1px solid var(--line)}
+.aim-rows div{display:flex;justify-content:space-between;gap:12px;padding:13px 16px;font-size:.95rem}
+.aim-rows div+div{border-top:1px solid var(--line)}
+.aim-rows span{color:var(--muted)}.aim-rows b{text-align:right;overflow-wrap:anywhere}
+.aim-sheet details{font-size:.84rem;color:var(--muted)}
+.aim-sheet summary{cursor:pointer;min-height:32px;display:flex;align-items:center}
+.aim-sheet details p{margin:6px 0 0;line-height:1.5;overflow-wrap:anywhere}
+.aim-sheet .row2{display:flex;gap:10px}
+.aim-sheet .row2 .aim-ghost{flex:1;min-height:54px;border-radius:16px}
+.aim-sheet .row2 .aim-big{flex:2}
+@media (max-width:520px){.aim .aim-h{font-size:1.45rem}.aim-msgs{height:min(58vh,560px)}.aim-card{padding:14px;gap:12px}.aim-mark{width:46px;height:46px}}
+{% if focus %}#llm-title{position:absolute;left:-9999px}{% endif %}
 </style>
 
-{#- 2026-10-23: "The model exchange should just have cards for each of the models listed and the user credits
-    available and the cost and the tokens per second and other relevant data ... whenever you click on one of the models,
-    you should go to that specific models page to interact with it"; "favorite stars on the model exchange and the sort
-    features from the token exchange". `focus` (llm_model.html) is the one model a page is about. #}
 {% import "_exui.html" as exui %}{{ exui.fav_script() }}
+<div class="aim" id="aim">
 {% if focus %}
-<p style="margin:0 0 10px"><a href="/exchange?tab=llm">&larr; All models</a></p>
-<div id="llm-detail"><div class="llm-empty">Finding this model&hellip;</div></div>
-{% else %}
-<div class="llm-head">
-  <div>
-    <h2 style="margin:0">Model exchange</h2>
-    <p>AI models shared by arcades across the mesh. Tap one to use it. Prices are per token for words and per credit for pictures.</p>
+{#- One model's own page (llm_model.html): chat or pictures, its credits, and its API keys. The views are #buy and
+    #keys of the same page, so the phone's back button steps back through them. #}
+  <div class="aim-top" id="aim-top">
+    <a class="aim-round" href="/exchange?tab=llm" aria-label="All models" id="aim-back" style="border:0;background:none">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"></path></svg></a>
+    <div class="aim-mark sm" id="aim-mark" aria-hidden="true"></div>
+    <div class="who"><b id="aim-name">{{ focus.model }}</b><span id="aim-by"></span></div>
+    <div class="acts">
+      <button type="button" class="ex-star" id="aim-star" aria-pressed="false" aria-label="Favorite this model" title="Favorite">&#9734;</button>
+      <button type="button" class="aim-round" id="aim-keys-btn" aria-label="Use it in your own apps (API key)" title="Use it in your own apps">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 8l-4 4 4 4M16 8l4 4-4 4M14 5l-4 14"></path></svg></button>
+      <button type="button" class="aim-pill" id="aim-credits" title="Your credits for this model: tap to buy more">Credits</button>
+    </div>
   </div>
-</div>
-<div class="ex-seg" id="llm-mode" role="group" aria-label="Which models" style="margin-bottom:10px">
-  <button type="button" data-mode="fav" aria-pressed="false">&#9733; Favorites</button>
-  <button type="button" data-mode="all" aria-pressed="true">All models</button>
-  <button type="button" data-mode="text" aria-pressed="false">Words</button>
-  <button type="button" data-mode="image" aria-pressed="false">Pictures</button>
-</div>
-<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
-  <input autocomplete="off" id="llm-find" class="ex-find" type="search" placeholder="Search all models" aria-label="Search models" style="flex:1 1 240px;margin:0">
-  <label style="display:flex;gap:6px;align-items:center;font-size:.85rem;color:var(--muted)">Sort
-    <select id="llm-sort" style="height:38px;border-radius:10px;border:1px solid var(--line);background:var(--panel);color:var(--fg);padding:0 8px">
-      <option value="popular">Most used</option><option value="cheap">Cheapest</option><option value="fast">Fastest</option>
-      <option value="idle">Least busy</option><option value="name">Name</option></select></label>
-</div>
-<div class="llm-chips" id="llm-chips" style="margin-bottom:12px"></div>
-<p class="ex-note" id="llm-fav-empty" hidden style="margin:0 4px 10px">Tap &#9734; on any model to keep it here. The model exchange
-  opens on your favorites, and searching always looks through every model.</p>
-<div class="llm-grid" id="llm-cards"><div class="llm-empty">Looking for models&hellip;</div></div>
-<div id="llm-sugg-head" hidden style="display:flex;justify-content:space-between;font-size:.72rem;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin:16px 4px 6px">
-  <span>Suggested</span><span>most used in the last hour</span></div>
-<div class="llm-grid" id="llm-sugg"></div>
-{% endif %}
-<div id="pic-wrap">
-  <section class="llm-panel" id="pic-make" style="margin-top:16px" hidden>
-    <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center">
-      <div style="min-width:0"><h3>Make a picture</h3><code id="pic-who" style="font-size:.8rem;color:var(--muted)"></code></div>
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <select id="pic-leg" aria-label="Pay with" style="width:auto;height:34px;padding:0 8px;border-radius:999px"></select>
-        <span class="llm-pill" id="pic-left" style="background:color-mix(in srgb,var(--accent) 14%,var(--panel));color:var(--accent)"></span></div>
-    </div>
-    <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start">
-      <div style="flex:1 1 320px;display:flex;flex-direction:column;gap:12px;min-width:0">
-        <label>What to draw, or what to change <textarea rows="3" id="pic-prompt" autocomplete="off" placeholder="e.g. a shiba inu playing an arcade cabinet, neon light"></textarea></label>
-        {#- Any size the person wants (2026-10-23: "The pixel ratio should be user defined"), up to the seller's
-            largest side; credits = longest side / 250, rounded up. #}
-        <div style="display:flex;flex-direction:column;gap:6px">
-          <span style="font-size:.8rem;font-weight:650">Size, in pixels</span>
-          <div style="display:flex;gap:8px;align-items:center">
-            <input type="number" id="pic-w" min="128" step="1" inputmode="numeric" autocomplete="off" aria-label="Width" style="flex:1 1 0">
-            <span style="color:var(--muted)">&times;</span>
-            <input type="number" id="pic-h" min="128" step="1" inputmode="numeric" autocomplete="off" aria-label="Height" style="flex:1 1 0">
-          </div>
-          <div class="llm-chips" id="pic-presets"></div>
-          <span id="pic-size-said" style="font-size:.8rem;color:var(--muted)"></span>
-        </div>
-        <label>Change a picture of yours <span style="font-weight:400;color:var(--muted)">(optional)</span>
-          <input type="file" id="pic-file" accept="image/png,image/jpeg,image/webp" style="height:auto;padding:8px"></label>
-        {#- 2026-10-23: "There should be a thumbnail of uploaded images when editing". #}
-        <div id="pic-up" hidden style="display:flex;gap:10px;align-items:center">
-          <img id="pic-up-thumb" alt="The picture to change" style="width:96px;height:96px;object-fit:cover;border-radius:10px;border:1px solid var(--line)">
-          <span style="display:flex;flex-direction:column;gap:4px;font-size:.82rem;color:var(--muted)"><span id="pic-up-size"></span>
-            <button type="button" class="llm-btn" id="pic-up-clear" style="height:32px;padding:0 10px;width:fit-content">Remove</button></span>
-        </div>
-        <button type="button" class="llm-btn go" id="pic-go" style="height:46px">Make it</button>
-        <p class="sub" id="pic-said"></p>
-      </div>
-      <div style="flex:1 1 320px;min-width:0;display:flex;flex-direction:column;gap:8px;align-items:flex-start">
-        <img id="pic-out" alt="" style="max-width:100%;border-radius:12px;border:1px solid var(--line);display:none">
-        <a id="pic-dl" class="llm-btn" download="arcade-picture.png" style="display:none;align-items:center;text-decoration:none">Download</a>
-      </div>
-    </div>
-  </section>
-  <section class="llm-panel" id="pic-gallery" style="margin-top:16px" hidden>
-    <div><h3>Your pictures</h3><p class="sub">Every picture you make is kept on your arcade for 24 hours, even if you close the page before it is done.</p></div>
-    <div id="pic-thumbs" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px"></div>
-  </section>
-</div>
+  <div class="aim-load" id="aim-load"></div>
+  <div class="aim-note" id="aim-old" hidden></div>
+  <div class="aim-empty" id="aim-missing" hidden>Finding this model&hellip;</div>
+  <div class="aim-note" id="aim-signin" hidden style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap">
+    <span>Sign in to use this model and buy credits for it.</span>
+    <button type="button" class="aim-big" data-signin="1" style="width:auto;min-height:44px">Sign in</button></div>
 
-<div class="llm-row">
-  <section class="llm-panel" style="flex:1 1 300px" id="llm-topup" hidden>
-    <div><h3>Top up</h3><p class="sub" id="llm-topup-sub"></p></div>
-    <label>Pay with <select id="llm-pay"></select></label>
-    <label>Amount <input id="llm-amount" inputmode="decimal" autocomplete="off" placeholder="e.g. 10"></label>
-    <div class="llm-note" id="llm-buys">Enter an amount to see what it buys.</div>
-    <button type="button" class="llm-btn go" id="llm-send-pay" style="height:46px">Send</button>
-    <p class="sub" id="llm-topup-said">Your wallet shows the fee and asks before it signs. It counts as credit as soon as the seller's node sees the payment, usually within seconds.</p>
-  </section>
-
-  <section class="llm-panel llm-chat" id="llm-chat" hidden>
-    <div class="top">
-      <div style="min-width:0"><h3>Chat</h3><code id="llm-chat-who" style="font-size:.8rem;color:var(--muted)"></code></div>
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <select id="llm-chat-leg" aria-label="Pay with" style="width:auto;height:34px;padding:0 8px;border-radius:999px;border:1px solid var(--line);background:var(--panel);color:var(--fg)"></select>
-        <span class="llm-pill" id="llm-left" style="background:color-mix(in srgb,var(--accent) 14%,var(--panel));color:var(--accent)"></span>
+  {#- Chat (2026-10-27, mock-up "Chat"): one question at a time -- the first tap locks Send into Stop. #}
+  <section class="aim-view aim-chat" id="v-chat" hidden>
+    <div class="aim-msgs" id="llm-msgs"></div>
+    <div class="aim-compose">
+      <div class="aim-busy" id="llm-busy" hidden role="status">Answering &middot; credits set aside &middot; one question at a time</div>
+      <div class="aim-sugg" id="llm-sugg">
+        <button type="button" data-ask="Explain DogecoinArcade like I am new">Explain like I am new</button>
+        <button type="button" data-ask="Write me a short idea for a small browser game">Write a game idea</button>
+        <button type="button" data-ask="How do prize pools work on DogecoinArcade?">How do prize pools work?</button>
+      </div>
+      <div class="aim-line">
+        <textarea rows="1" id="llm-input" autocomplete="off" aria-label="Message" placeholder="Ask anything"></textarea>
+        <button type="button" class="aim-send" id="llm-go" aria-label="Send">
+          <svg id="llm-go-send" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"></path></svg>
+          <span id="llm-go-stop" hidden aria-hidden="true" style="width:14px;height:14px;border-radius:3px;background:currentColor;display:block"></span></button>
+      </div>
+      <div class="aim-tools">
         {#- 2026-10-23: "You should be able to disable the arcade context for the in page LLM chat". #}
-        <label style="display:flex;gap:6px;align-items:center;font-size:.8rem;font-weight:650;color:var(--muted);flex-direction:row" title="Add what DogecoinArcade's docs say about your question (free)">
-          <input type="checkbox" id="llm-docs" checked style="width:18px;height:18px;margin:0"> Arcade docs</label>
-        <button type="button" class="llm-btn" id="llm-new-chat" style="height:34px;padding:0 12px">New chat</button>
+        <label class="aim-toggle" title="Add what DogecoinArcade's docs say about your question (free)">
+          <input type="checkbox" id="llm-docs" checked> Arcade docs (free)</label>
+        <button type="button" class="aim-ghost" id="llm-new-chat">New chat</button>
       </div>
     </div>
-    <div class="llm-msgs" id="llm-msgs"></div>
-    <div class="llm-send">
-      <textarea rows="2" id="llm-input" autocomplete="off" aria-label="Message" placeholder="Ask anything &mdash; it knows DogecoinArcade's docs&hellip;"></textarea>
-      <button type="button" class="llm-btn go" id="llm-go" style="height:46px">Send</button>
+  </section>
+
+  {#- Pictures (mock-up "Pictures"): every control the page had, the button locked into a clock while it paints. #}
+  <section class="aim-view" id="v-pics" hidden>
+    <div class="aim-tabs2" role="tablist" aria-label="What to do">
+      <button type="button" role="tab" data-pmode="new" aria-selected="true">New picture</button>
+      <button type="button" role="tab" data-pmode="edit" aria-selected="false">Change a picture</button>
+    </div>
+    <div class="aim-stage" id="pic-stage">
+      <img id="pic-out" alt="" hidden>
+      <div class="empty" id="pic-empty">Your picture appears here</div>
+      <div class="busy" id="pic-busy" hidden role="status" aria-live="polite">
+        <svg class="aim-spin" width="44" height="44" viewBox="0 0 44 44" aria-hidden="true"><circle cx="22" cy="22" r="18" fill="none" stroke="var(--line)" stroke-width="4"></circle><path d="M22 4a18 18 0 0 1 18 18" fill="none" stroke="var(--accent)" stroke-width="4" stroke-linecap="round"></path></svg>
+        <b id="pic-stage-word">Making your picture&hellip;</b><span id="pic-stage-note">Usually under a minute</span></div>
+      <div class="tools" id="pic-tools" hidden>
+        <a id="pic-dl" download="arcade-picture.png" href="#">Download</a>
+        <button type="button" id="pic-edit-this">Change it</button>
+        <a id="pic-ins" class="ins" href="#" hidden>Inscribe</a></div>
+    </div>
+    <div id="pic-up-box" hidden>
+      <span class="aim-lbl">Picture to change</span>
+      {#- 2026-10-23: "There should be a thumbnail of uploaded images when editing". #}
+      <div class="aim-up" id="pic-up" hidden>
+        <img id="pic-up-thumb" alt="The picture to change">
+        <div class="txt"><b id="pic-up-name"></b><span id="pic-up-size"></span></div>
+        <label class="aim-ghost aim-file">Replace<input type="file" id="pic-file" accept="image/png,image/jpeg,image/webp" aria-label="Choose a picture to change"></label>
+        <button type="button" class="aim-ghost" id="pic-up-clear">Remove</button>
+      </div>
+      <label class="aim-pick aim-file" id="pic-pick">Choose a picture of yours<span style="font-weight:400;font-size:.8rem">PNG, JPEG or WebP</span>
+        <input type="file" id="pic-file2" accept="image/png,image/jpeg,image/webp" aria-label="Choose a picture to change"></label>
+    </div>
+    <div>
+      <label class="aim-lbl" for="pic-prompt" id="pic-prompt-lbl">Describe it</label>
+      <textarea rows="2" id="pic-prompt" autocomplete="off" placeholder="e.g. a shiba inu playing an arcade cabinet, neon light"></textarea>
+    </div>
+    {#- Any size the person wants up to the seller's largest side (2026-10-23: "The pixel ratio should be user
+        defined"): a shape and a longest side, or exact pixels; credits by the longest side. #}
+    <div id="pic-size-box" style="display:flex;flex-direction:column;gap:14px">
+      <div><span class="aim-lbl">Shape</span>
+        <div class="aim-shapes" role="radiogroup" aria-label="Shape">
+          <button type="button" role="radio" data-shape="square" aria-checked="false"><i style="width:18px;height:18px"></i>Square</button>
+          <button type="button" role="radio" data-shape="portrait" aria-checked="false"><i style="width:14px;height:20px"></i>Portrait</button>
+          <button type="button" role="radio" data-shape="landscape" aria-checked="false"><i style="width:22px;height:15px"></i>Landscape</button>
+        </div></div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <div class="aim-sizehead"><span class="aim-lbl" style="margin:0">Size</span><b id="pic-dims"></b></div>
+        <div class="aim-sides" role="radiogroup" aria-label="Longest side in pixels" id="pic-sides"></div>
+        <details class="aim-exact" id="pic-exact"><summary>Exact size in pixels</summary>
+          <div class="wh">
+            <input type="number" id="pic-w" min="128" step="1" inputmode="numeric" autocomplete="off" aria-label="Width" placeholder="Width">
+            <span style="color:var(--muted)">&times;</span>
+            <input type="number" id="pic-h" min="128" step="1" inputmode="numeric" autocomplete="off" aria-label="Height" placeholder="Height">
+          </div></details>
+        <span class="aim-fine" style="text-align:left" id="pic-rule"></span>
+      </div>
+    </div>
+    <div class="aim-note" id="pic-edit-size" hidden></div>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <button type="button" class="aim-big" id="pic-go">Make it</button>
+      <p class="aim-fine" id="pic-said"></p>
+    </div>
+    <section id="pic-gallery" hidden style="display:flex;flex-direction:column;gap:10px">
+      <div class="aim-sizehead"><b style="font-size:1rem">Your pictures</b><span class="aim-fine">kept 24 hours on your arcade</span></div>
+      <div class="aim-gal" id="pic-thumbs"></div>
+    </section>
+  </section>
+
+  {#- Buy credits (mock-ups "Buy credits" + "Confirm"): credits for THIS model only, kept by its seller, in packs, each
+      priced in the coin tapped. Only the coins and tokens the seller prices a credit in are offered. #}
+  <section class="aim-view" id="v-buy" hidden>
+    <div><h2 class="aim-h">Buy credits</h2><p class="aim-sub" id="buy-sub"></p></div>
+    <div id="buy-free" class="aim-note" hidden></div>
+    <div id="buy-form" style="display:flex;flex-direction:column;gap:18px">
+      <div><span class="aim-lbl">Pay with</span><div class="aim-coins" role="radiogroup" aria-label="Pay with" id="buy-coins"></div>
+        <p class="aim-fine" id="buy-coin-note" style="text-align:left;margin-top:8px"></p></div>
+      <div><span class="aim-lbl">How many</span><div class="aim-packs" role="radiogroup" aria-label="Credits" id="buy-packs"></div></div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div class="aim-have" id="buy-have-row" hidden><span>You have</span><b id="buy-have"></b></div>
+        <div class="aim-have"><span>Your credits for this model</span><b id="buy-now"></b></div>
+        <button type="button" class="aim-big" id="llm-send-pay">Buy credits</button>
+        <p class="aim-fine" id="llm-topup-said"></p>
+        <p class="aim-fine" id="buy-foot"></p>
+      </div>
     </div>
   </section>
-</div>
 
-<section class="llm-panel" style="margin-top:16px" id="llm-api"{% if not focus %} hidden{% endif %}>
-  <div><h3>Use it from your own apps</h3>
-    <p class="sub">An OpenAI-compatible API on this arcade. Any local harness, chat app or script that takes a base URL and an API key works. Each key spends one seller's credit in one coin.</p></div>
-  <div class="llm-grid" style="grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr));gap:14px">
-    <div style="display:flex;flex-direction:column;gap:5px;min-width:0"><span style="font-size:.8rem;font-weight:650">Base URL</span>
-      <div class="llm-copy"><code id="llm-base"></code><button type="button" class="llm-btn" data-copy="llm-base">Copy</button></div></div>
-    <div style="display:flex;flex-direction:column;gap:5px;min-width:0" id="llm-fresh-box" hidden><span style="font-size:.8rem;font-weight:650">New key, shown once</span>
-      <div class="llm-copy"><code class="fresh" id="llm-fresh"></code><button type="button" class="llm-btn" data-copy="llm-fresh">Copy</button></div></div>
+  {#- API keys (mock-up "Keys"): an OpenAI-compatible API on this arcade; a key spends the credits of whatever model
+      each request names, with one seller. #}
+  <section class="aim-view" id="v-keys" hidden>
+    <div><h2 class="aim-h">Use it in your own apps</h2><p class="aim-sub" id="keys-sub"></p></div>
+    <div class="aim-make">
+      <input id="llm-key-name" placeholder="Name it, e.g. desktop app" autocomplete="off" aria-label="Key name">
+      <button type="button" class="aim-big" id="llm-key-make">Make a key</button>
+    </div>
+    <div class="aim-fresh" id="llm-fresh-box" hidden>
+      <b>Your new key: copy it now, it is shown only once</b>
+      <div class="aim-copy"><code id="llm-fresh"></code><button type="button" class="aim-ghost" data-copy="llm-fresh">Copy</button></div>
+    </div>
+    <div><span class="aim-lbl">Base URL</span>
+      <div class="aim-copy"><code id="llm-base"></code><button type="button" class="aim-ghost" data-copy="llm-base">Copy</button></div></div>
+    <div><span class="aim-lbl">Try it from a terminal</span>
+      <pre class="aim-pre" id="llm-curl"></pre>
+      <p class="aim-fine" style="text-align:left;margin-top:6px">Works with any app that asks for an OpenAI-style base URL and key.</p></div>
+    <div><span class="aim-lbl">Your keys</span><div class="aim-keys" id="llm-keys"></div></div>
+  </section>
+{% else %}
+{#- The marketplace (mock-up "AI marketplace"), with the token exchange's favorites, search and sort (the operator
+    2026-10-23). #}
+  <div><h2 class="aim-h">AI models</h2>
+    <p class="aim-sub">Tap a model to use it or buy credits for it. Each model has its own credits, kept by its operator.</p></div>
+  <div class="aim-search">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" style="color:var(--muted);flex:none"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
+    <input autocomplete="off" id="llm-find" type="search" placeholder="Search models" aria-label="Search models">
   </div>
-  <div class="llm-keys" id="llm-keys"></div>
-  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;padding:14px;border-radius:12px;background:var(--code)">
-    <label style="flex:1 1 200px">Name <input id="llm-key-name" placeholder="e.g. desktop harness" autocomplete="off"></label>
-    <label style="flex:1 1 220px">Spends <select id="llm-key-on"></select></label>
-    <button type="button" class="llm-btn go" id="llm-key-make">Make a key</button>
+  <div class="aim-tabs" id="llm-mode" role="group" aria-label="Which models">
+    <button type="button" data-mode="fav" aria-pressed="false">&#9733; Favorites</button>
+    <button type="button" data-mode="all" aria-pressed="true">All</button>
+    <button type="button" data-mode="text" aria-pressed="false">Chat</button>
+    <button type="button" data-mode="image" aria-pressed="false">Pictures</button>
+    <label class="aim-sort">Sort
+      <select id="llm-sort">
+        <option value="popular">Most used</option><option value="cheap">Cheapest</option><option value="fast">Fastest</option>
+        <option value="idle">Least busy</option><option value="name">Name</option></select></label>
   </div>
-  <pre class="llm-pre" id="llm-curl"></pre>
-</section>
+  <div class="aim-chips" id="llm-chips" role="group" aria-label="Paid in"></div>
+  <p class="aim-fine" id="llm-fav-empty" hidden style="text-align:left">Tap &#9734; on any model to keep it here. The marketplace
+    opens on your favorites, and searching always looks through every model.</p>
+  <div class="aim-list" id="llm-cards"><div class="aim-empty">Looking for models&hellip;</div></div>
+  <div id="llm-sugg-head" hidden style="display:flex;justify-content:space-between;font-size:.72rem;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin:6px 4px 0">
+    <span>Suggested</span><span>most used in the last hour</span></div>
+  <div class="aim-list" id="llm-sugg"></div>
+{% endif %}
+</div>
 
 <script type="module">
 const $ = (id) => document.getElementById(id);
 const esc = (t) => String(t ?? "").replace(/[&<>"']/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
-const COIN_NAMES = {};
+const FOCUS = {{ (focus or none)|tojson }};          // {seller, kind, model} on a model's own page, null on the marketplace
+const COIN_ICONS = {{ coin_icons()|tojson }};        // {network: "/coin-<x>.png"} (app.py _coin_icon)
 let book = {offers: [], me: "", signed_in: false, api_base: ""};
-let credit = {};                 // seller -> balance answer
-let picked = null, filter = "all", history = [], busy = false;
-const FOCUS = {{ (focus or none)|tojson }};          // {seller, kind, model} on a model's own page, null on the exchange
-let mode = "all", sortBy = "popular";
+let credit = {};                 // seller -> /account/llm/balance answer
+let cur = null;                  // the model this page is about: {kind, o, m}
+let filter = "all", mode = "all", sortBy = "popular", busy = false, picBusy = false;
 
 async function getJSON(url) {
   const r = await fetch(url, {credentials: "same-origin", cache: "no-store"});
@@ -219,122 +401,129 @@ const legNet = (leg) => leg.split("-")[0];
 const legIsToken = (leg) => leg.includes("-token-");
 const short = (label) => String(label || "").split(" · ")[0];
 const num = (t) => Number(String(t).replace(/,/g, ""));
+const plural = (n, one, many) => `${n === 1 ? one : many}`;
 
-function price(p) {                  // the dearest part shown plainly: no exponent for tiny prices
-  const n = Number(p); if (!n) return "free";
-  return n.toLocaleString(undefined, {maximumSignificantDigits: 8, maximumFractionDigits: 12});
+// --- coins and tokens, said as icons (2026-10-27: "Coins/tokens are shown as ICONS, not a dropdown") ------------
+// Chains said by name, never a bare "mainnet" (2026-10-27).
+const NET_NAMES = {main: "Pepecoin mainnet", test: "Pepecoin testnet", regtest: "Pepecoin regtest", doge: "Dogecoin",
+  ltc: "Litecoin", ltctest: "Litecoin testnet", bel: "Bellscoin", lky: "Luckycoin", kot: "Kotia", wjk: "Wojakcoin", dgb: "DigiByte"};
+const COIN_CODES = {main: "PEP", test: "PEP TEST", regtest: "PEP TEST", doge: "DOGE", ltc: "LTC", ltctest: "LTC TEST",
+  bel: "BEL", lky: "LKY", kot: "KOT", wjk: "WJK", dgb: "DGB"};
+function coinOf(p) {
+  const leg = p.leg, net = legNet(leg);
+  if (legIsToken(leg)) {
+    const name = short(p.label).split(" (#")[0].trim() || `Token #${leg.split("-token-")[1]}`;
+    const mark = (name.replace(/[^A-Za-z0-9]/g, "").slice(0, 3) || "TOK").toUpperCase();
+    return {leg, net, token: true, code: name, name, mark, icon: "", kind: `a token on ${NET_NAMES[net] || net}`,
+            note: `${name}, a token on ${NET_NAMES[net] || net}`};
+  }
+  const code = COIN_CODES[net] || short(p.label);
+  return {leg, net, token: false, code, name: NET_NAMES[net] || short(p.label), icon: COIN_ICONS[net] || "", mark: code.slice(0, 3),
+          kind: NET_NAMES[net] || net, note: ""};
 }
-function cheapness(o) { return o.free || !o.prices.length ? 0 : Math.min(...o.prices.map((p) => Number(p.out) || 0)); }
-const legsOf = (o) => o.free ? [{leg: "free", label: "Free", in: "0", out: "0"}] : o.prices;
-// How busy a model is (2026-10-23: "Users also need a way to know if one of the models is congested or being
-// frequently used"): the seller's own word for it on the book, said again whenever it changes.
-const WORDS = {idle: ["Idle", "var(--muted)"], steady: ["In use", "var(--ok)"], busy: ["Busy", "#b7791f"], full: ["Full: queue", "#a33"]};
-function loadPill(o) {
-  const w = WORDS[(o.load || {}).word] || WORDS.idle;
-  return `<span class="llm-pill" style="color:${w[1]};background:color-mix(in srgb,${w[1]} 14%,var(--panel))">${w[0]}</span>`;
-}
-function loadLine(o) {
-  const l = o.load || {}; if (!l.at_once) return "";
-  const bits = [`${l.active || 0} of ${l.at_once} running`];
-  if (l.waiting) bits.push(`${l.waiting} waiting`);
-  bits.push(`${(l.last_hour || 0).toLocaleString()} ${l.last_hour === 1 ? "reply" : "replies"} in the last hour`);
-  if (l.tok_s) bits.push(`${l.tok_s} tok/s`);
-  return `<div style="font-size:.8rem;color:var(--muted);margin-top:-4px">${bits.join(" \u00b7 ")}</div>`;
-}
-function sellerName(o) { return o.here ? (o.tag ? "@" + o.tag : "This arcade") : (o.tag ? "@" + o.tag : o.seller.slice(0, 10) + "…"); }
-
-function drawChips() {
-  const kinds = new Map([["all", "Any coin"]]);
-  if (book.offers.some((o) => o.free)) kinds.set("free", "Free");
-  book.offers.forEach((o) => o.prices.forEach((p) => kinds.set(legIsToken(p.leg) ? "tokens" : p.leg, legIsToken(p.leg) ? "Tokens" : short(p.label))));
-  $("llm-chips").innerHTML = [...kinds].map(([k, v]) => `<button type="button" data-k="${esc(k)}" class="${k === filter ? "on" : ""}">${esc(v)}</button>`).join("");
-}
-$("llm-chips") && $("llm-chips").addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; filter = b.dataset.k; draw(); });
-
-function creditText(o) {
-  const c = credit[o.seller];
-  if (!book.signed_in) return {big: "Sign in", small: "to buy"};
-  if (o.free) return {big: "Free", small: "for everyone"};
-  if (c && c.own) return {big: "Free", small: o.here ? "your own model" : "shared with you"};
-  if (!c) return {big: o.here || o.granted ? "…" : "—", small: o.here || o.granted ? "" : "sign once to see"};
-  const rows = o.prices.map((p) => c.credit && c.credit[p.leg] ? `${c.credit[p.leg].text} ${short(p.label)}` : "").filter(Boolean);
-  return rows.length ? {big: rows[0], small: rows.slice(1).join(" · ")} : {big: "None yet", small: ""};
+function coinIcon(c, size = 34) {
+  if (c.icon) return `<img class="aim-ic" src="${esc(c.icon)}" alt="" width="${size}" height="${size}" style="width:${size}px;height:${size}px">`;
+  return `<span class="aim-tok" aria-hidden="true" style="width:${size}px;height:${size}px;font-size:${Math.max(7, Math.round(size * 0.3))}px">${esc(c.mark)}</span>`;
 }
 
-// --- the model exchange: one card per model -------------------------------------------------------------------
+// --- credits: thousandths, as the seller keeps them (llm_credits.MC) -----------------------------------------------
+function mcText(mc) {
+  mc = Math.max(0, Math.round(Number(mc) || 0));
+  const whole = Math.floor(mc / 1000), frac = mc % 1000;
+  return whole.toLocaleString("en-US") + (frac ? "." + String(frac).padStart(3, "0").replace(/0+$/, "") : "");
+}
+// A decimal string as a whole number of 10^-d units, rounded UP (prices may be finer than a coin's 8 places).
+function decUnits(s, d) {
+  let t = String(s ?? "0").trim();
+  if (/e/i.test(t)) t = Number(t).toFixed(d + 2);
+  const [i, f = ""] = t.split(".");
+  let v = BigInt(i || "0") * 10n ** BigInt(d) + BigInt((f + "0".repeat(d)).slice(0, d) || "0");
+  if (/[1-9]/.test(f.slice(d))) v += 1n;
+  return v;
+}
+// What `n` credits cost at `per` coins a credit: n x per, rounded UP to 8 decimals (2026-10-27), as 10^-8 units.
+const costUnits = (per, n) => (decUnits(per, 12) * BigInt(n) + 9999n) / 10000n;
+function unitsText(u, sep = true) {
+  const whole = u / 100000000n, frac = (u % 100000000n).toString().padStart(8, "0").replace(/0+$/, "");
+  return (sep ? Number(whole).toLocaleString("en-US") : whole.toString()) + (frac ? "." + frac : "");
+}
+
+// --- the marketplace's cards -----------------------------------------------------------------------------------
+const WORDS = {idle: ["Idle", "var(--muted)"], steady: ["In use", "var(--ok)"], busy: ["Busy", "var(--warn)"], full: ["Full: queue", "var(--bad)"]};
+function sellerName(o) { return o.tag ? "@" + o.tag : o.here ? "This arcade" : o.seller.slice(0, 10) + "…"; }
 function modelsOf() {
   const out = [];
   book.offers.forEach((o) => {
     (o.models || []).forEach((m) => out.push({kind: "text", o, m}));
-    if (o.images) o.images.models.forEach((m) => out.push({kind: "image", o, m}));
+    if (o.images) (o.images.models || []).forEach((m) => out.push({kind: "image", o, m}));
   });
   return out;
 }
 const pageOf = (x) => `/exchange/llm/model?seller=${encodeURIComponent(x.o.seller)}&kind=${x.kind}&model=${encodeURIComponent(x.m.id)}`;
-const legsFor = (x) => x.kind === "image" ? (x.o.images.free ? [] : x.o.images.prices) : (x.o.free ? [] : x.o.prices);
-const freeFor = (x) => x.kind === "image" ? x.o.images.free : x.o.free;
+const nameOf = (x) => x.kind === "image" ? (x.m.label || x.m.id) : x.m.id;
 const loadOf = (x) => (x.kind === "image" ? x.o.images.load : x.o.load) || {};
-function priceLine(x) {
-  if (freeFor(x)) return "Free";
-  const p = legsFor(x)[0]; if (!p) return "—";
-  return x.kind === "image" ? `${price(p.per)} ${short(p.label)} / credit` : `${price(p.out)} ${short(p.label)} / token out`;
+// What a credit costs in each coin: the seller's own list for every model (pictures their own when priced apart);
+// an arcade from before credits sent per-token prices only, read the way llm_credits.credit_prices reads them.
+function pricesOf(x) {
+  if (x.kind === "image") return (x.o.images.credit_prices || x.o.credit_prices || []).filter((p) => Number(p.per) > 0 && p.to);
+  if (x.o.credit_prices) return x.o.credit_prices.filter((p) => Number(p.per) > 0 && p.to);
+  return (x.o.prices || []).map((p) => ({...p, per: String((Number(p.out) || Number(p.in) || 0) * 1000)})).filter((p) => Number(p.per) > 0 && p.to);
 }
-function speedLine(x) {
-  const l = loadOf(x);
-  return x.kind === "image" ? (l.avg_s ? `~${l.avg_s} s a picture` : "—") : (l.tok_s ? `${l.tok_s} tok/s` : "—");
+function freeFor(x) {
+  if (x.kind === "image") return !!x.o.images.free || Number(x.m.per_250px) === 0;
+  return !!x.o.free || (x.m.rate && Number(x.m.rate.in) === 0 && Number(x.m.rate.out) === 0);
 }
-function cheapOf(x) {
-  if (freeFor(x)) return 0;
-  const ps = legsFor(x).filter((p) => filter === "all" || p.leg === filter || (filter === "tokens" && legIsToken(p.leg)));
-  return ps.length ? Math.min(...ps.map((p) => Number(x.kind === "image" ? p.per : p.out) || 0)) : Infinity;
+function priceOf(x) {                 // {big, per}: the price in credits, for the card's right-hand side
+  if (freeFor(x)) return {big: "Free", per: "for everyone"};
+  if (x.kind === "image") return {big: x.m.per_250px ?? "1", per: "credits per 250 px"};
+  return x.m.typical != null ? {big: x.m.typical, per: "credits a reply, about"} : {big: "—", per: "price not in credits yet"};
 }
-// Credit said as credits at the model's own rate (2026-10-23: "it should be listing the credits as credits with the
-// listed conversion rate"), whatever coins bought it: pictures in credits, words in the tokens it still writes.
-function creditsOf(x) {
-  const c = credit[x.o.seller] || {}, out = {n: 0, rate: []};
-  legsFor(x).forEach((p) => {
-    const e = c.credit && c.credit[p.leg]; if (!e || !e.units) return;
-    const sc = e.scale || 1e8;
-    if (x.kind === "image") { const per = Math.ceil(Number(p.per) * sc); if (per > 0) out.n += Math.floor(e.units / per); }
-    else if (Number(p.out) > 0) out.n += Math.floor(e.units / sc / Number(p.out));
-  });
-  out.rate = legsFor(x).map((p) => x.kind === "image" ? `1 credit = ${price(p.per)} ${short(p.label)}` : `${price(p.out)} ${short(p.label)} / token out`);
-  return out;
+function priceLine(x) {               // the same, said in one line
+  if (freeFor(x)) return "free for everyone";
+  if (x.kind === "image") return `${x.m.per_250px ?? 1} ${Number(x.m.per_250px ?? 1) === 1 ? "credit" : "credits"} per 250 px`;
+  return x.m.typical != null ? `about ${x.m.typical} ${Number(x.m.typical) === 1 ? "credit" : "credits"} a reply` : "";
 }
-function creditLine(x) {
+// What the buyer holds for this one model (2026-10-27: "Each MODEL has its own credits").
+function haveOf(x) {
   const c = credit[x.o.seller];
-  if (!book.signed_in) return {big: "Sign in to buy", small: ""};
-  if (freeFor(x)) return {big: "Free for everyone", small: ""};
-  if (c && c.own) return {big: "Free", small: x.o.here ? "your own model" : "shared with you"};
-  if (!c) return {big: x.o.here || x.o.granted ? "\u2026" : "\u2014", small: ""};
-  const got = creditsOf(x), r = got.rate.join(" \u00b7 ");
-  if (!got.n) return {big: "No credits yet", small: r};
-  return x.kind === "image" ? {big: `${got.n.toLocaleString()} credit${got.n === 1 ? "" : "s"}`, small: r}
-    : {big: `\u2248 ${got.n.toLocaleString()} tokens`, small: r};
+  if (!book.signed_in) return {s: "signin", text: "Sign in to buy credits", pill: "Sign in"};
+  if (freeFor(x)) return {s: "free", text: "Free for everyone", pill: "Free"};
+  if (c && (c.own || (x.kind === "image" && c.images_free))) return {s: "free", text: x.o.here ? "Free: your own model" : "Free: shared with you", pill: "Free"};
+  if (!c) return {s: "unknown", text: x.o.here || x.o.granted ? "…" : "Open it to see your credits", pill: "Credits"};
+  const e = (c.models || {})[x.m.id], mc = e ? Number(e.mc) || 0 : 0;
+  if (!mc) return {s: "none", mc: 0, text: "No credits for it yet", pill: "Buy credits"};
+  const t = e.credits || mcText(mc);
+  return {s: "some", mc, text: `You have ${t} ${mc === 1000 ? "credit" : "credits"} for it`, pill: `${t} ${mc === 1000 ? "credit" : "credits"}`};
 }
-function creditOf(x) { const l = creditLine(x); return l.big; }
-function card(x, link) {
-  const l = loadOf(x), w = WORDS[l.word] || WORDS.idle, key = pageOf(x);
-  const used = x.kind === "image" ? `${(l.last_hour || 0).toLocaleString()} in the last hour` : `${(l.last_hour || 0).toLocaleString()} ${l.last_hour === 1 ? "reply" : "replies"} / hour`;
-  const tag = link ? "a" : "div";
-  return `<${tag} class="llm-card"${link ? ` href="${esc(key)}"` : ""} data-s="${esc(x.o.seller)}">
-    <div class="who"><div style="min-width:0"><div class="mname">${esc(x.kind === "image" ? (x.m.label || x.m.id) : x.m.id)}</div>
-      <small>${esc(sellerName(x.o))}${x.o.host ? " · " + esc(x.o.host) : ""}</small></div>
-      <div style="display:flex;gap:4px;align-items:center;flex:none"><span class="llm-kind">${x.kind === "image" ? "Pictures" : "Words"}</span>
-        <button type="button" class="ex-star" data-fav="${esc(key)}" aria-pressed="false" aria-label="Favorite this model" title="Favorite">☆</button></div></div>
-    <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap">
-      <span class="llm-pill" style="color:${w[1]};background:color-mix(in srgb,${w[1]} 14%,var(--panel))">${w[0]}</span>
-      <span style="font-size:.8rem;color:var(--muted)">${l.active || 0} of ${l.at_once || 1} ${x.kind === "image" ? "drawing" : "running"}${l.waiting ? ` · ${l.waiting} waiting` : ""}</span></div>
-    <div class="llm-stats">
-      <div><small>Price</small><b>${esc(priceLine(x))}</b></div>
-      <div><small>Speed</small><b>${esc(speedLine(x))}</b></div>
-      <div><small>Use</small><b>${esc(used)}</b></div>
-      <div><small>${x.kind === "image" ? "Largest side" : "Longest reply"}</small><b>${x.kind === "image" ? (x.o.images.max_side || 1024) + "px" : (x.o.max_out || 0).toLocaleString() + " tokens"}</b></div>
+function tint(x) {
+  let h = 0; for (const ch of nameOf(x)) h = (h * 31 + ch.charCodeAt(0)) % 360;
+  return `hsl(${h} 72% 68%)`;
+}
+const markOf = (x) => (nameOf(x).replace(/[^A-Za-z0-9]/g, "")[0] || "?").toUpperCase();
+function card(x) {
+  const l = loadOf(x), w = WORDS[l.word] || WORDS.idle, key = pageOf(x), pr = priceOf(x), have = haveOf(x);
+  const fast = x.kind === "text" && (l.tok_s || 0) >= 60;
+  return `<a class="aim-card" href="${esc(key)}" data-s="${esc(x.o.seller)}">
+    <div class="aim-mark" style="background:${tint(x)}" aria-hidden="true">${esc(markOf(x))}</div>
+    <div class="mid">
+      <div class="nm"><b>${esc(nameOf(x))}</b>${fast ? `<span class="aim-tag" style="color:var(--ok);background:color-mix(in srgb,var(--ok) 14%,var(--panel))">FAST</span>` : ""}
+        ${l.word && l.word !== "idle" ? `<span class="aim-tag" style="color:${w[1]};background:color-mix(in srgb,${w[1]} 14%,var(--panel))">${esc(w[0].toUpperCase())}</span>` : ""}</div>
+      <span class="by">by ${esc(sellerName(x.o))} · ${x.kind === "image" ? `pictures up to ${x.o.images.max_side || 1024} px` : "chat"}</span>
+      <span class="have${have.s === "some" || have.s === "free" ? " got" : ""}">${esc(have.text)}</span>
     </div>
-    <div class="llm-foot" style="padding-top:8px"><div style="min-width:0"><small>Your credit</small><strong style="font-size:.95rem">${esc(creditLine(x).big)}</strong>${creditLine(x).small ? `<small>${esc(creditLine(x).small)}</small>` : ""}</div>
-      ${link ? `<span class="llm-btn go" style="display:inline-flex;align-items:center;height:38px">Open</span>` : ""}</div>
-  </${tag}>`;
+    <div class="px"><b>${esc(pr.big)}</b><small>${esc(pr.per)}</small>
+      <button type="button" class="ex-star" data-fav="${esc(key)}" aria-pressed="false" aria-label="Favorite this model" title="Favorite">☆</button></div>
+  </a>`;
 }
+function drawChips() {
+  const kinds = new Map([["all", {label: "Any coin"}]]);
+  if (modelsOf().some(freeFor)) kinds.set("free", {label: "Free"});
+  modelsOf().forEach((x) => pricesOf(x).forEach((p) => { if (!kinds.has(p.leg)) kinds.set(p.leg, {label: coinOf(p).code, c: coinOf(p)}); }));
+  $("llm-chips").innerHTML = [...kinds].map(([k, v]) => `<button type="button" class="aim-chipc${k === filter ? " on" : ""}" data-k="${esc(k)}" aria-pressed="${k === filter}">
+    ${v.c ? coinIcon(v.c, 22) : ""}${esc(v.label)}</button>`).join("");
+}
+$("llm-chips") && $("llm-chips").addEventListener("click", (e) => { const b = e.target.closest("button[data-k]"); if (!b) return; filter = b.dataset.k; draw(); });
+function cheapOf(x) { return freeFor(x) ? 0 : Number(x.kind === "image" ? x.m.per_250px : x.m.typical) || Infinity; }
 const RANK = {idle: 0, steady: 1, busy: 2, full: 3};
 const speedOf = (x) => x.kind === "image" ? (loadOf(x).avg_s ? 1000 / loadOf(x).avg_s : 0) : (loadOf(x).tok_s || 0);
 function sorted(list) {
@@ -343,17 +532,16 @@ function sorted(list) {
     cheap: (a, b) => cheapOf(a) - cheapOf(b),
     fast: (a, b) => speedOf(b) - speedOf(a),
     idle: (a, b) => (RANK[loadOf(a).word] || 0) - (RANK[loadOf(b).word] || 0),
-    name: (a, b) => String(a.m.label || a.m.id).localeCompare(String(b.m.label || b.m.id)),
+    name: (a, b) => nameOf(a).localeCompare(nameOf(b)),
   }[sortBy] || (() => 0);
   return list.slice().sort((a, b) => by(a, b) || String(a.m.id).localeCompare(String(b.m.id)));
 }
 function draw() {
-  drawKeys();
-  if (FOCUS) { drawDetail(); return; }
+  if (FOCUS) { drawFocus(); return; }
   drawChips();
   const all = modelsOf(), want = ($("llm-find").value || "").trim().toLowerCase();
   const fav = (x) => window.arcadeFavs && window.arcadeFavs.has(pageOf(x));
-  const coinOk = (x) => filter === "all" || (filter === "free" ? freeFor(x) : legsFor(x).some((p) => filter === "tokens" ? legIsToken(p.leg) : p.leg === filter));
+  const coinOk = (x) => filter === "all" || (filter === "free" ? freeFor(x) : pricesOf(x).some((p) => p.leg === filter));
   let shown, sugg = [];
   if (want) {                                       // search: every model, whatever the mode (as on the token exchange)
     shown = all.filter((x) => [x.m.id, x.m.label, x.o.tag, x.o.host, x.o.name].join(" ").toLowerCase().includes(want));
@@ -365,10 +553,10 @@ function draw() {
   }
   shown = sorted(shown.filter(coinOk));
   $("llm-fav-empty").hidden = !(mode === "fav" && !want && !shown.length);
-  $("llm-cards").innerHTML = shown.length ? shown.map((x) => card(x, true)).join("")
-    : (mode === "fav" && !want ? "" : `<div class="llm-empty">${all.length ? "No model matches." : "No arcade shares a model right now. Operators turn it on in Admin &rarr; LLM."}</div>`);
+  $("llm-cards").innerHTML = shown.length ? shown.map(card).join("")
+    : (mode === "fav" && !want ? "" : `<div class="aim-empty">${all.length ? "No model matches." : "No arcade shares a model right now. Operators turn it on in Admin &rarr; LLM."}</div>`);
   $("llm-sugg-head").hidden = !sugg.length;
-  $("llm-sugg").innerHTML = sugg.map((x) => card(x, true)).join("");
+  $("llm-sugg").innerHTML = sugg.map(card).join("");
   if (window.arcadeFavs) window.arcadeFavs.paint();
 }
 if (!FOCUS) {
@@ -393,44 +581,12 @@ function favStart() {                               // opens on the favorites wh
   });
 }
 
-// --- one model's own page ---------------------------------------------------------------------------------------
-let opened = false;
-function focusItem() {
-  return modelsOf().find((x) => x.kind === FOCUS.kind && x.m.id === FOCUS.model &&
-    (x.o.seller === FOCUS.seller || (FOCUS.seller === "here" && x.o.here)));
-}
-function drawDetail() {
-  const x = focusItem();
-  if (!x) { $("llm-detail").innerHTML = `<div class="llm-empty">This model is not shared right now (its arcade may be offline). <a href="/exchange?tab=llm">See every model</a>.</div>`; return; }
-  const legs = legsFor(x);
-  const title = document.getElementById("llm-title"); if (title) title.textContent = x.m.label || x.m.id;
-  const table = freeFor(x) ? `<div class="llm-note"><b>Free for everyone.</b> Sign in and use it; nothing to pay.</div>`
-    : x.kind === "image" ? `<div class="llm-prices" style="grid-template-columns:minmax(0,1fr) auto"><span class="h">Coin</span><span class="h">Per credit</span>
-        ${legs.map((p) => `<span><b>${esc(short(p.label))}</b></span><span>${price(p.per)}</span>`).join("")}</div>
-        <p class="sub" style="font-size:.82rem">1 credit for every 250 pixels of the longest side (250&times;250 = 1, 500&times;375 = 2, 1000&times;750 = 4). An edit counts your picture going up and the new one coming down.</p>`
-    : `<div class="llm-prices"><span class="h">Coin</span><span class="h">In</span><span class="h">Out</span>
-        ${legs.map((p) => `<span><b>${esc(short(p.label))}</b></span><span>${price(p.in)}</span><span>${price(p.out)}</span>`).join("")}</div>`;
-  const own = (credit[x.o.seller] || {}).own;
-  $("llm-detail").innerHTML = `<div style="display:flex;flex-wrap:wrap;gap:16px;align-items:stretch">
-    <div style="flex:1 1 320px;min-width:0;display:flex">${card(x, false)}</div>
-    <section class="llm-panel" style="flex:1 1 300px"><h3>Prices</h3>${table}
-      <div style="display:flex;gap:8px;flex-wrap:wrap">${book.signed_in ? (freeFor(x) || own ? "" : `<button type="button" class="llm-btn" id="det-topup">Top up</button>`)
-        : `<button type="button" class="llm-btn go" data-signin="1">Sign in</button>`}</div></section></div>`;
-  const t = document.getElementById("det-topup");
-  if (t) t.onclick = async () => { picked = x.o; try { await ensureGrant(x.o); } catch (err) { toast(err.message); return; } openTopup(x.o, legs); };
-  if (window.arcadeFavs) window.arcadeFavs.paint();
-  if (!opened && book.signed_in) {
-    opened = true;
-    picked = x.o;
-    if (x.kind === "image") { picPicked = x.o; openPicture(x.o); } else openChat(x.o);
-  }
-}
-
 // Sign in through the arcade's own sheet (a public arcade has no /signin page to link to).
 document.addEventListener("click", (e) => {
   if (!e.target.closest("button[data-signin]")) return;
   if (window.arcadeSignIn) arcadeSignIn("Buying model time needs your wallet."); else location.href = "/join";
 });
+
 // --- who the buyer is, at a seller that is not this arcade: their own key signs it, once a month ---------------
 async function keysFor(network, why) {
   const w = await import("/wallet.js");
@@ -459,177 +615,509 @@ async function ensureGrant(o, {quiet = false} = {}) {
   o.granted = true;
   loadCredit(o);
 }
-
 async function loadCredit(o) {
   if (!book.signed_in || !(o.here || o.granted)) return;
   try { credit[o.seller] = await getJSON(`/account/llm/balance?seller=${encodeURIComponent(o.seller)}`); }
   catch (err) { credit[o.seller] = null; }
-  draw(); if (picked && picked.seller === o.seller) { drawLeft(); drawBuys(); }
-  if (picPicked && picPicked.seller === o.seller) picLeft();
+  draw();
+}
+// A reply or picture's own word for what is left, kept until the balance is read again.
+function setLeft(o, model, left, leftText) {
+  const c = credit[o.seller] = credit[o.seller] || {models: {}};
+  c.models = c.models || {};
+  c.models[model] = {mc: Number(left) || 0, credits: leftText || mcText(left)};
+}
+
+// --- one model's own page ---------------------------------------------------------------------------------------
+function focusItem() {
+  return modelsOf().find((x) => x.kind === FOCUS.kind && x.m.id === FOCUS.model &&
+    (x.o.seller === FOCUS.seller || (FOCUS.seller === "here" && x.o.here)));
+}
+const VIEWS = ["v-chat", "v-pics", "v-buy", "v-keys"];
+function viewName() { const h = location.hash.slice(1); return h === "buy" || h === "keys" ? h : "use"; }
+let movedHere = false;                    // the page itself opened #buy / #keys, so Back can step back to the model
+function go(view) { movedHere = true; location.hash = view; }
+function drawFocus() {
+  const x = cur = focusItem() || null;
+  $("aim-missing").hidden = !!x;
+  if (!x) {
+    $("aim-missing").innerHTML = book.offers.length || book.loaded ? `This model is not shared right now (its arcade may be offline). <a href="/exchange?tab=llm">See every model</a>.` : "Finding this model…";
+    VIEWS.forEach((v) => { $(v).hidden = true; });
+    $("aim-signin").hidden = true;
+    return;
+  }
+  const title = document.getElementById("llm-title"); if (title) title.textContent = nameOf(x);
+  $("aim-name").textContent = nameOf(x);
+  $("aim-mark").textContent = markOf(x); $("aim-mark").style.background = tint(x);
+  $("aim-by").textContent = [sellerName(x.o), priceLine(x)].filter(Boolean).join(" · ");
+  $("aim-star").dataset.fav = pageOf(x);
+  const have = haveOf(x);
+  $("aim-credits").textContent = have.pill;
+  $("aim-credits").className = "aim-pill" + (have.s === "some" || have.s === "free" ? " got" : have.s === "none" ? " want" : "");
+  const l = loadOf(x), w = WORDS[l.word] || WORDS.idle, bits = [];
+  bits.push(`<span><i class="aim-dot" style="background:${w[1]}"></i>${w[0]}</span>`);
+  if (l.at_once) bits.push(`<span>${l.active || 0} of ${l.at_once} ${x.kind === "image" ? "drawing" : "running"}${l.waiting ? ` · ${l.waiting} waiting` : ""}</span>`);
+  bits.push(`<span>${(l.last_hour || 0).toLocaleString()} ${x.kind === "image" ? "in the last hour" : plural(l.last_hour || 0, "reply", "replies") + " in the last hour"}</span>`);
+  if (x.kind === "text" && l.tok_s) bits.push(`<span>${l.tok_s} tok/s</span>`);
+  if (x.kind === "image" && l.avg_s) bits.push(`<span>~${l.avg_s} s a picture</span>`);
+  if (x.kind === "text" && x.o.max_out) bits.push(`<span>replies up to ${Number(x.o.max_out).toLocaleString()} tokens</span>`);
+  $("aim-load").innerHTML = bits.join("");
+  // Coin credit from before credits that no credit price converts now: shown, never lost (llm.py balance).
+  const old = Object.entries((credit[x.o.seller] || {}).credit || {}).filter(([, e]) => e && Number(e.units) > 0);
+  $("aim-old").hidden = !old.length;
+  if (old.length) $("aim-old").textContent = `Old credit with ${sellerName(x.o)}, from before credits: `
+    + old.map(([leg, e]) => `${e.text} ${coinOf({leg, label: leg}).code}`).join(", ") + ". It stays with the seller; ask its operator to count it as credits.";
+  if (window.arcadeFavs) window.arcadeFavs.paint();
+  const signed = book.signed_in, v = viewName();
+  $("aim-signin").hidden = signed;
+  $("v-chat").hidden = !(signed && v === "use" && x.kind === "text");
+  $("v-pics").hidden = !(signed && v === "use" && x.kind === "image");
+  $("v-buy").hidden = !(signed && v === "buy");
+  $("v-keys").hidden = !(signed && v === "keys");
+  if (!opened && signed) { opened = true; x.kind === "image" ? openPicture() : openChat(); }
+  if (v === "buy") drawBuy();
+  if (v === "keys") drawKeys();
+  if (x.kind === "image") picCost(); else drawHello();
+}
+let opened = false;
+if (FOCUS) {
+  window.addEventListener("hashchange", () => { drawFocus(); window.scrollTo({top: 0}); });
+  $("aim-credits").addEventListener("click", () => go("buy"));
+  $("aim-keys-btn").addEventListener("click", () => go("keys"));
+  // Back from #buy / #keys returns to the model; from the model itself, to every model.
+  $("aim-back").addEventListener("click", (e) => {
+    if (viewName() === "use") return;
+    e.preventDefault();
+    if (movedHere) history.back(); else location.hash = "";
+  });
+}
+
+// --- chat ----------------------------------------------------------------------------------------------------
+// The conversation kept in this browser, per account, seller and model, the way the helper keeps its own (the operator
+// 2026-10-23: "have the models store their context window in the browser, the same way as the helper [bot] does").
+const CHAT_KEEP = 80;
+let history = [];
+const chatKey = () => `arcade.llm.chat:${book.me || "guest"}:${cur.o.seller}:${cur.m.id}`;
+function keepChat() { if (!cur) return; try { localStorage.setItem(chatKey(), JSON.stringify(history.slice(-CHAT_KEEP))); } catch (e) {} }
+const llmToBottom = FOCUS ? arcadeFollow($("llm-msgs")) : () => {};   // follows a reply only while the reader is at the bottom (base.html)
+function bubble(cls, text) {
+  const el = document.createElement("div");
+  if (cls === "me") { el.className = "aim-me"; el.textContent = text; }
+  else { el.className = "aim-it"; el.innerHTML = `<details hidden><summary>Thinking</summary><span></span></details><div class="say"></div><small></small>`; }
+  const hello = $("llm-hello"); if (hello) hello.remove();
+  $("llm-msgs").appendChild(el); llmToBottom(cls === "me"); return el;
+}
+function md(out, text) { if (window.arcadeMd) out.innerHTML = arcadeMd(text); else out.textContent = text; }
+function drawHello() {
+  if (!FOCUS || !cur || cur.kind !== "text" || history.length || ($("llm-msgs").children.length && !$("llm-hello"))) return;
+  const have = haveOf(cur);
+  const why = have.s === "free" ? "It is free for you." : have.s === "some" ? `Each reply costs ${priceLine(cur)} from your ${have.pill} for this model.`
+    : `Each reply costs ${priceLine(cur)}. <a href="#buy">Buy credits for it</a> first.`;
+  $("llm-msgs").innerHTML = `<div class="aim-hello" id="llm-hello"><b style="color:var(--fg)">Ask ${esc(nameOf(cur))} anything.</b><br>${why}</div>`;
+}
+function drawChat() {
+  $("llm-msgs").innerHTML = "";
+  history.forEach((m) => {
+    if (m.role === "user") bubble("me", m.content);
+    else { const it = bubble("it"); md(it.querySelector(".say"), m.content); }
+  });
+  drawHello();
+  llmToBottom(true);                                       // a reopened conversation shows its last message
+}
+function docsWord() { $("llm-input").placeholder = $("llm-docs").checked ? "Ask anything — it knows DogecoinArcade's docs" : "Ask anything"; }
+function grow() { const t = $("llm-input"); t.style.height = "auto"; t.style.height = Math.min(140, t.scrollHeight + 2) + "px"; }
+function openChat() {
+  try { history = JSON.parse(localStorage.getItem(chatKey()) || "[]") || []; } catch (e) { history = []; }
+  drawChat();
+}
+if (FOCUS) {
+  try { $("llm-docs").checked = localStorage.getItem("arcade.llm.docs") !== "off"; } catch (e) {}
+  docsWord();
+  $("llm-docs").addEventListener("change", () => { try { localStorage.setItem("arcade.llm.docs", $("llm-docs").checked ? "on" : "off"); } catch (e) {} docsWord(); });
+  $("llm-new-chat").addEventListener("click", () => { if (busy) return; history = []; $("llm-msgs").innerHTML = ""; keepChat(); drawHello(); llmToBottom(true); });
+  $("llm-input").addEventListener("input", grow);
+  $("llm-input").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendChat(); } });
+  $("llm-go").addEventListener("click", () => { if (busy) { if (asking) asking.abort(); } else sendChat(); });
+  $("llm-sugg").addEventListener("click", (e) => { const b = e.target.closest("button[data-ask]"); if (b && !busy) sendChat(b.dataset.ask); });
+}
+// One question at a time (2026-10-27): the first tap locks Send into Stop and the suggestions off, before
+// anything else can be awaited, so a double tap never asks -- or pays -- twice.
+let asking = null;
+function chatLocked(on) {
+  busy = on;
+  $("llm-go").classList.toggle("stop", on);
+  $("llm-go").setAttribute("aria-label", on ? "Stop the answer" : "Send");
+  $("llm-go-send").style.display = on ? "none" : "";
+  $("llm-go-stop").hidden = !on;
+  $("llm-busy").hidden = !on;
+  $("llm-new-chat").disabled = on;
+  document.querySelectorAll("#llm-sugg button").forEach((b) => { b.disabled = on; });
+}
+async function sendChat(asked) {
+  const text = (asked || $("llm-input").value).trim();
+  if (!text || busy || !cur) return;
+  const x = cur, o = x.o;
+  chatLocked(true);
+  try { await ensureGrant(o); } catch (err) { toast(err.message); chatLocked(false); return; }
+  if (!asked) { $("llm-input").value = ""; grow(); }
+  history.push({role: "user", content: text}); bubble("me", text); keepChat();
+  const it = bubble("it"), out = it.querySelector(".say"), think = it.querySelector("details"), small = it.querySelector("small");
+  // "Thinking... Ns" with a live clock until the first words stream in.
+  const wait = document.createElement("div");
+  wait.className = "aim-think"; wait.setAttribute("role", "status");
+  wait.innerHTML = `<i aria-hidden="true"><b></b><b></b><b></b></i><span>Thinking… 0s</span>`;
+  it.insertBefore(wait, out);
+  const t0 = Date.now(), tick = setInterval(() => { wait.querySelector("span").textContent = `Thinking… ${Math.floor((Date.now() - t0) / 1000)}s`; }, 1000);
+  const firstWords = () => { clearInterval(tick); wait.remove(); };
+  llmToBottom();
+  let said = "", thought = "", stopped = false;
+  asking = new AbortController();
+  try {
+    const r = await fetch("/account/llm/chat", {method: "POST", credentials: "same-origin", headers: {"Content-Type": "application/json"},
+      signal: asking.signal,
+      // docs: the seller adds what DogecoinArcade's documentation says about the question, free (llmdocs.py).
+      body: JSON.stringify({seller: o.seller, leg: "auto", model: x.m.id, messages: history.slice(-40), docs: $("llm-docs").checked})});
+    if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.detail || `HTTP ${r.status}`); }
+    const reader = r.body.getReader(), dec = new TextDecoder(); let buf = "";
+    for (;;) {
+      const {value, done} = await reader.read(); if (done) break;
+      buf += dec.decode(value, {stream: true});
+      let at;
+      while ((at = buf.indexOf("\n\n")) >= 0) {
+        const line = buf.slice(0, at).trim(); buf = buf.slice(at + 2);
+        if (!line.startsWith("data:")) continue;
+        const data = line.slice(5).trim(); if (data === "[DONE]") continue;
+        let ev; try { ev = JSON.parse(data); } catch (e) { continue; }
+        if (ev.error) throw new Error(ev.error.message || "failed");
+        if (ev.arcade) {
+          const a = ev.arcade;
+          // "X credits · Y left" (2026-10-27); an arcade from before credits says coins.
+          const cost = a.free ? "free" : a.credits ? `${a.cost_text} ${a.cost_text === "1" ? "credit" : "credits"} · ${a.left_text} left`
+            : `${a.cost_text} ${coinOf({leg: a.leg || "", label: ""}).code} · ${a.left_text} left`;
+          small.textContent = cost + (a.docs_tokens ? ` · ${a.docs_tokens.toLocaleString()} tokens of DogecoinArcade docs, free` : "");
+          if (!a.free && a.credits) setLeft(o, a.model || x.m.id, a.left, a.left_text);
+          continue;
+        }
+        for (const ch of ev.choices || []) {
+          const d = ch.delta || {};
+          if (d.reasoning_content) { thought += d.reasoning_content; think.hidden = false; think.querySelector("span").textContent = thought; }
+          if (d.content) { if (!said) firstWords(); said += d.content; md(out, said.replace(/^\s+/, "")); }
+        }
+        llmToBottom();
+      }
+    }
+    firstWords();
+    history.push({role: "assistant", content: said.replace(/^\s+/, "")}); keepChat();
+  } catch (err) {
+    firstWords();
+    stopped = err && err.name === "AbortError";
+    if (stopped && said) {                                 // what came before Stop is kept, and paid for
+      history.push({role: "assistant", content: said.replace(/^\s+/, "")}); keepChat();
+      small.textContent = (small.textContent ? small.textContent + " · " : "") + "stopped";
+    } else {
+      md(out, said || (stopped ? "Stopped." : "—"));
+      const m = String(err.message || err);
+      small.innerHTML = stopped ? "" : esc(m) + (/not enough credit/i.test(m) ? ` · <a href="#buy">Buy credits</a>` : "");
+      history.pop(); keepChat();
+    }
+  } finally {
+    asking = null; chatLocked(false); draw(); llmToBottom();
+    if (book.signed_in) loadCredit(o);
+  }
 }
 
 // --- pictures --------------------------------------------------------------------------------------------------
-let picPicked = null;
-function picCredit(o) {
-  const c = credit[o.seller], im = o.images;
-  if (!book.signed_in) return {big: "Sign in", small: "to buy"};
-  if (im.free) return {big: "Free", small: "for everyone"};
-  if (c && c.own) return {big: "Free", small: o.here ? "your own model" : "shared with you"};
-  if (!c) return {big: o.here || o.granted ? "\u2026" : "\u2014", small: o.here || o.granted ? "" : "sign once to see"};
-  const rows = im.prices.map((p) => c.credit && c.credit[p.leg] ? `${c.credit[p.leg].text} ${short(p.label)}` : "").filter(Boolean);
-  return rows.length ? {big: rows[0], small: rows.slice(1).join(" \u00b7 ")} : {big: "None yet", small: ""};
+let picMode = "new", shape = "square", side = 1000, upFile = null, upSize = null, picMost = 1000;
+const creditsFor = (w, h) => Math.max(1, Math.ceil(Math.max(w, h) / 250));
+const dimsOf = (s, n) => s === "square" ? [n, n] : s === "portrait" ? [Math.round(n * 0.75), n] : [n, Math.round(n * 0.75)];
+function picSize() {                                       // [w, h] the next new picture is asked for, or null
+  if ($("pic-exact").open && ($("pic-w").value || $("pic-h").value)) {
+    let w = Math.round(num($("pic-w").value) || 0), h = Math.round(num($("pic-h").value) || 0);
+    if (w < 128 || h < 128) return null;
+    const k = Math.min(1, picMost / Math.max(w, h)); return [Math.round(w * k), Math.round(h * k)];
+  }
+  return dimsOf(shape, side);
 }
-function openPicture(o) {
-  const im = o.images, side = im.max_side || 1024;
-  $("pic-make").hidden = false;
-  $("pic-who").textContent = `${(im.models[0] || {}).label || ""} \u00b7 ${sellerName(o)}`;
-  $("pic-leg").hidden = !!im.free;
-  $("pic-leg").innerHTML = (im.free ? [{leg: "free", label: "Free"}] : im.prices).map((p) => `<option value="${esc(p.leg)}">${esc(short(p.label))}</option>`).join("");
-  const c = credit[o.seller], has = im.prices.find((p) => c && c.credit && c.credit[p.leg] && c.credit[p.leg].units > 0);
-  if (has) $("pic-leg").value = has.leg;
-  picMost = side;
-  $("pic-w").max = $("pic-h").max = side;
-  const steps = [250, 500, 750, 1000, 1250, 1500].filter((n) => n <= side);
-  if (!steps.includes(side)) steps.push(side);
-  $("pic-presets").innerHTML = steps.map((n) => [["Square", n, n], ["Portrait", Math.round(n * 0.75), n], ["Landscape", n, Math.round(n * 0.75)]]
-      .map(([k, w, h]) => `<button type="button" data-w="${w}" data-h="${h}">${k} ${w}\u00d7${h}</button>`).join("")).join("");
-  if (!$("pic-w").value) { $("pic-w").value = Math.min(500, side); $("pic-h").value = Math.min(500, side); }
+function openPicture() {
+  const im = cur.o.images;
+  picMost = im.max_side || 1024;
+  const steps = [250, 500, 750, 1000, 1250, 1500].filter((n) => n <= picMost);
+  if (!steps.includes(picMost)) steps.push(picMost);
+  side = steps.includes(1000) ? 1000 : steps[steps.length - 1];
+  $("pic-w").max = $("pic-h").max = picMost;
+  $("pic-sides").innerHTML = steps.map((n) => `<button type="button" role="radio" data-side="${n}" aria-checked="false">${n}</button>`).join("");
   picCost();
-  picLeft();
-  $("pic-make").scrollIntoView({behavior: "smooth", block: "nearest"});
+  loadGallery();
 }
+function picCost() {
+  if (!FOCUS || !cur || cur.kind !== "image") return;
+  const edit = picMode === "edit", per = Number(cur.m.per_250px ?? 1), free = haveOf(cur).s === "free" || freeFor(cur);
+  document.querySelectorAll("[data-pmode]").forEach((b) => b.setAttribute("aria-selected", b.dataset.pmode === picMode ? "true" : "false"));
+  document.querySelectorAll("[data-shape]").forEach((b) => b.setAttribute("aria-checked", b.dataset.shape === shape && !$("pic-exact").open ? "true" : "false"));
+  document.querySelectorAll("[data-side]").forEach((b) => b.setAttribute("aria-checked", Number(b.dataset.side) === side && !$("pic-exact").open ? "true" : "false"));
+  $("pic-up-box").hidden = !edit;
+  $("pic-up").hidden = !upFile; $("pic-pick").hidden = !!upFile;
+  $("pic-size-box").hidden = edit;
+  $("pic-prompt-lbl").textContent = edit ? "What to change" : "Describe it";
+  $("pic-rule").textContent = free ? "Free for you." : `${per} ${per === 1 ? "credit" : "credits"} for every 250 px of the longest side.`;
+  let units = 0;
+  if (edit) {
+    if (upSize) {
+      const s = Math.max(256, Math.min(picMost, Math.max(upSize[0], upSize[1])));
+      const a = creditsFor(upSize[0], upSize[1]), b = creditsFor(s, s);
+      units = a + b;
+      $("pic-up-size").textContent = `${upSize[0]} × ${upSize[1]} · counts ${free ? "free" : mcText(Math.ceil(per * a * 1000)) + " credits"}`;
+      $("pic-edit-size").hidden = false;
+      $("pic-edit-size").textContent = `The new picture follows yours: up to ${s} px on its longest side.`
+        + (free ? "" : ` ${mcText(Math.ceil(per * b * 1000))} credits for the new picture + ${mcText(Math.ceil(per * a * 1000))} for the one you upload.`);
+    } else { $("pic-edit-size").hidden = true; }
+  } else {
+    $("pic-edit-size").hidden = true;
+    const wh = picSize();
+    $("pic-dims").textContent = wh ? `${wh[0]} × ${wh[1]} px` : "at least 128 px each way";
+    if (wh) units = creditsFor(wh[0], wh[1]);
+  }
+  const mc = free ? 0 : Math.ceil(per * units * 1000);
+  costMc = mc;
+  if (picBusy) return;
+  const ready = edit ? !!upSize : !!picSize();
+  $("pic-go").disabled = !ready;
+  $("pic-go").textContent = !ready ? (edit ? "Choose a picture to change" : "Pick a size") : `${edit ? "Change it" : "Make it"} · ${free ? "free" : mcText(mc) + " " + (mc === 1000 ? "credit" : "credits")}`;
+  $("pic-said").textContent = picSaid || (free ? "" : "If a picture fails, its credits come back.");
+}
+let costMc = 0, picSaid = "";             // picSaid: how the last picture went, until the next one
+function upPicked(f) {
+  upFile = null; upSize = null;
+  if (!f) { picCost(); return; }
+  const img = new Image(), url = URL.createObjectURL(f);
+  img.onload = () => {
+    upFile = f; upSize = [img.naturalWidth, img.naturalHeight];
+    $("pic-up-thumb").src = url; $("pic-up-name").textContent = (f.name || "picture.png").slice(0, 60);
+    picCost();
+  };
+  img.onerror = () => { URL.revokeObjectURL(url); toast("That file is not a picture this page can read."); picCost(); };
+  img.src = url;
+}
+async function changeThis(src, name) {                   // "Change it" on a picture: it becomes the one to change
+  if (picBusy) return;
+  try { const b = await (await fetch(src, {credentials: "same-origin"})).blob(); upPicked(new File([b], name || "picture.png", {type: b.type || "image/png"})); }
+  catch (e) { toast("That picture could not be read."); return; }
+  picMode = "edit"; picCost();
+  $("pic-prompt").focus();
+}
+if (FOCUS) {
+  document.querySelectorAll("[data-pmode]").forEach((b) => b.addEventListener("click", () => { if (!picBusy) { picMode = b.dataset.pmode; picCost(); } }));
+  document.querySelectorAll("[data-shape]").forEach((b) => b.addEventListener("click", () => { shape = b.dataset.shape; $("pic-exact").open = false; picCost(); }));
+  $("pic-sides").addEventListener("click", (e) => { const b = e.target.closest("[data-side]"); if (!b) return; side = Number(b.dataset.side); $("pic-exact").open = false; picCost(); });
+  $("pic-exact").addEventListener("toggle", () => {
+    if ($("pic-exact").open && !$("pic-w").value) { const [w, h] = dimsOf(shape, side); $("pic-w").value = w; $("pic-h").value = h; }
+    picCost();
+  });
+  $("pic-w").addEventListener("input", picCost); $("pic-h").addEventListener("input", picCost);
+  ["pic-file", "pic-file2"].forEach((id) => $(id).addEventListener("change", () => { const f = $(id).files[0]; $(id).value = ""; if (f) upPicked(f); }));
+  $("pic-up-clear").addEventListener("click", () => { if (!picBusy) upPicked(null); });
+  $("pic-edit-this").addEventListener("click", () => changeThis($("pic-out").src, "my-picture.png"));
+  $("pic-go").addEventListener("click", makePicture);
+}
+// The first tap locks the button into a clock and sets the credits aside; a second tap does nothing (2026-10-27).
+async function makePicture() {
+  if (picBusy || !cur) return;
+  const x = cur, o = x.o, prompt = $("pic-prompt").value.trim(), edit = picMode === "edit";
+  if (!prompt) { toast(edit ? "Say what to change." : "Say what to draw."); $("pic-prompt").focus(); return; }
+  if (edit && !upFile) { toast("Choose the picture to change first."); return; }
+  const wh = edit ? null : picSize();
+  if (!edit && !wh) return;
+  picBusy = true;
+  const btn = $("pic-go"), held = costMc, t0 = Date.now();
+  const word = edit ? "Changing your picture…" : "Making your picture…";
+  const clock = () => { const s = Math.floor((Date.now() - t0) / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
+  const paint = () => {
+    btn.innerHTML = `<svg class="aim-spin" width="20" height="20" viewBox="0 0 44 44" aria-hidden="true"><circle cx="22" cy="22" r="18" fill="none" stroke="var(--line)" stroke-width="5"></circle><path d="M22 4a18 18 0 0 1 18 18" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round"></path></svg>${word} ${clock()}`;
+    const s = (Date.now() - t0) / 1000, l = loadOf(x);
+    $("pic-stage-word").textContent = s < 3 && (l.waiting || (l.at_once && (l.active || 0) >= l.at_once)) ? "Waiting in line" : edit ? "Changing your picture…" : "Painting…";
+    $("pic-stage-note").textContent = s < 3 && (l.waiting || (l.at_once && (l.active || 0) >= l.at_once)) ? "The model is finishing someone else’s picture" : `Usually under a minute · ${clock()}`;
+  };
+  btn.disabled = true; btn.classList.add("wait"); btn.setAttribute("aria-disabled", "true");
+  $("pic-busy").hidden = false; $("pic-tools").hidden = true; $("pic-empty").hidden = true; $("pic-out").style.opacity = ".35";
+  picSaid = `${held ? mcText(held) + " " + (held === 1000 ? "credit" : "credits") + " set aside. " : ""}You can leave this page: the picture lands in Your pictures.`;
+  $("pic-said").textContent = picSaid;
+  document.querySelectorAll("[data-pmode],#pic-up-clear").forEach((b) => { b.disabled = true; });
+  paint();
+  const tick = setInterval(paint, 1000);
+  let said = "";
+  try {
+    await ensureGrant(o);
+    const body = {seller: o.seller, leg: "auto", model: x.m.id, prompt, size: edit ? undefined : `${wh[0]}x${wh[1]}`};
+    if (edit) body.image = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(upFile); });
+    const got = await postJSON("/account/llm/image", body);
+    const url = "data:image/png;base64," + got.png;
+    $("pic-out").src = url; $("pic-out").hidden = false; $("pic-empty").hidden = true;
+    $("pic-dl").href = url;
+    $("pic-ins").hidden = !got.kept; if (got.kept) $("pic-ins").href = `/nfts?pick=llm:${encodeURIComponent(got.kept)}#inscribing`;
+    const a = got.arcade || {};
+    said = `Done in ${((a.ms || (Date.now() - t0)) / 1000).toFixed(0)} s · ` + (a.free ? "free" : a.credits
+      ? `${a.cost_text} ${a.cost_text === "1" ? "credit" : "credits"} · ${a.left_text} left` : `${a.cost_text} ${coinOf({leg: a.leg || "", label: ""}).code}`)
+      + " · kept 24 hours in Your pictures";
+    if (!a.free && a.credits) setLeft(o, a.model || x.m.id, a.left, a.left_text);
+    loadGallery();
+  } catch (err) {
+    const m = String(err.message || err);
+    said = m;
+    if (/not enough credit/i.test(m)) said += " — tap your credits at the top to buy more.";
+  } finally {
+    clearInterval(tick);
+    picBusy = false;
+    btn.classList.remove("wait"); btn.removeAttribute("aria-disabled");
+    $("pic-busy").hidden = true; $("pic-out").style.opacity = ""; $("pic-tools").hidden = $("pic-out").hidden;
+    $("pic-empty").hidden = !$("pic-out").hidden;
+    document.querySelectorAll("[data-pmode],#pic-up-clear").forEach((b) => { b.disabled = false; });
+    picSaid = said;
+    picCost();
+    draw();
+    if (book.signed_in) loadCredit(o);
+  }
+}
+// Every picture is kept on the arcade for 24 hours (2026-10-23), even if the page closed before it was done.
 async function loadGallery() {
   if (!book.signed_in || !$("pic-gallery")) return;
   let got; try { got = await getJSON("/account/llm/pictures"); } catch (e) { return; }
   const pics = got.pictures || [];
-  $("pic-gallery").hidden = !pics.length || !(FOCUS && FOCUS.kind === "image");
+  $("pic-gallery").hidden = !pics.length;
   $("pic-thumbs").innerHTML = pics.map((p) => {
     const left = Math.max(0, Math.round((p.until - Date.now() / 1000) / 3600));
-    return `<figure style="margin:0;display:flex;flex-direction:column;gap:4px;min-width:0">
-      <a href="${esc(p.url)}" target="_blank" rel="noopener"><img src="${esc(p.url)}" alt="${esc(p.prompt)}" loading="lazy" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px;border:1px solid var(--line)"></a>
-      <figcaption style="font-size:.75rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.prompt)}">${esc(p.prompt || "picture")}</figcaption>
-      <span style="display:flex;justify-content:space-between;gap:6px;font-size:.72rem;color:var(--muted)"><span>${left} h left</span>
-        <span style="display:flex;gap:8px;flex-wrap:wrap"><a href="/nfts?pick=llm:${encodeURIComponent(p.id)}#inscribing" style="font-weight:650">Inscribe now</a>
+    return `<figure>
+      <a href="${esc(p.url)}" target="_blank" rel="noopener"><img src="${esc(p.url)}" alt="${esc(p.prompt)}" loading="lazy"></a>
+      <figcaption title="${esc(p.prompt)}">${esc(p.prompt || "picture")} · ${left} h left</figcaption>
+      <span class="acts"><a href="/nfts?pick=llm:${encodeURIComponent(p.id)}#inscribing">Inscribe</a>
         <a href="${esc(p.url)}" download="arcade-${esc(p.id)}.png">Download</a>
-        <a href="#" data-del="${esc(p.id)}" style="color:#a33">Delete</a></span></span></figure>`;
+        <button type="button" data-change="${esc(p.url)}">Change it</button>
+        <button type="button" class="del" data-del="${esc(p.id)}">Delete</button></span></figure>`;
   }).join("");
 }
 document.addEventListener("click", async (e) => {
+  const ch = e.target.closest("[data-change]");
+  if (ch) { e.preventDefault(); changeThis(ch.dataset.change, "my-picture.png"); window.scrollTo({top: 0, behavior: "smooth"}); return; }
   const d = e.target.closest("[data-del]"); if (!d) return;
   e.preventDefault();
   if (window.arcadeAsk && !(await arcadeAsk("Delete this picture?", "It is taken off your arcade now; download it first if you want to keep it.", "Delete"))) return;
   try { await postJSON("/account/llm/pictures/delete", {id: d.dataset.del}); } catch (err) { toast(err.message); }
   loadGallery();
 });
-function picLeft() {
-  if (!picPicked) return;
-  const im = picPicked.images, c = credit[picPicked.seller] || {};
-  $("pic-leg").hidden = true;                              // the credit pays, in whatever coin it is (2026-10-23)
-  const got = creditsOf({kind: "image", o: picPicked, m: im.models[0] || {}});
-  $("pic-left").textContent = im.free || c.images_free ? "Free" : got.n ? `${got.n.toLocaleString()} credit${got.n === 1 ? "" : "s"} left` : "No credits";
+
+// --- buy credits -----------------------------------------------------------------------------------------------
+// Packs of credits (2026-10-27), each priced in the coin tapped; a pack that would cost less than dust in a
+// coin (0.01, fees.DUST_LIMIT) starts at the smallest round number of credits that does not.
+const DUST = 1000000n;
+function niceUp(n) { const mag = 10 ** Math.floor(Math.log10(n)); for (const k of [1, 2, 5, 10]) if (k * mag >= n) return k * mag; return n; }
+function packsFor(p) {
+  const base = [100, 500, 1000, 5000];
+  if (legIsToken(p.leg)) return base;
+  const per12 = decUnits(p.per, 12); if (per12 <= 0n) return base;
+  const least = Number((DUST * 10000n + per12 - 1n) / per12);
+  if (least <= 100) return base;
+  const first = niceUp(least);
+  return [first, first * 5, first * 10, first * 50];
 }
-$("pic-leg").addEventListener("change", picLeft);
-let picMost = 1000, upSize = null;
-const creditsFor = (w, h) => Math.max(1, Math.ceil(Math.max(w, h) / 250));
-function picCost() {
-  const edit = !!$("pic-file").files.length;
-  $("pic-w").disabled = $("pic-h").disabled = edit;
-  let n, said;
-  if (edit && upSize) {
-    const side = Math.min(picMost, Math.max(upSize[0], upSize[1]));
-    n = creditsFor(upSize[0], upSize[1]) + creditsFor(side, side);
-    said = `Your picture is ${upSize[0]}\u00d7${upSize[1]} (${creditsFor(upSize[0], upSize[1])} to send up) and comes back up to ${side} on its longest side (${creditsFor(side, side)} to bring down).`;
-  } else {
-    let w = Math.round(num($("pic-w").value) || 0), h = Math.round(num($("pic-h").value) || 0);
-    if (w < 128 || h < 128) { $("pic-size-said").textContent = "At least 128 pixels each way."; $("pic-go").disabled = true; return; }
-    const k = Math.min(1, picMost / Math.max(w, h)); w = Math.round(w * k); h = Math.round(h * k);
-    n = creditsFor(w, h);
-    said = `${w}\u00d7${h}` + (k < 1 ? ` (this seller draws up to ${picMost} on a side)` : "") + ` \u00b7 1 credit per 250 pixels of the longest side.`;
-  }
-  $("pic-go").disabled = false;
-  $("pic-size-said").textContent = said;
-  $("pic-go").textContent = `${edit ? "Edit it" : "Make it"} \u00b7 ${n} credit${n === 1 ? "" : "s"}`;
-}
-$("pic-w").addEventListener("input", picCost); $("pic-h").addEventListener("input", picCost);
-$("pic-presets").addEventListener("click", (e) => { const b = e.target.closest("button[data-w]"); if (!b) return; $("pic-w").value = b.dataset.w; $("pic-h").value = b.dataset.h; picCost(); });
-$("pic-up-clear").addEventListener("click", () => {
-  $("pic-file").value = ""; upSize = null; $("pic-up").hidden = true; $("pic-up").style.display = "none"; picCost();
-});
-$("pic-file").addEventListener("change", () => {
-  upSize = null;
-  const f = $("pic-file").files[0];
-  if (!f) { $("pic-up").hidden = true; $("pic-up").style.display = "none"; picCost(); return; }
-  const img = new Image(), url = URL.createObjectURL(f);
-  img.onload = () => {
-    upSize = [img.naturalWidth, img.naturalHeight];
-    $("pic-up-thumb").src = url; $("pic-up").hidden = false; $("pic-up").style.display = "flex";
-    $("pic-up-size").textContent = `${f.name.slice(0, 40)} \u00b7 ${upSize[0]}\u00d7${upSize[1]}`;
-    picCost();
-  };
-  img.onerror = () => { URL.revokeObjectURL(url); picCost(); };
-  img.src = url;
-  picCost();
-});
-$("pic-go").addEventListener("click", async () => {
-  const o = picPicked, prompt = $("pic-prompt").value.trim();
-  if (!o || !prompt) { toast("Say what to draw."); return; }
-  try { await ensureGrant(o); } catch (err) { toast(err.message); return; }
-  const btn = $("pic-go"); btn.disabled = true;
-  $("pic-said").textContent = "Drawing\u2026 a picture takes about half a minute, longer if the model has to wake up.";
+let buyLeg = "", buyPack = 0, buying = false, wallet = {};      // wallet: "<net>|<leg>" -> held, in 10^-8 units (or null)
+const PAYKEY = (o) => `arcade.llm.paycoin:${o.seller}`;
+async function walletHeld(c) {
+  const key = c.leg;
+  if (key in wallet) return wallet[key];
+  wallet[key] = null;
   try {
-    const body = {seller: o.seller, leg: "auto", model: (o.images.models[0] || {}).id, prompt, size: `${Math.round(num($("pic-w").value))}x${Math.round(num($("pic-h").value))}`};
-    const f = $("pic-file").files[0];
-    if (f) body.image = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(f); });
-    const got = await postJSON("/account/llm/image", body);
-    const url = "data:image/png;base64," + got.png;
-    $("pic-out").src = url; $("pic-out").style.display = "block";
-    $("pic-dl").href = url; $("pic-dl").style.display = "inline-flex";
-    const a = got.arcade || {}, p = o.images.prices.find((x) => x.leg === a.leg);
-    $("pic-said").textContent = `Done in ${((a.ms || 0) / 1000).toFixed(0)} s \u00b7 ${got.credits || 1} credit${got.credits === 1 ? "" : "s"} \u00b7 ${a.free ? "free" : a.cost_text + " " + short(p && p.label)} \u00b7 kept 24 hours below`;
-    loadGallery();
-    if (!a.free) { credit[o.seller] = credit[o.seller] || {credit: {}}; credit[o.seller].credit = credit[o.seller].credit || {};
-      credit[o.seller].credit[a.leg] = {...(credit[o.seller].credit[a.leg] || {}), units: a.left, text: a.left_text}; picLeft(); }
-  } catch (err) { $("pic-said").textContent = String(err.message || err); }
-  finally { btn.disabled = false; draw(); }
-});
-
-// --- top up --------------------------------------------------------------------------------------------------
-function openTopup(o, legs) {
-  $("llm-topup").hidden = false;
-  $("llm-topup-sub").textContent = `With ${sellerName(o)}. Paid straight to the seller, whose arcade keeps your balance, so start small with sellers you don't know.`;
-  const all = [...(legs || o.prices)];
-  (o.images && !o.images.free ? o.images.prices : []).concat(o.prices).forEach((p) => { if (!all.some((x) => x.leg === p.leg)) all.push(p); });
-  $("llm-pay").innerHTML = all.map((p) => `<option value="${esc(p.leg)}">${esc(p.label)}</option>`).join("");
-  $("llm-pay").dataset.legs = JSON.stringify(all);
-  drawBuys();
-  $("llm-topup").scrollIntoView({behavior: "smooth", block: "nearest"});
+    if (c.token) {
+      const got = await getJSON("/account/tokens");
+      const t = (((got.chains || []).find((x) => x.network === c.net) || {}).tokens || []).find((t) => `${c.net}-token-${t.property_id}` === c.leg);
+      if (t) wallet[key] = t.divisible === false ? BigInt(t.balance || 0) * 100000000n : BigInt(t.balance || 0);
+      else wallet[key] = 0n;
+    } else {
+      const w = await import("/wallet.js");
+      let acct = await getJSON("/account");
+      if (w.filled) acct = await w.filled(acct, c.net);
+      const row = (acct.chains || []).find((x) => x.network === c.net);
+      const sats = row ? (row.spendable ?? row.balance) : null;
+      if (sats != null) wallet[key] = BigInt(Math.round(Number(sats)));
+    }
+  } catch (e) { wallet[key] = null; }
+  if (viewName() === "buy") drawBuy();
+  return wallet[key];
 }
-function drawBuys() {
-  if (!picked) return;
-  const legs = JSON.parse($("llm-pay").dataset.legs || "[]"), p = legs.find((x) => x.leg === $("llm-pay").value), amt = num($("llm-amount").value);
-  const label = p ? short(p.label) : "";
-  $("llm-send-pay").textContent = amt > 0 ? `Send ${amt} ${label}` : "Send";
-  if (!p || !(amt > 0)) { $("llm-buys").textContent = "Enter an amount to see what it buys."; return; }
-  if (p.per !== undefined && p.in === undefined) {
-    const n = Number(p.per) ? Math.floor(amt / Number(p.per)) : 0;
-    $("llm-buys").innerHTML = n ? `Buys <b>${n.toLocaleString()} ${n === 1 ? "credit" : "credits"}</b>: ${n.toLocaleString()} ${n === 1 ? "picture" : "pictures"}, or ${Math.floor(n / 2).toLocaleString()} ${Math.floor(n / 2) === 1 ? "edit" : "edits"}` : "Pictures are free at this price."; return;
+function drawBuy() {
+  if (!cur) return;
+  const x = cur, o = x.o, have = haveOf(x), seller = sellerName(o);
+  $("buy-sub").innerHTML = `Credits for <b style="color:var(--fg)">${esc(nameOf(x))}</b> only, kept by its operator <b style="color:var(--fg)">${esc(seller)}</b>.`;
+  const legs = pricesOf(x);
+  const free = have.s === "free" || freeFor(x);
+  $("buy-free").hidden = !(free || !legs.length);
+  $("buy-form").hidden = free || !legs.length;
+  if (free) { $("buy-free").textContent = `${nameOf(x)} is ${have.text.toLowerCase().startsWith("free:") ? have.text.slice(6).toLowerCase() : "free for everyone"}: nothing to buy.`; return; }
+  if (!legs.length) { $("buy-free").textContent = `${seller} takes no coin for ${nameOf(x)} just now (its coins' chains may be away). Try again later.`; return; }
+  if (!legs.some((p) => p.leg === buyLeg)) {
+    let keep = ""; try { keep = localStorage.getItem(PAYKEY(o)) || ""; } catch (e) {}
+    buyLeg = (legs.find((p) => p.leg === keep) || legs[0]).leg;
   }
-  const out = Number(p.out) ? Math.floor(amt / Number(p.out)) : 0;
-  $("llm-buys").innerHTML = out ? `Buys about <b>${out.toLocaleString()} output tokens</b> (roughly ${Math.round(out * 0.75).toLocaleString()} words)` : "Output is free at this price.";
+  const p = legs.find((q) => q.leg === buyLeg), c = coinOf(p), packs = packsFor(p);
+  if (!packs.includes(buyPack)) buyPack = packs[1];
+  $("buy-coins").innerHTML = legs.map((q) => { const k = coinOf(q); return `<button type="button" role="radio" data-leg="${esc(q.leg)}" aria-checked="${q.leg === buyLeg}" aria-label="${esc(k.token ? k.name + ", " + k.kind : k.name)}" title="${esc(k.token ? k.note : k.name)}">${coinIcon(k)}<span>${esc(k.code)}</span></button>`; }).join("");
+  $("buy-coin-note").textContent = c.token ? c.note : `${c.code} on ${c.name}`;
+  const typical = Number(x.m.typical) || 0, per250 = Number(x.m.per_250px ?? 1) || 0;
+  const pic = Math.min(1000, o.images ? o.images.max_side || 1000 : 1000);
+  const gets = (n) => x.kind === "text" ? (typical ? `about ${Math.floor(n / typical).toLocaleString("en-US")} replies` : "")
+    : (per250 ? `about ${Math.floor(n / (per250 * creditsFor(pic, pic))).toLocaleString("en-US")} pictures at ${pic} px` : "");
+  $("buy-packs").innerHTML = packs.map((n) => `<button type="button" role="radio" data-pack="${n}" aria-checked="${n === buyPack}">
+      <span class="n">${n.toLocaleString("en-US")}</span><span class="u">credits</span>
+      <span class="c">${esc(unitsText(costUnits(p.per, n)))} ${esc(c.code)}</span><span class="g">${esc(gets(n))}</span></button>`).join("");
+  const held = wallet[p.leg];
+  $("buy-have-row").hidden = held == null;
+  if (held != null) $("buy-have").textContent = `${unitsText(held)} ${c.code}`;
+  else if (!(p.leg in wallet)) walletHeld(c);
+  $("buy-now").textContent = have.s === "some" ? have.pill : have.s === "none" ? "none yet" : "\u2014";
+  if (!buying) $("llm-send-pay").innerHTML = `${coinIcon(c, 24)}<span>Buy ${buyPack.toLocaleString("en-US")} credits · ${esc(unitsText(costUnits(p.per, buyPack)))} ${esc(c.code)}</span>`;
+  $("buy-foot").textContent = `Paid straight to ${seller}. Your wallet asks before it sends; the credits count as soon as ${seller}'s node sees the payment, usually within seconds.`;
 }
-$("llm-pay").addEventListener("change", drawBuys); $("llm-amount").addEventListener("input", drawBuys);
-
+if (FOCUS) {
+  $("buy-coins").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-leg]"); if (!b || buying) return;
+    buyLeg = b.dataset.leg; try { localStorage.setItem(PAYKEY(cur.o), buyLeg); } catch (err) {}
+    drawBuy();
+  });
+  $("buy-packs").addEventListener("click", (e) => { const b = e.target.closest("[data-pack]"); if (!b || buying) return; buyPack = Number(b.dataset.pack); drawBuy(); });
+  $("llm-send-pay").addEventListener("click", buyCredits);
+}
+// The question before paying, said plainly (2026-10-27, mock-up "Confirm"): "N credits for <model>, kept by
+// @seller", the price, the network fee and what is left in the wallet; the addresses only under Details.
+function askPay(a) {
+  return new Promise((answer) => {
+    const back = document.createElement("div");
+    back.className = "aim-sheet-back";
+    back.innerHTML = `<div class="aim-sheet" role="dialog" aria-modal="true" aria-labelledby="aim-sheet-h">
+      <div class="grab" aria-hidden="true"></div>
+      <div class="hd">${coinIcon(a.c, 56)}<h2 id="aim-sheet-h">${esc(a.credits)} credits</h2>
+        <p>for <b>${esc(a.model)}</b>, kept by <b>${esc(a.seller)}</b></p></div>
+      <div class="aim-rows"><div><span>Price</span><b>${esc(a.price)}</b></div><div><span>Network fee</span><b>${esc(a.fee)}</b></div>
+        ${a.left ? `<div><span>Left in your wallet</span><b>${esc(a.left)}</b></div>` : ""}</div>
+      <details><summary>Details</summary><p>${esc(a.details)}</p></details>
+      <div class="row2"><button type="button" class="aim-ghost" data-no="1">Back</button><button type="button" class="aim-big" data-yes="1">Pay ${esc(a.price)}</button></div></div>`;
+    const done = (v) => { back.remove(); document.removeEventListener("keydown", key); answer(v); };
+    const key = (e) => { if (e.key === "Escape") done(false); };
+    back.addEventListener("click", (e) => { if (e.target === back || e.target.closest("[data-no]")) done(false); else if (e.target.closest("[data-yes]")) done(true); });
+    document.addEventListener("keydown", key);
+    document.body.append(back);
+    back.querySelector("[data-no]").focus();                // a stray Enter never pays (base.html arcadeAsk's way)
+  });
+}
 const PENDING = "arcade.llm.topups";
 function pending() { try { return JSON.parse(localStorage.getItem(PENDING) || "[]"); } catch (e) { return []; } }
 function keepPending(list) { try { localStorage.setItem(PENDING, JSON.stringify(list)); } catch (e) {} }
-
-$("llm-send-pay").addEventListener("click", async () => {
-  const o = picked, leg = $("llm-pay").value, amount = $("llm-amount").value.trim();
-  const p = o && JSON.parse($("llm-pay").dataset.legs || "[]").find((x) => x.leg === leg);
-  if (!p || !(num(amount) > 0)) { toast("Enter an amount."); return; }
-  const net = legNet(leg), btn = $("llm-send-pay");
-  btn.disabled = true;
+async function buyCredits() {
+  if (buying || !cur) return;
+  const x = cur, o = x.o, p = pricesOf(x).find((q) => q.leg === buyLeg), n = buyPack;
+  if (!p || !n) { toast("Pick a coin and a pack."); return; }
+  const leg = p.leg, net = legNet(leg), c = coinOf(p), units = costUnits(p.per, n), amount = unitsText(units, false);
+  const btn = $("llm-send-pay");
+  buying = true; btn.disabled = true;
   try {
+    await ensureGrant(o);
     const {w, keys} = await keysFor(net, "Your wallet signs this payment.");
     let offer;
     if (legIsToken(leg)) {
@@ -640,31 +1128,34 @@ $("llm-send-pay").addEventListener("click", async () => {
       offer = await w.offerSend(p.to, amount, net);
     }
     const shown = await w.checked(offer, keys);
-    // Said plainly (2026-10-27: "I don't understand why all these addresses"): who is paid, the fee, and the
-    // change that stays in the wallet; the outputs word for word only under the details.
+    const fee = BigInt(shown.fee || 0), coin = COIN_CODES[net] || "";
+    delete wallet[leg]; const held = await walletHeld(c);
+    const left = held == null ? "" : c.token ? `${unitsText(held > units ? held - units : 0n)} ${c.code}`
+      : `${unitsText(held > units + fee ? held - units - fee : 0n)} ${c.code}`;
     const coinsOf = shown.coinsOf || ((v) => String(v));
-    const why = `For LLM credit with ${sellerName(o)}. Network fee ${coinsOf(BigInt(shown.fee || 0))}`
-      + (shown.change ? `; ${coinsOf(BigInt(shown.change))} stays in your wallet as change.` : ".")
-      + `\n\nDetails: ${shown.says}`;
-    const ok = window.arcadeAsk ? await arcadeAsk(`Pay ${amount} ${short(p.label)} to ${sellerName(o)}?`, why, "Yes, send it")
-      : confirm(`Pay ${amount} ${short(p.label)}?`);
+    const details = `Pays ${p.to}` + (shown.change ? `; ${coinsOf(BigInt(shown.change))} ${coin} comes back to your own address as change.` : ".")
+      + ` The credits are added as soon as ${sellerName(o)} sees the payment. Your wallet's reading of it: ${shown.says}`;
+    const ok = await askPay({c, credits: n.toLocaleString("en-US"), model: nameOf(x), seller: sellerName(o),
+      price: `${unitsText(units)} ${c.code}`, fee: `${unitsText(fee)} ${coin}`, left, details});
     if (!ok) return;
     // The question above named the amount, the seller, the fee and the change: the wallet's mainnet review would only
     // ask it a second time (2026-10-27, from the audit).
     const done = await w.confirm(keys, offer, {reviewed: true});
     // Kept the moment it is sent, before anything else can fail (2026-10-27: @apple's 600 PEP reached @strawberry and
     // was never counted -- the claim was made after the signing, and lost with it). Signed and claimed from here on,
-    // again and again until the seller has counted it.
-    keepPending([...pending(), {seller: o.seller, here: !!o.here, leg, net, txid: done.txid, sig: "", at: Date.now()}]);
-    $("llm-topup-said").textContent = "Sent. It counts as soon as the seller's node sees it, usually within seconds…";
+    // again and again until the seller has counted it. It names the model the credits are for.
+    keepPending([...pending(), {seller: o.seller, here: !!o.here, leg, net, model: x.m.id, credits: n, txid: done.txid, sig: "", at: Date.now()}]);
+    $("llm-topup-said").textContent = `Sent. ${n.toLocaleString("en-US")} credits count as soon as ${sellerName(o)}'s node sees it, usually within seconds…`;
+    delete wallet[leg];
     claimPending();
   } catch (err) { toast(err.message || String(err)); }
-  finally { btn.disabled = false; }
-});
+  finally { buying = false; btn.disabled = false; if (FOCUS && viewName() === "buy") drawBuy(); }
+}
 
 let claiming = false;
 async function claimPending() {
   if (claiming) return; claiming = true;
+  const say = (t, seller) => { const el = $("llm-topup-said"); if (el && (!cur || cur.o.seller === seller)) el.textContent = t; };
   try {
     let list = pending();
     for (const t of [...list]) {
@@ -685,10 +1176,10 @@ async function claimPending() {
           t.sig = await w.llmTopupSign(keys.on[net], {seller: t.seller, here: !!t.here, network: net, txid: t.txid, owner}, words);
           keepPending(list.map((x) => (x.txid === t.txid ? t : x)));
         }
-        const got = await postJSON("/account/llm/topup", {seller: t.seller, leg: t.leg, txid: t.txid, sig: t.sig});
+        const got = await postJSON("/account/llm/topup", {seller: t.seller, leg: t.leg, txid: t.txid, sig: t.sig, model: t.model || ""});
         list = list.filter((x) => x.txid !== t.txid);
-        toast(got.again ? "That payment was already counted." : `Credit added: ${got.text || ""}`);
-        $("llm-topup-said").textContent = "Credit added.";
+        toast(got.again ? "That payment was already counted." : `Credits added: ${got.text || got.credits || ""}`);
+        say(got.again ? "That payment was already counted." : `Credits added: ${got.text || got.credits || ""}.`, t.seller);
         const o = book.offers.find((x) => x.seller === t.seller); if (o) loadCredit(o);
       } catch (err) {
         const m = String(err.message || err);
@@ -699,7 +1190,7 @@ async function claimPending() {
           list = list.filter((x) => x.txid !== t.txid);
           toast((/already counted/.test(m) ? "Top-up: " : "Top-up not counted, tell the seller (txid " + t.txid.slice(0, 12) + "…): ") + m);
         } else {
-          if (!picked || picked.seller === t.seller) $("llm-topup-said").textContent = "Your payment is waiting to be counted: " + m;
+          say("Your payment is waiting to be counted: " + m, t.seller);
           if (/does not check|not sent from|does not go|another token|not valid/.test(m)) t.sig = "";   // signed again next try
           if (/sign once|grant/.test(m)) {                       // the grant to that seller ran out: signed again
             const o = (book.offers || []).find((x) => x.seller === t.seller);
@@ -713,180 +1204,102 @@ async function claimPending() {
   } finally { claiming = false; }
 }
 
-// --- chat ----------------------------------------------------------------------------------------------------
-// The conversation kept in this browser, per account and model, the way the helper keeps its own (2026-10-23:
-// "have the models store their context window in the browser, the same way as the helper [bot] does").
-const CHAT_KEEP = 80;
-const chatKey = (o) => `arcade.llm.chat:${book.me || "guest"}:${o.seller}:${(o.models[0] || {}).id || ""}`;
-function keepChat() {
-  if (!picked) return;
-  try { localStorage.setItem(chatKey(picked), JSON.stringify(history.slice(-CHAT_KEEP))); } catch (e) {}
-}
-function drawChat() {
-  $("llm-msgs").innerHTML = "";
-  history.forEach((m) => {
-    if (m.role === "user") bubble("me", m.content);
-    else { const it = bubble("it"); const out = it.querySelector("div");
-           if (window.arcadeMd) out.innerHTML = arcadeMd(m.content); else out.textContent = m.content; }
-  });
-  llmToBottom(true);                                       // a reopened conversation shows its last message
-}
-function docsWord() { $("llm-input").placeholder = $("llm-docs").checked ? "Ask anything \u2014 it knows DogecoinArcade's docs\u2026" : "Ask anything\u2026"; }
-try { $("llm-docs").checked = localStorage.getItem("arcade.llm.docs") !== "off"; } catch (e) {}
-docsWord();
-$("llm-docs").addEventListener("change", () => { try { localStorage.setItem("arcade.llm.docs", $("llm-docs").checked ? "on" : "off"); } catch (e) {} docsWord(); });
-function openChat(o) {
-  $("llm-chat").hidden = false;
-  try { history = JSON.parse(localStorage.getItem(chatKey(o)) || "[]") || []; } catch (e) { history = []; }
-  drawChat();
-  $("llm-chat-who").textContent = `${o.models[0] ? o.models[0].id : ""} · ${sellerName(o)}`;
-  const c = credit[o.seller];
-  $("llm-chat-leg").hidden = !!o.free;
-  $("llm-chat-leg").innerHTML = legsOf(o).map((p) => `<option value="${esc(p.leg)}">${esc(short(p.label))}</option>`).join("");
-  const has = o.prices.find((p) => c && c.credit && c.credit[p.leg] && c.credit[p.leg].units > 0);
-  if (has) $("llm-chat-leg").value = has.leg;
-  drawLeft();
-  $("llm-chat").scrollIntoView({behavior: "smooth", block: "nearest"});
-  $("llm-input").focus();
-}
-function drawLeft() {
-  if (!picked) return;
-  const m = (picked.models[0] || {}), l = creditLine({kind: "text", o: picked, m});
-  $("llm-chat-leg").hidden = true;                          // the credit pays, in whatever coin it is (2026-10-23)
-  $("llm-left").textContent = l.big === "No credits yet" ? "No credit" : l.big + (l.big.startsWith("\u2248") ? " left" : "");
-}
-$("llm-chat-leg").addEventListener("change", drawLeft);
-$("llm-new-chat").addEventListener("click", () => { history = []; $("llm-msgs").innerHTML = ""; llmToBottom(true); keepChat(); });
-
-const llmToBottom = arcadeFollow($("llm-msgs"));      // follows a reply only while the reader is at the bottom (base.html)
-function bubble(cls, text) {
-  const el = document.createElement("div");
-  if (cls === "me") { el.className = "llm-me"; el.textContent = text; }
-  else { el.className = "llm-it"; el.innerHTML = `<details hidden><summary>Thinking</summary><span></span></details><div></div><small></small>`; }
-  $("llm-msgs").appendChild(el); llmToBottom(cls === "me"); return el;
-}
-async function sendChat() {
-  const text = $("llm-input").value.trim();
-  if (!text || busy || !picked) return;
-  try { await ensureGrant(picked); } catch (err) { toast(err.message); return; }
-  busy = true; $("llm-go").disabled = true; $("llm-input").value = "";
-  history.push({role: "user", content: text}); bubble("me", text); keepChat();
-  const it = bubble("it"), out = it.querySelector("div"), think = it.querySelector("details"), small = it.querySelector("small");
-  let said = "", thought = "";
-  try {
-    const r = await fetch("/account/llm/chat", {method: "POST", credentials: "same-origin", headers: {"Content-Type": "application/json"},
-      // docs: the seller adds what DogecoinArcade's documentation says about the question, free (llmdocs.py).
-      body: JSON.stringify({seller: picked.seller, leg: "auto", model: picked.models[0] && picked.models[0].id, messages: history.slice(-40), docs: $("llm-docs").checked})});
-    if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.detail || `HTTP ${r.status}`); }
-    const reader = r.body.getReader(), dec = new TextDecoder(); let buf = "";
-    for (;;) {
-      const {value, done} = await reader.read(); if (done) break;
-      buf += dec.decode(value, {stream: true});
-      let at;
-      while ((at = buf.indexOf("\n\n")) >= 0) {
-        const line = buf.slice(0, at).trim(); buf = buf.slice(at + 2);
-        if (!line.startsWith("data:")) continue;
-        const data = line.slice(5).trim(); if (data === "[DONE]") continue;
-        let ev; try { ev = JSON.parse(data); } catch (e) { continue; }
-        if (ev.error) throw new Error(ev.error.message || "failed");
-        if (ev.arcade) {
-          const a = ev.arcade, p = picked.prices.find((x) => x.leg === a.leg);
-          const yours = Math.max(0, a.tokens_in - (a.docs_tokens || 0));
-          small.textContent = `${yours} in · ${a.tokens_out} out · ${a.free ? "free" : a.cost_text + " " + short(p && p.label)}` +
-            (a.docs_tokens ? ` · ${a.docs_tokens.toLocaleString()} tokens of DogecoinArcade docs, free` : "");
-          if (!a.free) { credit[picked.seller] = credit[picked.seller] || {credit: {}}; credit[picked.seller].credit = credit[picked.seller].credit || {};
-            credit[picked.seller].credit[a.leg] = {...(credit[picked.seller].credit[a.leg] || {}), units: a.left, text: a.left_text}; drawLeft(); }
-          continue;
-        }
-        for (const ch of ev.choices || []) {
-          const d = ch.delta || {};
-          if (d.reasoning_content) { thought += d.reasoning_content; think.hidden = false; think.querySelector("span").textContent = thought; }
-          if (d.content) { said += d.content; if (window.arcadeMd) out.innerHTML = arcadeMd(said.replace(/^\s+/, "")); else out.textContent = said.replace(/^\s+/, ""); }
-        }
-        llmToBottom();
-      }
-    }
-    history.push({role: "assistant", content: said.replace(/^\s+/, "")}); keepChat();
-  } catch (err) {
-    out.textContent = said || "—"; small.textContent = String(err.message || err);
-    history.pop(); keepChat();
-  } finally { busy = false; $("llm-go").disabled = false; draw(); }
-}
-$("llm-go").addEventListener("click", sendChat);
-$("llm-input").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); } });
-
 // --- API keys ------------------------------------------------------------------------------------------------
 let keys = [], fresh = null;             // fresh: the key made just now, {key, seller}, shown once
 function drawKeys() {
+  if (!FOCUS || !cur) return;
+  const x = cur, o = x.o, seller = sellerName(o);
+  $("keys-sub").textContent = `A key lets any app or script use ${nameOf(x)} with your credits for it. Only you and ${seller} can use it. Each request spends your credits for the model it names.`;
   $("llm-base").textContent = book.api_base;
-  $("llm-api").hidden = !book.signed_in || !FOCUS;          // keys belong to a model's own page
-  const on = [];
-  book.offers.forEach((o) => [{leg: "auto", label: "any of its coins"}].forEach((p) => on.push(`<option value="${esc(o.seller)}|${esc(p.leg)}">${esc(sellerName(o))} · ${esc(short(p.label))}</option>`)));
-  const keep = $("llm-key-on").value; $("llm-key-on").innerHTML = on.join(""); if (keep) $("llm-key-on").value = keep;
-  const name = (sid) => { const o = book.offers.find((x) => x.seller === sid); return o ? sellerName(o) : sid.slice(0, 10) + "…"; };
-  $("llm-keys").innerHTML = keys.length ? `<span class="h">Your key</span><span class="h">Name</span><span class="h">Spends your credit with</span><span class="h">Last used</span><span></span>` +
-    keys.map((k) => `<span class="k1"><span class="lbl">Your key </span><code>…${esc(k.tail)}</code></span><span style="overflow-wrap:anywhere"><span class="lbl">Name: </span>${esc(k.name || "—")}</span><span><span class="lbl">Spends your credit with </span>${esc(name(k.seller))} · ${esc(k.leg === "auto" ? "any coin" : k.leg)}</span>
-      <span style="color:var(--muted)"><span class="lbl">Last used: </span>${k.used ? new Date(k.used * 1000).toLocaleString() : "never"}</span>
-      <button type="button" class="llm-btn bad" data-drop="${esc(k.hash)}" style="height:36px">Revoke</button>`).join("") : "";
-  // The key just made goes into the example, with a model of the seller it spends at (2026-10-23: "When a user
-  // generates a key, it should auto populate into the curl command example").
-  const fx = FOCUS ? focusItem() : null;
-  const ko = fx ? fx.o : book.offers.find((o) => fresh && o.seller === fresh.seller) || book.offers.find((o) => o.models.length) || book.offers[0];
-  const text = fx ? fx.kind === "text" : !ko || ko.models.length;
-  const model = fx ? fx.m.id : ko && ko.models.length ? ko.models[0].id : ko && ko.images ? (ko.images.models[0] || {}).id : "MODEL";
-  if (fx && !$("llm-key-on").dataset.preset) {             // the key spends at this model's seller
-    const first = [...$("llm-key-on").options].find((op) => op.value.startsWith(fx.o.seller + "|"));
-    if (first) { $("llm-key-on").value = first.value; $("llm-key-on").dataset.preset = "1"; }
-  }
-  const k = fresh ? fresh.key : "sk-arcade-…";
-  $("llm-curl").textContent = text
-    ? `curl ${book.api_base}/chat/completions \\\n  -H "Authorization: Bearer ${k}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model": "${model}", "messages": [{"role": "user", "content": "Hi"}]}'`
-    : `curl ${book.api_base}/images/generations \\\n  -H "Authorization: Bearer ${k}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model": "${model}", "prompt": "a red dragon", "size": "1024x1024"}'`;
+  const mine = fresh && fresh.seller === o.seller;
+  $("llm-fresh-box").hidden = !mine;
+  if (mine) $("llm-fresh").textContent = fresh.key;
+  // The key just made goes into the example, with this model (2026-10-23: "When a user generates a key, it
+  // should auto populate into the curl command example"); "YOUR_KEY" before one is made.
+  const k = mine ? fresh.key : "YOUR_KEY";
+  $("llm-curl").textContent = x.kind === "text"
+    ? `curl ${book.api_base}/chat/completions \\\n  -H "Authorization: Bearer ${k}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model": "${x.m.id}",\n       "messages": [{"role": "user", "content": "Hi"}]}'`
+    : `curl ${book.api_base}/images/generations \\\n  -H "Authorization: Bearer ${k}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model": "${x.m.id}", "prompt": "a red dragon",\n       "size": "1024x1024"}'`;
+  const name = (sid) => { const s = book.offers.find((q) => q.seller === sid); return s ? sellerName(s) : (sid === "here" ? "this arcade" : sid.slice(0, 10) + "…"); };
+  const here = (k1) => k1.seller === o.seller || (o.here && k1.seller === "here");
+  const list = keys.filter(here).concat(keys.filter((k1) => !here(k1)));
+  // A phone (2026-10-27: a key's "Spends" read as somebody else's key): one key a card, every field named.
+  $("llm-keys").innerHTML = list.length ? list.map((k1) => `<div class="aim-key">
+      <div class="txt"><b>${esc(k1.name || "Key")} <code>…${esc(k1.tail)}</code></b>
+        <span>Your key · spends your credits with ${esc(name(k1.seller))}</span>
+        <span>Last used: ${k1.used ? new Date(k1.used * 1000).toLocaleString() : "never"}</span></div>
+      <button type="button" class="aim-ghost bad" data-drop="${esc(k1.hash)}">Revoke</button></div>`).join("")
+    : `<p class="aim-fine" style="text-align:left">No keys yet.</p>`;
 }
 async function loadKeys() { if (!book.signed_in) return; try { keys = (await getJSON("/account/llm/keys")).keys || []; } catch (e) { keys = []; } drawKeys(); }
-$("llm-key-make").addEventListener("click", async () => {
-  const [seller, leg] = ($("llm-key-on").value || "").split("|");
-  if (!leg) { toast("No seller to make a key for yet."); return; }
-  const o = book.offers.find((x) => x.seller === seller);
-  try {
-    if (o) await ensureGrant(o);
-    const got = await postJSON("/account/llm/keys/new", {seller, leg, name: $("llm-key-name").value.trim()});
-    $("llm-fresh").textContent = got.key; $("llm-fresh-box").hidden = false; $("llm-key-name").value = "";
-    fresh = {key: got.key, seller};
-    loadKeys();
-  } catch (err) { toast(err.message); }
-});
-$("llm-keys").addEventListener("click", async (e) => {
-  const b = e.target.closest("button[data-drop]"); if (!b) return;
-  if (window.arcadeAsk && !(await arcadeAsk("Revoke this key?", "Programs using it stop working at once.", "Revoke"))) return;
-  try { await postJSON("/account/llm/keys/drop", {hash: b.dataset.drop}); loadKeys(); } catch (err) { toast(err.message); }
-});
+if (FOCUS) {
+  $("llm-key-make").addEventListener("click", async () => {
+    if (!cur) return;
+    const o = cur.o, btn = $("llm-key-make");
+    if (btn.disabled) return;
+    btn.disabled = true;
+    try {
+      await ensureGrant(o);
+      const got = await postJSON("/account/llm/keys/new", {seller: o.seller, leg: "auto", name: $("llm-key-name").value.trim() || nameOf(cur)});
+      $("llm-key-name").value = "";
+      fresh = {key: got.key, seller: o.seller};
+      await loadKeys();
+    } catch (err) { toast(err.message); }
+    finally { btn.disabled = false; }
+  });
+  $("llm-keys").addEventListener("click", async (e) => {
+    const b = e.target.closest("button[data-drop]"); if (!b) return;
+    if (window.arcadeAsk && !(await arcadeAsk("Revoke this key?", "Programs using it stop working at once.", "Revoke"))) return;
+    try { await postJSON("/account/llm/keys/drop", {hash: b.dataset.drop}); loadKeys(); } catch (err) { toast(err.message); }
+  });
+}
 document.addEventListener("click", (e) => {
   const b = e.target.closest("button[data-copy]"); if (!b) return;
   navigator.clipboard.writeText($(b.dataset.copy).textContent).then(() => { b.textContent = "Copied"; setTimeout(() => { b.textContent = "Copy"; }, 1500); });
 });
 
 async function load() {
-  try { book = await getJSON("/account/llm/offers"); }
-  catch (err) { $(FOCUS ? "llm-detail" : "llm-cards").innerHTML = `<div class="llm-empty">${esc(err.message)}</div>`; return; }
-  if (picked) picked = book.offers.find((o) => o.seller === picked.seller) || null;
-  if (picPicked) picPicked = book.offers.find((o) => o.seller === picPicked.seller && o.images) || null;
+  try { book = await getJSON("/account/llm/offers"); book.loaded = true; }
+  catch (err) {
+    const el = $(FOCUS ? "aim-missing" : "llm-cards"); el.hidden = false;
+    el.innerHTML = `<div class="aim-empty">${esc(err.message)}</div>`; return;
+  }
   draw();
   favStart();
-  loadGallery();
-  book.offers.forEach(loadCredit);
-  loadKeys();
+  if (FOCUS) {
+    if (cur) {
+      // Credits at another arcade are read with a grant: renewed quietly here when the wallet is already open.
+      await ensureGrant(cur.o, {quiet: true}).catch(() => {});
+      loadCredit(cur.o);
+    }
+    loadKeys();
+  } else {
+    book.offers.forEach(loadCredit);
+    loadKeys();
+  }
 }
 // Grants to the other arcades this account uses, signed again ahead of their end while the wallet is open here, so its
 // API keys there keep working (2026-10-27).
 async function renewGrants() {
   for (const o of (book && book.offers) || []) {
     if (o.here) continue;
-    const uses = (keys || []).some((k) => k.seller === o.seller) || Object.values(credit[o.seller] || {}).some((v) => Number(v) > 0);
+    const c = credit[o.seller] || {};
+    const uses = (keys || []).some((k) => k.seller === o.seller) || Object.values(c.models || {}).some((v) => Number(v && v.mc) > 0)
+      || Object.values(c.credit || {}).some((v) => Number(v && v.units) > 0);
     if (uses) await ensureGrant(o, {quiet: true}).catch(() => {});
   }
 }
 Promise.resolve(load()).then(() => setTimeout(renewGrants, 3000)).catch(() => {});
 claimPending();
-setInterval(() => { if (!document.hidden && !busy) getJSON("/account/llm/offers").then((b) => { book = b; if (picked) picked = b.offers.find((o) => o.seller === picked.seller) || picked; draw(); }).catch(() => {}); }, 10000);
+setInterval(() => {
+  // A picture asked for before this page opened lands in Your pictures when it is done (it is kept either way).
+  if (FOCUS && cur && cur.kind === "image" && !document.hidden && viewName() === "use") loadGallery();
+  if (document.hidden || busy || picBusy || buying) return;
+  getJSON("/account/llm/offers").then((b) => {
+    // A grant this page signed is kept (the book only says it at the next read).
+    const had = new Set(book.offers.filter((o) => o.granted).map((o) => o.seller));
+    b.offers.forEach((o) => { if (had.has(o.seller)) o.granted = true; });
+    book = {...b, loaded: true}; draw();
+  }).catch(() => {});
+}, 10000);
 </script>

@@ -105,6 +105,12 @@ differently"; chat "by length, shown simply"; old balances go to "Seller's first
 - Admin -> LLM: "What one credit costs" (coins + 100-credit column), "Each model's rate" (in/out + a typical reply),
   and per-picture-model "credits per 250 px". GET /admin/api/llm returns `effective` prices and rates.
 Tests: tests/test_llm.py (each model's own credits, migration once, first credit prices keep picture costs).
+Page (_llm_tab.html) rebuilt to the operator's approved mock-up (artifact P4whGrBQ7T73isyyG7H4rZ, "I like it ship"): one card
+per model with that model's own credits; a model page with chat or pictures (every control kept, "Change it" edits),
+#buy (only the seller's coins/tokens as icons, tokens as a 3-letter ticker in a black circle; packs 100/500/1,000/5,000
+priced in the coin) with a confirm sheet (price, fee, what is left; Back focused), and #keys (key once + curl). Send
+locks into Stop, Make into a clock, so nothing is asked twice; chat/pictures charge the model shown, not models[0].
+offer(): a seller with credit prices and no old per-token asks is no longer dropped from the book.
 
 ### 2026-10-27 LLM market fixes after @apple's lost 600 PEP top-up (Claude)
 The operator: "I put in an order for 600 pep worth of credits and it doesn't look like ... I ever got my credit"; "You need to
