@@ -176,3 +176,18 @@ def test_the_admin_routes(public):
     assert app.post("/admin/api/cores/install", headers={**LOCAL, **WRITE}, json={"net": "kot"}).status_code == 400
     page = app.get("/admin", headers=LOCAL).text
     assert "function loadNodes()" in page
+
+
+def test_a_folder_with_only_a_config_is_not_counted_as_the_chain(tmp_path):
+    """.25 (2026-10-27): ~/.dogecoin held only dogecoin.conf; its node's data lives in /var/lib/dogecoind. Only a folder
+    with blocks/ is a Core's data folder, and a config's datadir= is followed."""
+    from types import SimpleNamespace
+    conf_dir = tmp_path / "conf"
+    conf_dir.mkdir()
+    data = tmp_path / "data"
+    (data / "blocks").mkdir(parents=True)
+    (conf_dir / "dogecoin.conf").write_text("rpcuser=x\n")
+    chain = SimpleNamespace(datadir=None, conf=conf_dir / "dogecoin.conf", params=NETWORKS["doge"])
+    assert disk_sizes.node_folder(chain) in (None,) or disk_sizes.node_folder(chain) != conf_dir
+    (conf_dir / "dogecoin.conf").write_text(f"datadir={data}\n")
+    assert disk_sizes.node_folder(chain) == data

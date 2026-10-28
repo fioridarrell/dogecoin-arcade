@@ -467,8 +467,9 @@ Pepecoin's, and the arcade shows its progress.
 Litecoin, Litecoin testnet, Bellscoin, Luckycoin, Kotia, Wojakcoin and DigiByte are add-on chains. The
 installer does not install their Cores. In **Admin → Chains** each one is run here (with its node on
 this machine), borrowed from an arcade that shares its Core, or left off. Dogecoin can be borrowed or
-left off too. Pepecoin testnet always runs here, and at least one more Core must run here as well (see
-*Shared Cores*). The Bellscoin, Luckycoin, Kotia, Wojakcoin and DigiByte pages give each node's version and
+left off too. Pepecoin testnet always runs here; every other chain may be borrowed (see *Shared
+Cores*). **Admin → Coins & chains → Install a node** installs an add-on chain's official Core here in one
+click. The Bellscoin, Luckycoin, Kotia, Wojakcoin and DigiByte pages give each node's version and
 config.
 
 ### A node you already run

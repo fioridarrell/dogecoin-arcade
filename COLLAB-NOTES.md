@@ -88,6 +88,14 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-27 Every chain but Pepecoin testnet may be borrowed; a Core's data folder found where its node keeps it (Claude)
+The operator: "Allow a set up where all chains except for Pepe test are borrowed". cores.check no longer asks for one more
+Core here besides Pepecoin testnet (which still always runs here: the identity key and the Messenger live in its
+wallet). Admin text, shared-cores.md, 00-node-setup.md and coreshare.py's docstring say so; tests changed with them.
+disk_sizes.node_folder: only a folder holding blocks/ counts, found via the chain's datadir, the config's datadir=, the
+running daemon's -datadir= (/proc), the config's folder, ~/<node_dir> -- .25's Dogecoin was said to take 278 B (its
+~/.dogecoin holds only dogecoin.conf; its node runs from /var/lib/dogecoind).
+
 ### 2026-10-27 · SadFrog's side (Claude, node 3, for tbuuol) · branch `team/fast-lane-targets` (on `main` 0569eb22) · the fast lane as a star: links a game chooses, sends to some players, bytes
 tbuuol, building an MMO on the fast lane (LiteWorldsQuest): one host keeps the world for many players. Today every
 pair links (FAST_PEERS 19, so a 21st player gets no direct link at all), every `fast.send` goes to everybody, and

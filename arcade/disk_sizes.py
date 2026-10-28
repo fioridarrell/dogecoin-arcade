@@ -116,18 +116,61 @@ class Sizes:
             self._lock.release()
 
 
+def _holds_chain(folder: Path) -> bool:
+    """A Core's data folder holds its blocks (a folder with only a config in it is not one: 2026-10-27, .25's
+    ~/.dogecoin held only dogecoin.conf, its node's data in /var/lib/dogecoind, and Dogecoin was said to take 278 B)."""
+    try:
+        return (folder / "blocks").is_dir() or (folder / "testnet4" / "blocks").is_dir() \
+            or (folder / "testnet3" / "blocks").is_dir()
+    except OSError:
+        return False
+
+
+def _conf_datadir(conf: Path) -> Path | None:
+    try:
+        for line in Path(conf).read_text().splitlines():
+            k, _, v = line.partition("=")
+            if k.strip() == "datadir" and v.strip():
+                return Path(v.strip()).expanduser()
+    except OSError:
+        pass
+    return None
+
+
+def _process_datadir(daemon: str) -> Path | None:
+    """The -datadir= of a running `daemon` (Linux /proc): a system install keeps its data where its service says."""
+    try:
+        for proc in Path("/proc").iterdir():
+            if not proc.name.isdigit():
+                continue
+            try:
+                argv = (proc / "cmdline").read_bytes().split(b"\0")
+            except OSError:
+                continue
+            if not argv or Path(argv[0].decode("utf-8", "replace")).name != daemon:
+                continue
+            for a in argv[1:]:
+                a = a.decode("utf-8", "replace")
+                if a.startswith("-datadir="):
+                    return Path(a.split("=", 1)[1]).expanduser()
+    except OSError:
+        pass
+    return None
+
+
 def node_folder(chain) -> Path | None:
-    """The Core's data folder of `chain` on this machine: its datadir if known, else ~/<node_dir>."""
-    for attr in ("datadir",):
-        d = getattr(chain, attr, None)
-        if d and Path(d).is_dir():
-            return Path(d)
+    """The Core's data folder of `chain` on this machine, and only one that holds its blocks: the chain's datadir, the
+    config's datadir=, the running daemon's -datadir=, the config's folder, or ~/<node_dir>."""
+    params = getattr(chain, "params", None)
     conf = getattr(chain, "conf", None)
-    if conf and Path(conf).parent.is_dir():
-        return Path(conf).parent
-    node_dir = getattr(getattr(chain, "params", None), "node_dir", "")
-    if node_dir and (Path.home() / node_dir).is_dir():
-        return Path.home() / node_dir
+    stem = Path(getattr(params, "node_conf", "") or "").stem
+    candidates = [getattr(chain, "datadir", None), _conf_datadir(conf) if conf else None,
+                  _process_datadir(stem + "d") if stem else None,
+                  Path(conf).parent if conf else None,
+                  (Path.home() / params.node_dir) if getattr(params, "node_dir", "") else None]
+    for c in candidates:
+        if c and Path(c).is_dir() and _holds_chain(Path(c)):
+            return Path(c)
     return None
 
 

@@ -281,11 +281,11 @@ def test_a_sharer_answers_only_what_it_shares():
 
 # ------------------------------------------------------------------------------------------- the rules
 
-def test_testnet_and_one_more_core_run_here():
+def test_testnet_runs_here_and_every_other_chain_may_be_borrowed():
+    """2026-10-27: "Allow a set up where all chains except for Pepe test are borrowed"."""
     cores.check({"test": "here", "main": "here", "doge": "borrow"})
     cores.check({"test": "here", "main": "borrow", "doge": "here"})
-    with pytest.raises(cores.CoreRule, match="at least one more"):
-        cores.check({"test": "here", "main": "borrow", "doge": "borrow"})
+    cores.check({"test": "here", "main": "borrow", "doge": "borrow", "ltc": "off"})
     with pytest.raises(cores.CoreRule, match="Pepecoin test"):
         cores.check({"test": "borrow", "main": "here"})
     with pytest.raises(cores.CoreRule, match="cannot be off"):

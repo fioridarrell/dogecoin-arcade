@@ -29524,7 +29524,8 @@ def create_app(state: AppState) -> FastAPI:
     @app.post("/admin/api/cores")
     def admin_cores(request: Request, payload: Any = Body(None)):
         """Which Cores run here, are borrowed, or are off (applies at the next start), and which are
-        shared with other arcades (applies within a minute). Pepecoin testnet and one more run here."""
+        shared with other arcades (applies within a minute). Pepecoin testnet runs here; every other chain may be
+        borrowed (2026-10-27)."""
         from .. import cores as coreslib
         _admin_check(request, write=True)
         said = payload if isinstance(payload, dict) else {}

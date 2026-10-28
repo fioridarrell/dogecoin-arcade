@@ -8,8 +8,8 @@ that share it. Two arcades that each run two Cores can both offer every chain.
 
 - **Pepecoin testnet always runs on your own machine.** The Messenger, the @names and the mesh's own
   checks live there.
-- **Run at least one more Core yourself.** Every arcade brings a Core to the network as well as
-  borrowing.
+- **Every other chain may be borrowed.** An arcade can run Pepecoin testnet alone and borrow all the
+  rest (2026-10-27). Running more Cores and sharing them is what keeps the network fast for everyone.
 - **Every other chain is your choice:** run it here, borrow it from an arcade that shares it, or (for
   a chain the arcade can do without, such as Dogecoin) leave it off.
 

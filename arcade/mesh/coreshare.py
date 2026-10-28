@@ -3,8 +3,9 @@
 2026-10-17: "use the mesh network as a core API allowing any operator to allow the rest of
 The operators to use their core by clicking a check box in the admin panel ... both arcades could
 offer all three but only each have two cores running." Every arcade runs Pepecoin testnet (the
-Messenger and the mesh's own vouching live there) and at least one more Core of its choosing; any
-chain it does not run it BORROWS from an arcade that shares that chain's Core.
+Messenger and the mesh's own vouching live there) and any more Cores of its choosing (none, since
+2026-10-27: every other chain may be borrowed); any chain it does not run it BORROWS from an arcade that
+shares that chain's Core.
 
 On the wire (frames of kind "cr" on an ordinary mesh link, never flooded):
 

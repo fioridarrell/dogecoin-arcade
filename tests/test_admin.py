@@ -180,8 +180,9 @@ def test_the_startup_window_points_at_the_panel_and_installs(tmp_path, monkeypat
     assert adminwindow.uninstall() and not path.exists()
 
 
-def test_chains_run_here_or_borrowed_with_testnet_and_one_more_here(public, monkeypatch):
-    """2026-10-17: Cores shared between arcades. Testnet always runs here, and at least one more;
+def test_chains_run_here_or_borrowed_with_testnet_here(public, monkeypatch):
+    """2026-10-17: Cores shared between arcades. Testnet always runs here (and, since 2026-10-27, nothing else
+    has to);
     sharing is one box per chain that runs here; which Cores run here applies at a restart."""
     app, state = public
     got = app.get("/admin/api/state", headers=LOCAL).json()["chains"]
@@ -193,11 +194,14 @@ def test_chains_run_here_or_borrowed_with_testnet_and_one_more_here(public, monk
     assert state.setting("share:main") is False
     assert {r["net"]: r for r in app.get("/admin/api/state", headers=LOCAL).json()["chains"]["rows"]}["main"]["share"] is False
     assert nets["main"]["now"] == "here" and nets["doge"]["now"] in ("here", "off")
+    every = app.post("/admin/api/cores", headers={**LOCAL, **WRITE},
+                     json={"modes": {"main": "borrow", "doge": "borrow"}})
+    assert every.status_code == 200, "every chain but Pepecoin test borrowed (2026-10-27)"
     refused = app.post("/admin/api/cores", headers={**LOCAL, **WRITE},
-                       json={"modes": {"main": "borrow", "doge": "borrow"}})
-    assert refused.status_code == 400 and "at least one more" in refused.json()["detail"]
+                       json={"modes": {state.messaging.network: "borrow"}})
+    assert refused.status_code == 400 and "Pepecoin test" in refused.json()["detail"]
     ok = app.post("/admin/api/cores", headers={**LOCAL, **WRITE},
-                  json={"modes": {"doge": "borrow"}, "share": {"main": True, "doge": True}}).json()
+                  json={"modes": {"main": "here", "doge": "borrow"}, "share": {"main": True, "doge": True}}).json()
     assert ok["restart"] is (nets["doge"]["now"] != "borrow")
     assert state.setting("core:doge") == "borrow" and state.setting("share:main") is True
     assert not state.setting("share:doge"), "a borrowed chain is not shared onward"
