@@ -24,6 +24,9 @@
   </div>
   <p class="muted ord-rules" id="ord-rules"></p>
   <p class="muted" id="ord-picked" hidden></p>
+  <p class="muted" id="ord-pic-note" hidden style="font-size:.86rem">An ord is the picture alone: its name and traits are
+    not inscribed with it. To give AI pictures a name, a number and traits, tick <b>For a collection</b> under
+    <a href="/exchange?tab=llm">Your pictures</a> and inscribe them below as a collection, even a collection of one.</p>
   <div class="row" style="margin-top:8px">
     <button type="button" id="ord-go" disabled>Inscribe</button>
   </div>
@@ -41,6 +44,7 @@
     the collection index &mdash; each piece's name, number and traits from its JSON &mdash; is inscribed on Pepecoin
     test, where the arcades index it, and the collection appears on the Exchange. If the tab closes, choose the
     folder again: pieces already inscribed are skipped and a half-done one carries on.</p>
+  <div id="pic-set-details" hidden style="margin:0 0 10px;padding:10px;border:1px solid var(--line);border-radius:10px"></div>
   <div class="ord-grid">
     <label>Chain <select id="set-chain"></select></label>
     <label>Folder <input type="file" id="set-folder" webkitdirectory directory multiple></label>
@@ -104,6 +108,7 @@
   .ix-table td.id{grid-column:1/-1}}
 </style>
 {% if account_here %}
+{% include "_picture_details.html" %}
 <script type="module">
 import * as wallet from "/wallet.js";
 
@@ -202,10 +207,13 @@ $("ord-go").onclick = async () => {
     const first = await wallet.startOrd(held, {chain: c.chain, content: b64(bytes), content_type: f.type, name: f.name});
     const k = first.costs, shown = await wallet.checked(first, held);
     const network = Number(shown.fee || 0) + Number(k.reveal_fees || 0);
+    // The operator's fee is an output of the commit (2026-10-27, app._operator_fee), named on its own line.
+    const operator = Number(k.operator_fee || 0);
     const label = `Inscribe ${f.name} (${commas(f.size)} bytes) as a ${first.label}: ${commas(first.of)} transactions, `
       + `signed here without asking again. ${coins(k.postage, c.chain)} stays yours as the ord's own coin.`;
     const ok = c.mainnet
-      ? await arcadeMainnetReview({label, network, data: 0, others: 0, operator: 0, total: network + Number(k.postage), chain: c.chain})
+      ? await arcadeMainnetReview({label, network, data: 0, others: 0, operator, fee: first.operator_fee || null,
+                                   total: network + operator + Number(k.postage), chain: c.chain})
       : await arcadeAsk(`Inscribe ${f.name}?`, `${label} Network fees: ${coins(network, c.chain)}.`, "Inscribe");
     if (!ok) return;
     await run(first, f, bytes);
@@ -367,11 +375,46 @@ async function drawSet() {
   $("set-picked").hidden = false;
   $("set-picked").textContent = `${commas(read.items.length)} pictures, ${commas(bytes)} bytes, `
     + `${read.json ? `JSON for ${commas(read.json)}` : "no JSON (numbered in file order, no traits)"}`
-    + (quote ? ` · ${commas(quote.txs)} transactions, about ${coins(quote.fees, c.chain)} in fees` : "")
+    + (quote ? ` · ${commas(quote.txs)} transactions, about ${coins(quote.fees, c.chain)} in fees`
+        + (quote.operator ? ` and ${coins(quote.operator, c.chain)} to this arcade's operator` : "") : "")
     + (big ? ` · ${commas(big)} too big for this inscriber` : "");
   $("set-go").disabled = busy || big > 0 || !c;
 }
 $("set-folder").onchange = drawSet;
+
+// Pictures from the LLM tab's "Your pictures" (2026-10-27, SadFrog: "a pipeline that easily allows them to inscribe
+// right there ... a prefilled template of a metadata ... incase they want to make a small collection"): ?pick=llm:<id>
+// puts one picture in the file box; several (?pick=llm:<id>,<id>... from "Inscribe as ords") go in the collection's
+// folder box as 1.png, 2.png ... with the _metadata.json the details template (_picture_details.html) writes, so
+// readFolder reads them exactly as it reads a HashLips folder.
+(async () => {
+  let pics;
+  try { pics = await arcadePickedPictures(); }
+  catch (e) { say("Could not pick those pictures: " + String(e.message || e)); return; }
+  if (pics.length === 1) {
+    const dt = new DataTransfer();
+    dt.items.add(pics[0].file);
+    $("ord-file").files = dt.files;
+    $("ord-pic-note").hidden = false;
+    drawPicked();
+    $("ord-make").scrollIntoView({behavior: "smooth", block: "start"});
+  } else if (pics.length > 1) {
+    let later = 0;
+    arcadePictureDetails($("pic-set-details"), pics, (entries) => {
+      const dt = new DataTransfer();
+      for (const p of pics) dt.items.add(p.file);
+      const meta = entries.map((e, i) => e && {...e, image: `${i + 1}.png`});
+      if (meta.every((e) => e && Number.isInteger(e.edition)))
+        dt.items.add(new File([JSON.stringify(meta)], "_metadata.json", {type: "application/json"}));
+      $("set-folder").files = dt.files;
+      const named = (entries.find((e) => e && e.edition) || {}).name || "";
+      $("set-name").value = named.replace(/\s*#\s*\d+\s*$/, "");
+      clearTimeout(later);
+      later = setTimeout(drawSet, 400);                // drawSet asks this node for a quote; once typing stops
+    }, true);
+    $("ord-set").scrollIntoView({behavior: "smooth", block: "start"});
+  }
+})();
 $("set-chain").onchange = drawSet;
 $("set-stop").onclick = () => { stopAsked = true; $("set-stop").disabled = true; };
 
@@ -409,12 +452,14 @@ $("set-go").onclick = async () => {
   const plan = setPlan, c = plan && plan.chain, name = $("set-name").value.trim();
   if (!plan || !c) return;
   if (!name) { say("give the collection a name"); return; }
-  const n = plan.items.length, q = plan.quote || {fees: 0, txs: 0};
+  const n = plan.items.length, q = plan.quote || {fees: 0, txs: 0}, operator = Number(q.operator || 0);
   const label = `Inscribe ${name}: ${commas(n)} pictures as ${c.ord}s, about ${commas(q.txs)} transactions signed here without `
     + `asking again, then its collection index on ${TAG.network === "test" ? "Pepecoin test" : "this arcade's chain"}. `
     + `${coins(q.postage * n, c.chain)} stays yours as the ords' own coins.`;
   const ok = c.mainnet
-    ? await arcadeMainnetReview({label, network: q.fees, data: 0, others: 0, operator: 0, total: q.fees + q.postage * n, chain: c.chain, estimate: true})
+    ? await arcadeMainnetReview({label, network: q.fees, data: 0, others: 0, operator,
+                                 fee: operator ? {value: Math.round(operator / n)} : null,
+                                 total: q.fees + operator + q.postage * n, chain: c.chain, estimate: true})
     : await arcadeAsk(`Inscribe ${name}?`, `${label} Network fees: about ${coins(q.fees, c.chain)}.`, "Inscribe");
   if (!ok) return;
   busy = true; stopAsked = false; drawPicked();
@@ -432,7 +477,7 @@ $("set-go").onclick = async () => {
     const lanes = [];
     if (L > 1) {
       try {
-        const per = (Number(q.fees) + Number(q.postage) * n) / n;
+        const per = (Number(q.fees) + operator + Number(q.postage) * n) / n;   // each ord's commit pays the operator too
         const each = Math.ceil(per * Math.ceil(n / L) * 1.25) + 2000000;
         $("set-says").textContent = `Making ${L} lanes, a coin each, so ${L} ords go at once…`;
         const split = await postJSON("/account/ord/split", {chain: c.chain, lanes: L, each});
