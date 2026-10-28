@@ -209,7 +209,28 @@ def lock_fee(state: Any, chain: Any) -> dict:
     to = fee_payee(state, chain)
     if not to:
         return {}
-    return {"bps": bps, "to": to}
+    share = lender_payee(chain)
+    return {"bps": bps, "to": to, **({"share_to": share} if share and share != to else {})}
+
+
+def lender_payee(chain: Any) -> str:
+    """On a chain this arcade BORROWS: the address the arcade lending it is paid at (its offer's "p", mesh/coreshare),
+    which takes trade.SHARE_PERCENT of every fee here (2026-10-28: "On a borrowed chain 20% of all fees should
+    go to the operator who is loaning the chain"); "" on a chain run here or when the lender names no address of it."""
+    if not getattr(chain, "borrowed", False):
+        return ""
+    from .mesh import coreshare
+    from .script import b58check_decode
+    share = coreshare.CURRENT
+    if share is None:
+        return ""
+
+    def ours(address: str) -> bool:
+        try:
+            return b58check_decode(address)[0] == chain.params.pubkeyhash_version and T.payee_ok(address)
+        except Exception:                                  # noqa: BLE001
+            return False
+    return share.payee(chain.network, ours) or ""
 
 
 def fee_payee(state: Any, chain: Any) -> str:
@@ -243,7 +264,11 @@ def fee_terms_fit(proposed: T.Leg, stood: dict) -> bool:
     into the lister's own lock would be paid out of it by its own claim."""
     if not proposed.fee_bps:
         return True
-    return proposed.fee_bps == int(stood.get("fee_bps") or 0) and proposed.fee_to == str(stood.get("fee_to") or "")
+    # The lending arcade's share too (2026-10-28): a taker naming ANOTHER address for it would be paid a fifth of the
+    # lister's fee out of the lister's own lock by its own claim. Naming none is fine -- an arcade from before that day
+    # drops the field -- the lock then pays the lister's operator alone.
+    return (proposed.fee_bps == int(stood.get("fee_bps") or 0) and proposed.fee_to == str(stood.get("fee_to") or "")
+            and proposed.fee_share_to in ("", str(stood.get("fee_share_to") or "")))
 
 
 def asset_seen(seen: T.LockSeen | None, leg: T.Leg, lock_address: str, index: Any,
@@ -378,7 +403,8 @@ class NodeTrader:
                              "lock-script swaps are between two chains (and Doginal offers in DOGE)")
         what = lambda d: {k: d.get(k, "") for k in ("network", "kind", "asset")} | {"amount": int(d["amount"])}
         terms = self.fee_terms(give["network"])
-        mine = what(give) | {"fee_bps": int(terms.get("bps") or 0)} | ({"fee_to": terms["to"]} if terms else {})
+        mine = what(give) | {"fee_bps": int(terms.get("bps") or 0)} | ({"fee_to": terms["to"]} if terms else {}) \
+            | ({"fee_share_to": terms["share_to"]} if terms.get("share_to") else {})
         with self._db() as conn:
             conn.execute("INSERT OR REPLACE INTO standing_order(id, give, get) VALUES(?,?,?)",
                          (order_id, json.dumps(mine), json.dumps(what(get))))
@@ -1022,7 +1048,7 @@ class NodeTrader:
             elif step == T.CLAIM:
                 coin = {**theirs, "value": facts.theirs.value, "reserve": facts.theirs.reserve}
                 inputs, outputs = self._way_out(coin, trade.get, trade.their_redeem(), get_chain, to=home_get,
-                                                operator=T.payee(trade.get, trade.give))
+                                                operator=T.payees(trade.get, trade.give))
                 txid = trpc.call("sendrawtransaction", H.claimed(
                     inputs, outputs, trade.their_redeem(), bytes.fromhex(trade.secret), key.sign))
                 courier.send(self.state, self.messaging, peer, M.build(

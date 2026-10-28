@@ -88,6 +88,8 @@ def leg_json(leg: Leg) -> dict:
         out["fee_bps"] = int(leg.fee_bps)
         if leg.fee_to:
             out["fee_to"] = leg.fee_to
+        if leg.fee_share_to:
+            out["fee_share_to"] = leg.fee_share_to
     return out
 
 
@@ -124,7 +126,20 @@ def leg_from(said: Any) -> Leg:
     if said["giver_key"] == said["taker_key"]:
         raise TradeMessageError("a leg goes from one person to another")
     fee_bps, fee_to = fee_terms(said)
-    return Leg(network, kind, asset, amount, said["giver_key"], said["taker_key"], fee_bps, fee_to)
+    return Leg(network, kind, asset, amount, said["giver_key"], said["taker_key"], fee_bps, fee_to,
+               share_term(said, fee_to))
+
+
+def share_term(said: dict, fee_to: str) -> str:
+    """The lending arcade a leg's operator fee is shared with on a borrowed chain (2026-10-28; trade.fee_split): "" when
+    the leg names none or pays no fee. A pay-to-pubkey-hash address, or refused (a claim could never pay it)."""
+    from .trade import payee_ok
+    share = said.get("fee_share_to") or ""
+    if not share or not fee_to:
+        return ""
+    if not payee_ok(share):
+        raise TradeMessageError("a leg's shared fee is paid to an address (pay to public key hash)")
+    return str(share)
 
 
 def fee_terms(said: dict) -> tuple[int | None, str]:

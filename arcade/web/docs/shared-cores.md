@@ -165,15 +165,21 @@ arcades on the same rules hold the same index. Linked arcades check that they do
 This applies to borrowed chains too: an index built from a borrowed Core's blocks is compared with the
 indexes other arcades built from their own Cores.
 
-## A tenth to the arcade that shares
+## What the arcade that shares is paid
 
-An arcade that borrows a chain pays the arcade whose Core it uses a tenth of what it earns on that chain:
+An arcade that borrows a chain pays the arcade whose Core it uses part of what it earns on that chain:
 
-- **Operator fees.** The operator's fee on a borrowed chain is split in the same transaction: nine tenths to
-  this arcade and one tenth to the sharer. A tenth too small for the network to carry (under the dust
-  limit) is not paid; the whole fee then stays with this arcade.
-- **Mined blocks.** A block mined with a borrowed Core's work pays the sharer a tenth of its reward in its
-  own coinbase.
+- **Fees: a fifth.** Every fee this arcade's operator takes on a borrowed chain is split: four fifths to this
+  arcade and one fifth to the sharer. That covers the inscription fee and the fee held in a swap's lock.
+  - An inscription fee is split in the same transaction, as two outputs.
+  - A swap lock holds both parts, and the claim pays each as an output of its own.
+  - When a fifth is too small for the network to carry (under the dust limit), it's raised to the dust limit,
+    so the sharer is always paid. What stays with this arcade is never under it either, so the fee can come to
+    a little more than the amount set.
+  - An arcade from before this change pays the whole lock fee to the locker's operator; only the sharer's
+    part is missed.
+- **Mined blocks: a tenth.** A block mined with a borrowed Core's work pays the sharer a tenth of its reward in
+  its own coinbase.
 
 Each sharing arcade names the address it is paid at for every chain it shares, and a borrowing arcade is
 paid its fees and mined coins in the same way. It's the operator account's own address on that chain when

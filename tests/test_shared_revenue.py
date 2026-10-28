@@ -1,4 +1,4 @@
-"""A tenth of the revenue made on a borrowed chain goes to the arcade whose Core it is (2026-10-18: "If a
+"""A fifth of every fee (a tenth of a mined block) made on a borrowed chain goes to the arcade whose Core it is (2026-10-18: "If a
 node operator is using a shared node 10% of the revenue should go to the operator of the shared node"): the
 operator's fee is split in the same transaction, a mined block pays it in its coinbase (test_blockminer), and a
 miner on another machine asks /rpc/work/<chain> whom to pay."""
@@ -23,15 +23,20 @@ class _Share:
         return SHARER if valid(SHARER) else None
 
 
-def test_a_fee_on_a_borrowed_chain_pays_the_sharer_a_tenth(monkeypatch):
+def test_a_fee_on_a_borrowed_chain_pays_the_sharer_a_fifth_at_least_the_dust_line(monkeypatch):
+    """2026-10-28: "On a borrowed chain 20% of all fees should go to the operator who is loaning the chain";
+    a share under the chain's minimum is "raised to the minimum" (was a tenth, and nothing under the dust line)."""
     monkeypatch.setattr(coreshare, "CURRENT", _Share())
     borrowed = SimpleNamespace(borrowed=True, network="main", params=NETWORKS["main"])
     here = SimpleNamespace(borrowed=False, network="main", params=NETWORKS["main"])
-    assert appmod._sharer_cut(borrowed, 50_000_000) == (5_000_000, SHARER)
-    assert appmod._sharer_cut(here, 50_000_000) == (0, ""), "a chain run here owes nobody"
-    assert appmod._sharer_cut(borrowed, fees.DUST_LIMIT) == (0, ""), "a tenth under dust is not paid"
+    dust = fees.dust_limit(NETWORKS["main"])
+    assert appmod._sharer_cut(borrowed, 50_000_000) == (40_000_000, 10_000_000, SHARER)
+    assert appmod._sharer_cut(here, 50_000_000) == (50_000_000, 0, ""), "a chain run here owes nobody"
+    assert appmod._sharer_cut(borrowed, dust) == (dust, dust, SHARER), \
+        "a fifth under the dust line is raised to it, and what stays never falls under it"
+    assert appmod._sharer_cut(borrowed, 3 * dust) == (3 * dust - 3 * dust * 20 // 100, dust, SHARER)
     ltc = SimpleNamespace(borrowed=True, network="ltc", params=NETWORKS["ltc"])
-    assert appmod._sharer_cut(ltc, 50_000_000) == (0, ""), "an address of another chain is never paid"
+    assert appmod._sharer_cut(ltc, 50_000_000) == (50_000_000, 0, ""), "an address of another chain is never paid"
 
 
 def test_a_miner_elsewhere_asks_the_arcade_for_work_with_its_cookie(client):

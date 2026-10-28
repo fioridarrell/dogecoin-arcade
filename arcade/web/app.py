@@ -476,9 +476,13 @@ class _SessionRenewal:
 #: (`mainnet_create_fee_permille` in settings.json): 0.5%, the exchange's own cut.
 MAINNET_CREATE_FEE_PERMILLE = 5
 
-#: What the arcade whose Core a chain is borrowed from is paid of the revenue made on it: a tenth of an
-#: operator's fee, and a tenth of a block mined with its work (2026-10-18; blockminer.SHARE_PERCENT).
+#: What the arcade whose Core a chain is borrowed from is paid of a block mined with its work: a tenth (the operator
+#: 2026-10-18; blockminer.SHARE_PERCENT).
 SHARER_PERCENT = 10
+#: ...and of every fee this arcade's operator takes on that chain: a fifth, at least the chain's dust line (the operator
+#: 2026-10-28: "On a borrowed chain 20% of all fees should go to the operator who is loaning the chain"; a share under
+#: the dust line is "raised to the minimum"). Was a tenth, and nothing when a tenth was under the dust line.
+FEE_SHARER_PERCENT = 20
 
 #: What /rpc/work/<chain> answers besides getworkshare: a miner's calls, nothing else.
 MINING_CALLS = frozenset({"getblocktemplate", "submitblock", "getbestblockhash", "getblockcount",
@@ -803,17 +807,18 @@ STALL_AFTER = 45
 STALL_EVERY = 120
 
 
-def _sharer_cut(chain, sats: int) -> tuple[int, str]:
-    """The tenth of an operator's fee owed to the arcade whose Core this chain is borrowed from (the operator
-    2026-10-18: "If a node operator is using a shared node 10% of the revenue should go to the operator of the
-    shared node"): (satoshis, its address), or (0, "") on a chain that runs here, when no sharer names an
-    address, or when a tenth -- or what it leaves -- would be under the dust limit no node relays."""
+def _sharer_cut(chain, sats: int) -> tuple[int, int, str]:
+    """An operator's fee of `sats` on a BORROWED chain split with the arcade whose Core it is borrowed from:
+    (what stays this operator's, the sharer's share, the sharer's address). The share is FEE_SHARER_PERCENT of the fee,
+    raised to the chain's dust line when under it, and what stays is never under the dust line either -- so the fee
+    paid can come to a little more than `sats` (2026-10-28: "Raise it to the minimum"). (sats, 0, "") on a
+    chain that runs here, or when no sharer names an address on it."""
     if not getattr(chain, "borrowed", False):
-        return 0, ""
+        return int(sats), 0, ""
     from ..mesh import coreshare
     share = coreshare.CURRENT
     if share is None:
-        return 0, ""
+        return int(sats), 0, ""
 
     def ours(address: str) -> bool:
         try:
@@ -821,10 +826,11 @@ def _sharer_cut(chain, sats: int) -> tuple[int, str]:
         except Exception:                              # noqa: BLE001
             return False
     payee = share.payee(chain.network, ours) or ""
-    cut = int(sats) * SHARER_PERCENT // 100
-    if not payee or cut < fees.DUST_LIMIT or int(sats) - cut < fees.DUST_LIMIT:
-        return 0, ""
-    return cut, payee
+    if not payee:
+        return int(sats), 0, ""
+    dust = fees.dust_limit(chain.params)
+    part = int(sats) * FEE_SHARER_PERCENT // 100
+    return max(dust, int(sats) - part), max(dust, part), payee
 
 
 def _request_timer():
@@ -13279,10 +13285,10 @@ def create_app(state: AppState) -> FastAPI:
         sats = max(share, floor)
         said = {"address": to, "value": sats, "permille": max(0, permille),
                 "minimum": floor, "at_minimum": share < floor}
-        cut, payee = _sharer_cut(chain, sats)
-        if cut:
-            said["sharer"] = {"address": payee, "value": cut, "percent": SHARER_PERCENT}
-            return ([(sats - cut, txbuild.p2pkh_script(to)), (cut, txbuild.p2pkh_script(payee))], said)
+        mine, cut, payee = _sharer_cut(chain, sats)
+        if cut and payee != to:
+            said.update({"value": mine + cut, "sharer": {"address": payee, "value": cut, "percent": FEE_SHARER_PERCENT}})
+            return ([(mine, txbuild.p2pkh_script(to)), (cut, txbuild.p2pkh_script(payee))], said)
         return ([(sats, txbuild.p2pkh_script(to))], said)
 
     def _set_pictures(run, chain, piece) -> set[str]:
@@ -19250,29 +19256,35 @@ def create_app(state: AppState) -> FastAPI:
             raise ValueError("an NFT leg names its inscription")
         return tradelib.Leg(chain.network, kind, asset, 1 if kind == "nft" else amount, "", "")
 
-    def _trade_operator(said: Any, chain) -> tuple[int, str] | None:
-        """The operator fee of the lock a tab names (2026-10-21: "add an operator fee output to each lock
-        script"), as the tab worked it out from the swap's terms (wallet_js.js operatorFee, the same arithmetic as
-        trade.operator_fee): {fee, fee_to} on its leg; None for none. For the tab's OWN lock it is what goes in on top;
-        for the lock it claims, the output its claim pays the other side's operator. Checked to be a payable address
-        and worth an output; how much is the account's own word, about its own swap."""
+    def _trade_operator(said: Any, chain) -> list[tuple[int, str]] | None:
+        """The operator fee outputs of the lock a tab names (2026-10-21: "add an operator fee output to each lock
+        script"), as the tab worked them out from the swap's terms (wallet_js.js feeSplit, the same arithmetic as
+        trade.fee_split): {fee, fee_to} on its leg, and on a borrowed chain {share, share_to} beside them, the lending
+        arcade's part (2026-10-28); None for none. For the tab's OWN lock their sum is what goes in on top; for the lock
+        it claims, the outputs its claim pays. Each checked to be a payable address and worth an output; how much is the
+        account's own word, about its own swap."""
         from .. import htlc as htlclib
         leg = said if isinstance(said, dict) else {}
-        try:
-            fee = int(leg.get("fee") or 0)
-        except (TypeError, ValueError):
-            raise ValueError("an operator fee is a whole number of base units")
-        if fee <= 0:
-            return None
-        to = str(leg.get("fee_to") or "")
-        if not tradelib.payee_ok(to):
-            raise ValueError("an operator fee is paid to an address")
-        if fee < htlclib.dust_of(chain.params):
-            raise ValueError("an operator fee under the dust line would not relay")
-        return fee, to
+        out = []
+        for fee_key, to_key in (("fee", "fee_to"), ("share", "share_to")):
+            try:
+                fee = int(leg.get(fee_key) or 0)
+            except (TypeError, ValueError):
+                raise ValueError("an operator fee is a whole number of base units")
+            if fee <= 0:
+                continue
+            to = str(leg.get(to_key) or "")
+            if not tradelib.payee_ok(to):
+                raise ValueError("an operator fee is paid to an address")
+            if fee < htlclib.dust_of(chain.params):
+                raise ValueError("an operator fee under the dust line would not relay")
+            out.append((fee, to))
+        if out and out[0][1] != str(leg.get("fee_to") or ""):
+            raise ValueError("a shared fee goes beside the operator's own, never instead of it")
+        return out or None
 
     def _lock_spend_pays(decoded: dict, owner: str, lock_address: str, kind: str,
-                         operator: tuple[int, str] | None) -> None:
+                         operator: list[tuple[int, str]] | None) -> None:
         """A lock spend the tab hands back pays this account and nobody else -- but for, on a claim, the one output of
         exactly the operator fee the terms owe the other side's operator (2026-10-21), and, moving a token or NFT out,
         what is left of the lock's coin back into the lock itself. The account's output is the last (a token's
@@ -19280,16 +19292,19 @@ def create_app(state: AppState) -> FastAPI:
         outs = decoded["vout"]
         ok = {owner, lock_address}
         paid = []
+        owed = {a for _v, a in operator or []}
         for o in outs:
             addresses = o["scriptPubKey"].get("addresses", [])
             for a in addresses:
                 if a in ok:
                     continue
-                if kind == "claim" and operator is not None and a == operator[1] and addresses == [a]:
-                    paid.append(round(float(o["value"]) * COIN))
+                if kind == "claim" and a in owed and addresses == [a]:
+                    paid.append((round(float(o["value"]) * COIN), a))
                     continue
                 raise ValueError("that spend pays somebody besides this account")
-        if paid and paid != [operator[0]]:
+        # Each operator output exactly as agreed -- the locker's operator and, on a borrowed chain, its lender
+        # (2026-10-28) -- or none of them (a claim that leaves the fee in, which only the claimer loses by).
+        if paid and sorted(paid) != sorted(operator or []):
             raise ValueError("that spend pays the operator something other than the fee agreed")
         # A Doginal comes out with two inputs (the Doginal and its reserve, htlc.doginal_out): its first output is the
         # Doginal's coin; everything else's last output is the token's recipient, so never the operator's.
@@ -19355,7 +19370,7 @@ def create_app(state: AppState) -> FastAPI:
                 raise ValueError("that lock would refund somebody else; only lock your own")
             leg = _trade_leg(said.get("leg"), chain, account)
             # This account's arcade's operator fee goes into its own lock on top (2026-10-21).
-            cut = (_trade_operator(said.get("leg"), chain) or (0, ""))[0]
+            cut = sum(v for v, _a in _trade_operator(said.get("leg"), chain) or [])
             index = state.token_index(chain)
             mine = _coin_pubkey(account.pubkey, chain)
             if leg.kind == "token":
@@ -19438,7 +19453,7 @@ def create_app(state: AppState) -> FastAPI:
             leg = _trade_leg(said.get("leg"), chain, account)
             if leg.kind != "token20":
                 raise ValueError("this route locks a DRC-20 / PRC-20 token")
-            cut = (_trade_operator(said.get("leg"), chain) or (0, ""))[0]
+            cut = sum(v for v, _a in _trade_operator(said.get("leg"), chain) or [])
             index = state.ord_index(chain.network)
             if index is None:
                 raise ValueError("this arcade has no ord index of that chain")
@@ -33789,7 +33804,8 @@ def create_app(state: AppState) -> FastAPI:
         stood = next((o["give"] for o in state.node_trader.standing() if o["id"] == oid), {})
         return JSONResponse({"msg_key": state.ensure_identity().public_bytes.hex(), "node": mesh.node_id,
                              "deposit": deposit,
-                             "lock_fee": {"bps": int(stood.get("fee_bps") or 0), "to": stood.get("fee_to", "")}})
+                             "lock_fee": {"bps": int(stood.get("fee_bps") or 0), "to": stood.get("fee_to", ""),
+                                          **({"share_to": stood["fee_share_to"]} if stood.get("fee_share_to") else {})}})
 
     @app.post("/account/orders/post")
     def orders_post(request: Request, payload: Any = Body(None)):
@@ -34213,7 +34229,8 @@ def create_app(state: AppState) -> FastAPI:
             # 2026-10-21, and then that lock is held to the old rule).
             get = tradelib.Leg(found["give"]["network"], found["give"]["kind"], found["give"]["asset"],
                                found["give"]["amount"], found["trade_key"], mine.hex(),
-                               found["give"].get("fee_bps"), found["give"].get("fee_to", ""))
+                               found["give"].get("fee_bps"), found["give"].get("fee_to", ""),
+                               found["give"].get("fee_share_to", ""))
             trade = trader.propose(bytes.fromhex(found["msg_key"]), found["id"], give, get)
             state.flash(f"Proposed ({trade.id}). It locks and settles by itself; follow it below.", "ok")
         except Exception as exc:

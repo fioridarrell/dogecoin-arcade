@@ -836,7 +836,7 @@ export function endMainnetApproval() {
 /** What a transaction costs, by kind, from its own bytes. */
 export function mainnetCosts(offer, shown) {
   const opAddr = offer.operator_fee && offer.operator_fee.address;
-  // On a borrowed chain a tenth of the fee goes to the arcade whose Core it is (2026-10-18): the same fee line.
+  // On a borrowed chain a fifth of the fee goes to the arcade whose Core it is (2026-10-18, a fifth since 2026-10-28): the same fee line.
   const shareAddr = offer.operator_fee && offer.operator_fee.sharer && offer.operator_fee.sharer.address;
   let operator = 0, data = 0, others = 0;
   for (const p of shown.pays || []) {
@@ -3047,18 +3047,27 @@ async function signLockSpend(wallet, {chain, redeem, txid, vout, kind, secret, l
     // A CLAIM also pays the other side's operator exactly the fee its lock holds, as one output of
     // its own (2026-10-21) -- worked out here from the terms, never taken from the node.
     const lockScript = await coins.htlcScript(unhex(redeem));
-    const op = kind === "claim" && what.fee ? {value: BigInt(what.fee), script: await payeeScript(what.fee_to)} : null;
-    if (op && !op.script) throw new Error("the operator fee's address cannot be paid. Nothing was signed.");
-    const isOp = (o) => op && same(o.script, op.script) && !same(o.script, mine);
-    const fine = (o) => same(o.script, mine) || (isOp(o) && o.value === op.value)
+    // On a borrowed chain the lending arcade's share is a second such output (2026-10-28, trade.fee_split).
+    const ops = [];
+    if (kind === "claim") {
+      for (const [v, a] of [[what.fee, what.fee_to], [what.share, what.share_to]]) {
+        if (!v) continue;
+        const script = await payeeScript(a);
+        if (!script) throw new Error("the operator fee's address cannot be paid. Nothing was signed.");
+        if (!same(script, mine)) ops.push({value: BigInt(v), script});
+      }
+    }
+    const opOf = (o) => ops.find((p) => same(o.script, p.script) && o.value === p.value);
+    const isOp = (o) => ops.some((p) => same(o.script, p.script));
+    const fine = (o) => same(o.script, mine) || !!opOf(o)
       || (what.kind !== "coin" && !dg && (o.script[0] === 0x6a || same(o.script, lockScript)));
     const ours = tx.outputs.length ? tx.outputs[dg ? 0 : tx.outputs.length - 1] : null;
     if (!tx.outputs.length || !tx.outputs.every(fine) || !same(ours.script, mine)
-        || tx.outputs.filter(isOp).length > 1
-        || (dg && tx.outputs.length > 2)
+        || tx.outputs.filter(isOp).length > ops.length
+        || (dg && tx.outputs.length > Math.max(2, 1 + ops.length))
         || (what.kind !== "coin" && !dg && tx.outputs.filter((o) => o.script[0] === 0x6a).length !== 1))
       throw new Error("that spend pays somebody else. Nothing was signed.");
-    if (op && !same(op.script, mine) && tx.outputs.filter(isOp).length !== 1)
+    if (ops.some((p) => tx.outputs.filter((o) => same(o.script, p.script) && o.value === p.value).length !== 1))
       throw new Error("that claim leaves out the operator fee the swap agreed. Nothing was signed.");
     // The sender paid the network fee (2026-10-21): a coin claimed on the new terms comes out whole.
     if (kind === "claim" && what.kind === "coin" && leg && leg.fee_bps != null) {
@@ -3141,9 +3150,9 @@ async function payeeScript(address) {
  *  of the other lock pays the other side's operator. */
 function legWhat(leg, other = null) {
   if (!leg) return {kind: "coin", asset: "", amount: 0};
-  const fee = operatorFee(leg, other);
+  const [own, share] = feeSplit(leg, other);
   return {kind: leg.kind || "coin", asset: leg.asset || "", amount: leg.amount,
-          ...(fee ? {fee, fee_to: leg.fee_to} : {})};
+          ...(own ? {fee: own[0], fee_to: own[1]} : {}), ...(share ? {share: share[0], share_to: share[1]} : {})};
 }
 
 /* The trade state machine: arcade/trade.py's next_step, rule for rule (tests compare
@@ -3171,6 +3180,8 @@ export const TRADE = {
   FEE_FLOOR: {main: 1_000_000, test: 1_000_000, regtest: 1_000_000, doge: 1_000_000, ltc: 10_000, ltctest: 10_000,
               bel: 10_000, lky: 1_000_000, kot: 100_000, wjk: 10_000, dgb: 10_000},
   FEE_BPS_CEILING: 10_000,
+  // The lending arcade's part of a fee on a borrowed chain (trade.SHARE_PERCENT, 2026-10-28).
+  SHARE_PERCENT: 20,
   PAYEE_VERSIONS: [25, 30, 46, 47, 48, 56, 73, 111, 113],
 };
 //: The real-coin chains (config.py `real_coins`): their legs are mainnet tier (trade.Leg.tier).
@@ -3246,14 +3257,14 @@ export async function checkLock(trade, seen, theirs) {
   if (seen.script_hex !== script) return "that lock's script is not the one agreed (hash, keys or lock time differ)";
   if ((leg.kind === "doginal" || leg.kind === "token20") && (seen.vout !== 0 || !seen.asset_ok))
     return "that lock does not hold the agreed Doginal at the start of output 0, with its reserve beside it";
-  if ((leg.kind === "doginal" || leg.kind === "token20") && operatorFee(leg, other)
+  if ((leg.kind === "doginal" || leg.kind === "token20") && heldFee(leg, other)
       && Number(seen.reserve || 0) < doginalReserve(leg, other))
     return "the reserve beside that Doginal is too small to pay its spend and the operator fee agreed";
   if (seen.value < lockValue(leg, other)) {
     if (leg.kind === "coin") {
       if (leg.fee_bps == null) return `that lock holds ${seen.value}, less than the ${leg.amount} agreed`;
       return `that lock holds ${seen.value}, less than the ${leg.amount} agreed with its network fee `
-        + `(${claimFee(leg.network)}) and operator fee (${operatorFee(leg, other)}) on top`;
+        + `(${claimFee(leg.network)}) and operator fee (${heldFee(leg, other)}) on top`;
     }
     return "that lock holds too little coin to move its token or NFT out again";
   }
@@ -3287,9 +3298,25 @@ export function operatorFee(leg, other = null) {
   return Math.max(feeFloor(leg.network), pct);
 }
 
+/** The operator outputs a claim of `leg`'s lock pays (trade.fee_split, 2026-10-28): none; the operator alone; or, when
+ *  the leg names a lending arcade (fee_share_to, a borrowed chain), TRADE.SHARE_PERCENT of the fee to it and the rest
+ *  to the operator, each at least the chain's floor. [[value, address], ...] */
+export function feeSplit(leg, other = null) {
+  const fee = operatorFee(leg, other);
+  if (!fee) return [];
+  if (!leg.fee_share_to || leg.fee_share_to === leg.fee_to) return [[fee, leg.fee_to]];
+  const floor = feeFloor(leg.network), part = Number((BigInt(fee) * BigInt(TRADE.SHARE_PERCENT)) / 100n);
+  return [[Math.max(floor, fee - part), leg.fee_to], [Math.max(floor, part), leg.fee_share_to]];
+}
+
+/** All of a claim's operator outputs together: what the lock holds for them (trade.held_fee). */
+export function heldFee(leg, other = null) {
+  return feeSplit(leg, other).reduce((n, [v]) => n + v, 0);
+}
+
 /** The coin locked beside a Doginal (trade.doginal_reserve): the spend's own reserve and the operator fee. */
 export function doginalReserve(leg, other = null) {
-  return TRADE.DOGINAL_RESERVE + operatorFee(leg, other);
+  return TRADE.DOGINAL_RESERVE + heldFee(leg, other);
 }
 
 /** The least coin a lock output for `leg` must hold (trade.lock_value): the amount, the claim's network fee and the
@@ -3299,16 +3326,16 @@ export function doginalReserve(leg, other = null) {
 export function lockValue(leg, other = null) {
   const kind = leg.kind || "coin";
   if (kind === "doginal" || kind === "token20") return 1;
-  if (kind !== "coin") return TRADE.LOCK_RESERVE + operatorFee(leg, other);
+  if (kind !== "coin") return TRADE.LOCK_RESERVE + heldFee(leg, other);
   if (leg.fee_bps == null) return Number(leg.amount);
-  return Number(leg.amount) + claimFee(leg.network) + operatorFee(leg, other);
+  return Number(leg.amount) + claimFee(leg.network) + heldFee(leg, other);
 }
 
 /** What this trader puts into its OWN lock for `leg` (trade.fund_value): lockValue as an updated arcade reads it,
  *  whatever terms the other side sent -- the claim's network fee is always the sender's. A Doginal: its reserve. */
 export function fundValue(leg, other = null) {
   if ((leg.kind || "coin") === "doginal" || leg.kind === "token20") return doginalReserve(leg, other);
-  return lockValue(leg.fee_bps == null ? {...leg, fee_bps: 0, fee_to: ""} : leg, other);
+  return lockValue(leg.fee_bps == null ? {...leg, fee_bps: 0, fee_to: "", fee_share_to: ""} : leg, other);
 }
 
 /** `leg` with this arcade's lock-fee terms ({bps, to} from /account chains[].lock_fee; {} = Off: rate 0, still the
@@ -3318,6 +3345,9 @@ export function withFee(leg, terms) {
   const to = bps > 0 ? String((terms && terms.to) || "") : "";
   const out = {...leg, fee_bps: to ? bps : 0};
   if (to) out.fee_to = to; else delete out.fee_to;
+  // On a borrowed chain, the lending arcade's fifth (2026-10-28, trade.with_fee).
+  const share = to ? String((terms && terms.share_to) || "") : "";
+  if (share) out.fee_share_to = share; else delete out.fee_share_to;
   return out;
 }
 
@@ -3340,7 +3370,8 @@ export async function payeeOk(address) {
 async function feeTermsOk(leg) {
   if (!leg || leg.fee_bps == null) return true;
   if (!Number.isInteger(leg.fee_bps) || leg.fee_bps < 0 || leg.fee_bps > TRADE.FEE_BPS_CEILING) return false;
-  return leg.fee_bps === 0 || await payeeOk(leg.fee_to);
+  if (leg.fee_bps === 0) return true;
+  return await payeeOk(leg.fee_to) && (!leg.fee_share_to || await payeeOk(leg.fee_share_to));
 }
 
 /** May this lister lock `proposed` (its own side as the taker wrote it) under the terms it listed (`stood`)? Yes with
@@ -3348,7 +3379,9 @@ async function feeTermsOk(leg) {
  *  listed; never a payee or rate the taker chose (node_trader.fee_terms_fit). */
 function feeTermsFit(proposed, stood) {
   if (!proposed.fee_bps) return true;
-  return proposed.fee_bps === Number((stood && stood.fee_bps) || 0) && proposed.fee_to === String((stood && stood.fee_to) || "");
+  // The lending arcade's share (2026-10-28): none (an older arcade drops it) or exactly the one listed.
+  return proposed.fee_bps === Number((stood && stood.fee_bps) || 0) && proposed.fee_to === String((stood && stood.fee_to) || "")
+    && (!proposed.fee_share_to || proposed.fee_share_to === String((stood && stood.fee_share_to) || ""));
 }
 
 //: This arcade's lock-fee terms per chain (/account chains[].lock_fee), read once per page.
@@ -3675,6 +3708,7 @@ export async function takeOrder(wallet, order, options = {}) {
   if (order.give.fee_bps != null) {
     get.fee_bps = Number(order.give.fee_bps);
     if (order.give.fee_to) get.fee_to = String(order.give.fee_to);
+    if (order.give.fee_to && order.give.fee_share_to) get.fee_share_to = String(order.give.fee_share_to);
     if (!(await feeTermsOk(get))) throw new Error("that swap's fee terms cannot be met, so nothing was asked");
   }
   const secret = crypto.getRandomValues(new Uint8Array(32));

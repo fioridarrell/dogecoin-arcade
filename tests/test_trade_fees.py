@@ -340,6 +340,7 @@ def test_the_browser_keeps_the_same_fee_tables():
     versions = re.search(r"PAYEE_VERSIONS: \[([0-9, ]+)\]", js).group(1)
     assert {int(v) for v in versions.split(",")} == set(T.PAYEE_VERSIONS)
     assert int(re.search(r"FEE_BPS_CEILING: ([0-9_]+)", js).group(1).replace("_", "")) == T.FEE_BPS_CEILING
+    assert int(re.search(r"SHARE_PERCENT: ([0-9_]+)", js).group(1)) == T.SHARE_PERCENT
 
 
 def _legs():
@@ -358,6 +359,10 @@ def _legs():
                             to if bps else "")
                 for other_net in (net, "doge" if net != "doge" else "main"):
                     out.append((leg, T.Leg(other_net, "coin", "", 123_456_789_012, b.pub.hex(), a.pub.hex())))
+    # On a borrowed chain the lending arcade's fifth beside each fee (2026-10-28, trade.fee_split).
+    lender = {"doge": Key(30).address, "main": Key(56).address, "ltc": Key(48).address, "regtest": Key(111).address}
+    out += [(dataclasses.replace(leg, fee_share_to=lender[leg.network]), other) for leg, other in list(out)
+            if leg.fee_bps]
     return out
 
 
@@ -385,7 +390,7 @@ def test_the_browser_works_out_every_fee_as_the_python_does(tmp_path):
     for leg, other in _legs():
         cases.append([dataclasses.asdict(leg), dataclasses.asdict(other),
                       [T.operator_fee(leg, other), T.lock_value(leg, other), T.fund_value(leg, other),
-                       T.doginal_reserve(leg, other)]])
+                       T.doginal_reserve(leg, other), [list(x) for x in T.fee_split(leg, other)]]])
     # check_lock: their lock, exactly enough, one short, the old amount alone.
     a, b = Key(), Key()
     now = int(time.time())
@@ -414,7 +419,8 @@ def test_the_browser_works_out_every_fee_as_the_python_does(tmp_path):
             got = tab.evaluate("""async ([cases, checks, payees]) => {
                 const w = await import('/wallet.js'), c = await import('/coins.js');
                 const fees = cases.map(([leg, other]) => [w.operatorFee(leg, other), w.lockValue(leg, other),
-                                                          w.fundValue(leg, other), w.doginalReserve(leg, other)]);
+                                                          w.fundValue(leg, other), w.doginalReserve(leg, other),
+                                                          w.feeSplit(leg, other)]);
                 const said = [];
                 for (const [t, seen] of checks) {
                   t.myRedeem = c.unhex(t.myRedeem); t.theirRedeem = c.unhex(t.theirRedeem);

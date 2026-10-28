@@ -93,6 +93,14 @@ def _side(said: Any) -> dict:
         out["fee_bps"] = bps
         if to:
             out["fee_to"] = to
+            # On a chain the lister's arcade borrows: the lending arcade's fifth (2026-10-28, trade.fee_split).
+            from .trade_messages import share_term
+            try:
+                share = share_term(said, to)
+            except TradeMessageError as exc:
+                raise OrderError(str(exc)) from None
+            if share:
+                out["fee_share_to"] = share
     return out
 
 

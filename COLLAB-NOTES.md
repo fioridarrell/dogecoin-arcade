@@ -88,6 +88,28 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-28 A fifth of every fee on a borrowed chain to the lending arcade (Claude)
+The operator: "On a borrowed chain 20% of all fees should go to the operator who is loaning the chain"; a share under the
+chain's minimum: "Raise it to the minimum and also have the operator be able to raise their fees as they want above the
+minimum" (#40's per-chain inscription fee already lets them). Was a tenth of inscription fees only, skipped under dust.
+- Inscription fee (app._sharer_cut / _operator_fee): FEE_SHARER_PERCENT 20, the share raised to the chain's own dust
+  line (fees.dust_limit(params), not the fixed DUST_LIMIT), what stays never under it; two outputs as before. Mined
+  blocks keep a tenth (SHARER_PERCENT 10, blockminer).
+- Swap lock fee (trade.py, exchange-safety): Leg.fee_share_to = the lender's address (its coreshare offer "p", via
+  node_trader.lender_payee) when the locker's arcade borrows that chain. trade.fee_split: SHARE_PERCENT of
+  operator_fee to the lender, the rest to fee_to, each >= fee_floor; held_fee (their sum) replaces operator_fee in
+  lock_value/doginal_reserve/check_lock. Claims pay a list of operator outputs (htlc._operators: pay_out, move_out,
+  doginal_out take one pair or a list). Carried in trade messages (share_term) and orders. lock_fee terms gain
+  "share_to"; with_fee / withFee copy it.
+- Safety: fee_terms_fit refuses a taker naming ANOTHER lender address (it would be paid a fifth of the lister's lock);
+  naming none is allowed (older arcades drop the field: the lock pays the lister's operator alone). Older claimers
+  pay operator_fee to fee_to only and keep the rest; older checkers accept the bigger lock ("holds at least").
+- Wallet (wallet_js.js): feeSplit/heldFee mirror Python; legWhat sends {fee, fee_to, share, share_to}; the claim
+  check takes each agreed operator output exactly once. App routes (_trade_operator, _lock_spend_pays) take the list.
+- Tests: tests/test_lender_fee_share.py (new, 7), test_shared_revenue, test_trade_fees parity incl. fee_split with a
+  lender (the browser part needs playwright, absent from the test venv: run with PYTHONPATH holding playwright+pyee+
+  greenlet for py3.12). Docs: shared-cores.md "What the arcade that shares is paid".
+
 ### 2026-10-28 Merged SadFrog's PR #40 (Claude)
 The operator asked who the fee goes to (the home node's operator, on that chain) and decided: on a BORROWED chain 20% of every
 fee goes to the operator lending the chain, a share under the dust line raised to it, and operators may set any fee above

@@ -124,6 +124,10 @@ class Leg:
     #: way (at least the amount; the claim's network fee comes off it). 0: an updated arcade with its fee Off.
     fee_bps: int | None = None
     fee_to: str = ""
+    #: On a chain the locker's arcade BORROWS (2026-10-28: "On a borrowed chain 20% of all fees should go to the
+    #: operator who is loaning the chain"): the lending arcade's address, paid SHARE_PERCENT of the fee beside `fee_to`
+    #: (fee_split). "" everywhere else, and from an arcade before that day.
+    fee_share_to: str = ""
 
     def tier(self) -> str:
         # Any real-coin chain's leg is mainnet tier (2026-10-22): a chain added as Params (Bellscoin,
@@ -225,15 +229,43 @@ def operator_fee(leg: Leg, other: Leg | None = None) -> int:
     return max(fee_floor(leg.network), base * bps // 10_000)
 
 
-def payee(leg: Leg, other: Leg | None = None) -> tuple[int, str] | None:
-    """(fee, address) of the operator output a claim of `leg`'s lock pays, or None when it pays none."""
+#: The lending arcade's part of a fee on a borrowed chain (Leg.fee_share_to; app.FEE_SHARER_PERCENT).
+SHARE_PERCENT = 20
+
+
+def fee_split(leg: Leg, other: Leg | None = None) -> list[tuple[int, str]]:
+    """The operator outputs a claim of `leg`'s lock pays, [(fee, address), ...]: none with no fee; the operator alone
+    (operator_fee to fee_to); or, when the leg names a lending arcade (fee_share_to), SHARE_PERCENT of that fee to it
+    and the rest to the operator -- each at least the chain's floor, so the two can come to a little more than
+    operator_fee (2026-10-28: a share under the minimum is "raised to the minimum")."""
     fee = operator_fee(leg, other)
-    return (fee, leg.fee_to) if fee else None
+    if not fee:
+        return []
+    if not leg.fee_share_to or leg.fee_share_to == leg.fee_to:
+        return [(fee, leg.fee_to)]
+    floor, part = fee_floor(leg.network), fee * SHARE_PERCENT // 100
+    return [(max(floor, fee - part), leg.fee_to), (max(floor, part), leg.fee_share_to)]
+
+
+def held_fee(leg: Leg, other: Leg | None = None) -> int:
+    """All the operator outputs of `leg`'s claim together: what its lock holds for them (fee_split)."""
+    return sum(v for v, _a in fee_split(leg, other))
+
+
+def payees(leg: Leg, other: Leg | None = None) -> list[tuple[int, str]] | None:
+    """The operator outputs a claim of `leg`'s lock pays (fee_split), or None when it pays none."""
+    return fee_split(leg, other) or None
+
+
+def payee(leg: Leg, other: Leg | None = None) -> tuple[int, str] | None:
+    """(fee, address) of the locker's own operator output, or None: the first of payees."""
+    got = fee_split(leg, other)
+    return got[0] if got else None
 
 
 def doginal_reserve(leg: Leg, other: Leg | None = None) -> int:
     """The coin locked beside a Doginal (output 1 of its lock): the spend's own reserve and the operator fee."""
-    return H.DOGINAL_RESERVE + operator_fee(leg, other)
+    return H.DOGINAL_RESERVE + held_fee(leg, other)
 
 
 def lock_value(leg: Leg, other: Leg | None = None) -> int:
@@ -245,10 +277,10 @@ def lock_value(leg: Leg, other: Leg | None = None) -> int:
     if leg.kind in ("doginal", "token20"):
         return 1
     if leg.kind != "coin":
-        return LOCK_RESERVE + operator_fee(leg, other)
+        return LOCK_RESERVE + held_fee(leg, other)
     if leg.fee_bps is None:
         return leg.amount
-    return leg.amount + claim_fee(leg.network) + operator_fee(leg, other)
+    return leg.amount + claim_fee(leg.network) + held_fee(leg, other)
 
 
 def fund_value(leg: Leg, other: Leg | None = None) -> int:
@@ -258,7 +290,7 @@ def fund_value(leg: Leg, other: Leg | None = None) -> int:
     if leg.kind in ("doginal", "token20"):
         return doginal_reserve(leg, other)
     if leg.fee_bps is None:
-        leg = dataclasses.replace(leg, fee_bps=0, fee_to="")
+        leg = dataclasses.replace(leg, fee_bps=0, fee_to="", fee_share_to="")
     return lock_value(leg, other)
 
 
@@ -286,7 +318,8 @@ def with_fee(leg: Leg, terms: dict | None) -> Leg:
     terms = terms or {}
     bps = int(terms.get("bps") or 0)
     to = str(terms.get("to") or "") if bps > 0 else ""
-    return dataclasses.replace(leg, fee_bps=bps if to else 0, fee_to=to)
+    share = str(terms.get("share_to") or "") if to else ""
+    return dataclasses.replace(leg, fee_bps=bps if to else 0, fee_to=to, fee_share_to=share if payee_ok(share) else "")
 
 
 def move_data(leg: Leg) -> bytes:
@@ -450,14 +483,14 @@ def check_lock(trade: Trade, seen: LockSeen, theirs: bool) -> str:
         return "that lock's script is not the one agreed (hash, keys or lock time differ)"
     if leg.kind in ("doginal", "token20") and (seen.vout != 0 or not seen.asset_ok):
         return "that lock does not hold the agreed Doginal at the start of output 0, with its reserve beside it"
-    if leg.kind in ("doginal", "token20") and operator_fee(leg, other) and seen.reserve < doginal_reserve(leg, other):
+    if leg.kind in ("doginal", "token20") and held_fee(leg, other) and seen.reserve < doginal_reserve(leg, other):
         return "the reserve beside that Doginal is too small to pay its spend and the operator fee agreed"
     if seen.value < lock_value(leg, other):
         if leg.kind == "coin":
             if leg.fee_bps is None:
                 return f"that lock holds {seen.value}, less than the {leg.amount} agreed"
             return (f"that lock holds {seen.value}, less than the {leg.amount} agreed with its network fee "
-                    f"({claim_fee(leg.network)}) and operator fee ({operator_fee(leg, other)}) on top")
+                    f"({claim_fee(leg.network)}) and operator fee ({held_fee(leg, other)}) on top")
         return "that lock holds too little coin to move its token or NFT out again"
     if leg.kind != "coin" and not seen.asset_ok:
         return "the ledger does not show the agreed token or NFT at that lock"
