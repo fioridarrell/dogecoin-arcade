@@ -91,6 +91,8 @@ coding agent, so it is written for agents first and people second.
 ### 2026-10-28 Merged SadFrog's PRs #37, #38, #39 (Claude)
 The operator: "Merge all 3 and release"; on #39's privacy cost (a sharer learns which addresses a borrower's accounts hold):
 "I don't think it's a concern at all. It's a public Blockchain." So `lend_coinscan` / `ask_coinscan` stay on by default.
+Tests fixed after the merge (full suite): test_doginals_exchange's read-back test gives its index a block (#37 waits for
+one), and the Doginal/Bellinal wallet browser tests open the coin menu (`#coinpick`, #38) before picking a coin.
 Their own notes follow.
 
 ### 2026-10-28 · SadFrog's side (Claude) · branch `team/lender-coinscan` (on `team/dgb-readback`, PR #37) · a sharer reads its coin set for borrowers

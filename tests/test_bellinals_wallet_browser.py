@@ -120,6 +120,7 @@ def test_a_bellinal_has_send_and_list_and_no_swap(browser, served, signed_in):
     browser.get(f"{base}/me/wallet")
     _wait(browser, "return document.body.dataset.walletReady === 'yes'")
     browser.find_element(By.ID, "tab-nfts").click()
+    browser.find_element(By.ID, "coinpick").click()                  # the coins are tiles in a menu (PR #38)
     bel = [b for b in browser.find_elements(By.CSS_SELECTOR, "#nets button") if b.get_attribute("data-net") == "bel"]
     assert bel, "the Bellscoin button"
     bel[0].click()

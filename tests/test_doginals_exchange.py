@@ -234,6 +234,9 @@ def test_every_account_s_dogecoin_address_is_watched_and_read_back(client, monke
                         read.append((set(addresses), start, end)) or 0)
     monkeypatch.setattr(doge, "rpc", lambda: cl.nullcontext(None), raising=False)
     monkeypatch.setattr(threading, "Thread", lambda target, **kw: type("T", (), {"start": lambda self: target()})())
+    # An index with a block read: an address watched before its first block waits for one (PR #37, 2026-10-28).
+    from arcade.ledger import LedgerIndex
+    monkeypatch.setattr(LedgerIndex, "indexed_height", lambda self: doge.params.activation_height + 10)
     watcher = BlockWatcher(state)
     watcher._watch_doge_accounts()
     want = b58check_encode(30, b58check_decode(main)[1])
