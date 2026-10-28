@@ -939,6 +939,13 @@
       drawOn(); drawModels(); drawPrices(); drawLoad(j.load); imgFill(j.images);
       ff = (c.free_for || []).map(function (r) { return r.tag; }).filter(Boolean); ffDraw(j.operators || []);
       helperDraw(j.helper || [], j.helper_now);
+      // Top-ups in a coin this node has no wallet for share the operator's everyday address (2026-10-27).
+      var sp = $('llm-sharedpay');
+      if (!sp) { sp = document.createElement('p'); sp.id = 'llm-sharedpay'; sp.className = 'msg err'; $('llm-onoff').after(sp); }
+      sp.hidden = !(j.shared_pay_to || []).length;
+      sp.textContent = 'Top-ups in ' + (j.shared_pay_to || []).join(', ') + ' go to your everyday address (this node has no '
+        + 'wallet for that chain), so a payment to you for anything else could be claimed as LLM credit. Run that chain\u2019s '
+        + 'Core here to give LLM sales an address of their own.';
       if (c.url && !scanned) scan(false);
       var e = j.earned || [];
       $('llm-earned').innerHTML = e.length ? e.map(function (r) {

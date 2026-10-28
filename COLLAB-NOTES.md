@@ -88,6 +88,28 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-27 LLM market fixes after @apple's lost 600 PEP top-up (Claude)
+The operator: "I put in an order for 600 pep worth of credits and it doesn't look like ... I ever got my credit"; "You need to
+look through how the LLM market works because it's definitely broken". An audit found, and this fixes:
+- **No real-coin top-up could be counted** (since 85701ab, issue #5): the wallet signed topup words naming the PAYING
+  key's address; the seller checks words naming the BUYER (the account's tag-chain address) signed by the paying key.
+  The same key only on testnet, so tests passed. llmTopupSign takes `owner` (the tag key) and names it; coins.signWords
+  lets a topup name `owner`. tests/test_blind_signing.py: a Pepecoin mainnet top-up, here and to another arcade.
+  @apple's 600 PEP (fd5aee4f...) was credited by hand on Strawberry with the operator's OK (Books.credit, once by txid).
+- Page: the claim is kept the moment the payment is sent, signed afterwards (only with the wallet open), retried for 72 h,
+  never dropped unsaid; a stalled grant is signed again. The payment question says amount, seller, fee and change; the
+  wallet's mainnet review is not asked a second time. coins.js says the change once, as change.
+- **Own address for LLM sales**: llmweb.pay_to = a new "arcade-llm" address in this node's Core wallet for that chain
+  (setting llm_pay_to:<net>); a borrowed chain falls back to the operator's address and Admin -> LLM warns. A payment to
+  the operator for anything else can no longer be claimed as credit.
+- Grants: ten years (GRANT_DAYS_MOST 3650; the operator: "I don't think the API key should expire"), held by the seller to the
+  first arcade that carries each (Books.carried_by, table grant_carrier); renewed quietly at a visit within 30 days.
+- Credit set aside before a reply or picture (Books.reserve/release): replies at once can no longer overdraw.
+- A coin sold for before still counts after the seller stops taking it (Seller.paid_before).
+- Key rows on a phone say "Your key ... Spends your credit with ...".
+- Not changed: REAL_CONFIRMATIONS stays 0 (2026-10-23: credit at broadcast); a zero-confirmation top-up can be
+  double-spent -- asked of the operator.
+
 ### 2026-10-27 Every chain but Pepecoin testnet may be borrowed; a Core's data folder found where its node keeps it (Claude)
 The operator: "Allow a set up where all chains except for Pepe test are borrowed". cores.check no longer asks for one more
 Core here besides Pepecoin testnet (which still always runs here: the identity key and the Messenger live in its

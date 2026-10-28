@@ -431,7 +431,9 @@ class ImageSeller:
         sc = self.scale(leg) if not free else llmlib.COIN
         per = llmlib.price(price["per"])
         cost = 0 if free else int(math.ceil(per * sc * credits))
-        if not free and self.books.balance(buyer, leg) < cost:
+        # Set aside before the picture is made (2026-10-27, from the audit: pictures at once each saw the same balance).
+        held = 0 if free else cost
+        if held and not self.books.reserve(buyer, leg, held):
             raise llmlib.LlmError(f"not enough credit: this costs {credits} credit{'' if credits == 1 else 's'}; top up first")
         steps = int(cfg.get("steps") or 20)
         seed = int(body.get("seed") or 0) or uuid.uuid4().int % (2 ** 32)
@@ -440,10 +442,14 @@ class ImageSeller:
             self.waiting += 1
         try:
             got = slot.acquire(timeout=llmlib.WAIT_FOR_SLOT * 5)
+        except BaseException:
+            self.books.release(buyer, leg, held)
+            raise
         finally:
             with self._lock:
                 self.waiting -= 1
         if not got:
+            self.books.release(buyer, leg, held)
             raise llmlib.LlmError("the picture model is busy; try again in a few minutes")
         with self._lock:
             self.active += 1
@@ -467,6 +473,7 @@ class ImageSeller:
             with self._lock:
                 self.active -= 1
             ms = int((time.monotonic() - t0) * 1000)
+            self.books.release(buyer, leg, held)                # what was set aside back; the real cost follows
             left = self.books.charge(buyer, leg if not free else "free", "image:" + name, 0, 0,
                                      cost if ok else 0, via, ms=ms, first_ms=ms, ok=ok, images=1 if ok else 0)
         return {"png": base64.b64encode(png).decode(), "seed": seed, "model": name, "edit": bool(edit), "credits": credits,

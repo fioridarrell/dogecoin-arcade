@@ -383,7 +383,7 @@ const MESH_NET = /^arcade-[a-z0-9]{2,16}$/;
 /** The longest a certificate may run: arcade/mesh/service.py CERT_DAYS, plus the hour `expiry` rounds up to. */
 export const CERT_MOST = 86400 + 3600;
 /** The longest a grant may run: arcade/llm.py GRANT_DAYS_MOST. */
-export const GRANT_MOST = 90 * 86400;
+export const GRANT_MOST = 3650 * 86400;
 const NODE_ID = /^[0-9a-f]{64}$/;                // a mesh node id: its Ed25519 key, hex
 const TXID = /^[0-9a-f]{64}$/;
 const NET = /^[a-z0-9]{2,16}$/;
@@ -448,10 +448,15 @@ export function arcadeWords(message, now = Date.now() / 1000) {
 
 /** Sign `words` with `mine` ({key, address}: a key this page derived): only words of the three shapes, naming
  *  mine.address, with the magic pinned above for their chain -- Core's `signmessage` base64. */
-export async function signWords(mine, words, now = Date.now() / 1000) {
+export async function signWords(mine, words, now = Date.now() / 1000, {owner = null} = {}) {
   const read = arcadeWords(words, now);
   if (!read) wordsRefused("those are not words this wallet signs");
-  if (!mine || !mine.key || read.address !== mine.address) wordsRefused("the words name another address");
+  // A top-up names the buyer -- the account's own address on the tag chain -- and is signed by the key that paid, on
+  // the chain it paid on (llm.Seller.topup checks exactly that). Those are two keys of this one wallet wherever the
+  // payment was not on the tag chain (2026-10-27: every Pepecoin mainnet top-up named the paying key instead and
+  // never counted). So for a top-up only, the named address may be `owner`'s, a key of this same wallet.
+  const named = read.kind === "topup" && owner && owner.address ? owner.address : mine && mine.address;
+  if (!mine || !mine.key || read.address !== named) wordsRefused("the words name another address");
   return signMessage(mine.key, words, read.magic);
 }
 
@@ -994,10 +999,10 @@ export async function verifyOffer(offer, keys) {
   const says = [
     ...(data.length ? [data.length === 1 ? `${bytes} bytes written to the chain`
                        : `${bytes} bytes written to the chain in ${data.length} outputs`] : []),
-    ...pays.filter((out) => out.bytes === undefined).map((out) =>
-      `${coinsOf(out.value)} to ${out.to}${out.mine ? " (back to you)" : ""}`),
+    ...pays.filter((out) => out.bytes === undefined && !out.mine).map((out) => `${coinsOf(out.value)} to ${out.to}`),
   ].join(", ") + `; ${coinsOf(fee)} in fees`
-    + (change > 0n ? `, ${coinsOf(change)} of it coming back to you` : "");
+    // The change said once, as change (2026-10-27, the operator: the payment read as four destinations, the change twice).
+    + (change > 0n ? `; ${coinsOf(change)} back to you as change` : "");
   return {tx, hashes, pays, fee: Number(fee), change: Number(change),
           what: offer.what || "", signs: {from, of: tx.inputs.length},
           coinsOf, says};

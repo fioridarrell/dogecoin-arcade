@@ -769,7 +769,7 @@ export async function realtimeSign(mine, hello, {there = false} = {}) {
 }
 
 /** A grant for `seller`, the other arcade the player picked: `mine` lets it serve the player for `days`. */
-export async function llmGrantSign(mine, seller, days = 30) {
+export async function llmGrantSign(mine, seller, days = 3649) {
   seller = String(seller || "");
   if (seller && seller === keptNode()) throw notSigned("that seller is this arcade, which needs no grant");
   const expires = Math.floor(Date.now() / 1000) + days * 86400;
@@ -780,19 +780,21 @@ export async function llmGrantSign(mine, seller, days = 30) {
 /** The top-up signature for payment `txid` on `network`, sent by this page, to `seller` (`here`: this arcade).
  *  This arcade's own id is the one thing taken from its words (`said`, /account/llm/topup): read back to the shape,
  *  every other field equal to this page's, the id held to the one kept here. */
-export async function llmTopupSign(mine, {seller = "", here = false, network, txid}, said = null) {
+export async function llmTopupSign(mine, {seller = "", here = false, network, txid, owner = null}, said = null) {
   let sid = String(seller || "");
   if (here) {
     const read = coins.arcadeWords(said && said.message);
     if (!read || read.kind !== "topup") throw notSigned("this arcade's top-up words are not ones this wallet signs");
     sid = read.seller;
   } else if (!sid) throw notSigned("which arcade is paid?");
-  const words = coins.topupWords(String(network || ""), String(txid || "").toLowerCase(), sid, mine.address);
+  // The buyer is the account's own tag-chain address (`owner`, a key of this wallet); `mine` is the key that paid.
+  const buyer = owner || mine;
+  const words = coins.topupWords(String(network || ""), String(txid || "").toLowerCase(), sid, buyer.address);
   if (here) {
     if (said.message !== words) throw notSigned("this arcade's words name another payment or address");
     if (!await ownNode(sid, words)) throw notSigned("you said no");
   }
-  return coins.signWords(mine, words);
+  return coins.signWords(mine, words, Date.now() / 1000, {owner: buyer});
 }
 
 /* --- real coins: every mainnet transaction is said before it is signed -------

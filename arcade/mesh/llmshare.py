@@ -51,7 +51,7 @@ def grant_ok(grant: Any, seller: str, now: float | None = None) -> str:
     if expires < now:
         raise llmlib.LlmError("that grant has run out; sign again")
     if expires > now + llmlib.GRANT_DAYS_MOST * 86400 + 600:
-        raise llmlib.LlmError("a grant may last 90 days at most")
+        raise llmlib.LlmError(f"a grant may last {llmlib.GRANT_DAYS_MOST // 365} years at most")
     if not llmlib.signed_by(sig, llmlib.grant_words(seller, address, expires), address):
         raise llmlib.LlmError("that grant's signature does not check")
     return address
@@ -173,6 +173,10 @@ class LlmShare:
                 if seller is None:
                     raise llmlib.LlmError("this arcade sells no model")
                 address = grant_ok(asked.get("grant"), self.node.node_id)
+                books = getattr(seller, "books", None)
+                if books is not None and hasattr(books, "carried_by") \
+                        and not books.carried_by(str((asked.get("grant") or {}).get("sig") or ""), peer):
+                    raise llmlib.LlmError("that grant was brought by another arcade: the buyer signs again here")
                 body = asked.get("body") if isinstance(asked.get("body"), dict) else {}
                 if what == "chat":
                     for ev in seller.chat(address, str(asked.get("leg") or ""), body, via=peer):

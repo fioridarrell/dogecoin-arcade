@@ -439,8 +439,17 @@ async function keysFor(network, why) {
   if (!keys || !keys.on || !keys.on[network]) throw new Error("Unlock your wallet first.");
   return {w, keys, chain};
 }
-async function ensureGrant(o) {
+async function ensureGrant(o, {quiet = false} = {}) {
   if (o.here || o.granted) return;
+  // Renewing ahead of time at a visit (`quiet`): only with a wallet already open, never a prompt of its own.
+  if (quiet) {
+    const w = await import("/wallet.js");
+    const said0 = await getJSON(`/account/llm/grant?seller=${encodeURIComponent(o.seller)}`);
+    if (said0.ok) { o.granted = true; return; }
+    const chain = (await w.chains()).find((c) => c.network === said0.sign.chain.network) || said0.sign.chain;
+    const open = await w.opened(chain);
+    if (!open || !open.on || !open.on[chain.network]) return;
+  }
   const said = await getJSON(`/account/llm/grant?seller=${encodeURIComponent(o.seller)}`);
   if (said.ok) { o.granted = true; return; }
   const {w, keys} = await keysFor(said.sign.chain.network, "To use another arcade's model, your wallet signs who you are, once a month.");
@@ -640,7 +649,9 @@ $("llm-send-pay").addEventListener("click", async () => {
     const ok = window.arcadeAsk ? await arcadeAsk(`Pay ${amount} ${short(p.label)} to ${sellerName(o)}?`, why, "Yes, send it")
       : confirm(`Pay ${amount} ${short(p.label)}?`);
     if (!ok) return;
-    const done = await w.confirm(keys, offer);
+    // The question above named the amount, the seller, the fee and the change: the wallet's mainnet review would only
+    // ask it a second time (2026-10-27, from the audit).
+    const done = await w.confirm(keys, offer, {reviewed: true});
     // Kept the moment it is sent, before anything else can fail (2026-10-27: @apple's 600 PEP reached @strawberry and
     // was never counted -- the claim was made after the signing, and lost with it). Signed and claimed from here on,
     // again and again until the seller has counted it.
@@ -662,9 +673,16 @@ async function claimPending() {
           // Built in the wallet from this payment, this chain, this address and the seller picked here; this arcade's
           // words are asked for its own id only, and held to everything else (2026-10-26, issue #5: llmTopupSign).
           const net = t.net || legNet(t.leg);
-          const {w, keys} = await keysFor(net, "Your wallet signs which payment is your credit.");
+          // Signed only with the wallet already open (right after the payment it is): a waiting claim never pops up
+          // the unlock of its own, every 15 s (2026-10-27, from the audit); it says so and waits.
+          const w = await import("/wallet.js");
+          const all = await w.chains();
+          const tag = (all.find((c) => c.tags) || {}).network;
+          const keys = await w.opened(all.find((c) => c.network === net) || {network: net});
+          const owner = keys && keys.on && tag ? keys.on[tag] : null;
+          if (!keys || !keys.on || !keys.on[net] || !owner) throw new Error("unlock your wallet to finish counting your payment");
           const words = t.here ? await getJSON(`/account/llm/topup?seller=${encodeURIComponent(t.seller)}&leg=${encodeURIComponent(t.leg)}&txid=${t.txid}`) : null;
-          t.sig = await w.llmTopupSign(keys.on[net], {seller: t.seller, here: !!t.here, network: net, txid: t.txid}, words);
+          t.sig = await w.llmTopupSign(keys.on[net], {seller: t.seller, here: !!t.here, network: net, txid: t.txid, owner}, words);
           keepPending(list.map((x) => (x.txid === t.txid ? t : x)));
         }
         const got = await postJSON("/account/llm/topup", {seller: t.seller, leg: t.leg, txid: t.txid, sig: t.sig});
@@ -683,6 +701,10 @@ async function claimPending() {
         } else {
           if (!picked || picked.seller === t.seller) $("llm-topup-said").textContent = "Your payment is waiting to be counted: " + m;
           if (/does not check|not sent from|does not go|another token|not valid/.test(m)) t.sig = "";   // signed again next try
+          if (/sign once|grant/.test(m)) {                       // the grant to that seller ran out: signed again
+            const o = (book.offers || []).find((x) => x.seller === t.seller);
+            if (o) { o.granted = false; await ensureGrant(o, {quiet: true}).catch(() => {}); }
+          }
         }
       }
     }
@@ -855,6 +877,16 @@ async function load() {
   book.offers.forEach(loadCredit);
   loadKeys();
 }
-load(); claimPending();
+// Grants to the other arcades this account uses, signed again ahead of their end while the wallet is open here, so its
+// API keys there keep working (2026-10-27).
+async function renewGrants() {
+  for (const o of (book && book.offers) || []) {
+    if (o.here) continue;
+    const uses = (keys || []).some((k) => k.seller === o.seller) || Object.values(credit[o.seller] || {}).some((v) => Number(v) > 0);
+    if (uses) await ensureGrant(o, {quiet: true}).catch(() => {});
+  }
+}
+Promise.resolve(load()).then(() => setTimeout(renewGrants, 3000)).catch(() => {});
+claimPending();
 setInterval(() => { if (!document.hidden && !busy) getJSON("/account/llm/offers").then((b) => { book = b; if (picked) picked = b.offers.find((o) => o.seller === picked.seller) || picked; draw(); }).catch(() => {}); }, 10000);
 </script>

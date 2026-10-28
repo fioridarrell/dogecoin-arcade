@@ -177,7 +177,7 @@ def test_llm_grants_and_top_ups_are_built_from_what_the_page_knows(tmp_path):
       return {g, grantHere, grantBad, topHere, topThere, refused, elsewhere, asked};
     """, data)
     g = got["g"]
-    assert abs(g["expires"] - (time.time() + 30 * 86400)) < 120, "the expiry is the page's own"
+    assert abs(g["expires"] - (time.time() + 3649 * 86400)) < 120, "the expiry is the page's own (ten years since 2026-10-27)"
     assert llm.signed_by(g["sig"], llm.grant_words(OTHER_NODE, key.address, g["expires"]), key.address)
     from arcade.mesh.llmshare import grant_ok
     assert grant_ok({"address": key.address, "expires": g["expires"], "sig": g["sig"]}, OTHER_NODE) == key.address
@@ -239,3 +239,32 @@ def test_a_program_s_certificate_uses_its_own_magic_and_shape(monkeypatch):
                  {**good["cert"], "expires": expires + 10 * 86400}):
         with pytest.raises(S.ServiceError):
             room({"online": True, "cert": cert}).join()
+
+
+def test_a_top_up_paid_on_another_chain_names_the_buyer_and_is_signed_by_the_paying_key(tmp_path):
+    """2026-10-27: no real-coin top-up could be counted. The seller checks topup_words naming the BUYER -- the
+    account's tag-chain (testnet) address -- signed by the key that paid; the wallet named the paying key's own address
+    (Pepecoin mainnet: another key of the same wallet), so the seller recovered someone else and refused it, and a top-up
+    on this arcade threw before it was signed. @apple's 600 PEP to @strawberry was lost that way."""
+    from arcade.llm import recover_hash160, topup_words
+    from arcade.script import b58check_decode
+    owner = Key(NETWORKS["test"].pubkeyhash_version)            # the account: its tag-chain key
+    payer = Key(NETWORKS["main"].pubkeyhash_version)            # the key that paid, on Pepecoin mainnet
+    data = {"priv": payer.secret.to_bytes(32, "big").hex(), "address": payer.address, "yes": True,
+            "owner_priv": owner.secret.to_bytes(32, "big").hex(), "owner": owner.address,
+            "other": OTHER_NODE, "here": HERE_NODE, "txid": TXID,
+            "said": {"message": topup_words("main", TXID, HERE_NODE, owner.address), "magic": DOGECOIN_MAGIC}}
+    got = run_wallet_js(tmp_path, HARNESS + """
+      const owner = {key: c.unhex(data.owner_priv), address: data.owner};
+      store.set("arcade.node.self", data.here);
+      const there = await tryIt(() => w.llmTopupSign(mine, {seller: data.other, network: "main", txid: data.txid, owner}));
+      const here = await tryIt(() => w.llmTopupSign(mine, {seller: "here", here: true, network: "main", txid: data.txid, owner}, data.said));
+      const stranger = await tryIt(() => c.signWords(mine, data.said.message, undefined, {owner: {address: "x"}}));
+      return {there, here, stranger};
+    """, data)
+    payer_hash = b58check_decode(payer.address)[1]
+    for which, seller in (("there", OTHER_NODE), ("here", HERE_NODE)):
+        assert "ok" in got[which], got[which]
+        assert recover_hash160(got[which]["ok"], topup_words("main", TXID, seller, owner.address)) == payer_hash, \
+            "the seller recovers the paying key from the words naming the buyer"
+    assert "another address" in got["stranger"]["error"], "the named address must be the given key's"

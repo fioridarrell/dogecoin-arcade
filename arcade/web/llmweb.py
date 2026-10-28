@@ -54,8 +54,40 @@ def register(app, state, *, signed_in: Callable, account_address: Callable, acco
             raise llmlib.LlmError(f"this arcade has no {network} chain") from None
 
     def pay_to(leg: str) -> str:
+        """Where a top-up in `leg` is paid. An address of its own for LLM sales (2026-10-27, from the audit: a top-up
+        went to the operator's everyday address, so a payment made to the operator for anything else -- a trade, a fee --
+        could be claimed as credit too): a new address in this node's own Core wallet for that chain, labelled
+        "arcade-llm", kept in `llm_pay_to:<net>` and seen in Admin -> The node's coins. A chain borrowed here, or one
+        whose Core runs without a wallet, has none: the operator's address, as before (Admin says so)."""
         network, kind, _ = llmlib.leg_parts(leg)
-        return state.payout_address(_chain(network))
+        return llm_pay_to(_chain(network))
+
+    def llm_pay_to(chain) -> str:
+        kept = str(state.setting(f"llm_pay_to:{chain.network}") or "")
+        if kept:
+            return kept
+        if not getattr(chain, "borrowed", False) and not state.keyed(chain):
+            try:
+                with chain.rpc() as rpc:
+                    try:
+                        made = rpc.call("getnewaddress", "arcade-llm", "legacy")
+                    except Exception:                               # noqa: BLE001 -- a Core with no address types
+                        made = rpc.call("getnewaddress", "arcade-llm")
+                made = str(made or "").strip()
+                if made:
+                    state.set_setting(f"llm_pay_to:{chain.network}", made)
+                    return made
+            except Exception:                                       # noqa: BLE001 -- no wallet here: the operator's
+                log.info("llm: no address of its own on %s; top-ups go to the operator's address", chain.network)
+        return state.payout_address(chain)
+
+    def shares_pay_to(network: str) -> bool:
+        """Whether top-ups in `network` share the operator's everyday address (no address of their own here)."""
+        try:
+            chain = _chain(network)
+        except llmlib.LlmError:
+            return False
+        return not state.setting(f"llm_pay_to:{chain.network}") and llm_pay_to(chain) == state.payout_address(chain)
 
     def scale(leg: str) -> int:
         if leg == "free":
@@ -108,6 +140,14 @@ def register(app, state, *, signed_in: Callable, account_address: Callable, acco
         return {"tag": tag or "", "host": hosts[0] if hosts else ""}
 
     seller = llmlib.Seller(lambda: llmlib.config(state), books, pay_to, scale, verify, free, about)
+
+    def _paid_before(leg: str) -> bool:
+        try:
+            network, kind, _ = llmlib.leg_parts(leg)
+        except llmlib.LlmError:
+            return False
+        return kind == "coin" and bool(state.setting(f"llm_pay_to:{network}"))
+    seller.paid_before = _paid_before
     seller.node_id = me_id
 
     def arcade_name() -> str:
@@ -203,6 +243,11 @@ def register(app, state, *, signed_in: Callable, account_address: Callable, acco
         return JSONResponse({"config": {**{k: v for k, v in cfg.items() if k != "key"}, "has_key": bool(cfg.get("key"))},
                              "earned": earned, "kinds": kinds, "selling": bool(seller.offer()), "load": load_now(),
                              "operators": operators,
+                             # Coins whose top-ups share the operator's everyday address (no wallet here for that
+                             # chain): a payment to the operator for anything else could be claimed as credit there.
+                             "shared_pay_to": sorted({llmlib.leg_parts(p["leg"])[0] for p in cfg.get("prices") or []
+                                                      if llmlib.leg_parts(p["leg"])[1] == "coin"
+                                                      and shares_pay_to(llmlib.leg_parts(p["leg"])[0])}),
                              "helper": [{"seller": x["o"]["seller"], "here": x["o"]["here"], "tag": x["o"].get("tag", ""),
                                          "host": x["o"].get("host", ""), "model": x["m"], "ready": x["ready"],
                                          "approved": x["approved"], "key": f"{x['o']['seller']}|{x['m']}",
@@ -457,9 +502,12 @@ def register(app, state, *, signed_in: Callable, account_address: Callable, acco
             account, address = need_account(request)
         except llmlib.LlmError as exc:
             return refuse(exc)
-        if is_here(seller) or books.grant(account.pubkey, seller) is not None:
+        held = None if is_here(seller) else books.grant(account.pubkey, seller)
+        # A grant good for less than RENEW_DAYS is signed again at the next visit, ahead of time (2026-10-27, from the
+        # audit: API keys to another arcade's model stopped when a 30-day grant ran out with no browser to renew it).
+        if is_here(seller) or (held is not None and int(held["expires"]) > time.time() + llmlib.RENEW_DAYS * 86400):
             return JSONResponse({"ok": True})
-        expires = int(time.time()) + 30 * 86400
+        expires = int(time.time()) + llmlib.GRANT_DAYS * 86400
         chain = account_chain()
         # The wallet builds the words itself for the seller it asked about, with its own expiry and its pinned
         # magic (2026-10-26, issue #5, blind signing: wallet.js llmGrantSign); this says only that a grant is needed

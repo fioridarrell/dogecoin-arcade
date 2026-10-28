@@ -41,7 +41,13 @@ import requests
 SETTING = "llm"
 #: The magic a buyer's key signs with: one for every chain, since the signature is checked here from the bytes.
 MAGIC = "Pepecoin Signed Message:\n"
-GRANT_DAYS_MOST = 90
+#: A grant may last ten years (2026-10-27: "I don't think the API key should expire"; it was 90 days, and the
+#: page signed 30): an API key spending at another arcade works until it is revoked. What keeps a grant from being
+#: used elsewhere is that the seller holds it to the one arcade that carries it (Books.carried_by).
+GRANT_DAYS_MOST = 3650
+#: How long a grant the wallet signs lasts, and how close to its end the page signs a new one at a visit.
+GRANT_DAYS = 3650
+RENEW_DAYS = 30
 COIN = 100_000_000
 LEG = re.compile(r"^([a-z0-9]{2,16})-(coin|token-(\d{1,10}))$")
 AT_ONCE_MOST = 32
@@ -367,6 +373,7 @@ CREATE TABLE IF NOT EXISTS usage (at REAL NOT NULL, buyer TEXT NOT NULL, model T
                                   tokens_in INTEGER NOT NULL, tokens_out INTEGER NOT NULL, units INTEGER NOT NULL,
                                   via TEXT NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS usage_at ON usage (at);
+CREATE TABLE IF NOT EXISTS grant_carrier (sig TEXT PRIMARY KEY, carrier TEXT NOT NULL, at REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS grant_held (account TEXT NOT NULL, seller TEXT NOT NULL, address TEXT NOT NULL,
                                        expires INTEGER NOT NULL, sig TEXT NOT NULL, PRIMARY KEY (account, seller));
 CREATE TABLE IF NOT EXISTS apikey (hash TEXT PRIMARY KEY, account TEXT NOT NULL, address TEXT NOT NULL,
@@ -413,6 +420,18 @@ class Books:
             return {r["leg"]: int(r["units"]) for r in db.execute("SELECT leg, units FROM credit WHERE buyer=?",
                                                                    (buyer,))}
 
+    def carried_by(self, sig: str, carrier: str) -> bool:
+        """The seller's side: a grant is carried by one arcade only -- the first that brought it (2026-10-27, from the
+        audit: a grant names the seller, the buyer and an expiry, not who carries it, so a copy that leaked off the
+        buyer's arcade would have let any arcade linked to this one spend the buyer's credit). A new grant the buyer
+        signs (another arcade, or a renewal) is a new signature, bound the same way."""
+        with self._lock, self._db() as db:
+            row = db.execute("SELECT carrier FROM grant_carrier WHERE sig=?", (sig,)).fetchone()
+            if row is None:
+                db.execute("INSERT INTO grant_carrier VALUES (?,?,?)", (sig, carrier, time.time()))
+                return True
+            return row["carrier"] == carrier
+
     def credited(self, txid: str, leg: str) -> dict | None:
         with self._db() as db:
             row = db.execute("SELECT * FROM topup WHERE txid=? AND leg=?", (txid, leg)).fetchone()
@@ -428,6 +447,23 @@ class Books:
             db.execute("INSERT INTO credit VALUES (?,?,?) ON CONFLICT(buyer, leg) DO UPDATE SET units=units+?",
                        (buyer, leg, int(units), int(units)))
         return True
+
+    def reserve(self, buyer: str, leg: str, units: int) -> bool:
+        """Set `units` of the buyer's credit aside for a reply about to be made, or False when it is not there
+        (2026-10-27, from the audit: replies at once each checked the same balance and the last ones were free)."""
+        if units <= 0:
+            return True
+        with self._lock, self._db() as db:
+            return db.execute("UPDATE credit SET units=units-? WHERE buyer=? AND leg=? AND units>=?",
+                              (int(units), buyer, leg, int(units))).rowcount > 0
+
+    def release(self, buyer: str, leg: str, units: int) -> None:
+        """What `reserve` set aside, back -- before the reply's real cost is charged."""
+        if units <= 0:
+            return
+        with self._lock, self._db() as db:
+            db.execute("INSERT INTO credit VALUES (?,?,?) ON CONFLICT(buyer, leg) DO UPDATE SET units=units+?",
+                       (buyer, leg, int(units), int(units)))
 
     def charge(self, buyer: str, leg: str, model: str, tokens_in: int, tokens_out: int, units: int,
                via: str = "", ms: int = 0, first_ms: int = 0, ok: bool = True, images: int = 0) -> int:
@@ -782,9 +818,11 @@ class Seller:
 
     def topup(self, buyer: str, leg: str, txid: str, sig: str) -> dict:
         legs = self.paid_legs()
-        if not legs:
-            raise LlmError("this arcade's model is free: no top-up needed")
-        if leg not in legs:
+        # A coin this arcade sold for before still counts (2026-10-27, from the audit: a buyer who paid and then saw the
+        # seller make its model free, or drop that coin, lost the coins): its address of its own for LLM sales is kept.
+        if leg not in legs and not self.paid_before(leg):
+            if not legs:
+                raise LlmError("this arcade's model is free: no top-up needed")
             raise LlmError("this arcade does not take that coin or token")
         txid = (txid or "").strip().lower()
         network = leg_parts(leg)[0]
@@ -803,6 +841,7 @@ class Seller:
         return {"ok": True, "units": units, "text": fmt(units, self.scale(leg)), **self.balance(buyer)}
 
     node_id = staticmethod(lambda: "")                          # set by the web layer: this arcade's mesh id
+    paid_before = staticmethod(lambda leg: False)               # set by the web layer: a coin sold for before
     arcade_name = staticmethod(lambda: "DogecoinArcade")        # set by the web layer: this arcade's face's name
 
     def chat(self, buyer: str, leg: str, body: dict, via: str = "") -> Iterator[dict]:
@@ -852,15 +891,23 @@ class Seller:
         out = {k: body[k] for k in PASSED if k in body}
         out.pop("max_completion_tokens", None)
         out.update(model=model, max_tokens=most, n=1)
+        # The most this reply can cost, set aside first: what is left is what the next reply at once can spend.
+        held = 0 if free else min(balance, cost_units(prices, guess_own, most, scale))   # the buyer's own words
+        if held and not self.books.reserve(buyer, leg, held):
+            raise LlmError("not enough credit for that; top up first")
         slot = self._slot()
         with self._lock:
             self.waiting += 1
         try:
             got = slot.acquire(timeout=WAIT_FOR_SLOT)
+        except BaseException:
+            self.books.release(buyer, leg, held)
+            raise
         finally:
             with self._lock:
                 self.waiting -= 1
         if not got:
+            self.books.release(buyer, leg, held)
             self.books.charge(buyer, leg if not free else "free", model, 0, 0, 0, via, ok=False)
             raise LlmError("the model is busy; try again in a minute")
         with self._lock:
@@ -895,6 +942,7 @@ class Seller:
             with self._lock:
                 self.active -= 1
             ms = int((time.monotonic() - t0) * 1000)
+            self.books.release(buyer, leg, held)                # what was set aside back; the real cost follows
             if heard and not failed:     # a server that never answered, or broke off with an error, costs nothing
                 # (2026-10-23: "If there is an error, they should be refunded their credit")
                 if not used_in:

@@ -47,8 +47,8 @@ def test_a_grant_is_refused_expired_too_long_or_for_another_arcade():
     old = int(now) - 10
     with pytest.raises(llm.LlmError, match="run out"):
         grant_ok({**good, "expires": old, "sig": sign_message(SECRET, llm.grant_words("me", ADDR, old), llm.MAGIC)}, "me")
-    far = int(now) + 200 * 86400
-    with pytest.raises(llm.LlmError, match="90 days"):
+    far = int(now) + 4000 * 86400                              # ten years at most since 2026-10-27
+    with pytest.raises(llm.LlmError, match="10 years"):
         grant_ok({**good, "expires": far, "sig": sign_message(SECRET, llm.grant_words("me", ADDR, far), llm.MAGIC)}, "me")
 
 
@@ -822,3 +822,37 @@ def test_a_shared_model_is_used_by_the_helper_only_once_approved(arcade, monkeyp
     assert got["available"] and got["model"] == "small-9b" and got["seller"] == "@other"
     client.post("/admin/api/llm", headers=h, json={"helper_off_own": False})
     assert client.get("/account/llm/helper").json()["model"] == "tiny", "own model back on: first again"
+
+
+def test_a_grant_is_carried_by_the_first_arcade_that_brings_it(tmp_path):
+    """2026-10-27, from the audit: a grant names seller, buyer and expiry, not who carries it. The seller binds each to
+    the first arcade that brings it, so a copy leaked off the buyer's arcade is refused from any other."""
+    from arcade.llm import Books
+    books = Books(tmp_path)
+    assert books.carried_by("sig-1", "arcadeA") and books.carried_by("sig-1", "arcadeA")
+    assert not books.carried_by("sig-1", "arcadeB"), "the same grant from another arcade"
+    assert books.carried_by("sig-2", "arcadeB"), "a grant the buyer signed anew for another arcade"
+
+
+def test_a_coin_sold_for_before_still_counts_after_the_seller_stops_taking_it():
+    """2026-10-27, from the audit: paid, then the seller made its model free or dropped that coin -> coins lost."""
+    from arcade import llm
+    seller = llm.Seller(lambda: {"on": True, "url": "x", "models": ["m"], "prices": []}, None, lambda leg: "addr",
+                        lambda leg: llm.COIN, lambda *a: 0, lambda b: False, lambda: {})
+    with pytest.raises(llm.LlmError, match="free"):
+        seller.topup("buyer", "main-coin", "ab" * 32, "sig")
+    seller.paid_before = lambda leg: leg == "main-coin"
+    with pytest.raises(llm.LlmError) as exc:
+        seller.topup("buyer", "main-coin", "ab" * 32, "sig")
+    assert "free" not in str(exc.value) and "does not take" not in str(exc.value), "it goes on to check the payment"
+
+
+def test_credit_set_aside_for_a_reply_keeps_two_at_once_from_overdrawing(tmp_path):
+    """2026-10-27, from the audit: replies at once each checked the same balance before either was charged."""
+    from arcade.llm import Books
+    books = Books(tmp_path)
+    books.credit("ab" * 32, "main-coin", "buyer", 100)
+    assert books.reserve("buyer", "main-coin", 70)
+    assert not books.reserve("buyer", "main-coin", 70), "the second reply finds only what is left"
+    books.release("buyer", "main-coin", 70)
+    assert books.balance("buyer", "main-coin") == 100
