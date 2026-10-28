@@ -103,7 +103,7 @@ def test_a_top_up_is_proved_by_the_key_that_paid(tmp_path):
         seen.append((leg, txid, to, signer))
         if signer != llm.hash160(PUB):
             raise llm.LlmError("that payment was not sent from the key that signed for it")
-        return 12345
+        return 25_000_000                                   # 0.25 PEP
     cfg = {**llm.DEFAULTS, "on": True, "url": "http://x", "models": ["m"],
            "prices": [{"leg": "main-coin", "label": "PEP", "in": "0", "out": "0.0001"}]}
     seller = llm.Seller(lambda: cfg, books, lambda leg: "PAYTO", lambda leg: llm.COIN, verify, lambda b: False)
@@ -111,7 +111,10 @@ def test_a_top_up_is_proved_by_the_key_that_paid(tmp_path):
     txid = "ab" * 32
     sig = sign_message(SECRET, llm.topup_words("main", txid, "me", "buyer-address"), llm.MAGIC)
     got = seller.topup("buyer-address", "main-coin", txid, sig)
-    assert got["units"] == 12345 and got["credit"]["main-coin"]["units"] == 12345
+    # Credits per model (2026-10-27): the per-token price before credits reads as 0.1 PEP a credit (1,000 written
+    # tokens), so 0.25 PEP buys 2.5 credits, for the seller's first model when the buyer names none.
+    assert got["units"] == 25_000_000 and got["model"] == "m" and got["models"]["m"]["mc"] == 2500
+    assert got["credits"] == "2.5"
     assert seen == [("main-coin", txid, "PAYTO", llm.hash160(PUB))]
     assert seller.topup("buyer-address", "main-coin", txid, sig)["again"] is True
     with pytest.raises(llm.LlmError, match="somebody else"):
@@ -210,14 +213,17 @@ def test_the_tab_lists_this_arcades_offer_and_a_chat_is_metered(arcade):
     offers = client.get("/account/llm/offers").json()
     assert offers["signed_in"] and offers["me"] == ADDR
     (mine,) = offers["offers"]
-    assert mine["here"] and mine["models"] == [{"id": "tiny"}]
-    assert mine["prices"][0]["to"] == "PAYTO-main", "the price carries where to pay"
+    # Credits per model (2026-10-27): 0.001 / 0.01 PEP a token read as 10 PEP a credit, "tiny" 0.1 / 1 credit per
+    # 1,000 tokens read / written; a typical reply (300 in, 400 out) about 0.43 credits.
+    assert mine["here"] and mine["models"] == [{"id": "tiny", "rate": {"in": "0.1", "out": "1"}, "typical": "0.43"}]
+    assert mine["credit_prices"] == [{"leg": "main-coin", "label": mine["credit_prices"][0]["label"], "per": "10",
+                                      "to": "PAYTO-main"}], "what a credit costs, and where to pay"
 
     said = client.post("/account/llm/chat", json={"seller": "here", "leg": "main-coin",
                                                   "messages": [{"role": "user", "content": "hi"}]})
     assert said.status_code == 400 and "credit" in said.json()["detail"], "no credit, no reply"
 
-    state.llm_seller.books.credit("ef" * 32, "main-coin", ADDR, 2 * llm.COIN)
+    state.llm_seller.credits.give(ADDR, "tiny", 200)                   # 0.2 credits for "tiny"
     said = client.post("/account/llm/chat", json={"seller": "here", "leg": "main-coin", "model": "tiny",
                                                   "messages": [{"role": "user", "content": "hi"}], "max_tokens": 99999})
     assert said.status_code == 200, said.text
@@ -225,9 +231,9 @@ def test_the_tab_lists_this_arcades_offer_and_a_chat_is_metered(arcade):
     assert "".join(c["delta"].get("content", "") for e in evs for c in e.get("choices", [])) == "Hello there"
     cost = evs[-1]["arcade"]
     assert cost["tokens_in"] == 100 and cost["tokens_out"] == 20
-    assert cost["cost"] == int((0.001 * 100 + 0.01 * 20) * llm.COIN)
-    assert client.get("/account/llm/balance?seller=here").json()["credit"]["main-coin"]["units"] == \
-        2 * llm.COIN - cost["cost"]
+    # the reply cost 0.1 * 100 / 1000 + 1 * 20 / 1000 = 0.03 credits (30 thousandths) of "tiny"'s own
+    assert cost["cost"] == 30 and cost["model"] == "tiny" and cost["cost_text"] == "0.03"
+    assert client.get("/account/llm/balance?seller=here").json()["models"]["tiny"]["mc"] == 200 - 30
     assert seen[-1]["max_tokens"] <= 1000, "never past the operator's longest reply"
     assert seen[-1]["max_tokens"] < 200, "and never past what the credit pays for"
 
@@ -526,17 +532,20 @@ def test_an_image_model_is_found_shared_and_sold_in_credits_by_size(pictures):
 
     said = client.post("/account/llm/image", json={"seller": "here", "leg": "main-coin", "prompt": "a dragon"})
     assert said.status_code == 400 and "credit" in said.json()["detail"]
-    state.llm_seller.books.credit("56" * 32, "main-coin", ADDR, llm.COIN)        # 2 credits at 0.5
+    # Credits per model (2026-10-27): the picture model's own credits, 1 a 250 px of the longest side by default.
+    MODEL = "qwen_image_2.1_int8_convrot.safetensors"
+    assert o["images"]["credit_prices"][0]["per"] == "0.5" and o["images"]["models"][0]["per_250px"] == "1"
+    state.llm_seller.credits.give(ADDR, MODEL, 2000)                          # 2 credits
     got = client.post("/account/llm/image", json={"seller": "here", "leg": "main-coin", "prompt": "a dragon",
                                                   "size": "500x375"}).json()
-    assert base64.b64decode(got["png"]) == PNG and got["credits"] == 2 and got["arcade"]["cost"] == llm.COIN
+    assert base64.b64decode(got["png"]) == PNG and got["credits"] == 2 and got["arcade"]["cost"] == 2000
     assert jobs[-1]["5"]["inputs"]["width"] == 496 // 2 and jobs[-1]["5"]["inputs"]["height"] == 368 // 2, \
         "drawn at a multiple of 16 no bigger than what was paid for"
     big = client.post("/account/llm/image", json={"seller": "here", "leg": "main-coin", "prompt": "x", "size": "4000x100"})
     assert big.status_code == 400 and "4 credits" in big.json()["detail"], "cut to the 1000 cap: 4 credits"
 
     up = _png_of(400, 300)                                      # 2 credits up; comes back at most 400: 2 more down
-    state.llm_seller.books.credit("58" * 32, "main-coin", ADDR, 2 * llm.COIN)
+    state.llm_seller.credits.give(ADDR, MODEL, 4000)
     edit = client.post("/account/llm/image", json={"seller": "here", "leg": "main-coin", "prompt": "add a hat",
                                                    "image": "data:image/png;base64," + base64.b64encode(up).decode()})
     assert edit.status_code == 200, edit.text
@@ -548,11 +557,11 @@ def test_an_image_model_is_found_shared_and_sold_in_credits_by_size(pictures):
     assert client.get(pics[1]["url"]).content == PNG
 
     key = client.post("/account/llm/keys/new", json={"seller": "here", "leg": "main-coin"}).json()["key"]
-    state.llm_seller.books.credit("57" * 32, "main-coin", ADDR, llm.COIN)
+    state.llm_seller.credits.give(ADDR, MODEL, 1000)
     v1 = client.post("/v1/images/generations", headers={"Authorization": f"Bearer {key}"},
                      json={"prompt": "a fox", "size": "250x250"})
     assert v1.status_code == 200 and base64.b64decode(v1.json()["data"][0]["b64_json"]) == PNG
-    state.llm_seller.books.credit("59" * 32, "main-coin", ADDR, 5 * llm.COIN)
+    state.llm_seller.credits.give(ADDR, MODEL, 5000)
     ed = client.post("/v1/images/edits", headers={"Authorization": f"Bearer {key}"},
                      files={"image": ("x.png", up, "image/png")}, data={"prompt": "add a hat"})
     assert ed.status_code == 200, ed.text
@@ -642,7 +651,8 @@ def test_the_chat_knows_the_docs_and_does_not_charge_for_them(arcade):
     end = _events(said.text)[-1]["arcade"]
     assert end["docs_tokens"] > 0
     # the fake server says 100 prompt tokens; the docs' share of them is not charged
-    assert end["cost"] == int((0.001 * max(0, 100 - end["docs_tokens"]) + 0.01 * 20) * llm.COIN)
+    from arcade import llm_credits
+    assert end["cost"] == llm_credits.text_cost_mc({"in": "0.1", "out": "1"}, max(0, 100 - end["docs_tokens"]), 20)
 
 
 def test_the_helper_can_reach_every_public_doc():
@@ -758,33 +768,46 @@ def test_a_reply_that_breaks_off_with_an_error_costs_nothing(tmp_path, monkeypat
     seller = llm.Seller(lambda: cfg, books, lambda leg: "P", lambda leg: llm.COIN, None, lambda b: False)
     with pytest.raises(llm.LlmError):
         list(seller.chat("b", "main-coin", {"messages": [{"role": "user", "content": "hi"}]}))
-    assert books.balance("b", "main-coin") == llm.COIN, "nothing taken"
+    # the old coin credit (1 PEP at 10 PEP a credit) became 0.1 credits for "m"; the broken reply took none of it
+    assert seller.credits.balance("b", "m") == 100, "nothing taken"
     assert books.analytics(0)["total"]["failed"] == 1
 
 
-def test_credit_pays_in_whatever_coin_it_was_bought_in_and_pictures_can_be_deleted(pictures):
-    """2026-10-23: "you shouldn't have to select the coin ... it should just automatically deduct your credit";
-    "User should be able to delete generated images from the cache"."""
+def test_each_model_has_its_own_credits_and_pictures_can_be_deleted(pictures):
+    """2026-10-27: "Credits should not be shared across models each model has their own credit, and those
+    credits are stored by the operator of that model" (before, one coin credit paid for any model of a seller);
+    "User should be able to delete generated images from the cache" (2026-10-23)."""
     client, state, pubkey, jobs, url = pictures
     h = {"X-Arcade-Admin": "1"}
+    MODEL = "qwen_image_2.1_int8_convrot.safetensors"
     client.post("/admin/api/llm/images", headers=h, json={
-        "on": True, "url": url, "models": ["qwen_image_2.1_int8_convrot.safetensors"],
-        "prices": [{"leg": "main-coin", "label": "PEP", "per": "0.5"}, {"leg": "regtest-coin", "label": "T", "per": "1"}]})
-    state.llm_seller.books.credit("80" * 32, "regtest-coin", ADDR, llm.COIN)          # 1 credit's worth in the 2nd coin
-    got = client.post("/account/llm/image", json={"seller": "here", "leg": "auto", "prompt": "x", "size": "250x250"})
-    assert got.status_code == 200 and got.json()["arcade"]["leg"] == "regtest-coin", got.text
-    said = client.post("/account/llm/chat", json={"seller": "here", "leg": "auto",
-                                                  "messages": [{"role": "user", "content": "hi"}]})
-    assert said.status_code == 400 and "credit" in said.json()["detail"], "no credit left in any coin the words take"
-    state.llm_seller.books.credit("81" * 32, "main-coin", ADDR, llm.COIN)
+        "on": True, "url": url, "models": [MODEL], "prices": [{"leg": "main-coin", "label": "PEP", "per": "0.5"}]})
+    state.llm_seller.credits.give(ADDR, MODEL, 1000)                            # 1 picture credit
+    got = client.post("/account/llm/image", json={"seller": "here", "prompt": "x", "size": "250x250"})
+    assert got.status_code == 200 and got.json()["arcade"]["model"] == MODEL, got.text
+    state.llm_seller.credits.give(ADDR, MODEL, 5000)
     said = client.post("/account/llm/chat", json={"seller": "here", "messages": [{"role": "user", "content": "hi"}]})
-    assert said.status_code == 200 and _events(said.text)[-1]["arcade"]["leg"] == "main-coin", "picked by itself"
-    key = client.post("/account/llm/keys/new", json={"seller": "here"}).json()["key"]
-    assert client.get("/account/llm/keys").json()["keys"][0]["leg"] == "auto"
+    assert said.status_code == 400 and "credits" in said.json()["detail"], "a picture model's credits pay no chat"
+    bal = client.get("/account/llm/balance?seller=here").json()["models"]
+    assert bal[MODEL]["mc"] == 5000 and all(v["mc"] == 0 for m, v in bal.items() if m != MODEL)
     pics = client.get("/account/llm/pictures").json()["pictures"]
     assert client.post("/account/llm/pictures/delete", json={"id": pics[0]["id"]}).json()["ok"]
     assert client.get("/account/llm/pictures").json()["pictures"] == []
     assert client.get(pics[0]["url"]).status_code == 404
+
+
+def test_old_coin_credit_becomes_the_first_models_credits_once(tmp_path):
+    """the operator's choice (2026-10-27): a buyer's coin credit from before credits becomes credits for the seller's first
+    model, at the seller's credit price, once."""
+    books = llm.Books(tmp_path)
+    books.credit("71" * 32, "main-coin", "b", 3 * llm.COIN)
+    cfg = {**llm.DEFAULTS, "on": True, "url": "http://x", "models": ["first", "second"],
+           "credit_prices": [{"leg": "main-coin", "label": "PEP", "per": "0.5"}]}
+    seller = llm.Seller(lambda: cfg, books, lambda leg: "P", lambda leg: llm.COIN, None, lambda b: False)
+    got = seller.balance("b")["models"]
+    assert got["first"]["mc"] == 6000 and got["second"]["mc"] == 0, "3 PEP at 0.5 a credit: 6 credits, first model"
+    books.credit("72" * 32, "main-coin", "b", llm.COIN)
+    assert seller.balance("b")["models"]["first"]["mc"] == 6000, "once"
 
 
 def test_the_chat_can_leave_the_arcade_docs_out(arcade):
@@ -856,3 +879,23 @@ def test_credit_set_aside_for_a_reply_keeps_two_at_once_from_overdrawing(tmp_pat
     assert not books.reserve("buyer", "main-coin", 70), "the second reply finds only what is left"
     books.release("buyer", "main-coin", 70)
     assert books.balance("buyer", "main-coin") == 100
+
+
+def test_the_first_credit_prices_keep_what_pictures_cost(pictures):
+    """2026-10-27: an operator's first save of credit prices sets each picture model's rate from its old picture price,
+    so 0.5 PEP a picture credit against a 10 PEP credit becomes 0.05 credits a 250 px -- the same 0.5 PEP."""
+    from arcade import imagegen
+    client, state, pubkey, jobs, url = pictures
+    h = {"X-Arcade-Admin": "1"}
+    MODEL = "qwen_image_2.1_int8_convrot.safetensors"
+    client.post("/admin/api/llm/images", headers=h, json={
+        "on": True, "url": url, "models": [MODEL], "prices": [{"leg": "main-coin", "label": "PEP", "per": "0.5"}]})
+    saved = client.post("/admin/api/llm", headers=h, json={
+        "credit_prices": [{"leg": "main-coin", "label": "PEP", "per": "10"}], "prices": []})
+    assert saved.status_code == 200, saved.text
+    assert imagegen.config(state)["rates"][MODEL]["px"] == "0.05"
+    eff = client.get("/admin/api/llm").json()["effective"]
+    assert eff["picture_rates"][MODEL] == "0.05" and eff["picture_prices"][0]["per"] == "10"
+    client.post("/admin/api/llm/images", headers=h, json={"rates": {MODEL: {"px": "0.2"}}})
+    client.post("/admin/api/llm", headers=h, json={"credit_prices": [{"leg": "main-coin", "label": "PEP", "per": "5"}]})
+    assert imagegen.config(state)["rates"][MODEL]["px"] == "0.2", "a rate the operator set is never changed"

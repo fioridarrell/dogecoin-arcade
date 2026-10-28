@@ -681,6 +681,9 @@
 .llmadm .stat{border:1px solid var(--line);border-radius:12px;background:var(--code);padding:14px;display:flex;flex-direction:column;gap:2px}
 .llmadm .stat strong{font-size:1.4rem}
 .llmadm .pill{font-size:.78rem;font-weight:650;padding:3px 10px;border-radius:999px}
+.llmadm .pr.cp{grid-template-columns:minmax(0,1.4fr) minmax(0,1fr) minmax(0,1fr) 42px}
+.llmadm .pr.rt{grid-template-columns:minmax(0,1.6fr) minmax(0,1fr) minmax(0,1fr) minmax(0,.9fr)}
+.llmadm .pr.px{grid-template-columns:minmax(0,1.6fr) minmax(0,1fr) minmax(0,1.2fr)}
 @media (max-width:640px){.llmadm .pr{grid-template-columns:1fr 1fr}.llmadm .pr.h{display:none}}
 </style>
 <div class="llmadm">
@@ -740,13 +743,21 @@
 </section>
 
 <section class="panel">
+  {#- 2026-10-27: buyers buy credits for one model, with the cost shown in the coin they pick; each model its own
+     credits, priced on its own (arcade/llm_credits.py). #}
   <h2 style="margin:0">Your prices</h2>
-  <p class="muted" style="margin:2px 0 8px">Per LLM token, in any coin or token the exchange trades. Input (the prompt) is cheap for your GPU;
-    output (the reply) is the real work. Your own account always uses it free.</p>
+  <p class="muted" style="margin:2px 0 8px">Buyers buy <b>credits</b> for one model at a time, in the coins and tokens you list here.
+    Each model has its own credits and its own rate. Your own account always uses everything free.</p>
+  <h3 style="margin:14px 0 6px;font-size:1rem">What one credit costs</h3>
   <div id="llm-paid">
-  <div class="pr h"><span>Paid in</span><span>Per input token</span><span>Per output token</span><span>1,000-word answer</span><span></span></div>
+  <div class="pr h cp"><span>Paid in</span><span>One credit costs</span><span>100 credits</span><span></span></div>
   <div id="llm-prices"></div>
   </div>
+  <h3 style="margin:16px 0 6px;font-size:1rem">Each model&rsquo;s rate</h3>
+  <p class="muted" style="margin:0 0 8px;font-size:.85rem">Credits per 1,000 tokens (about 750 words) the model reads and writes. A reply is
+    charged by its length; buyers see about what a typical reply costs.</p>
+  <div class="pr h rt"><span>Model</span><span>Per 1,000 read</span><span>Per 1,000 written</span><span>Typical reply</span></div>
+  <div id="llm-rates"></div>
   <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between;margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;flex:1 1 340px;min-width:0">
       <select id="llm-add" aria-label="Add a way to be paid" style="flex:1 1 240px;width:auto"></select>
@@ -786,14 +797,11 @@
     <label class="f">Pictures at once <input type="number" min="1" max="4" id="img-atonce" autocomplete="off">
       <span class="h">Others wait in line.</span></label>
   </div>
-  <h3 style="margin:18px 0 6px;font-size:1rem">Price per credit</h3>
-  <p class="muted" style="margin:0 0 6px;font-size:.85rem">250&times;250 = 1 credit, 500&times;500 = 2, 1000&times;750 = 4; an edit adds its upload's credits.</p>
-  <div class="pr h" style="grid-template-columns:minmax(0,1.6fr) minmax(0,1fr) minmax(0,.9fr) 42px"><span>Paid in</span><span>Per credit</span><span>A 500&times;500 picture</span><span></span></div>
-  <div id="img-prices"></div>
-  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between;margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">
-    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;flex:1 1 340px;min-width:0">
-      <select id="img-add" aria-label="Add a way to be paid for pictures" style="flex:1 1 240px;width:auto"></select>
-      <button type="button" class="small" id="img-addbtn" style="height:42px">Add</button></div>
+  <h3 style="margin:18px 0 6px;font-size:1rem">Each picture model's rate</h3>
+  <p class="muted" style="margin:0 0 6px;font-size:.85rem">Credits for every 250 px of a picture's longest side (500&times;500 is 2 of those, 1000&times;750 is 4); an edit adds its upload's. Buyers pay in the coins under <b>What one credit costs</b> above, and each model's credits are its own.</p>
+  <div class="pr h px"><span>Model</span><span>Credits per 250 px</span><span>A 500&times;500 picture</span></div>
+  <div id="img-rates"></div>
+  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:flex-end;margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">
     <button type="button" id="img-save" style="height:42px;padding:0 24px">Save changes</button>
   </div>
   <p class="muted" id="img-said" style="margin:8px 0 0"></p>
@@ -865,32 +873,59 @@
         esc(m.id) + '</b><span class="muted" style="font-size:.8rem">' + (m.gone ? 'no longer on the server' : m.ctx ? m.ctx.toLocaleString() + '-token context' : 'shared') + '</span></span></label>';
     }).join('') : '<p class="muted" style="margin:6px 0 0">Enter the server address to find its models.</p>';
   }
+  // Credits (2026-10-27): `prices` here is what ONE credit costs in each coin or token, [{leg, label, per}]; `rates`
+  // each chosen model's credits per 1,000 tokens read / written. Old per-token asks open as their credit equivalent.
+  var rates = {}, typical = [300, 400];
+  function hundred(p) {
+    var n = Number(p.per); if (!(n > 0)) return '';
+    return (n * 100).toLocaleString(undefined, {maximumFractionDigits: 8}) + ' ' + short(p.label);
+  }
   function drawPrices() {
     $('llm-prices').innerHTML = prices.length ? prices.map(function (p, i) {
-      return '<div class="pr"><span style="display:flex;gap:10px;align-items:center;min-width:0"><span class="badge">' + esc(short(p.label).slice(0, 1)) +
+      return '<div class="pr cp"><span style="display:flex;gap:10px;align-items:center;min-width:0"><span class="badge">' + esc(short(p.label).slice(0, 1)) +
         '</span><b style="min-width:0;overflow-wrap:anywhere">' + esc(p.label) + '</b></span>' +
-        '<input autocomplete="off" data-i="' + i + '" data-f="in" value="' + esc(p.in) + '" inputmode="decimal" aria-label="' + esc(short(p.label)) + ' per input token">' +
-        '<input autocomplete="off" data-i="' + i + '" data-f="out" value="' + esc(p.out) + '" inputmode="decimal" aria-label="' + esc(short(p.label)) + ' per output token">' +
-        '<span class="muted" data-a="' + i + '">' + esc(answer(p)) + '</span>' +
+        '<input autocomplete="off" data-i="' + i + '" data-f="per" value="' + esc(p.per) + '" inputmode="decimal" aria-label="' + esc(short(p.label)) + ' for one credit">' +
+        '<span class="muted" data-a="' + i + '">' + esc(hundred(p)) + '</span>' +
         '<button type="button" class="x" data-x="' + i + '" aria-label="Remove ' + esc(short(p.label)) + '">×</button></div>';
     }).join('') : '<div class="model" style="margin:10px 0"><span style="display:flex;flex-direction:column"><b>Free for everyone</b>' +
-      '<span class="muted" style="font-size:.85rem">No asks, so any signed-in player, app or API key uses it free, with everything a paid model has. ' +
-      'Add an ask below to charge for it; remove every ask to make it free again.</span></span></div>';
+      '<span class="muted" style="font-size:.85rem">No credit price, so any signed-in player, app or API key uses it free, with everything a paid model has. ' +
+      'Add a coin or token below to sell credits; remove every one to make it free again.</span></span></div>';
     var have = prices.map(function (p) { return p.leg; });
-    $('llm-add').innerHTML = '<option value="">Add a way to be paid…</option>' + kinds.filter(function (k) { return have.indexOf(k.key) < 0; })
+    $('llm-add').innerHTML = '<option value="">Add a coin or token…</option>' + kinds.filter(function (k) { return have.indexOf(k.key) < 0; })
       .map(function (k) { return '<option value="' + esc(k.key) + '">' + esc(k.label) + '</option>'; }).join('');
+    drawRates();
   }
+  function typicalOf(r) {
+    var c = (Number(r.in) || 0) * typical[0] / 1000 + (Number(r.out) || 0) * typical[1] / 1000;
+    return c ? 'about ' + c.toLocaleString(undefined, {maximumFractionDigits: 3}) + ' credits' : 'free';
+  }
+  function drawRates() {
+    keepTicks();
+    $('llm-rates').innerHTML = chosen.length ? chosen.map(function (m) {
+      var r = rates[m] || (rates[m] = {in: '0.1', out: '1'});
+      return '<div class="pr rt"><b class="mono" style="min-width:0;overflow-wrap:anywhere">' + esc(m) + '</b>' +
+        '<input autocomplete="off" data-m="' + esc(m) + '" data-f="in" value="' + esc(r.in) + '" inputmode="decimal" aria-label="' + esc(m) + ' credits per 1,000 tokens read">' +
+        '<input autocomplete="off" data-m="' + esc(m) + '" data-f="out" value="' + esc(r.out) + '" inputmode="decimal" aria-label="' + esc(m) + ' credits per 1,000 tokens written">' +
+        '<span class="muted" data-t="' + esc(m) + '">' + esc(typicalOf(r)) + '</span></div>';
+    }).join('') : '<p class="muted" style="margin:6px 0 0">Tick a model above to set its rate.</p>';
+  }
+  $('llm-rates').addEventListener('input', function (e) {
+    var m = e.target.dataset.m; if (!m) return;
+    (rates[m] = rates[m] || {in: '0', out: '0'})[e.target.dataset.f] = e.target.value.trim();
+    var t = document.querySelector('#llm-rates [data-t="' + CSS.escape(m) + '"]'); if (t) t.textContent = typicalOf(rates[m]);
+  });
+  $('llm-models').addEventListener('change', drawRates);
   $('llm-prices').addEventListener('input', function (e) {
     var i = e.target.dataset.i; if (i == null) return;
     prices[i][e.target.dataset.f] = e.target.value.trim();
-    var a = document.querySelector('#llm-prices [data-a="' + i + '"]'); if (a) a.textContent = answer(prices[i]);
+    var a = document.querySelector('#llm-prices [data-a="' + i + '"]'); if (a) a.textContent = hundred(prices[i]);
   });
   $('llm-prices').addEventListener('click', function (e) {
     var x = e.target.closest('[data-x]'); if (!x) return; prices.splice(Number(x.dataset.x), 1); drawPrices();
   });
   $('llm-addbtn').onclick = function () {
     var k = kinds.find(function (k) { return k.key === $('llm-add').value; }); if (!k) return;
-    prices.push({leg: k.key, label: k.label, in: '0', out: '0'}); drawPrices();
+    prices.push({leg: k.key, label: k.label, per: ''}); drawPrices();
   };
   $('llm-on').onchange = drawOn;
 
@@ -920,7 +955,10 @@
   $('llm-save').onclick = function () {
     keepTicks();
     var body = {on: $('llm-on').checked, url: $('llm-url').value.trim(), name: $('llm-name').value.trim(), models: chosen,
-                at_once: Number($('llm-atonce').value) || 1, max_out: Number($('llm-maxout').value) || 4096, prices: prices};
+                at_once: Number($('llm-atonce').value) || 1, max_out: Number($('llm-maxout').value) || 4096,
+                // credits (2026-10-27): the per-token asks of before are retired once credit prices are saved
+                credit_prices: prices, prices: [],
+                rates: chosen.reduce(function (o, m) { o[m] = rates[m] || {in: '0', out: '0'}; return o; }, {})};
     if ($('llm-key').value.trim()) body.key = $('llm-key').value.trim();
     said('Saving…');
     post('/admin/api/llm', body).then(function (j) {
@@ -935,7 +973,10 @@
       $('llm-on').checked = !!c.on; $('llm-url').value = c.url || ''; $('llm-name').value = c.name || '';
       $('llm-key').placeholder = c.has_key ? 'Saved (type to replace)' : 'Stays on this machine';
       $('llm-atonce').value = c.at_once || 2; $('llm-maxout').value = c.max_out || 4096;
-      chosen = c.models || []; prices = (c.prices || []).map(function (p) { return Object.assign({}, p); });
+      chosen = c.models || [];
+      var eff = j.effective || {};
+      prices = (eff.credit_prices || []).map(function (p) { return Object.assign({}, p); });
+      rates = Object.assign({}, eff.rates || {}); typical = eff.typical || typical;
       drawOn(); drawModels(); drawPrices(); drawLoad(j.load); imgFill(j.images);
       ff = (c.free_for || []).map(function (r) { return r.tag; }).filter(Boolean); ffDraw(j.operators || []);
       helperDraw(j.helper || [], j.helper_now);
@@ -950,7 +991,7 @@
       var e = j.earned || [];
       $('llm-earned').innerHTML = e.length ? e.map(function (r) {
         var k = prices.find(function (p) { return p.leg === r.leg; });
-        return '<div class="stat"><span class="muted" style="font-size:.8rem">' + esc(k ? short(k.label) : r.leg) + '</span><strong>' + esc(r.text) +
+        return '<div class="stat"><span class="muted" style="font-size:.8rem">' + esc(r.credits ? r.model : k ? short(k.label) : r.leg) + '</span><strong>' + esc(r.text) +
           '</strong><span class="muted" style="font-size:.8rem">' + (r.replies || 0).toLocaleString() + ' replies · ' + (r.buyers || 0) + ' buyer' + (r.buyers === 1 ? '' : 's') +
           ' · ' + ((r.tokens_in || 0) + (r.tokens_out || 0)).toLocaleString() + ' tokens</span></div>';
       }).join('') : '<p class="muted" style="margin:0">Nothing sold yet.</p>';
@@ -1120,7 +1161,7 @@
   });
 
   // --- pictures (arcade/imagegen.py) ---
-  var img = {models: [], chosen: [], prices: [], scanned: ''};
+  var img = {models: [], chosen: [], rates: {}, scanned: ''};
   function imgDrawOn() {
     var on = $('img-on').checked;
     $('img-onoff').className = 'onoff' + (on ? '' : ' off');
@@ -1138,35 +1179,30 @@
         ' style="width:20px;height:20px"><span style="display:flex;flex-direction:column;min-width:0"><b>' + esc(m.label || m.id) +
         '</b><span class="muted mono" style="font-size:.78rem;overflow-wrap:anywhere">' + esc(m.gone ? 'no longer on ComfyUI' : m.id) + '</span></span></label>';
     }).join('') : '<p class="muted" style="margin:6px 0 0">Enter ComfyUI\'s address to find its models.</p>';
+    imgDrawRates();
   }
-  function imgDrawPrices() {
-    $('img-prices').innerHTML = img.prices.length ? img.prices.map(function (p, i) {
-      return '<div class="pr" style="grid-template-columns:minmax(0,1.6fr) minmax(0,1fr) minmax(0,.9fr) 42px"><span style="display:flex;gap:10px;align-items:center;min-width:0"><span class="badge">' +
-        esc(short(p.label).slice(0, 1)) + '</span><b style="min-width:0;overflow-wrap:anywhere">' + esc(p.label) + '</b></span>' +
-        '<input autocomplete="off" data-i="' + i + '" value="' + esc(p.per) + '" inputmode="decimal" aria-label="' + esc(short(p.label)) + ' per credit">' +
-        '<span class="muted" data-pa="' + i + '">' + picCost(p) + '</span>' +
-        '<button type="button" class="x" data-x="' + i + '" aria-label="Remove ' + esc(short(p.label)) + '">\u00d7</button></div>';
-    }).join('') : '<div class="model" style="margin:10px 0"><span style="display:flex;flex-direction:column"><b>Free for everyone</b>' +
-      '<span class="muted" style="font-size:.85rem">No asks, so pictures are free. Add an ask below to charge per credit.</span></span></div>';
-    var have = img.prices.map(function (p) { return p.leg; });
-    $('img-add').innerHTML = '<option value="">Add a way to be paid\u2026</option>' + kinds.filter(function (k) { return have.indexOf(k.key) < 0; })
-      .map(function (k) { return '<option value="' + esc(k.key) + '">' + esc(k.label) + '</option>'; }).join('');
+  function imgDrawRates() {
+    imgKeep();
+    $('img-rates').innerHTML = img.chosen.length ? img.chosen.map(function (m) {
+      return '<div class="pr px"><b style="min-width:0;overflow-wrap:anywhere">' + esc(m) + '</b>' +
+        '<input autocomplete="off" data-m="' + esc(m) + '" value="' + esc(img.rates[m] == null ? '1' : img.rates[m]) + '" inputmode="decimal" aria-label="Credits per 250 px for ' + esc(m) + '">' +
+        '<span class="muted" data-pa="' + esc(m) + '">' + picCost(m) + '</span></div>';
+    }).join('') : '<p class="muted" style="margin:6px 0 0">Tick a picture model above to give it a rate.</p>';
   }
-  function picCost(p) {
-    var n = Number(p.per) || 0; if (!n) return 'free';
-    var f = function (x) { return x.toLocaleString(undefined, {maximumSignificantDigits: 8}); };
-    return f(2 * n) + ' ' + esc(short(p.label)) + ' (2 credits)';
+  function picCost(m) {
+    var n = (Number(img.rates[m] == null ? 1 : img.rates[m]) || 0) * 2;
+    var pp = ((data && data.effective) || {}).picture_prices || prices, p = pp[0];
+    if (!p || !(Number(p.per) > 0)) return 'free';
+    return n.toLocaleString(undefined, {maximumSignificantDigits: 6}) + ' credits = ' +
+      (n * Number(p.per)).toLocaleString(undefined, {maximumSignificantDigits: 8}) + ' ' + esc(short(p.label));
   }
-  $('img-prices').addEventListener('input', function (e) {
-    var i = e.target.dataset.i; if (i == null) return;
-    img.prices[i].per = e.target.value.trim();
-    var a = document.querySelector('#img-prices [data-pa="' + i + '"]'); if (a) a.innerHTML = picCost(img.prices[i]);
+  $('img-rates').addEventListener('input', function (e) {
+    var m = e.target.dataset.m; if (m == null) return;
+    img.rates[m] = e.target.value.trim();
+    var a = Array.prototype.find.call(document.querySelectorAll('#img-rates [data-pa]'), function (x) { return x.dataset.pa === m; });
+    if (a) a.innerHTML = picCost(m);
   });
-  $('img-prices').addEventListener('click', function (e) { var x = e.target.closest('[data-x]'); if (!x) return; img.prices.splice(Number(x.dataset.x), 1); imgDrawPrices(); });
-  $('img-addbtn').onclick = function () {
-    var k = kinds.find(function (k) { return k.key === $('img-add').value; }); if (!k) return;
-    img.prices.push({leg: k.key, label: k.label, per: '0'}); imgDrawPrices();
-  };
+  $('img-models').addEventListener('change', imgDrawRates);
   $('img-on').onchange = imgDrawOn;
   function imgScan(force) {
     var url = $('img-url').value.trim();
@@ -1191,7 +1227,8 @@
     imgKeep();
     var body = {on: $('img-on').checked, url: $('img-url').value.trim(), name: $('img-name').value.trim(), models: img.chosen,
                 max_side: Number($('img-side').value) || 1024, steps: Number($('img-steps').value) || 20,
-                at_once: Number($('img-atonce').value) || 1, prices: img.prices};
+                at_once: Number($('img-atonce').value) || 1,
+                rates: img.chosen.reduce(function (o, m) { o[m] = {px: String(img.rates[m] == null ? '1' : img.rates[m])}; return o; }, {})};
     if (data && data.images && data.images.local) body.wake = $('img-wake').value.trim();
     $('img-said').textContent = 'Saving\u2026';
     post('/admin/api/llm/images', body).then(function (j) {
@@ -1206,8 +1243,8 @@
     $('img-wake').placeholder = im.local ? 'systemctl --user start comfyui' : (c.wake ? 'Set (change it at the node machine)' : 'Set at the node machine only');
     $('img-wake-h').textContent = im.local ? 'Run when a picture is asked for and ComfyUI is asleep.' : 'It runs on this machine, so it is set at the node machine only.';
     $('img-side').value = c.max_side || 1024; $('img-steps').value = c.steps || 20; $('img-atonce').value = c.at_once || 1;
-    img.chosen = c.models || []; img.prices = (c.prices || []).map(function (p) { return Object.assign({}, p); });
-    imgDrawOn(); imgDrawModels(); imgDrawPrices();
+    img.chosen = c.models || []; img.rates = Object.assign({}, ((data && data.effective) || {}).picture_rates || {});
+    imgDrawOn(); imgDrawModels();
     var l = im.load || {}, w = WORDS[l.word] || WORDS.idle;
     $('img-word').textContent = c.on ? w[0] : ''; $('img-word').style.cssText = c.on ? 'color:' + w[1] + ';background:color-mix(in srgb,' + w[1] + ' 14%,var(--panel))' : 'display:none';
     if (c.url && !img.scanned) imgScan(false);

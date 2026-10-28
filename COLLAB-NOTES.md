@@ -88,6 +88,24 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-27 LLM credits per model (Claude)
+The operator: "Credits should not be shared across models each model has their own credit, and those credits are stored by
+The operator of that model"; "If an operator has multiple LLM's on their computer, they should all be able to be priced
+differently"; chat "by length, shown simply"; old balances go to "Seller's first model". New arcade/llm_credits.py:
+- CreditBooks (llm.sqlite: mcredit/mtopup/mmigrated) keeps each buyer's credits per MODEL in thousandths (MC = 1000).
+  A top-up names its model (`model` in the topup body/frame; the seller's first model if none) and buys credits at the
+  operator's `credit_prices` [{leg, label, per}] -- what ONE credit costs in each coin or token.
+- Text models: `rates` {model: {in, out}} credits per 1,000 tokens read/written. Pictures: imagegen `rates`
+  {model: {px}} credits per picture credit (250 px of the longest side). Legacy configs keep their exact costs: with no
+  credit_prices, 1 credit = 1,000 output tokens at the old price and pictures keep their old per-credit price.
+- The first save of credit prices sets each picture model's rate from its old picture price (old per / new per), so no
+  picture changes price by itself; a rate the operator set is never touched (admin_llm_save).
+- A buyer's old coin credit moves once into the seller's first model (Seller._migrate). /v1 API keys spend the same
+  per-model credits (they go through ask()). API grants now last 10 years, renewed when 30 days are left.
+- Admin -> LLM: "What one credit costs" (coins + 100-credit column), "Each model's rate" (in/out + a typical reply),
+  and per-picture-model "credits per 250 px". GET /admin/api/llm returns `effective` prices and rates.
+Tests: tests/test_llm.py (each model's own credits, migration once, first credit prices keep picture costs).
+
 ### 2026-10-27 LLM market fixes after @apple's lost 600 PEP top-up (Claude)
 The operator: "I put in an order for 600 pep worth of credits and it doesn't look like ... I ever got my credit"; "You need to
 look through how the LLM market works because it's definitely broken". An audit found, and this fixes:

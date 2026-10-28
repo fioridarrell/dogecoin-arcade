@@ -183,7 +183,8 @@ class LlmShare:
                         loop.call_soon_threadsafe(events.put_nowait, ("ev", ev))
                 elif what == "topup":
                     loop.call_soon_threadsafe(events.put_nowait, ("ev", seller.topup(
-                        address, str(body.get("leg") or ""), str(body.get("txid") or ""), str(body.get("sig") or ""))))
+                        address, str(body.get("leg") or ""), str(body.get("txid") or ""), str(body.get("sig") or ""),
+                        str(body.get("model") or "")[:200])))
                 elif what == "image":
                     if getattr(seller, "images", None) is None:
                         raise llmlib.LlmError("this arcade shares no pictures")

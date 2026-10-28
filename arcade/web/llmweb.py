@@ -160,6 +160,9 @@ def register(app, state, *, signed_in: Callable, account_address: Callable, acco
     from .. import imagegen
     pictures = imagegen.ImageSeller(lambda: imagegen.config(state), books, pay_to, scale, free)
     seller.images = pictures
+    # One credit price list for the whole seller (llm_credits.py): pictures are paid in the same coins at the same price.
+    from .. import llm_credits as credits_lib
+    pictures.credit_prices = lambda: credits_lib.credit_prices_for(llmlib.config(state), imagegen.config(state), True)
     state.llm_seller = seller                       # mesh/llmshare.py serves through it
 
     # ---------------------------------------------------------------- reaching a seller
@@ -179,7 +182,8 @@ def register(app, state, *, signed_in: Callable, account_address: Callable, acco
             elif what == "image":
                 yield pictures.make(address, leg, body, via=via)
             elif what == "topup":
-                yield seller.topup(address, body.get("leg", ""), body.get("txid", ""), body.get("sig", ""))
+                yield seller.topup(address, body.get("leg", ""), body.get("txid", ""), body.get("sig", ""),
+                                   body.get("model", ""))
             else:
                 yield seller.balance(address)
             return
@@ -232,6 +236,10 @@ def register(app, state, *, signed_in: Callable, account_address: Callable, acco
         for row in books.earned(month):
             if row["leg"] == "free":
                 continue
+            if str(row["leg"]).startswith("mc:"):                # credits of one model (llm_credits.py)
+                earned.append({**row, "credits": True, "model": row["leg"][3:],
+                               "text": credits_lib.credits_text(int(row["units"] or 0)) + " credits"})
+                continue
             sc = scale(row["leg"])
             earned.append({**row, "text": llmlib.fmt(int(row["units"] or 0), sc)})
         kinds = [c for c in pay_choices(request) if c.get("kind") in ("coin", "token")]
@@ -240,7 +248,15 @@ def register(app, state, *, signed_in: Callable, account_address: Callable, acco
         except Exception:                                           # noqa: BLE001
             peers = {}
         operators = sorted({str(p.get("tag")) for p in peers.values() if isinstance(p, dict) and p.get("tag")})
+        icfg_now = imagegen.config(state)
+        effective = {"credit_prices": credits_lib.credit_prices_for(cfg, icfg_now, False),
+                     "rates": {m: credits_lib.text_rate(cfg, m) for m in cfg.get("models") or []},
+                     "picture_prices": credits_lib.credit_prices_for(cfg, icfg_now, True),
+                     "picture_rates": {m: format(credits_lib.picture_rate(icfg_now, m), "f")
+                                       for m in icfg_now.get("models") or []},
+                     "typical": [credits_lib.TYPICAL_IN, credits_lib.TYPICAL_OUT]}
         return JSONResponse({"config": {**{k: v for k, v in cfg.items() if k != "key"}, "has_key": bool(cfg.get("key"))},
+                             "effective": effective,
                              "earned": earned, "kinds": kinds, "selling": bool(seller.offer()), "load": load_now(),
                              "operators": operators,
                              # Coins whose top-ups share the operator's everyday address (no wallet here for that
@@ -447,7 +463,25 @@ def register(app, state, *, signed_in: Callable, account_address: Callable, acco
             if "free_for" in said:                                  # names, resolved here (never an address from the form)
                 said["free_for"] = [{"tag": str(t).strip().lstrip("@").lower(), "address": tag_address(str(t))}
                                     for t in said.get("free_for") or [] if str(t).strip()]
-            state.set_setting(llmlib.SETTING, llmlib.clean(said, kept))
+            new = llmlib.clean(said, kept)
+            # The first credit prices saved: each picture model whose rate was never set keeps what its pictures cost
+            # under the picture prices of before (llm_credits.py) -- 0.5 PEP a picture credit against a 10 PEP credit
+            # becomes 0.05 credits a 250 px -- so no buyer's picture changes price by itself.
+            if new.get("credit_prices") and not kept.get("credit_prices"):
+                icfg = imagegen.config(state)
+                old = {p["leg"]: llmlib.price(p.get("per", 0)) for p in icfg.get("prices") or []}
+                rates = dict(icfg.get("rates") or {})
+                for m in icfg.get("models") or []:
+                    if m in rates:
+                        continue
+                    for p in new["credit_prices"]:
+                        before, now = old.get(p["leg"]), llmlib.price(p["per"])
+                        if before and now > 0:
+                            rates[m] = {"px": credits_lib.rate_ok((before / now).normalize())}
+                            break
+                if rates != (icfg.get("rates") or {}):
+                    state.set_setting(imagegen.SETTING, {**icfg, "rates": rates})
+            state.set_setting(llmlib.SETTING, new)
         except (llmlib.LlmError, ValueError, TypeError) as exc:
             return refuse(exc)
         s = share()
@@ -551,7 +585,7 @@ def register(app, state, *, signed_in: Callable, account_address: Callable, acco
             said = await body_of(request)
             sid = str(said.get("seller") or HERE)
             body = {"leg": str(said.get("leg") or ""), "txid": str(said.get("txid") or ""),
-                    "sig": str(said.get("sig") or "")}
+                    "sig": str(said.get("sig") or ""), "model": str(said.get("model") or "")[:200]}
             import asyncio
             got = await asyncio.to_thread(lambda: next(ask(account, address, sid, "topup", body["leg"], body), {}))
         except llmlib.LlmError as exc:

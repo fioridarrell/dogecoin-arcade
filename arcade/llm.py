@@ -219,15 +219,25 @@ def fmt(units: int, scale: int) -> str:
     return text[:-1] if text.endswith(".") else text
 
 
+def text_cost_free(rate: dict) -> bool:
+    """A chat model whose rate charges nothing in or out (offered free by its operator)."""
+    return price(rate.get("in", 0)) == 0 and price(rate.get("out", 0)) == 0
+
+
 # ------------------------------------------------------------------------------------------------ the operator's offer
 
 DEFAULTS = {"on": False, "url": "", "key": "", "models": [], "at_once": 2, "max_out": 4096, "prices": [],
+            # Credits per model (llm_credits.py, 2026-10-27): what one credit costs in each coin or token, and each
+            # chat model's rate in credits per 1,000 tokens read / written.
+            "credit_prices": [], "rates": {},
             "name": "", "free_for": [], "helper_ok": None, "helper_off_own": False}
 
 
 def is_free(cfg: dict) -> bool:
     """No asks: free for everyone (2026-10-23: "if I offer my model for free, it should have all the same
     capabilities as a paid model. But I should be able to change it from free to pay at any time by adding an ask")."""
+    if cfg.get("credit_prices"):
+        return False
     for p in cfg.get("prices") or []:
         try:
             if price(p.get("in", 0)) > 0 or price(p.get("out", 0)) > 0:
@@ -286,6 +296,29 @@ def clean(said: dict, kept: dict) -> dict:
         out["at_once"] = max(1, min(AT_ONCE_MOST, int(said.get("at_once") or 1)))
     if "max_out" in said:
         out["max_out"] = max(16, min(MAX_OUT_MOST, int(said.get("max_out") or 16)))
+    if "credit_prices" in said:
+        # What one credit costs in each coin or token this arcade accepts (llm_credits.py): only these are offered.
+        rows, seen = [], set()
+        for row in said.get("credit_prices") or []:
+            if not isinstance(row, dict):
+                continue
+            leg = str(row.get("leg") or "").strip()
+            leg_parts(leg)
+            if leg in seen:
+                raise LlmError("each coin or token once")
+            seen.add(leg)
+            per = price(row.get("per", 0))
+            if per <= 0:
+                raise LlmError("a credit costs more than nothing; take the coin out to stop taking it")
+            rows.append({"leg": leg, "label": str(row.get("label") or leg)[:80], "per": format(per, "f")})
+        out["credit_prices"] = rows[:40]
+    if "rates" in said:
+        from .llm_credits import rate_ok
+        rates = {}
+        for model, r in (said.get("rates") or {}).items():
+            if isinstance(r, dict) and str(model).strip():
+                rates[str(model).strip()[:200]] = {"in": rate_ok(r.get("in", 0)), "out": rate_ok(r.get("out", 0))}
+        out["rates"] = dict(list(rates.items())[:40])
     if "prices" in said:
         rows, seen = [], set()
         for row in said.get("prices") or []:
@@ -477,6 +510,16 @@ class Books:
                        "UPDATE SET units=MAX(0, units-?)", (buyer, leg, int(units)))
             row = db.execute("SELECT units FROM credit WHERE buyer=? AND leg=?", (buyer, leg)).fetchone()
         return int(row["units"]) if row else 0
+
+    def log(self, buyer: str, model: str, tokens_in: int, tokens_out: int, mc: int, via: str = "", ms: int = 0,
+            first_ms: int = 0, ok: bool = True, images: int = 0) -> None:
+        """A reply or picture charged in credits (llm_credits.py): logged as leg "mc:<model>", units in thousandths
+        of a credit; the balance itself is taken by CreditBooks."""
+        with self._lock, self._db() as db:
+            db.execute("INSERT INTO usage (at, buyer, model, leg, tokens_in, tokens_out, units, via, ms, first_ms, ok, "
+                       "images) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                       (time.time(), buyer, model, "mc:" + model, int(tokens_in), int(tokens_out), int(mc), via,
+                        int(ms), int(first_ms), 1 if ok else 0, int(images)))
 
     def earned(self, since: float = 0.0) -> list[dict]:
         """Per payment kind: replies, tokens and units since `since` (the admin panel's summary)."""
@@ -756,8 +799,30 @@ class Seller:
         about = self.about() or {}
         load = self.load()
         load["word"] = self.word(load)
+        from . import llm_credits as cr
+        # Credits per model (llm_credits.py): what one credit costs in each coin or token this arcade accepts -- the only
+        # ones a buyer is shown -- and what each model charges in credits.
+        icfg = self.images.config() if self.images is not None else {}
+        def with_to(rows: list) -> list:
+            out_rows = []
+            for p in rows:
+                try:
+                    to = self.pay_to(p["leg"])
+                except Exception:                               # noqa: BLE001 -- a chain away: not offered now
+                    to = ""
+                if to:
+                    out_rows.append({**p, "to": to})
+            return out_rows
+        cps = with_to(cr.credit_prices_for(cfg, icfg, False) if cfg.get("models") else cr.credit_prices_for(cfg, icfg, True))
+        if pictures and not cfg.get("credit_prices"):
+            pictures = {**pictures, "credit_prices": with_to(cr.credit_prices_for(cfg, icfg, True))}
+
+        def model_row(m: str) -> dict:
+            rate = cr.text_rate(cfg, m)
+            return {"id": m, "rate": rate, "typical": cr.credits_text(cr.text_cost_mc(rate, cr.TYPICAL_IN, cr.TYPICAL_OUT))}
         out = {"name": cfg.get("name") or (pictures or {}).get("name") or "",
-               "models": [{"id": m} for m in cfg["models"]] if text else [], "free": free and text,
+               "models": [model_row(m) for m in cfg["models"]] if text else [], "free": free and text,
+               "credit_prices": cps, "credits": True,
                "load": load if text else {}, "max_out": int(cfg.get("max_out") or 0) if text else 0,
                "prices": prices, "tag": str(about.get("tag") or ""), "host": str(about.get("host") or ""),
                # The operators this arcade shares its models with free, by name: their arcades' helpers may use them
@@ -802,7 +867,47 @@ class Seller:
                 return p
         raise LlmError("this arcade does not take that coin or token for its model")
 
+    # --- credits per model (llm_credits.py) ------------------------------------------------------------------------
+
+    @property
+    def credits(self):
+        cb = self.__dict__.get("_credits")
+        if cb is None:
+            from .llm_credits import CreditBooks
+            cb = self._credits = CreditBooks(self.books.path.parent)
+        return cb
+
+    def model_ids(self) -> list[str]:
+        """Every model this arcade sells, chat models first, then picture models (each one's credits its own)."""
+        out = list(self.config().get("models") or [])
+        if self.images is not None:
+            icfg = self.images.config()
+            out += [m for m in (icfg.get("models") or []) if m not in out]
+        return out
+
+    def default_model(self) -> str:
+        """The seller's first model: where a buyer's coin credit from before credits goes (the operator's choice)."""
+        ids = self.model_ids()
+        return ids[0] if ids else ""
+
+    def is_picture(self, model: str) -> bool:
+        return self.images is not None and model in (self.images.config().get("models") or []) \
+            and model not in (self.config().get("models") or [])
+
+    def prices_for(self, model: str) -> list[dict]:
+        """What one credit of `model` costs in each coin or token (llm_credits.credit_prices_for)."""
+        from . import llm_credits as cr
+        icfg = self.images.config() if self.images is not None else {}
+        return cr.credit_prices_for(self.config(), icfg, self.is_picture(model))
+
+    def _migrate(self, buyer: str) -> None:
+        model = self.default_model()
+        prices = {p["leg"]: p["per"] for p in self.prices_for(model)}
+        self.credits.migrate(buyer, model, prices, self.scale)
+
     def balance(self, buyer: str) -> dict:
+        from . import llm_credits as cr
+        self._migrate(buyer)
         legs = self.books.balances(buyer)
         # Three answers kept apart (2026-10-23: a free LLM said a PAID picture model was "Free, your own model"):
         # `own` -- this buyer uses everything here free (the operator, or a name in free_for); `free` -- the words are
@@ -812,12 +917,19 @@ class Seller:
         from .imagegen import is_free as pictures_free
         def entry(leg: str, units: int) -> dict:
             return {"units": units, "text": fmt(units, self.scale(leg)), "scale": self.scale(leg)}
+        mine = self.credits.balances(buyer)
         return {"free": own or is_free(self.config()), "own": own,
                 "images_free": own or bool(icfg.get("on") and pictures_free(icfg)),
-                "credit": {leg: entry(leg, u) for leg, u in legs.items() if leg != "free"}}
+                "models": {m: {"mc": mine.get(m, 0), "credits": cr.credits_text(mine.get(m, 0))} for m in self.model_ids()},
+                # coin credit from before credits that no credit price converts now (shown, never lost)
+                "credit": {leg: entry(leg, u) for leg, u in legs.items() if leg != "free" and u > 0}}
 
-    def topup(self, buyer: str, leg: str, txid: str, sig: str) -> dict:
-        legs = self.paid_legs()
+    def topup(self, buyer: str, leg: str, txid: str, sig: str, model: str = "") -> dict:
+        """A payment counted once, as credits for `model` (llm_credits.py; the seller's first model when none is named
+        -- an arcade from before credits names none): what it brought divided by that coin's credit price."""
+        from . import llm_credits as cr
+        legs = self.paid_legs() | {p["leg"] for p in cr.credit_prices(
+            self.config(), self.images.config() if self.images is not None else {})}
         # A coin this arcade sold for before still counts (2026-10-27, from the audit: a buyer who paid and then saw the
         # seller make its model free, or drop that coin, lost the coins): its address of its own for LLM sales is kept.
         if leg not in legs and not self.paid_before(leg):
@@ -829,16 +941,31 @@ class Seller:
         signer = recover_hash160(sig, topup_words(network, txid, self.node_id(), buyer))
         if signer is None:
             raise LlmError("the payment's signature does not check")
-        done = self.books.credited(txid, leg)
+        done = self.credits.credited(txid, leg)
         if done is not None:
             if done["buyer"] != buyer:
                 raise LlmError("that payment was already counted for somebody else")
-            return {"ok": True, "again": True, "units": done["units"], **self.balance(buyer)}
+            return {"ok": True, "again": True, "units": done["units"], "model": done.get("model", ""),
+                    "credits": cr.credits_text(done.get("mc", 0)), **self.balance(buyer)}
+        ids = self.model_ids()
+        model = model if model in ids else self.default_model()
+        if not model:
+            raise LlmError("this arcade sells no model now")
+        prices = {p["leg"]: p["per"] for p in self.prices_for(model)}
+        per = prices.get(leg)
+        if per is None and self.paid_before(leg):
+            raise LlmError("this arcade no longer sets a credit price in that coin: ask its operator to count it")
+        if per is None:
+            raise LlmError("this arcade does not take that coin or token")
         to = self.pay_to(leg)
         units = int(self.verify(leg, txid, to, signer))
-        if not self.books.credit(txid, leg, buyer, units):
+        mc = cr.mc_for_payment(units, self.scale(leg), per)
+        if mc <= 0:
+            raise LlmError("that payment buys less than a thousandth of a credit")
+        if not self.credits.add(txid, leg, buyer, model, units, mc):
             raise LlmError("that payment was already counted")
-        return {"ok": True, "units": units, "text": fmt(units, self.scale(leg)), **self.balance(buyer)}
+        return {"ok": True, "units": units, "model": model, "credits": cr.credits_text(mc),
+                "text": cr.credits_text(mc) + " credits for " + model, **self.balance(buyer)}
 
     node_id = staticmethod(lambda: "")                          # set by the web layer: this arcade's mesh id
     paid_before = staticmethod(lambda leg: False)               # set by the web layer: a coin sold for before
@@ -868,21 +995,19 @@ class Seller:
                 m for m in messages if not (isinstance(m, dict) and m.get("role") == "system")]
             body = {**body, "messages": messages}
             house = Server(cfg["url"], cfg.get("key") or "").count(sysmsg, model) or len(sysmsg) // 4
-        free = bool(self.free(buyer)) or is_free(cfg)
-        if not free and leg in ("", "auto", "free"):          # any coin the buyer holds credit in, chosen here
-            leg = self.pick_leg(buyer, cfg.get("prices") or [], lambda p, units: affordable_out(
-                p, units, guess_own, self.scale(p["leg"])) != 0) or "auto"
-            if leg == "auto":
-                raise LlmError("not enough credit for that; top up first")
-        prices = {"in": 0, "out": 0} if free else self._price(leg)
-        scale = self.scale(leg) if not free else COIN
-        balance = 0 if free else self.books.balance(buyer, leg)
+        # Credits per model (llm_credits.py): this model's rate, paid from this buyer's credits for this model alone.
+        from . import llm_credits as cr
+        rate = cr.text_rate(cfg, model)
+        free = bool(self.free(buyer)) or is_free(cfg) or text_cost_free(rate)
+        if not free:
+            self._migrate(buyer)
+        balance = 0 if free else self.credits.balance(buyer, model)
         guess_in = guess_tokens(body)
         most = int(cfg.get("max_out") or 4096)
         if not free:
-            can = affordable_out(prices, balance, guess_own, scale)
+            can = cr.affordable_out(rate, balance, guess_own)
             if can == 0:
-                raise LlmError("not enough credit for that; top up first")
+                raise LlmError(f"not enough credits for {model}; buy some first")
             if can > 0:
                 most = min(most, can)
         asked = body.get("max_tokens") or body.get("max_completion_tokens")
@@ -892,23 +1017,23 @@ class Seller:
         out.pop("max_completion_tokens", None)
         out.update(model=model, max_tokens=most, n=1)
         # The most this reply can cost, set aside first: what is left is what the next reply at once can spend.
-        held = 0 if free else min(balance, cost_units(prices, guess_own, most, scale))   # the buyer's own words
-        if held and not self.books.reserve(buyer, leg, held):
-            raise LlmError("not enough credit for that; top up first")
+        held = 0 if free else min(balance, cr.text_cost_mc(rate, guess_own, most))   # the buyer's own words
+        if held and not self.credits.reserve(buyer, model, held):
+            raise LlmError(f"not enough credits for {model}; buy some first")
         slot = self._slot()
         with self._lock:
             self.waiting += 1
         try:
             got = slot.acquire(timeout=WAIT_FOR_SLOT)
         except BaseException:
-            self.books.release(buyer, leg, held)
+            self.credits.give(buyer, model, held)
             raise
         finally:
             with self._lock:
                 self.waiting -= 1
         if not got:
-            self.books.release(buyer, leg, held)
-            self.books.charge(buyer, leg if not free else "free", model, 0, 0, 0, via, ok=False)
+            self.credits.give(buyer, model, held)
+            self.books.log(buyer, model, 0, 0, 0, via, ok=False)
             raise LlmError("the model is busy; try again in a minute")
         with self._lock:
             self.active += 1
@@ -942,18 +1067,18 @@ class Seller:
             with self._lock:
                 self.active -= 1
             ms = int((time.monotonic() - t0) * 1000)
-            self.books.release(buyer, leg, held)                # what was set aside back; the real cost follows
+            self.credits.give(buyer, model, held)               # what was set aside back; the real cost follows
             if heard and not failed:     # a server that never answered, or broke off with an error, costs nothing
                 # (2026-10-23: "If there is an error, they should be refunded their credit")
                 if not used_in:
                     used_in = guess_in
                 if not used_out and chars:
                     used_out = chars // 4 + 1
-                cost = 0 if free else cost_units(prices, max(0, used_in - house), used_out, scale)
-                left = self.books.charge(buyer, leg if not free else "free", model, used_in, used_out, cost, via,
-                                         ms=ms, first_ms=first_ms)
+                cost = 0 if free else cr.text_cost_mc(rate, max(0, used_in - house), used_out)
+                left = self.credits.take(buyer, model, cost) if not free else 0
+                self.books.log(buyer, model, used_in, used_out, cost, via, ms=ms, first_ms=first_ms)
             else:
-                self.books.charge(buyer, leg if not free else "free", model, 0, 0, 0, via, ms=ms, ok=False)
+                self.books.log(buyer, model, 0, 0, 0, via, ms=ms, ok=False)
         yield {"arcade": {"tokens_in": used_in, "tokens_out": used_out, "cost": cost, "docs_tokens": house,
-                          "cost_text": fmt(cost, scale), "left": left, "left_text": fmt(left, scale),
-                          "free": free, "leg": leg}}
+                          "cost_text": cr.credits_text(cost), "left": left, "left_text": cr.credits_text(left),
+                          "free": free, "model": model, "credits": True}}

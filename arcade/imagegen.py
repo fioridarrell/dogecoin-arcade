@@ -30,7 +30,9 @@ from . import llm as llmlib
 
 SETTING = "llm_images"
 DEFAULTS = {"on": False, "url": "", "wake": "", "models": [], "max_side": 1000, "steps": 20, "at_once": 1,
-            "prices": [], "name": ""}
+            "prices": [], "name": "",
+            # each picture model's rate in credits per 250 px of the longest side (llm_credits.py, 2026-10-27)
+            "rates": {}}
 SIDE_MOST = 1536
 SIDE_LEAST = 128
 #: A picture's credits: its longest side over CREDIT_SIDE, rounded up (2026-10-23: "250 pixels by 250 pixels ...
@@ -101,6 +103,10 @@ def clean(said: dict, kept: dict, local: bool) -> dict:
             rows.append({"leg": leg, "label": str(row.get("label") or leg)[:80],
                          "per": format(llmlib.price(row.get("per", 0)), "f")})
         out["prices"] = rows[:40]
+    if "rates" in said:
+        from .llm_credits import rate_ok
+        out["rates"] = {str(m).strip()[:200]: {"px": rate_ok((r or {}).get("px", 1))}
+                        for m, r in list((said.get("rates") or {}).items())[:40] if isinstance(r, dict) and str(m).strip()}
     if out.get("on") and not (out.get("url") and out.get("models")):
         raise llmlib.LlmError("to share pictures, name ComfyUI's address and tick at least one model")
     return out
@@ -371,7 +377,7 @@ class ImageSeller:
         cfg = self.config()
         if not (cfg.get("on") and cfg.get("url") and cfg.get("models")):
             return None
-        free = is_free(cfg)
+        free = not self.credit_prices()
         prices = []
         if not free:
             for p in cfg["prices"]:
@@ -381,12 +387,17 @@ class ImageSeller:
                     to = ""
                 if to:
                     prices.append({**p, "to": to})
-            if not prices:
-                return None
-        return {"models": [{"id": m, "label": (self._known.get(m) or {}).get("label") or label_of(m)} for m in cfg["models"]],
+        from . import llm_credits as cr
+        return {"models": [{"id": m, "label": (self._known.get(m) or {}).get("label") or label_of(m),
+                            "per_250px": format(cr.picture_rate(cfg, m), "f")} for m in cfg["models"]],
                 "free": free, "prices": prices, "max_side": int(cfg.get("max_side") or 1024), "edits": True,
                 "credit_side": CREDIT_SIDE,
                 "name": cfg.get("name") or "", "load": self.load()}
+
+    #: What one credit costs in each coin (llm_credits.credit_prices of the seller's whole config), set by the web layer;
+    #: alone, the picture prices from before credits.
+    def credit_prices(self) -> list:
+        return [p for p in self.config().get("prices") or [] if llmlib.price(p.get("per", 0)) > 0]
 
     def make(self, buyer: str, leg: str, body: dict, via: str = "") -> dict:
         """One picture, from text or from the buyer's own picture, charged per image after it is made."""
@@ -413,28 +424,19 @@ class ImageSeller:
             w, h = size_of(body.get("size"), most)
             credits = credits_for(w, h)
 
-        def cost_in(p: dict) -> int:
-            return int(math.ceil(llmlib.price(p.get("per", 0)) * self.scale(p["leg"]) * credits))
-        price = {"per": "0"}
-        if not free:
-            asks = cfg.get("prices") or []
-            if leg in ("", "auto", "free"):                        # whichever coin the buyer's credit covers it in
-                legs = self.books.balances(buyer)
-                leg = next((p["leg"] for p in sorted(asks, key=lambda p: -legs.get(p["leg"], 0))
-                            if legs.get(p["leg"], 0) >= cost_in(p)), "")
-                if not leg:
-                    raise llmlib.LlmError(f"not enough credit: this costs {credits} credit{'' if credits == 1 else 's'};"
-                                          " top up first")
-            price = next((p for p in asks if p.get("leg") == leg), None)
-            if price is None:
-                raise llmlib.LlmError("this arcade does not take that coin or token for its pictures")
-        sc = self.scale(leg) if not free else llmlib.COIN
-        per = llmlib.price(price["per"])
-        cost = 0 if free else int(math.ceil(per * sc * credits))
+        # Credits per model (llm_credits.py): this picture model's rate in credits per 250 px of the longest side
+        # (an edit counts the uploaded picture too), paid from this buyer's credits for this model alone.
+        from . import llm_credits as cr
+        per_px = cr.picture_rate(cfg, name)
+        # Paid only while the operator names what a credit costs (its credit prices, or the picture prices before them).
+        free = bool(self.free(buyer)) or per_px == 0 or not self.credit_prices()
+        credits_book = cr.CreditBooks(self.books.path.parent)
+        cost = 0 if free else int(math.ceil(per_px * credits * cr.MC))
         # Set aside before the picture is made (2026-10-27, from the audit: pictures at once each saw the same balance).
-        held = 0 if free else cost
-        if held and not self.books.reserve(buyer, leg, held):
-            raise llmlib.LlmError(f"not enough credit: this costs {credits} credit{'' if credits == 1 else 's'}; top up first")
+        held = cost
+        if held and not credits_book.reserve(buyer, name, held):
+            raise llmlib.LlmError(f"not enough credits for {name}: this costs {cr.credits_text(cost)} credits; buy some "
+                                  "first")
         steps = int(cfg.get("steps") or 20)
         seed = int(body.get("seed") or 0) or uuid.uuid4().int % (2 ** 32)
         slot = self._slot()
@@ -443,13 +445,13 @@ class ImageSeller:
         try:
             got = slot.acquire(timeout=llmlib.WAIT_FOR_SLOT * 5)
         except BaseException:
-            self.books.release(buyer, leg, held)
+            credits_book.give(buyer, name, held)
             raise
         finally:
             with self._lock:
                 self.waiting -= 1
         if not got:
-            self.books.release(buyer, leg, held)
+            credits_book.give(buyer, name, held)
             raise llmlib.LlmError("the picture model is busy; try again in a few minutes")
         with self._lock:
             self.active += 1
@@ -464,7 +466,7 @@ class ImageSeller:
                 got_size = png_size(png)
                 if got_size and not free:                           # what came back, never more than was shown
                     credits = min(credits, credits_for(uw, uh) + credits_for(*got_size))
-                    cost = int(math.ceil(per * sc * credits))
+                    cost = int(math.ceil(per_px * credits * cr.MC))
             else:
                 png = srv.run(qwen_text(m, prompt, *drawn(w, h), steps, seed))
             ok = True
@@ -473,9 +475,10 @@ class ImageSeller:
             with self._lock:
                 self.active -= 1
             ms = int((time.monotonic() - t0) * 1000)
-            self.books.release(buyer, leg, held)                # what was set aside back; the real cost follows
-            left = self.books.charge(buyer, leg if not free else "free", "image:" + name, 0, 0,
-                                     cost if ok else 0, via, ms=ms, first_ms=ms, ok=ok, images=1 if ok else 0)
+            credits_book.give(buyer, name, held)                # what was set aside back; the real cost follows
+            left = credits_book.take(buyer, name, cost if ok else 0) if not free else 0
+            self.books.log(buyer, "image:" + name, 0, 0, cost if ok else 0, via, ms=ms, first_ms=ms, ok=ok,
+                           images=1 if ok else 0)
         return {"png": base64.b64encode(png).decode(), "seed": seed, "model": name, "edit": bool(edit), "credits": credits,
-                "arcade": {"cost": cost, "cost_text": llmlib.fmt(cost, sc), "left": left,
-                           "left_text": llmlib.fmt(left, sc), "free": free, "leg": leg, "ms": ms}}
+                "arcade": {"cost": cost, "cost_text": cr.credits_text(cost), "left": left,
+                           "left_text": cr.credits_text(left), "free": free, "model": name, "ms": ms, "credits": True}}
