@@ -2660,7 +2660,11 @@ section.panel h2{margin-top:0}
     if (r.error) out.push(['bad', r.error]);
     if (r.differ) out.push(['', num(r.differ) + ' chunk' + (r.differ > 1 ? 's were' : ' was') + ' read differently by '
       + 'two arcades. Another arcade scans it to settle which is right.']);
-    if (r.mode !== 'off' && !copies.length) out.push(['bad', 'No arcade holds this chain’s index yet. One that can '
+    // Still working it out (2026-10-27, the operator: it said nobody holds the index while the tab was loading): the copies
+    // are known only once this chain's status is in, so until then the panel says it is checking.
+    if (r.mode !== 'off' && !copies.length && (r.counting || r.stale || r.opening))
+      out.push(['', 'Checking which arcades hold this chain’s index…']);
+    else if (r.mode !== 'off' && !copies.length) out.push(['bad', 'No arcade holds this chain’s index yet. One that can '
       + 'spare the disk should choose Keep the full index.']);
     else if (r.mode !== 'off' && copies.length === 1) out.push(['', 'Only one copy: ' + ordName(copies[0]) + ' holds it. '
       + 'A second arcade holding the index (ring B) would keep it safe if that one goes offline.']);

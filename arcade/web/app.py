@@ -28330,7 +28330,12 @@ def create_app(state: AppState) -> FastAPI:
             if net not in STARTS:
                 continue
             index = indexes.get(net)
-            st = index.status(quick=True) if index is not None else {"mode": "off", "base": STARTS[net]}
+            if index is None and state.ord_mode(net) != "off":
+                # Not open yet (lazy indexes): this visit opens it, and the panel says it is checking meanwhile.
+                state.ord_index(net, wait=0)
+                index = state.ord_indexes().get(net)
+            st = index.status(quick=True) if index is not None else {
+                "mode": "off", "base": STARTS[net], **({"opening": True} if state.ord_mode(net) != "off" else {})}
             # The mode as set now, never the status kept for 20 s (2026-10-22: the four choices "are not
             # registering the clicks" -- the redraw after a click showed the kept mode and turned the choice back).
             st = {**st, "mode": state.ord_mode(net)}
