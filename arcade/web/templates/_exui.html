@@ -287,14 +287,14 @@ document.addEventListener("click", function (e) {
 window.arcadeFavs = window.arcadeFavs || (function () {
   var LS = "arcade-favorites", set = null, saved = false, listeners = [];
   function local() { try { return JSON.parse(localStorage.getItem(LS) || "[]"); } catch (e) { return []; } }
-  function paint() {
+  function stars() {
     document.querySelectorAll("[data-fav]").forEach(function (b) {
       var on = set.indexOf(b.dataset.fav) >= 0;
       b.setAttribute("aria-pressed", on ? "true" : "false");
       b.textContent = b.classList.contains("ex-star") ? (on ? "\u2605" : "\u2606") : (on ? "\u2605 Favorited" : "\u2606 Favorite");
     });
-    listeners.forEach(function (f) { f(set); });
   }
+  function paint() { stars(); listeners.forEach(function (f) { f(set); }); }
   var ready = fetch("/account/favorites", {cache: "no-store", credentials: "same-origin"})
     .then(function (r) { return r.ok ? r.json() : {favorites: [], saved: false}; })
     .catch(function () { return {favorites: [], saved: false}; })
@@ -316,7 +316,9 @@ window.arcadeFavs = window.arcadeFavs || (function () {
     if (set) toggle(b.dataset.fav);
   }, true);
   return {ready: ready, has: function (k) { return !!set && set.indexOf(k) >= 0; },
-          onChange: function (f) { listeners.push(f); if (set) f(set); }, paint: function () { if (set) paint(); }};
+          onChange: function (f) { listeners.push(f); if (set) f(set); }, // paint() repaints the stars only: a listener that redraws its list and calls it must not be called back
+          // (the LLM tab's draw -> paint -> listeners -> draw ran out of stack, 2026-10-28).
+          paint: function () { if (set) stars(); }};
 })();
 </script>
 {% endmacro %}
