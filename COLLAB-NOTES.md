@@ -99,8 +99,9 @@ of the apps that needs to be fixed. The website should by default open to Ubuntu
   that never picked a look goes to the Ubuntu desktop. "Website" under Themes, or leaving the desktop, is now kept as
   `arcade.deskview = "web"` (it was removed, which now means the default). A phone, the installed app, Admin and the
   sign-in pages keep the website as before.
-- **Tests:** the conftest fixture `website_look` sets DESK_DEFAULT to "" for every test not marked `desk_default`, so
-  the browser tests keep driving the website. New: test_desktop_default_browser (5: the default, Website and Windows 98
+- **Tests:** conftest's pytest_configure sets DESK_DEFAULT to "" for the whole run (module-scoped servers too: a
+  per-test switch came too late for test_showcase, test_nfts_browser, test_inscription_sandbox and test_trade_browser,
+  32 errors), so the browser tests keep driving the website; tests marked `desk_default` get "ubuntu" back. New: test_desktop_default_browser (5: the default, Website and Windows 98
   kept once picked, a phone, the helper window moved, closed and opened again).
 
 ### 2026-10-28 Merged SadFrog's #47, the Desktop View (Claude)
