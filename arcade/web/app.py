@@ -1157,7 +1157,8 @@ def create_app(state: AppState) -> FastAPI:
     # address, and the pages themselves are still never cached -- so a browser can never run an old copy (the reason
     # these were no-store: a stale copy of the code that derives somebody's keys has no acceptable failure mode).
     ASSETS = {"/wallet.js": "wallet_js.js", "/coins.js": "coins.js", "/signin.js": "signin.js",
-              "/messaging.js": "messaging_js.js", "/qrscan.js": "qrscan.js", "/base.css": "base_css.css"}
+              "/messaging.js": "messaging_js.js", "/qrscan.js": "qrscan.js", "/base.css": "base_css.css",
+              "/desk98.css": "desk98_css.css", "/deskubuntu.css": "deskubuntu_css.css"}
     _asset_kept: dict = {}
 
     def _assets_mark() -> str:
@@ -10184,6 +10185,35 @@ def create_app(state: AppState) -> FastAPI:
         state.set_setting(f"homebg:{owner}", said)
         return JSONResponse({"id": said})
 
+    DESK_FITS = ("fill", "stretch", "center", "tile")
+
+    @app.get("/account/deskbg")
+    def deskbg_get(request: Request):
+        """The Desktop View's wallpaper: an inscription id ("" for the plain one) and how it is laid on the screen
+        (2026-10-28: "we should be able to select our own background image of inscriptions")."""
+        owner = _favorites_owner(request)
+        kept = state.setting(f"deskbg:{owner}") if owner is not None else None
+        kept = kept if isinstance(kept, dict) else {}
+        said = str(kept.get("id") or "")
+        fit = str(kept.get("fit") or "")
+        return JSONResponse({"id": said if HOME_BG.fullmatch(said) else "",
+                             "fit": fit if fit in DESK_FITS else "fill"}, headers={"Cache-Control": "no-store"})
+
+    @app.post("/account/deskbg")
+    def deskbg_set(request: Request, payload: Any = Body(None)):
+        owner = _favorites_owner(request)
+        if owner is None:
+            raise HTTPException(403, "sign in first")
+        said = payload if isinstance(payload, dict) else {}
+        pick = str(said.get("id") or "").strip().lower()
+        fit = str(said.get("fit") or "fill").strip().lower()
+        if pick and not HOME_BG.fullmatch(pick):
+            return JSONResponse({"detail": "an inscription id: 64 hex characters, i, a number"}, status_code=400)
+        if fit not in DESK_FITS:
+            return JSONResponse({"detail": "fit: fill, stretch, center or tile"}, status_code=400)
+        state.set_setting(f"deskbg:{owner}", {"id": pick, "fit": fit})
+        return JSONResponse({"id": pick, "fit": fit})
+
     @app.get("/account/badges")
     def account_badges(request: Request):
         """The red counts of the tabs, by tab, for the home screen to keep fresh without reloading (2026-10-24:
@@ -10206,6 +10236,12 @@ def create_app(state: AppState) -> FastAPI:
         (2026-10-24: "PWA should ask for you to login right away")."""
         if _account_view(request) and signed_in(request) is None:
             return RedirectResponse("/join?next=/home", status_code=303)
+        return render(request, "home.html", fullscreen=True, apps=_shelf_apps(request),
+                      operator_view=not _account_view(request))
+
+    def _shelf_apps(request: Request) -> list[dict]:
+        """Every inscribed app as an icon, most popular first: the home screen's store and the Desktop View's
+        Programs."""
         rows = _games_ranked(request, "popular")
         apps = []
         for it in rows:
@@ -10225,8 +10261,29 @@ def create_app(state: AppState) -> FastAPI:
                 "perms": [p for p in ("wallet", "contacts", "media", "notify") if g.get(p)],
                 "timeout": g.get("minimized_timeout"),
             })
-        return render(request, "home.html", fullscreen=True, apps=apps,
-                      operator_view=not _account_view(request))
+        return apps
+
+    @app.get("/desktop", response_class=HTMLResponse)
+    def desktop_view(request: Request):
+        """The Desktop View (desktop.html; 2026-10-28: "a toggle at the top left of the user's desktop view ... that
+        turns the normal website into a 'Desktop View' similar to how the mobile side of things look now - but make it
+        look like old windows 98"): the tabs and the apps as desktop icons, each opened in a window that moves, sizes,
+        minimizes to the taskbar and keeps running. A browser on a computer only; the toggle is not drawn on a phone
+        or on the Admin pages. Anybody may open it: a page in a window asks for a sign-in the way it always does."""
+        nets = [{"net": c.network, "label": c.label} for c in state.token_chains if _ord_chain(c)]
+        # A wallet shortcut for every coin (2026-10-28: "have shortcuts able to be added for every coin type so people
+        # can click that to quickly get to their favorite wallet"): /wallet?coin=<network> opens on that coin.
+        coins = [{"net": c.network, "label": c.label, "icon": _coin_icon(c.network)} for c in _account_chains()]
+        # System Information's own lines (2026-10-28: "extra menu items like system info - and it provides all info
+        # about the arcade nodes"); the mesh's are asked for when it opens (/account/arcades).
+        mesh = getattr(state, "mesh", None)
+        system = {"version": str(getattr(state, "running_version", "") or ""),
+                  "node": str(getattr(mesh, "node_id", "") or "") if mesh is not None else "",
+                  "chains": [{"net": c.network, "label": c.label, "icon": _coin_icon(c.network),
+                              "real": bool(c.is_mainnet), "ords": _ord_chain(c)}
+                             for c in state.all_chains]}
+        return render(request, "desktop.html", fullscreen=True, apps=_shelf_apps(request), ord_nets=nets,
+                      coins=coins, system=system, operator_view=not _account_view(request))
 
     @app.post("/account/push/subscribe")
     def push_subscribe(request: Request, payload: Any = Body(None)):
@@ -10915,6 +10972,18 @@ def create_app(state: AppState) -> FastAPI:
     def base_css(request: Request):
         """The style every page shares (templates/base_css.css, out of base.html since 2026-10-20: 45 KB a page)."""
         return _asset_response(request, "/base.css")
+
+    @app.get("/desk98.css")
+    def desk98_css(request: Request):
+        """The Desktop View's look for the pages in its windows (templates/desk98_css.css; base.html loads it there
+        only)."""
+        return _asset_response(request, "/desk98.css")
+
+    @app.get("/deskubuntu.css")
+    def deskubuntu_css(request: Request):
+        """The Desktop View's Ubuntu look for the pages in its windows (templates/deskubuntu_css.css; Themes on Your
+        arcade)."""
+        return _asset_response(request, "/deskubuntu.css")
 
     @app.get("/join", response_class=HTMLResponse)
     def join_page(request: Request):

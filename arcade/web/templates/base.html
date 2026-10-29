@@ -30,6 +30,8 @@ html.inshell body:not(.fullscreen){padding-top:18px}
 html.inshell body.fullscreen #arc-bot,html.inshell body.fullscreen #arc-bot-box{display:none !important}
 /* Back to the home screen, the App Store's own link (2026-10-24: "all of the pages should have a back to home
    link like the App Store does"). */
+/* A window of the Desktop View: its title bar says what it is, so the page starts at its top. */
+html.indesk body:not(.fullscreen){padding-top:0}
 .inshell-home{display:inline-block;background:none !important;border:0;box-shadow:none !important;color:var(--accent);
   padding:8px 8px 8px 0;margin:0 0 6px;font:inherit;font-weight:650;font-size:1rem;cursor:pointer}
 </style>
@@ -74,11 +76,26 @@ html.inshell body.fullscreen #arc-bot,html.inshell body.fullscreen #arc-bot-box{
   };
 })();
 (function () {
-  var shell = null;
-  try { if (window.top !== window && window.top.location.pathname === '/home') shell = window.top; } catch (e) {}
+  var shell = null, desk = false;
+  try {
+    var top = window.top !== window && window.top.location.pathname;
+    if (top === '/home' || top === '/desktop') { shell = window.top; desk = top === '/desktop'; }
+  } catch (e) {}
   if (shell) {
     document.documentElement.classList.add('inshell');
+    // In a window of the Desktop View (desktop.html): the window's own title bar closes it, so no Home link.
+    if (desk) {
+      document.documentElement.classList.add('indesk');
+      // ... in the desktop's own look (2026-10-28: "all apps internally should be styled windows 98 as well"; Themes
+      // in me.html picks the look).
+      var skin = shell.document.documentElement.getAttribute('data-skin') || 'w98';
+      document.documentElement.setAttribute('data-skin', skin);
+      var look = document.createElement('link');
+      look.rel = 'stylesheet'; look.href = skin === 'ubuntu' ? '/deskubuntu.css' : '/desk98.css';
+      document.head.appendChild(look);
+    }
     document.addEventListener('DOMContentLoaded', function () {
+      if (desk) return;
       if (document.body.classList.contains('fullscreen')) return;     // an app: the pull-down bar is its way home
       var home = document.createElement('button');
       home.type = 'button'; home.className = 'inshell-home'; home.textContent = '\u2039 Home';
@@ -93,7 +110,7 @@ html.inshell body.fullscreen #arc-bot,html.inshell body.fullscreen #arc-bot-box{
       if (u.origin !== location.origin) return;
       if (/^\/inscriptions\/[^/]+\/full$/.test(u.pathname)) {
         e.preventDefault(); shell.arcadeShell.open(u.pathname + u.search, a.title || a.textContent.trim().slice(0, 40));
-      } else if (u.pathname === '/home' || (u.pathname === '/apps' && !u.search && !u.hash)) {
+      } else if (u.pathname === '/home' || u.pathname === '/desktop' || (!desk && u.pathname === '/apps' && !u.search && !u.hash)) {
         e.preventDefault(); shell.arcadeShell.home();
       } else if (a.target === '_blank') {
         e.preventDefault(); shell.arcadeShell.open(u.pathname + u.search + u.hash, a.title || a.textContent.trim().slice(0, 40));
@@ -103,6 +120,19 @@ html.inshell body.fullscreen #arc-bot,html.inshell body.fullscreen #arc-bot-box{
   }
   var installed = window.navigator.standalone === true ||
     (window.matchMedia && matchMedia('(display-mode: standalone)').matches);
+  // THE DESKTOP VIEW (desktop.html; 2026-10-28), on a computer's browser only: while its switch is on, a page opened in
+  // a tab of its own goes to the desktop and opens there in a window. Never the Admin pages, the sign-in pages, a phone
+  // or the installed app.
+  if (!installed && window.top === window && location.pathname !== '/desktop' && window.innerWidth > 640 &&
+      !/^\/(admin|join|restore|signin|offline|clone|home)(\/|$)/.test(location.pathname)) {
+    var deskOn = false;
+    try { deskOn = /^(1|w98|ubuntu)$/.test(localStorage.getItem('arcade.deskview') || ''); } catch (e) {}
+    if (deskOn) {
+      var page = location.pathname + location.search + location.hash;
+      location.replace(page === '/' ? '/desktop' : '/desktop#open=' + encodeURIComponent(page));
+      return;
+    }
+  }
   if (!installed || window.top !== window || location.pathname === '/home') return;
   if (/^\/(join|restore|signin|offline|clone)(\/|$)/.test(location.pathname)) return;
   // Opening the app goes straight to the apps (2026-10-24: "The PWA should open directly to the apps"): its start

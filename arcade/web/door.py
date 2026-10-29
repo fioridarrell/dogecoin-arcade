@@ -75,6 +75,7 @@ PUBLIC_PAGES = frozenset({
     "/exchange/pairs",            # the "open a pair" box: two token ids to a token/token pair's page
     "/apps",                  # every inscribed app (arcade/games.py; the Apps tab since 2026-10-23)
     "/home",                  # the installed app's home screen (home.html, PWA only, 2026-10-24)
+    "/desktop",               # the Desktop View: the tabs and apps as icons and windows (desktop.html, 2026-10-28)
     "/apps/store-icon.png",   # the App Store's icon on it
     "/games",                 # the old name: redirects to /apps
     "/account/escrows",       # an account's own escrows (needs a session)
@@ -106,7 +107,7 @@ PUBLIC_PAGES = frozenset({
     "/account/push/news",     # what woke the phone: who wrote, never what (signed in)
     "/account/ring/apps",     # the apps an account lets ring it (arcade/ring.py, signed in)
     "/admin/login",           # the remote admin password page (rate-limited)
-    "/signin.js", "/base.css",
+    "/signin.js", "/base.css", "/desk98.css", "/deskubuntu.css",
     "/coins.js",
     "/wallet.js",
     "/messaging.js",
@@ -156,6 +157,7 @@ PUBLIC_PAGES = frozenset({
     "/account/favorites",             # the markets this account starred (Exchange, 2026-10-17)
     "/account/homeapps",              # the icons on this account's home screen, in its order (PWA, 2026-10-24)
     "/account/homebg",                # the inscription behind this account's home screen (PWA, 2026-10-27)
+    "/account/deskbg",                # the Desktop View's wallpaper: an inscription id and its fit (2026-10-28)
     "/account/badges",                # the red counts of its tabs, for the home screen (PWA, 2026-10-24)
     "/account/orders/delegated",      # where this account's node-filled orders stand (2026-10-17)
     "/account/talk/inbox",            # sealed swap messages the mesh brought this page (talk_relay)
@@ -515,6 +517,8 @@ PUBLIC_POST = ("/auth/challenge", "/auth/login", "/auth/logout",
                "/account/homeapps",
                # the home screen's background: one inscription id for the caller's own screen, nothing else
                "/account/homebg",
+               # the Desktop View's wallpaper: one inscription id and its fit, for the caller's own desktop
+               "/account/deskbg",
                # the page holding this account's listed swaps is open (order_presence)
                "/account/orders/alive",
                "/account/orders/cancel",
