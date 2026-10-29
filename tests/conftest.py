@@ -118,6 +118,17 @@ QUIESCE = 5.0
 
 
 @pytest.fixture(autouse=True)
+def sys_path_as_it_was():
+    """A test that adds to sys.path takes it out again: test_lora_keys and test_lora_txcheck once put an old checkout
+    of arcade first and left it, and every worker process spawned later on that xdist worker imported that arcade
+    (the ord index tests failed, 2026-10-29)."""
+    import sys
+    kept = list(sys.path)
+    yield
+    sys.path[:] = kept
+
+
+@pytest.fixture(autouse=True)
 def desk_default_look(monkeypatch, request):
     """Tests marked `desk_default` open pages in the shipped default look, the Ubuntu desktop (pytest_configure
     turns it off for the rest)."""

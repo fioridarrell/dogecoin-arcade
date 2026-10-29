@@ -88,6 +88,12 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-29 No test leaves sys.path changed (Claude)
+The full run after the fixes below had one failure left, the new `test_a_lanes_blocks_read_the_same_in_a_worker_process`:
+its spawned worker still imported `~/arcade-localtest`. tests/test_lora_txcheck.py did the same as test_lora_keys
+(the old checkout first on sys.path, never taken out); it now compares against this repository's `arcade.funding`.
+conftest's autouse `sys_path_as_it_was` puts sys.path back after every test, so no test can do it again.
+
 ### 2026-10-29 The last two of the full suite's regular failures found and fixed (tests only) (Claude)
 - **test_doginal_index (6), the cause:** tests/test_lora_keys.py put `~/arcade-localtest` (an old checkout of arcade)
   first on `sys.path` and left it there. Every worker process spawned afterwards on that xdist worker imported the old

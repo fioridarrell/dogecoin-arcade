@@ -1,9 +1,7 @@
-import os, sys, struct
 import pytest
 from arcade.lora import txcheck as T
 from arcade.lora import device_keys as K
 
-ARCADE = os.path.expanduser("~/arcade-localtest")
 acct = K.Account("abandon " * 11 + "about")
 NET, VER, P2SH = "test", 113, 196
 
@@ -21,14 +19,15 @@ def test_good_offer_digests_match_arcade():
     raw = make_offer(PAYEE, 5000, 1000, INS)
     c = T.check_offer(raw, [4000, 3000], acct.coin_pubkey(NET), pay_script=PAYEE, amount=5000, fee_cap=1500)
     assert c.fee == 1000 and c.change == 1000
-    if os.path.isdir(ARCADE):
-        sys.path.insert(0, ARCADE)
-        from arcade import funding
-        own = T.p2pkh(K.hash160(acct.coin_pubkey(NET)))
-        outs = [(5000, PAYEE), (1000, own)]
-        for i in range(2):
-            ins = [{"txid": t, "vout": v} for t, v in INS]
-            assert funding.sighash(ins, outs, i, own) == c.digests[i]
+    # This repository's own arcade.funding. It used to put ~/arcade-localtest (an old checkout) first on sys.path and
+    # leave it there, so every worker process spawned later in the run imported that arcade (2026-10-29; and
+    # test_lora_keys).
+    from arcade import funding
+    own = T.p2pkh(K.hash160(acct.coin_pubkey(NET)))
+    outs = [(5000, PAYEE), (1000, own)]
+    for i in range(2):
+        ins = [{"txid": t, "vout": v} for t, v in INS]
+        assert funding.sighash(ins, outs, i, own) == c.digests[i]
 
 def test_wrong_amount_refused():
     raw = make_offer(PAYEE, 6000, 0, INS)
