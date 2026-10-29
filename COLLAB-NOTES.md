@@ -88,6 +88,21 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-29 Two of the full suite's regular failures fixed (tests only) (Claude)
+The operator: "Can you figure out if we can fix these 11 failures so that we don't get them anymore?"
+- **test_signup_browser `test_the_page_asks_for_two_things`**: the file shares one browser; a test that signed up just
+  before it left it signed in, and a signed-in page preloads the wallet's modules (`noble-secp256k1.js`), a word the
+  page must not show. It now clears the cookies first, as most tests in the file do. (Those two tests together failed
+  every time.)
+- **test_doginal_index (6)**: no test set the cores, so on a 20-core machine every index there gave 10 lanes, each a
+  spawned worker process importing all of arcade, never shut down. The autouse `small` fixture now pins
+  `default_cores` to 1 and reads the lanes' blocks in-process (`_InProcess`); the new
+  `test_a_lanes_blocks_read_the_same_in_a_worker_process` keeps the real spawn pool covered, and the test of
+  `default_cores` calls the real one. The old file also passes alone, under load and under run-tests.sh's limits, so
+  the full-suite trigger is not yet proven.
+- **test_account_take (4)**: not yet fixed; it passes alone, and something an earlier test leaves on the worker's
+  shared regtest chain is being looked for.
+
 ### 2026-10-29 Themes inside a desktop switches the look at once (Claude)
 Found filming the Desktop View promo: in a desktop window, Your arcade -> Themes -> the other desktop kept the old look.
 `/desktop#open=/me` to `/desktop#open=/me` only changes the hash, which never loads the page. me.html now reloads the

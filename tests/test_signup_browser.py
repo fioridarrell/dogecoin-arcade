@@ -342,6 +342,9 @@ def test_the_page_asks_for_two_things(loaded):
     from selenium.webdriver.common.by import By
 
     browser, base, state, home = loaded
+    # Signed out, as a visitor sees it: a test before it on this browser may have left an account signed in, and a
+    # signed-in page preloads the wallet's modules (noble-secp256k1.js) -- the words the page must not show.
+    browser.delete_all_cookies()
     _ready(browser, base)
     assert browser.find_element(By.ID, "tag").is_displayed()
     assert browser.find_element(By.ID, "pw").is_displayed()

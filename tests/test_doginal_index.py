@@ -109,11 +109,30 @@ class Chain:
 FUND = "aa" * 32
 
 
+_DEFAULT_CORES = dx.default_cores                # the real one, for the test of it (small() pins it to 1)
+
+
+class _InProcess:
+    """The lanes' worker processes, in this process: a spawned worker imports all of arcade before its first block,
+    which on a loaded machine (the full suite) takes longer than a step's budget, so a walk waited on lanes that had
+    not finished and a test saw an empty index (2026-10-29). test_a_lanes_blocks_read_the_same_in_a_worker_process
+    keeps the real pool honest."""
+
+    def map(self, fn, jobs):
+        return list(map(fn, jobs))
+
+    def shutdown(self, **kw):
+        pass
+
+
 @pytest.fixture(autouse=True)
 def small(monkeypatch):
     monkeypatch.setattr(dx, "CHUNK", 4)
     monkeypatch.setattr(dx, "SETTLE", 0)
     monkeypatch.setattr(dx, "WALK_SETTLE", 0)
+    # One core unless a test gives it more: the machine's own count (half of 20 here) made every walk a walk of lanes.
+    monkeypatch.setattr(dx, "default_cores", lambda: 1)
+    monkeypatch.setattr(dx.DoginalIndex, "_workers", lambda self: _InProcess())
 
 
 def _walker(tmp_path, chain):
@@ -503,15 +522,27 @@ def test_cores_are_lanes_each_reading_a_chunk_of_its_own_side_by_side(tmp_path, 
     assert len(many.chunks.lanes) <= 1
 
 
+def test_a_lanes_blocks_read_the_same_in_a_worker_process():
+    """The lanes read their blocks in spawned worker processes (DoginalIndex._workers): a block's job goes there and
+    comes back as it reads here."""
+    import multiprocessing
+    from concurrent.futures import ProcessPoolExecutor
+    chain = _busy_chain(4)
+    jobs = [(chain.blocks[k][1].hex(), chain.blocks[k][0], False, False, "dogecoin", False, False) for k in range(4)]
+    with ProcessPoolExecutor(max_workers=2, mp_context=multiprocessing.get_context("spawn")) as pool:
+        there = list(pool.map(dx._parse, jobs, timeout=300))
+    assert there == [dx._parse(j) for j in jobs] and there[0][2] == 1, "the birth in block 0, read the same"
+
+
 def test_a_small_machine_on_one_core_rests_and_a_big_one_goes_straight_on(tmp_path, monkeypatch):
     chain = _busy_chain(8)
     index = dx.DoginalIndex(tmp_path / "p.sqlite", lambda: chain, lambda: "help", cores=lambda: 1)
     monkeypatch.setattr("os.cpu_count", lambda: 4)
     assert index.step() >= 0.5, "one core of four: rests as long as it worked"
-    assert dx.default_cores() == 1
+    assert _DEFAULT_CORES() == 1
     monkeypatch.setattr("os.cpu_count", lambda: 20)
     assert index.step() < 0.1, "a big machine: straight on"
-    assert dx.default_cores() == 10
+    assert _DEFAULT_CORES() == 10
 
 
 def test_read_only_holds_no_index_and_asks_an_arcade_that_walks(tmp_path):
