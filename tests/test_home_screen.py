@@ -97,6 +97,18 @@ def test_nobody_signed_in_is_asked_to_sign_in_first(public):
     assert app.get("/home", headers=EDGE, follow_redirects=False).status_code == 200
 
 
+def test_a_phones_browser_tab_shows_a_visitor_the_home_screen(public):
+    """2026-10-29: "if they are viewing on a mobile the website make it look like the PWA by default". base.html sends
+    a phone's tab to /home?tab=1, which a visitor not signed in sees as well; only the installed app asks first."""
+    app, _state = public
+    r = app.get("/home?tab=1", headers=EDGE, follow_redirects=False)
+    assert r.status_code == 200 and 'id="home"' in r.text
+    base = (TEMPLATES / "base.html").read_text()
+    assert "localStorage.getItem('arcade.phoneview')" in base and "'/home?tab=1#open='" in base
+    home = (TEMPLATES / "home.html").read_text()
+    assert "lock || /[?&]tab=1\\b/.test(location.search)" in home, "a browser tab is not kept awake"
+
+
 def test_a_card_says_how_long_its_app_keeps_running_minimized():
     """2026-10-24: "App builders should be able to decide their apps do when they are minimized that should be
     stored in the game card ... five minutes before they time out. Other apps could have a different timeout or no

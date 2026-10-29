@@ -349,6 +349,53 @@
     <button type="button" class="btn small ghost" data-desk-set="ubuntu" role="radio">Ubuntu desktop</button>
   </div>
 </div>
+{#- On a phone's browser (2026-10-29: "if they are viewing on a mobile the website make it look like the PWA by
+    default"): the installed app's home screen (home.html) or the website, kept in this browser (arcade.phoneview). -#}
+<div class="panel" style="margin-top:14px" id="phone-theme-pref" hidden>
+  <h2 style="margin-top:0">Themes</h2>
+  <p class="muted" style="margin-top:0">The home screen, like the installed app: every tab and app an icon that opens full
+    screen. Or the website as it is. Kept in this browser.</p>
+  <div class="row" style="gap:8px;flex-wrap:wrap" role="radiogroup" aria-label="Theme">
+    <button type="button" class="btn small ghost" data-phone-set="home" role="radio">Home screen</button>
+    <button type="button" class="btn small ghost" data-phone-set="web" role="radio">Website</button>
+  </div>
+</div>
+<script>
+(function () {
+  var box = document.getElementById('phone-theme-pref');
+  var installed = window.navigator.standalone === true ||
+    (window.matchMedia && matchMedia('(display-mode: standalone)').matches);
+  var shell = null;
+  try { if (window.top !== window && window.top.location.pathname === '/home') shell = window.top; } catch (e) {}
+  // A phone's browser only: the installed app is always its home screen, and a computer has the desktops above.
+  if (installed || (window.top !== window && !shell) || Math.max(screen.width, window.innerWidth) > 640) return;
+  box.hidden = false;
+  var bs = box.querySelectorAll('[data-phone-set]');
+  function now() {
+    var v = ''; try { v = localStorage.getItem('arcade.phoneview') || ''; } catch (e) {}
+    return (v || '{{ phone_default }}') === 'home' ? 'home' : 'web';
+  }
+  function paint() {
+    bs.forEach(function (b) {
+      var on = b.dataset.phoneSet === now();
+      b.classList.toggle('on', on); b.classList.toggle('ghost', !on); b.setAttribute('aria-checked', on ? 'true' : 'false');
+    });
+  }
+  bs.forEach(function (b) {
+    b.addEventListener('click', function () {
+      var want = b.dataset.phoneSet;
+      if (want === now()) return;
+      try { localStorage.setItem('arcade.phoneview', want); } catch (e) {}
+      paint();
+      var page = location.pathname + location.search;
+      if (want === 'home') (shell || window).location.href = '/home?tab=1#open=' + encodeURIComponent(page);
+      else if (shell) shell.location.href = page;
+    });
+  });
+  window.addEventListener('storage', function (e) { if (e.key === 'arcade.phoneview') paint(); });
+  paint();
+})();
+</script>
 <script>
 (function () {
   var box = document.getElementById('desk-theme-pref');

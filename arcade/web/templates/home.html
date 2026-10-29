@@ -1190,7 +1190,8 @@ body.fullscreen #arc-bot { display: none !important; }
   // ---------- the screen stays awake while the app is open ----------
   var lock = null;
   function wake() {
-    if (!('wakeLock' in navigator) || document.visibilityState !== 'visible' || lock) return;
+    // The installed app only: a phone's browser tab showing this screen (?tab=1, 2026-10-29) sleeps as any page does.
+    if (!('wakeLock' in navigator) || document.visibilityState !== 'visible' || lock || /[?&]tab=1\b/.test(location.search)) return;
     navigator.wakeLock.request('screen').then(function (l) {
       lock = l; l.addEventListener('release', function () { lock = null; });
     }).catch(function () {});
@@ -1218,7 +1219,7 @@ body.fullscreen #arc-bot { display: none !important; }
     draw();
     var m = /^#open=(.+)$/.exec(location.hash);
     if (m) {
-      history.replaceState(null, '', '/home');
+      history.replaceState(null, '', location.pathname + location.search);   // keeps a browser tab's ?tab=1
       var url = decodeURIComponent(m[1]);
       var tab = TABS.filter(function (t) { return t.href === url.split('?')[0]; })[0];
       if (tab) openKey(tab.key); else window.arcadeShell.open(url);

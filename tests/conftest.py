@@ -124,6 +124,9 @@ def desk_default_look(monkeypatch, request):
     if request.node.get_closest_marker("desk_default") is not None:
         from arcade.web import app as web_app
         monkeypatch.setattr(web_app, "DESK_DEFAULT", "ubuntu")
+    if request.node.get_closest_marker("phone_default") is not None:
+        from arcade.web import app as web_app
+        monkeypatch.setattr(web_app, "PHONE_DEFAULT", "home")
 
 
 @pytest.fixture(autouse=True)
@@ -209,8 +212,11 @@ def pytest_configure(config):
     # to /desktop and open in a window. Off for the whole run, module-scoped servers included; `desk_default` below.
     from arcade.web import app as web_app
     web_app.DESK_DEFAULT = ""
+    web_app.PHONE_DEFAULT = ""                     # the same for a phone's home screen (2026-10-29)
     config.addinivalue_line(
         "markers", "desk_default: open pages in the shipped default look (the Ubuntu desktop) instead of the website")
+    config.addinivalue_line(
+        "markers", "phone_default: a phone's browser opens the home screen (the shipped default) instead of the website")
 
 
 @pytest.fixture(autouse=True)

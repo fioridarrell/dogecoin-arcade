@@ -134,6 +134,20 @@ html.indesk body:not(.fullscreen){padding-top:0}
       return;
     }
   }
+  // A PHONE'S BROWSER gets the installed app's home screen too (2026-10-29: "if they are viewing on a mobile the website
+  // make it look like the PWA by default"), until its reader picks Website under Themes (me.html; arcade.phoneview).
+  // ?tab=1 tells /home it is a browser tab, so a visitor not signed in sees it instead of the sign-in page.
+  if (!installed && window.top === window && window.innerWidth <= 640 &&
+      !/^\/(admin|join|restore|signin|offline|clone|home|desktop)(\/|$)/.test(location.pathname)) {
+    var phoneOn = false;
+    try { phoneOn = (localStorage.getItem('arcade.phoneview') || '{{ phone_default }}') === 'home'; } catch (e) {}
+    if (phoneOn) {
+      var at = location.pathname + location.search + location.hash, how = null;
+      try { how = performance.getEntriesByType('navigation')[0]; } catch (e) {}
+      location.replace(at === '/' || (how && how.redirectCount > 0) ? '/home?tab=1' : '/home?tab=1#open=' + encodeURIComponent(at));
+      return;
+    }
+  }
   if (!installed || window.top !== window || location.pathname === '/home') return;
   if (/^\/(join|restore|signin|offline|clone)(\/|$)/.test(location.pathname)) return;
   // Opening the app goes straight to the apps (2026-10-24: "The PWA should open directly to the apps"): its start

@@ -895,6 +895,9 @@ _ORDER_POSTS: dict[str, float] = {}
 #: (2026-10-29: "The website should by default open to Ubuntu view"): "ubuntu", "w98", or "" for the website.
 #: A phone, the installed app, Admin and the sign-in pages keep the website whatever it says (base.html).
 DESK_DEFAULT = "ubuntu"
+#: What a phone's browser opens the website as until its reader picks under Themes (2026-10-29: "if they are viewing on a
+#: mobile the website make it look like the PWA by default"): "home" (the installed app's home screen) or "" (the website).
+PHONE_DEFAULT = "home"
 
 def create_app(state: AppState) -> FastAPI:
     TEMPLATES._screen_of = state.screen          # the feed card's screen_text()
@@ -1262,6 +1265,7 @@ def create_app(state: AppState) -> FastAPI:
             "offers_waiting": 0 if _account_view(request) else _offers_waiting(),
             # The look a computer's browser opens in until its reader picks one under Themes (base.html, desktop.html)
             "desk_default": DESK_DEFAULT,
+            "phone_default": PHONE_DEFAULT,
         }
         base.update(context)
         # What a POST decided, picked up by the GET it redirected to. Last,
@@ -10242,7 +10246,8 @@ def create_app(state: AppState) -> FastAPI:
         and kept running when minimized. A browser tab never comes here by itself (base.html sends only the
         installed app), and still works if it does. Nobody signed in: the sign-in page first, then back here
         (2026-10-24: "PWA should ask for you to login right away")."""
-        if _account_view(request) and signed_in(request) is None:
+        # A phone's browser tab (base.html, ?tab=1) shows it to a visitor too; only the installed app asks first.
+        if _account_view(request) and signed_in(request) is None and request.query_params.get("tab") != "1":
             return RedirectResponse("/join?next=/home", status_code=303)
         return render(request, "home.html", fullscreen=True, apps=_shelf_apps(request),
                       operator_view=not _account_view(request))

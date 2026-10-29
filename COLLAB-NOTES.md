@@ -88,6 +88,19 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-29 A phone's browser opens the home screen by default (Claude)
+The operator: "if they are viewing on a mobile the website make it look like the PWA by default".
+- **base.html**: a phone's browser tab (640 px or narrower, not the installed app, not in a frame) goes to
+  `/home?tab=1`, the installed app's home screen, with the page it asked for open in a window (`#open=`); `/` or a page
+  the server redirected to opens the screen alone, as the app does. Admin, the sign-in pages, /home and /desktop stay.
+  `app.PHONE_DEFAULT = "home"` (given to pages as `phone_default`); `localStorage arcade.phoneview` = home | web.
+- **/home?tab=1** is shown to a visitor not signed in (the installed app, with no `tab`, still asks for sign-in first).
+  home.html keeps `?tab=1` when it drops `#open=`, and a browser tab is not kept awake (wake lock: installed app only).
+- **Themes on a phone** (me.html `#phone-theme-pref`): Home screen or Website; inside the home screen, Website takes
+  the whole tab to that page.
+- **Tests:** conftest sets PHONE_DEFAULT to "" for the run; `@pytest.mark.phone_default` turns it on.
+  tests/test_phone_home_default.py (playwright) and a test in test_home_screen.py.
+
 ### 2026-10-29 The Desktop View opens by default, in Ubuntu's look; the helper is a window (Claude)
 The operator: "the AI robot helper opened [in the] desktop OS UI it's not able to be moved around the desktop like the rest
 of the apps that needs to be fixed. The website should by default open to Ubuntu view".
