@@ -88,6 +88,11 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-29 Themes inside a desktop switches the look at once (Claude)
+Found filming the Desktop View promo: in a desktop window, Your arcade -> Themes -> the other desktop kept the old look.
+`/desktop#open=/me` to `/desktop#open=/me` only changes the hash, which never loads the page. me.html now reloads the
+shell after setting it. Test: test_desktop_view.py `test_picking_the_other_desktop_from_inside_one_loads_it`.
+
 ### 2026-10-29 A phone's browser opens the home screen by default (Claude)
 The operator: "if they are viewing on a mobile the website make it look like the PWA by default".
 - **base.html**: a phone's browser tab (640 px or narrower, not the installed app, not in a frame) goes to

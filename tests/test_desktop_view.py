@@ -135,3 +135,10 @@ def test_programs_start_with_the_four_that_come_with_it():
             gameslib.app_key("nWKJgSeAZSmfRCxZnwVgtYyPNowQT5X1Gk", "Tic-Tac-Toe")]
     line = re.search(r"var DEFAULT_PROGRAMS = (\[.*?\]);", desk, re.S).group(1)
     assert json.loads(line.replace("'", '"')) == want
+
+
+def test_picking_the_other_desktop_from_inside_one_loads_it():
+    """Themes in a desktop window: /desktop#open=/me to /desktop#open=/me changes only the hash, which never loads the
+    page, so the look stayed the old one until a reload (found filming the promo, 2026-10-29)."""
+    me = (pathlib.Path(__file__).resolve().parent.parent / "arcade/web/templates/me.html").read_text()
+    assert "if (want) shell.location.reload();" in me
