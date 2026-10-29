@@ -121,12 +121,13 @@ html.indesk body:not(.fullscreen){padding-top:0}
   var installed = window.navigator.standalone === true ||
     (window.matchMedia && matchMedia('(display-mode: standalone)').matches);
   // THE DESKTOP VIEW (desktop.html; 2026-10-28), on a computer's browser only: while its switch is on, a page opened in
-  // a tab of its own goes to the desktop and opens there in a window. Never the Admin pages, the sign-in pages, a phone
+  // a tab of its own goes to the desktop and opens there in a window (on by default, in Ubuntu's look). Never the Admin pages, the sign-in pages, a phone
   // or the installed app.
   if (!installed && window.top === window && location.pathname !== '/desktop' && window.innerWidth > 640 &&
       !/^\/(admin|join|restore|signin|offline|clone|home)(\/|$)/.test(location.pathname)) {
     var deskOn = false;
-    try { deskOn = /^(1|w98|ubuntu)$/.test(localStorage.getItem('arcade.deskview') || ''); } catch (e) {}
+    // Nothing chosen yet: the arcade's default look (DESK_DEFAULT, Ubuntu since 2026-10-29); "web" is the website, chosen.
+    try { deskOn = /^(1|w98|ubuntu)$/.test(localStorage.getItem('arcade.deskview') || '{{ desk_default }}'); } catch (e) {}
     if (deskOn) {
       var page = location.pathname + location.search + location.hash;
       location.replace(page === '/' ? '/desktop' : '/desktop#open=' + encodeURIComponent(page));

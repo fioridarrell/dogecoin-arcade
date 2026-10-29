@@ -890,6 +890,12 @@ def _request_timer():
 _ORDER_POSTS: dict[str, float] = {}
 
 
+
+#: The look a computer's browser opens the website in until its reader picks one under Themes on Your arcade
+#: (2026-10-29: "The website should by default open to Ubuntu view"): "ubuntu", "w98", or "" for the website.
+#: A phone, the installed app, Admin and the sign-in pages keep the website whatever it says (base.html).
+DESK_DEFAULT = "ubuntu"
+
 def create_app(state: AppState) -> FastAPI:
     TEMPLATES._screen_of = state.screen          # the feed card's screen_text()
     # The operator's own choice of face (admin panel, `brand` setting) when the service did not
@@ -1254,6 +1260,8 @@ def create_app(state: AppState) -> FastAPI:
             # The operator's own badge: on a public page nobody sees it, and
             # working it out asks the node's wallet which addresses are its own.
             "offers_waiting": 0 if _account_view(request) else _offers_waiting(),
+            # The look a computer's browser opens in until its reader picks one under Themes (base.html, desktop.html)
+            "desk_default": DESK_DEFAULT,
         }
         base.update(context)
         # What a POST decided, picked up by the GET it redirected to. Last,

@@ -118,6 +118,19 @@ QUIESCE = 5.0
 
 
 @pytest.fixture(autouse=True)
+def website_look(monkeypatch, request):
+    """The browser tests drive the website, so its pages open as the website here.
+
+    A computer's browser opens in the Ubuntu desktop until its reader picks a look (app.DESK_DEFAULT, 2026-10-29),
+    and a test's headless browser is a computer's browser that never picked one: every page would go to /desktop and
+    open in a window. Tests of the desktop itself mark themselves `desk_default` to keep the real default.
+    """
+    if request.node.get_closest_marker("desk_default") is None:
+        from arcade.web import app as web_app
+        monkeypatch.setattr(web_app, "DESK_DEFAULT", "")
+
+
+@pytest.fixture(autouse=True)
 def collection_runs(monkeypatch):
     """Finish the collection runs a test started before the next one begins.
 
@@ -195,6 +208,8 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "node_trades_default: run with node-facilitated trades at the "
         "shipped default (off) instead of on")
+    config.addinivalue_line(
+        "markers", "desk_default: open pages in the shipped default look (the Ubuntu desktop) instead of the website")
 
 
 @pytest.fixture(autouse=True)

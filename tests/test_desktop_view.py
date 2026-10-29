@@ -74,7 +74,7 @@ def test_themes_on_your_arcade_turn_the_desktop_on_and_pick_its_look():
     redirect = base[base.index("THE DESKTOP VIEW (desktop.html"):]
     redirect = redirect[:redirect.index("if (!installed || window.top !== window")]
     for need in ("!installed", "window.top === window", "window.innerWidth > 640", "admin|join|restore|signin",
-                 "/^(1|w98|ubuntu)$/.test(localStorage.getItem('arcade.deskview')"):
+                 "/^(1|w98|ubuntu)$/.test(localStorage.getItem('arcade.deskview') || '{{ desk_default }}')"):
         assert need in redirect
     assert "look.href = skin === 'ubuntu' ? '/deskubuntu.css' : '/desk98.css';" in base
 
@@ -82,7 +82,7 @@ def test_themes_on_your_arcade_turn_the_desktop_on_and_pick_its_look():
 def test_the_ubuntu_look_has_its_own_shell_and_its_own_window_style(client):
     app, _state = client
     desk = (TEMPLATES / "desktop.html").read_text()
-    for need in ("localStorage.getItem('arcade.deskview') === 'ubuntu' ? 'ubuntu' : 'w98'", "function paintDock()",
+    for need in ("v = '{{ desk_default }}' === 'w98' ? 'w98' : 'ubuntu'", "function paintDock()",
                  "function toggleApps(", "$('dk-sys').addEventListener('click'", "[data-skin=\"ubuntu\"] .dk-dock",
                  "setSkin('w98')", "setSkin('ubuntu')"):
         assert need in desk, need

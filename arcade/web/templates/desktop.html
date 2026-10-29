@@ -20,7 +20,9 @@
     or Ubuntu, kept in this browser. Set before anything is drawn; the pages in the windows read it (base.html). -#}
 <script>
 document.documentElement.setAttribute('data-skin', (function () {
-  try { return localStorage.getItem('arcade.deskview') === 'ubuntu' ? 'ubuntu' : 'w98'; } catch (e) { return 'w98'; }
+  var v = ''; try { v = localStorage.getItem('arcade.deskview') || ''; } catch (e) {}
+  if (!/^(1|w98|ubuntu)$/.test(v)) v = '{{ desk_default }}' === 'w98' ? 'w98' : 'ubuntu';   // not chosen: the default
+  return v === 'ubuntu' ? 'ubuntu' : 'w98';
 })());
 </script>
 <div id="dk" class="dk" tabindex="-1">
@@ -120,6 +122,9 @@ header, footer.version, .notice, #appbar, #newposts, .unlockbar { display: none 
 /* The helper is an icon on the desktop; its chat box sits above the taskbar. */
 body.fullscreen #arc-bot { display: none !important; }
 #arc-bot-box { bottom: 40px !important; }
+.dk-body > #arc-bot-box { position: absolute !important; inset: 0 !important; width: auto !important; height: auto !important;
+  border-radius: 0 !important; border: 0 !important; box-shadow: none !important; z-index: auto !important; }
+.dk-body > #arc-bot-box #arc-bot-x { display: none !important; }
 .dk, .dk-task, .dk-menu, .dk-toast {
   --w98-face: #c0c0c0; --w98-light: #dfdfdf; --w98-hi: #fff; --w98-shadow: #808080; --w98-dark: #0a0a0a;
   --w98-navy: #000080; --w98-blue: #1084d0; --w98-desk: #008080;
@@ -720,17 +725,31 @@ body.fullscreen #arc-bot { display: none !important; }
   function openKey(k) {
     var it = byKey[k]; if (!it) return;
     hideMenus();
-    if (it.kind === 'helper') {
-      var bot = document.getElementById('arc-bot');
-      if (!bot || bot.style.display === 'none') { say('The helper is not on this arcade right now.'); return; }
-      bot.click(); return;
-    }
+    if (it.kind === 'helper') { openHelper(); return; }
     if (it.kind === 'display') { openDisplay(); return; }
     if (it.kind === 'sysinfo') { openSysinfo(); return; }
     if (it.kind === 'run') { openRun(); return; }
     if (it.kind === 'shortcuts') { openShortcuts(); return; }
     if (it.kind === 'app') openWin({key: k, url: it.app.open, name: it.name, item: it});
     else openWin({key: k, url: it.href, name: it.name, item: it});
+  }
+  // The helper (_helper.html) in a window of its own (2026-10-29: "the AI robot helper ... it's not able to be moved
+  // around the desktop like the rest of the apps"): its chat box moves into the window and back out when it closes.
+  function openHelper() {
+    var bot = document.getElementById('arc-bot'), box = document.getElementById('arc-bot-box');
+    if (!bot || !box || bot.style.display === 'none') { say('The helper is not on this arcade right now.'); return; }
+    var open = wins.filter(function (x) { return x.key === 'helper'; })[0];
+    if (open) { if (open.min) restore(open); focus(open); return; }
+    var w = openWin({key: 'helper', name: 'Helper', item: byKey.helper, body: box, panel: true, w: 420, h: 560});
+    if (box.style.display !== 'flex') bot.click();                 // the helper draws its chat as it opens
+    // Its own close (Escape) hides the box: the window goes with it.
+    var seen = new MutationObserver(function () { if (box.style.display !== 'flex') closeWin(w); });
+    seen.observe(box, {attributes: true, attributeFilter: ['style']});
+    w.onclose = function () {
+      seen.disconnect();
+      box.style.display = 'none';
+      document.body.appendChild(box);
+    };
   }
   function defaultRect(o) {
     var W = deskW(), H = deskH(), n = opened++ % 8;
@@ -755,6 +774,7 @@ body.fullscreen #arc-bot { display: none !important; }
     close: '<svg width="8" height="7" viewBox="0 0 8 7" aria-hidden="true"><path d="M0 0h2l2 2 2-2h2L5 3.5 8 7H6L4 5 2 7H0l3-3.5z" fill="#000"/></svg>'
   };
   function openWin(o) {
+    var dlg = !!o.body && !o.panel;
     if (o.url && !o.body) {
       layout.recent = [{key: o.key, url: o.url, name: o.name}].concat(layout.recent.filter(function (r) { return r.key !== o.key; })).slice(0, 12);
       save();
@@ -769,14 +789,14 @@ body.fullscreen #arc-bot { display: none !important; }
     var el = document.createElement('div');
     el.className = 'dk-win'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', o.name);
     el.innerHTML = '<div class="dk-title">' + smallIcon(o.item) + '<span class="dk-tname"></span>'
-      + (o.body ? '' : '<button type="button" class="w98-btn dk-tbtn" data-a="min" aria-label="Minimize">' + TB_ICONS.min + '</button>'
+      + (dlg ? '' : '<button type="button" class="w98-btn dk-tbtn" data-a="min" aria-label="Minimize">' + TB_ICONS.min + '</button>'
       + '<button type="button" class="w98-btn dk-tbtn" data-a="max" aria-label="Maximize">' + TB_ICONS.max + '</button>')
       + '<button type="button" class="w98-btn dk-tbtn" data-a="close" aria-label="Close">' + TB_ICONS.close + '</button></div>'
-      + '<div class="dk-body' + (o.body ? ' plain' : '') + '"></div>'
-      + (o.body ? '' : ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'].map(function (d) { return '<div class="dk-rz" data-d="' + d + '"></div>'; }).join(''));
-    w = {key: o.key, el: el, name: o.name, item: o.item || {name: o.name}, min: false, max: false, dialog: !!o.body,
+      + '<div class="dk-body' + (dlg ? ' plain' : '') + '"></div>'
+      + (dlg ? '' : ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'].map(function (d) { return '<div class="dk-rz" data-d="' + d + '"></div>'; }).join(''));
+    w = {key: o.key, el: el, name: o.name, item: o.item || {name: o.name}, min: false, max: false, dialog: dlg,
          timeout: o.item && o.item.app && typeof o.item.app.timeout === 'number' ? o.item.app.timeout : null};
-    w.rect = fitRect(!o.body && layout.rects[o.key] ? layout.rects[o.key] : defaultRect(o));
+    w.rect = fitRect(!dlg && layout.rects[o.key] ? layout.rects[o.key] : defaultRect(o));
     el.querySelector('.dk-tname').textContent = o.name;
     var body = el.querySelector('.dk-body');
     if (o.body) body.appendChild(o.body);
@@ -1744,7 +1764,7 @@ body.fullscreen #arc-bot { display: none !important; }
 
   // ---------- off: back to the website, at the page in front ----------
   function leave() {
-    try { localStorage.removeItem('arcade.deskview'); } catch (e) {}
+    try { localStorage.setItem('arcade.deskview', 'web'); } catch (e) {}   // chosen: the default would bring it back
     var to = '/', w = front();
     try { if (w && w.frame) to = w.frame.contentWindow.location.pathname + w.frame.contentWindow.location.search; } catch (e) {}
     location.href = to;
@@ -1752,7 +1772,7 @@ body.fullscreen #arc-bot { display: none !important; }
 
   // ---------- start ----------
   function boot() {
-    try { if (!/^(1|w98|ubuntu)$/.test(localStorage.getItem('arcade.deskview') || '')) localStorage.setItem('arcade.deskview', 'w98'); } catch (e) {}
+    try { if (!/^(1|w98|ubuntu)$/.test(localStorage.getItem('arcade.deskview') || '')) localStorage.setItem('arcade.deskview', UB ? 'ubuntu' : 'w98'); } catch (e) {}
     loadWallpaper();
     drawIcons();
     if (UB) paintDock();

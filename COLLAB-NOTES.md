@@ -88,6 +88,21 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-29 The Desktop View opens by default, in Ubuntu's look; the helper is a window (Claude)
+The operator: "the AI robot helper opened [in the] desktop OS UI it's not able to be moved around the desktop like the rest
+of the apps that needs to be fixed. The website should by default open to Ubuntu view".
+- **The helper is a window** (desktop.html `openHelper`): its chat box (#arc-bot-box) moves into a window that moves,
+  sizes, maximizes and minimizes like the rest, and goes back to the page hidden when the window closes. Its own X is
+  hidden there; Escape still closes it, and the window goes with it. `openWin` takes `panel: true` for a body of the
+  desktop's own that is a window, not a dialog.
+- **Ubuntu by default** (`app.DESK_DEFAULT = "ubuntu"`, given to every page as `desk_default`): a computer's browser
+  that never picked a look goes to the Ubuntu desktop. "Website" under Themes, or leaving the desktop, is now kept as
+  `arcade.deskview = "web"` (it was removed, which now means the default). A phone, the installed app, Admin and the
+  sign-in pages keep the website as before.
+- **Tests:** the conftest fixture `website_look` sets DESK_DEFAULT to "" for every test not marked `desk_default`, so
+  the browser tests keep driving the website. New: test_desktop_default_browser (5: the default, Website and Windows 98
+  kept once picked, a phone, the helper window moved, closed and opened again).
+
 ### 2026-10-28 Merged SadFrog's #47, the Desktop View (Claude)
 The operator: "Check now" (the new PR). Reviewed: #open= and Run open paths on this arcade only; a wallpaper that runs
 scripts is in a sandboxed frame with no same-origin access; app windows load /inscriptions/<id>/full as the phone's

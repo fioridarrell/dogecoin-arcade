@@ -362,7 +362,8 @@
   var bs = box.querySelectorAll('[data-desk-set]');
   function now() {
     var v = ''; try { v = localStorage.getItem('arcade.deskview') || ''; } catch (e) {}
-    return v === '1' ? 'w98' : v;
+    if (!v) v = '{{ desk_default }}';                 // nothing chosen yet: the arcade's default look
+    return v === '1' ? 'w98' : v === 'web' ? '' : v;
   }
   function paint() {
     bs.forEach(function (b) {
@@ -374,7 +375,7 @@
     b.addEventListener('click', function () {
       var want = b.dataset.deskSet;
       if (want === now()) return;
-      try { if (want) localStorage.setItem('arcade.deskview', want); else localStorage.removeItem('arcade.deskview'); } catch (e) {}
+      try { localStorage.setItem('arcade.deskview', want || 'web'); } catch (e) {}
       paint();
       var page = location.pathname + location.search;
       if (shell) { shell.location.href = want ? '/desktop#open=' + encodeURIComponent(page) : page; return; }
