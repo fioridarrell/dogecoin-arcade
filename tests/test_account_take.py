@@ -335,13 +335,26 @@ def _payable(state, rpc):
     refuses a pubkey input -- including the one on the machine that made it. After
     the 101 blocks every seat mines, the wallet holds a mountain of coinbase, so
     without this the answer below would be sent, confirmed, and unreadable, which
-    is the worst way for a test to fail. Two ordinary sends to the address the
-    node pays from, with a block between, is what `test_many_accounts` does for
-    the same reason.
+    is the worst way for a test to fail. Ordinary sends to the address the node
+    pays from, with a block between, is what `test_many_accounts` does for the
+    same reason.
     """
     wallet = state.derived_address
-    for _ in range(2):
-        rpc.call("sendtoaddress", wallet, 3.0)
+    # Three outputs that stay: the answer's swap reserves one of the address's coins (swaplib.build) and the message
+    # carrying it needs another. The wallet chooses a send's inputs, and on the shared regtest wallet it chose the
+    # address's own last output, so two sends left one coin -- or none to spare once an earlier file
+    # (test_page_doors_browser) had shaped the wallet, and every answer here failed (2026-10-29). Its coins are locked
+    # while each send is made, so each send adds one.
+    for _ in range(3):
+        held = [{"txid": u["txid"], "vout": u["vout"]}
+                for u in rpc.call("listunspent", 0, 9_999_999, [wallet]) or []]
+        if held:
+            rpc.call("lockunspent", False, held)
+        try:
+            rpc.call("sendtoaddress", wallet, 3.0)
+        finally:
+            if held:
+                rpc.call("lockunspent", True, held)
         _settled(state, rpc)
 
 

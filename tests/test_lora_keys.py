@@ -1,5 +1,3 @@
-import os, sys
-import pytest
 from arcade.lora import device_keys as K
 
 ABANDON = "abandon " * 11 + "about"
@@ -20,11 +18,10 @@ def test_bip44_address_vector():
     pub = __import__("coincurve").PrivateKey(K.bip32(s, (44 | K.H, 0 | K.H, 0 | K.H, 0, 0))).public_key.format(True)
     assert K.b58check(0, K.hash160(pub)) == "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA"
 
-ARCADE = os.path.expanduser("~/arcade-localtest")
-
-@pytest.mark.skipif(not os.path.isdir(ARCADE), reason="no arcade checkout")
 def test_login_and_mail_keys_match_arcade():
-    sys.path.insert(0, ARCADE)
+    # This repository's own arcade.seed. It used to put ~/arcade-localtest (an old checkout) first on sys.path and
+    # leave it there: every worker process spawned later in the run imported that arcade, and the ord index tests on
+    # the same xdist worker failed ("too many values to unpack", its _parse of 2026-10-20; found 2026-10-29).
     from arcade import seed as S
     phrase = ABANDON
     a = K.Account(phrase)

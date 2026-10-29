@@ -88,6 +88,19 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-29 The last two of the full suite's regular failures found and fixed (tests only) (Claude)
+- **test_doginal_index (6), the cause:** tests/test_lora_keys.py put `~/arcade-localtest` (an old checkout of arcade)
+  first on `sys.path` and left it there. Every worker process spawned afterwards on that xdist worker imported the old
+  arcade, whose `_parse` takes a 4-field job: the index lanes failed with "too many values to unpack (expected 4)"
+  and the tests saw an empty index. The test now compares against this repository's own `arcade.seed`. Proved: the old
+  lora test then the old index tests, 10 failed; the new one then the old index tests, 64 passed.
+- **test_account_take (4):** a Shopkeeper answer needs two ordinary outputs on the node's address, one the swap
+  reserves (swaplib.build) and one that pays for the message. `_payable`'s two `sendtoaddress` calls let the shared
+  regtest wallet spend the address's own last output, so they left one coin, or none to spare once
+  test_page_doors_browser had shaped the wallet; the answer then fell back on mined coins and failed. `_payable` now
+  locks the address's coins during each of three sends. Proved: page_doors then take, 4 failed before and 25 passed
+  after; gw2's whole sequence, 104 passed.
+
 ### 2026-10-29 Two of the full suite's regular failures fixed (tests only) (Claude)
 The operator: "Can you figure out if we can fix these 11 failures so that we don't get them anymore?"
 - **test_signup_browser `test_the_page_asks_for_two_things`**: the file shares one browser; a test that signed up just
@@ -98,8 +111,7 @@ The operator: "Can you figure out if we can fix these 11 failures so that we don
   spawned worker process importing all of arcade, never shut down. The autouse `small` fixture now pins
   `default_cores` to 1 and reads the lanes' blocks in-process (`_InProcess`); the new
   `test_a_lanes_blocks_read_the_same_in_a_worker_process` keeps the real spawn pool covered, and the test of
-  `default_cores` calls the real one. The old file also passes alone, under load and under run-tests.sh's limits, so
-  the full-suite trigger is not yet proven.
+  `default_cores` calls the real one. (The trigger was test_lora_keys; see the entry above.)
 - **test_account_take (4)**: not yet fixed; it passes alone, and something an earlier test leaves on the worker's
   shared regtest chain is being looked for.
 
