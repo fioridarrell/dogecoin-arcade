@@ -88,6 +88,20 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-30 Media: the screen as the picture, for the Screen Share app (Claude)
+2026-10-29: an app to "share the view of their desktop and allows audio communication ... between two people",
+built from Video Call and Arcade Spaces. A sandboxed inscription cannot capture the screen (tested: "display-capture is
+disallowed by permissions policy"), so the viewer does, as it does the camera (_page_doors.js.html mediaDoor):
+- `room.media.start({screen: true, audio})` opens the browser's own picker (getDisplayMedia, asked first while the
+  press still counts) and sends that as the picture with the microphone; `room.media.screen` says whether this browser
+  can (a phone cannot); a closed picker answers `{ok: false, error: 'cancelled'}` and changes nothing.
+- The browser's own "Stop sharing" ends the picture only: the track leaves every share, the game hears state
+  `screen-off`, the voice goes on. `start({audio})` again stops the screen and keeps the voice.
+- The pill says "Sharing your screen"; the home screen's and the desktop's app windows allow `display-capture`.
+- Test: test_media_browser `test_a_screen_goes_with_the_voice_and_the_browser_s_stop_keeps_the_voice` (6/6).
+The app itself is inscriptions (Screen Share, launcher b75d160f..., by @strawberry on P test); its Share button shows
+once the arcade it runs in has this.
+
 ### 2026-10-30 Mesh: a dial-back proves only the address it reached; STUN answers IPv4 askers in IPv4 (Claude)
 The operator: "So we need to fix the mesh network."
 - **601913e, dial-back:** .25 (Starlink, carrier NAT) cannot reach its own public IPv4, but `ask_dial_back` took any
