@@ -18,6 +18,29 @@ def test_a_binding_answer_carries_the_senders_address_both_families():
     assert stun.answer(b"GET / HTTP/1.1\r\n\r\n....", ("1.2.3.4", 1)) is None
 
 
+def test_an_ipv4_asker_on_the_dual_stack_server_gets_an_ipv4_answer():
+    """The server listens on "::", so an IPv4 asker arrives as ::ffff:a.b.c.d (2026-10-29: every arcade answered
+    129.222.44.64 as ::ffff:81de:2c40, an IPv6-family answer a browser asking over IPv4 drops)."""
+    packet, tid = stun.binding_request()
+    reply = stun.answer(packet, ("::ffff:203.0.113.7", 50123, 0, 0))
+    assert reply[20 + 4 + 1] == 1, "family 1: IPv4"
+    assert stun.mapped_address(reply, tid) == ("203.0.113.7", 50123)
+
+    async def run():
+        loop = asyncio.get_running_loop()
+        import socket
+        sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        sock.bind(("::", 0))
+        t, _ = await loop.create_datagram_endpoint(lambda: stun._Server({}), sock=sock)
+        try:
+            return await stun.probe("127.0.0.1", sock.getsockname()[1])
+        finally:
+            t.close()
+    said = asyncio.run(run())
+    assert said and said[0] == "127.0.0.1", said
+
+
 def test_the_server_answers_a_real_probe():
     async def run():
         loop = asyncio.get_running_loop()

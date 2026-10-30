@@ -44,6 +44,11 @@ def binding_request(tid: bytes | None = None) -> tuple[bytes, bytes]:
 
 def _xor_address(host: str, port: int, tid: bytes) -> bytes:
     ip = ipaddress.ip_address(host.split("%", 1)[0])
+    # The server listens on "::" for both families, so an IPv4 asker arrives as ::ffff:a.b.c.d. It gets its address
+    # back as IPv4: a browser asking over IPv4 drops an IPv6-family answer, and has no address to give its peer
+    # (2026-10-29: every arcade answered 129.222.44.64 as ::ffff:81de:2c40).
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
     xport = port ^ (MAGIC >> 16)
     if ip.version == 4:
         xip = int(ip) ^ MAGIC
