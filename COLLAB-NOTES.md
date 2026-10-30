@@ -88,6 +88,19 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-30 Joining a room waits for the player to unlock their wallet (Claude, from the Tank Simulator session)
+Game-agnostic (every page that joins a room). A locked wallet's "Join this game as you?" took longer than
+`realtime.js` waited (20 s): the page played offline, its room never reached the mesh, and the viewer's late answer
+was dropped.
+- Viewer (`_page_doors.js.html`): before the wallet asks for its password on a first join, it sends the page
+  `{seq, pending: 'unlock'}`. Only to a page whose join says `waits: true` (an older realtime.js copy would read
+  it as a no).
+- `realtime.js`: a pending answer stretches the wait to 10 minutes; if it still runs out, `room.why` starts
+  `wallet-locked` (otherwise still "no viewer is listening"). Documented in its guide.
+- Tests: `tests/test_realtime_join_waits_browser.py` (a stand-in viewer, the browser clock run forward: an answer 5
+  minutes later is taken; never unlocked says wallet-locked; no viewer still gives up at 20 s). The old realtime.js
+  fails the first two.
+
 ### 2026-10-30 The punch probe: can two linked arcades behind NAT reach each other directly over UDP? (Claude)
 The operator: "try the punch". New `arcade/mesh/punch.py` (mesh extension, frames "pu"); nothing else changes.
 - Each side opens one UDP socket, maps it through two STUN servers (other nodes' proved STUN first, never its own;

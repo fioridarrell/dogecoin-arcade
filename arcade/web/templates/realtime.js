@@ -20,6 +20,10 @@
 //     room.send({x: 10, y: 4, facing: 'n'});
 //   });
 //
+// A player whose wallet is locked is asked for its password by the viewer first; join waits for them (up to ten
+// minutes) instead of giving up. If they never unlock, room.online is false with room.why starting 'wallet-locked'
+// (any other failure: another why), so a page can say "unlock your wallet to play online" (2026-10-30).
+//
 // A player is {id, address, tag, guest, node}. `id` is unique in the room and
 // is what to key your state by; `address` and `tag` are the player's chain
 // address and @tag, proved by their own key, or null for a guest.
@@ -112,17 +116,26 @@
   if (window.arcade && window.arcade.realtime) return;
   var seq = 0, waiting = {}, rooms = {};
 
+  // A viewer that is waiting on the person (a locked wallet's password, 2026-10-30) says {pending: 'unlock'} first:
+  // the wait grows to PENDING_WAIT, and if it still runs out the reason is 'wallet-locked', not "no viewer".
+  var PENDING_WAIT = 600000;
+
   function ask(message, wait) {
     return new Promise(function (resolve, reject) {
       message.arcade = 'realtime';
       message.seq = ++seq;
-      waiting[message.seq] = {resolve: resolve, reject: reject};
-      setTimeout(function () {
-        if (waiting[message.seq]) {
+      var w = waiting[message.seq] = {resolve: resolve, reject: reject, pending: ''};
+      w.giveUp = function (after) {
+        clearTimeout(w.timer);
+        w.timer = setTimeout(function () {
+          if (waiting[message.seq] !== w) return;
           delete waiting[message.seq];
-          reject(new Error('no viewer is listening: open this page in a DogecoinArcade viewer'));
-        }
-      }, wait || 20000);
+          reject(new Error(w.pending === 'unlock'
+            ? 'wallet-locked: unlock your wallet in the viewer to play online'
+            : 'no viewer is listening: open this page in a DogecoinArcade viewer'));
+        }, after);
+      };
+      w.giveUp(wait || 20000);
       window.parent.postMessage(message, '*');
     });
   }
@@ -137,6 +150,12 @@
     }
     var w = waiting[m.seq];
     if (!w) return;
+    if (m.pending) {                                // not an answer yet: the viewer is waiting on the person
+      w.pending = String(m.pending);
+      w.giveUp(PENDING_WAIT);
+      return;
+    }
+    clearTimeout(w.timer);
     delete waiting[m.seq];
     if (m.ok) w.resolve(m); else w.reject(new Error(m.error || 'refused'));
   });
@@ -312,7 +331,7 @@
   // its family instead (its registry's id, say) and every version shares rooms.
   function joinOne(name, options) {
     if (rooms[name]) return Promise.resolve(rooms[name]);
-    var m = {op: 'join', room: name, game: options.game || '', fast: !!options.fast};
+    var m = {op: 'join', room: name, game: options.game || '', fast: !!options.fast, waits: true};
     if (Array.isArray(options.link)) m.link = options.link.map(String);
     if (options.max) m.max = options.max | 0;
     return ask(m).then(function (said) {
