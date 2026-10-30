@@ -8867,7 +8867,13 @@ def create_app(state: AppState) -> FastAPI:
                 "mints": mints}
 
     @app.get("/inscriptions/{key}/full", response_class=HTMLResponse)
-    def inscription_full(request: Request, key: str):
+                other, oix = _chain_of(key)
+            if oix is not None and other is not chain:
+                row = oix.inscription(contentlib._key(key))
+                if row is not None:
+                    chain, index = other, oix
+        if row is None:
+            raise HTTPException(status_code=404, detail="no such piece")
         """One inscription filling the screen, inside the app (2026-09-29): a
         page runs in the same sandboxed frame as everywhere else, with the
         reader's ticket, so the wallet carries in; a picture is shown whole."""
