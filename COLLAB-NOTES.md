@@ -88,6 +88,13 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-30 Merged PR #48 (fioridarrell): the operator's app links open on the app's own chain (Claude)
+`/inscriptions/<id>/full` for a piece on another chain sent the operator to the NFTs page: an account's browser is
+switched to the piece's chain (`_on_other_chain`), but the operator has no per-browser chain, so it fell through to the
+redirect. It now opens the piece on whichever chain holds it (`_chain_of`), with that chain's details for the page's
+wallet doors; a piece on no chain answers 404 "no such piece". Claude added
+test_cross_chain_content `test_a_game_on_another_chain_opens_there_for_the_operator` (303 before, 200 after).
+
 ### 2026-10-30 Media: the screen as the picture, for the Screen Share app (Claude)
 2026-10-29: an app to "share the view of their desktop and allows audio communication ... between two people",
 built from Video Call and Arcade Spaces. A sandboxed inscription cannot capture the screen (tested: "display-capture is
