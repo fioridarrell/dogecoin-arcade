@@ -32,7 +32,8 @@ arcade.realtime.join('call', {game: 'media-test', fast: true}).then(function (r)
 });
 </script>"""
 
-ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream",
+ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--auto-accept-this-tab-capture",
+        "--auto-select-desktop-capture-source=Entire screen",
         "--disable-features=WebRtcHideLocalIpsWithMdns", "--autoplay-policy=no-user-gesture-required"]
 
 
@@ -94,7 +95,7 @@ def test_a_picture_goes_only_where_the_game_shares_it(tmp_path, no_nodes):
 
             for g in (ga, gb):
                 said = g.evaluate("window.room.media.start({video: true, audio: true})")
-                assert said == {"ok": True, "video": True, "audio": True}, said
+                assert said == {"ok": True, "video": True, "audio": True, "screen": False}, said
             ga.evaluate("window.room.media.place('me', {x: 5, y: 5, w: 80, h: 60}, {mirror: true})")
             _until(pa, "(() => { var v = document.querySelector('.arcade-media-layer video[data-media=me]');"
                        " return v && v.videoWidth > 0 && v.style.display === 'block' && v.muted; })()",
@@ -272,7 +273,7 @@ def test_voice_only_then_the_camera_joins_mid_call(tmp_path, no_nodes):
             ida, idb = ga.evaluate("window.room.me.id"), gb.evaluate("window.room.me.id")
             _until(ga, f"window.states[{idb!r}] === 'direct'", "a direct")
             assert ga.evaluate("window.room.media.start({video: false, audio: true})") == \
-                {"ok": True, "video": False, "audio": True}
+                {"ok": True, "video": False, "audio": True, "screen": False}
             assert "Microphone on" in pa.inner_text(".arcade-media-pill")
             ga.evaluate(f"window.room.media.share({idb!r}, true)")
             _until(gb, f"window.has[{ida!r}] && window.has[{ida!r}].audio && !window.has[{ida!r}].video", "voice only")
@@ -285,6 +286,57 @@ def test_voice_only_then_the_camera_joins_mid_call(tmp_path, no_nodes):
             ga.evaluate(f"window.room.media.share({idb!r}, {{video: false, audio: true}})")
             _until(gb, f"window.has[{ida!r}] && window.has[{ida!r}].audio && !window.has[{ida!r}].video",
                    "the picture stops, the voice goes on", timeout=20000)
+            chrome.close()
+    finally:
+        server.stop()
+        state.mesh.stop()
+
+
+def test_a_screen_goes_with_the_voice_and_the_browser_s_stop_keeps_the_voice(tmp_path, no_nodes):
+    """Screen Share (2026-10-29: "share the view of their desktop and allows audio communication"): start({screen,
+    audio}) sends the screen as the picture with the microphone; the browser's own Stop sharing ends the picture only
+    (the game hears 'screen-off', the other side keeps the voice); start({audio}) after a screen keeps the voice too."""
+    state, server, base = _server(tmp_path)
+    try:
+        with sync_api.sync_playwright() as pw:
+            chrome = _launch(pw)
+            pa, _, _ = _player(chrome, base)
+            pb, _, _ = _player(chrome, base)
+            ga, gb = _game(pa), _game(pb)
+            _until(ga, "window.room && window.room.media && window.room.me", "a in")
+            _until(gb, "window.room && window.room.media && window.room.me", "b in")
+            assert ga.evaluate("window.room.media.screen") is True, "a computer's browser can share its screen"
+            ida, idb = ga.evaluate("window.room.me.id"), gb.evaluate("window.room.me.id")
+            _until(ga, f"window.states[{idb!r}] === 'direct'", "a direct")
+            said = ga.evaluate("window.room.media.start({screen: true, audio: true})")
+            assert said == {"ok": True, "video": True, "audio": True, "screen": True}, said
+            assert "Sharing your screen, microphone on" in pa.inner_text(".arcade-media-pill")
+            assert pa.evaluate("(() => { const t = document.querySelector('.arcade-media-layer') && "
+                               "[...document.querySelectorAll('.arcade-media-layer video')]; return true; })()")
+            ga.evaluate(f"window.room.media.share({idb!r}, true)")
+            _until(gb, f"window.has[{ida!r}] && window.has[{ida!r}].video && window.has[{ida!r}].audio",
+                   "b gets a's screen and voice")
+            gb.evaluate(f"window.room.media.place({ida!r}, {{x: 0, y: 0, w: 640, h: 360}}, {{fit: 'contain'}})")
+            tile = f"document.querySelector('.arcade-media-layer video[data-media=\"{ida}\"]')"
+            _until(pb, f"(() => {{ var v = {tile}; return v && v.videoWidth > 0 && v.currentTime > 0; }})()",
+                   "a's screen playing on b")
+            # The browser's own Stop sharing (the track ends): the picture goes, the voice stays.
+            pa.evaluate("""() => { for (const v of document.querySelectorAll('.arcade-media-layer video'))
+                if (v.srcObject) v.srcObject.getVideoTracks().forEach(t => { t.stop(); t.dispatchEvent(new Event('ended')); }); }""")
+            _until(ga, "window.log.some(function (e) { return e[0] === 'state' && e[1] === 'screen-off'; })",
+                   "a's game told screen-off")
+            _until(gb, f"window.has[{ida!r}] && window.has[{ida!r}].audio && !window.has[{ida!r}].video",
+                   "b keeps a's voice, without the picture", timeout=20000)
+            assert "Microphone on" in pa.inner_text(".arcade-media-pill")
+            # Shared again, then back to the voice alone by start({audio}).
+            assert ga.evaluate("window.room.media.start({screen: true, audio: true})")["screen"] is True
+            _until(gb, f"window.has[{ida!r}] && window.has[{ida!r}].video", "the screen again")
+            assert ga.evaluate("window.room.media.start({audio: true})") == \
+                {"ok": True, "video": False, "audio": True, "screen": False}
+            _until(gb, f"window.has[{ida!r}] && window.has[{ida!r}].audio && !window.has[{ida!r}].video",
+                   "voice alone again", timeout=20000)
+            assert not gb.evaluate("window.log.some(function (e) { return e[0] === 'media-off'; })"), \
+                "the voice never stopped"
             chrome.close()
     finally:
         server.stop()

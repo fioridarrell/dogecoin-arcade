@@ -99,6 +99,12 @@
 //     room.media.stop();                                      // camera and microphone off, every share ends
 //   });
 //
+// THE SCREEN (2026-10-29), instead of the camera: room.media.screen is true where the browser can share its screen
+// (a computer's; a phone's cannot). start({screen: true, audio: true}) on the player's press opens the browser's own
+// picker (a screen, a window or a tab) and sends that as the picture, with the microphone; {ok: false, error:
+// 'cancelled'} if they closed the picker. The browser's own "Stop sharing" ends the picture only: state 'screen-off'.
+// start({audio: true}) again stops the screen and keeps the voice.
+//
 // Rectangles are in this page's CSS pixels (getBoundingClientRect), placed again when your layout moves; null hides
 // one. A picture can only be shared over a direct link ('not direct' otherwise: media never goes through the room).
 // The viewer always shows that the camera or microphone is on, with a Stop button, over your page.
@@ -145,14 +151,15 @@
     var self = this;
     (said.members || []).forEach(function (p) { self._members[p.id] = p; });
     this.fast = said.fast ? new Fast(this) : null;
-    this.media = said.fast && said.media ? new Media(this) : null;
+    this.media = said.fast && said.media ? new Media(this, !!said.screen) : null;
   }
 
   // CAMERA & MICROPHONE (2026-10-22), on a fast room. The viewer opens them (a sandboxed page cannot), only while the
   // game's card has Camera & microphone on, sends them to the players you name and draws the pictures over your page
   // where you say. See the guide at the top of this file.
-  function Media(room) {
+  function Media(room, screen) {
     this.room = room;
+    this.screen = screen;                           // this browser can share its screen
     this._on = {media: [], 'media-off': [], state: []};
   }
   Media.prototype.on = function (type, fn) {
@@ -167,8 +174,8 @@
   };
   Media.prototype.start = function (options) {
     options = options || {video: true, audio: true};
-    return this._ask('start', {video: !!options.video, audio: !!options.audio}, 600000)
-      .then(function (said) { return {ok: true, video: !!said.video, audio: !!said.audio}; },
+    return this._ask('start', {video: !!options.video, audio: !!options.audio, screen: !!options.screen}, 600000)
+      .then(function (said) { return {ok: true, video: !!said.video, audio: !!said.audio, screen: !!said.screen}; },
             function (err) { return {ok: false, error: err.message}; });
   };
   Media.prototype.stop = function () { return this._ask('stop'); };

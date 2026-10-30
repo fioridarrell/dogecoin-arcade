@@ -881,7 +881,7 @@ body.fullscreen #arc-bot { display: none !important; }
     if (!w) {
       var f = document.createElement('iframe');
       f.className = 'hs-win'; f.src = o.url; f.title = o.name;
-      f.setAttribute('allow', 'camera; microphone; autoplay; fullscreen; clipboard-write; screen-wake-lock');
+      f.setAttribute('allow', 'camera; microphone; display-capture; autoplay; fullscreen; clipboard-write; screen-wake-lock');
       $('hs-wins').appendChild(f);
       var it = o.item || {name: o.name};
       // The card's "minimized" timeout (games.py; 2026-10-24): seconds it keeps running minimized (15 minutes

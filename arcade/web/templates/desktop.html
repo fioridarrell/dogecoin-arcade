@@ -803,7 +803,7 @@ body.fullscreen #arc-bot { display: none !important; }
     else {
       var f = document.createElement('iframe');
       f.src = o.url; f.title = o.name;
-      f.setAttribute('allow', 'camera; microphone; autoplay; fullscreen; clipboard-write; screen-wake-lock');
+      f.setAttribute('allow', 'camera; microphone; display-capture; autoplay; fullscreen; clipboard-write; screen-wake-lock');
       f.addEventListener('load', function () { framed(w); });
       body.appendChild(f);
       w.frame = f;
