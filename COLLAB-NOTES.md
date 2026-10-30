@@ -88,6 +88,20 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-30 Defaults: Read only for every chain's ord index; every chain borrows its Core when none is here (Claude)
+The operator: "Read only on all chains should be on by default" and "Borrow a node should be on by default for all chain".
+- **Ords** (`state.ord_mode`): a chain with no `ord_index:<net>` choice is now **read** (no index here, its questions
+  asked of a linked arcade that keeps one) instead of off; Dogecoin's default was help, now read too (an old
+  `doginal_index` choice still counts). Every explicit choice is kept: .25 and Strawberry walk the chains they chose.
+  The sites search (DNS) already defaulted to `ask`, its read-only mode: unchanged.
+- **Cores** (`__main__._ledger_default`): the add-on chains already borrowed when this machine has no node of theirs;
+  Pepecoin main now does too when no `core:main` choice was made and discovery finds no main config or cookie (and
+  none is named with --ledger-conf/--ledger-datadir). An arcade with a main node keeps running it.
+- **For SadFrog's side:** after updating, chains you never chose in Admin -> Ords show "Watch only" (read); pick
+  Keep/Help there for any you want indexed on your machine.
+Tests: test_admin, test_chains `test_every_chain_borrows_by_default_pepecoin_main_too`, test_bells_luckycoin (renamed
+`..._read_only_until_chosen`).
+
 ### 2026-10-30 Desktop View: the App Store is the home screen's store, in a window (Claude)
 The operator: "You know how the App Store works in the PWA that's how the App Store should work in the desktop modes." The
 App Store icon opened /apps in a window; it now opens `openStore()` (desktop.html), home.html's store as a dialog in both

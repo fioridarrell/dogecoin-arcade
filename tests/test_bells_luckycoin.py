@@ -190,7 +190,7 @@ def test_raw_blocks_read_as_core_prints_them_and_carry_their_work(net):
 
 # --- Bellinals and Luckinals: Admin -> Ords opt-ins, and the wallet's view (2026-10-22) ---------------------------
 
-def test_admin_ords_offers_each_chain_off_until_turned_on(client, monkeypatch):
+def test_admin_ords_offers_each_chain_read_only_until_chosen(client, monkeypatch):
     app, state = client
     _with(state, monkeypatch, "bel", "lky")
     state.set_setting("public_hosts", ["node.dogecoinarcade.com"])
@@ -198,7 +198,8 @@ def test_admin_ords_offers_each_chain_off_until_turned_on(client, monkeypatch):
     try:
         rows = {r["net"]: r for r in app.get("/admin/api/ords", headers=local).json()["rows"]}
         assert rows["bel"]["base"] == 22_470 and rows["lky"]["base"] == 88_554
-        assert "Nintondo" in rows["bel"]["source"] and rows["bel"]["mode"] == rows["lky"]["mode"] == "off"
+        assert "Nintondo" in rows["bel"]["source"] and rows["bel"]["mode"] == rows["lky"]["mode"] == "read", \
+            "Read only until the operator chooses (2026-10-30)"
         for net in ("bel", "lky"):
             assert app.post("/admin/api/ords", headers={**local, **write}, json={"net": net, "mode": "walk"}).json()["ok"]
             assert state.ord_mode(net) == "walk"

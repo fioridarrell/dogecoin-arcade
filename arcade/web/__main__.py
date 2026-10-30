@@ -171,7 +171,10 @@ def main(argv: list[str] | None = None) -> int:
     # Which Cores run here and which are borrowed from arcades that share theirs (arcade/cores.py).
     from .. import cores as coreslib
     chosen = coreslib.read_settings(home)
-    ledger_borrowed = coreslib.mode(chosen, "main") == coreslib.BORROW
+    # Borrowed by default on every chain (2026-10-30: "Borrow a node should be on by default for all chain"):
+    # the add-on chains already borrow when this machine has no node of theirs (_addon_context); Pepecoin main does
+    # too now, when no choice was made and no main node's config or cookie is anywhere a node is looked for.
+    ledger_borrowed = coreslib.mode(chosen, "main", _ledger_default(args)) == coreslib.BORROW
 
     state = AppState(
         home=home,
@@ -367,6 +370,17 @@ def main(argv: list[str] | None = None) -> int:
 
 #: Every add-on chain, from the chains' own Params.
 ADDON_PARAMS = tuple(p for p in NETWORKS.values() if p.addon)
+
+
+def _ledger_default(args, discover=None) -> str:
+    """Pepecoin main's Core when the operator has not chosen (Admin -> Chains): here when this machine has a main
+    node -- named on the command line, or a config or cookie wherever discovery looks -- else borrowed."""
+    from .. import cores as coreslib
+    if args.ledger_conf or args.ledger_datadir:
+        return coreslib.HERE
+    if discover is None:
+        from ..discovery import discover
+    return coreslib.HERE if any(c.credentials for c in discover(args.ledger_network)) else coreslib.BORROW
 
 
 def _addon_context(args, params, mode: str = "") -> "ChainContext | None":

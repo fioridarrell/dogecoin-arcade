@@ -224,7 +224,11 @@ def test_the_ords_tab_lists_each_chain_with_its_official_start_and_saves_its_mod
     assert app.post("/admin/api/ords", headers={**LOCAL, **WRITE}, json={"net": "doge", "mode": "fly"}).status_code == 400
     assert app.post("/admin/api/ords", headers={**LOCAL, **WRITE}, json={"net": "btc", "mode": "off"}).status_code == 400
     assert app.post("/admin/api/ords", headers=LOCAL, json={"net": "main", "mode": "help"}).status_code == 403
-    assert state.ord_mode("main") == "off" and state.ord_mode("doge") == "help", "off until turned on; Dogecoin helps"
+    assert state.ord_mode("main") == "read" and state.ord_mode("doge") == "read", \
+        "Read only on every chain until the operator chooses (2026-10-30)"
+    state.set_setting("doginal_index", "walk")
+    assert state.ord_mode("doge") == "walk", "an old Dogecoin choice still counts"
+    state.set_setting("doginal_index", None)
     assert app.post("/admin/api/ords", headers={**LOCAL, **WRITE}, json={"net": "main", "mode": "help"}).json()["ok"]
     assert state.ord_mode("main") == "help"
     from arcade import doginal_index as dx

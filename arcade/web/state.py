@@ -1780,14 +1780,16 @@ class AppState:
         return keyed
 
     def ord_mode(self, net: str) -> str:
-        """walk | help | off for one chain's ord index (Admin -> Ords). Dogecoin helps unless told otherwise (it did
-        first, as `doginal_index`); every other chain is off until its operator turns it on."""
+        """walk | help | read | off for one chain's ord index (Admin -> Ords). Read only on every chain unless the
+        operator chose otherwise (2026-10-30: "Read only on all chains should be on by default"): no index
+        here, its questions asked of a linked arcade that keeps one. An old `doginal_index` choice still counts for
+        Dogecoin."""
         from ..doginal_index import MODES
         chosen = self.setting(f"ord_index:{net}")
         if chosen is None and net == "doge":
-            chosen = self.setting("doginal_index") or "help"
-        chosen = str(chosen or "off")
-        return chosen if chosen in MODES else "off"
+            chosen = self.setting("doginal_index")
+        chosen = str(chosen or "read")
+        return chosen if chosen in MODES else "read"
 
     def ord_cores(self) -> int:
         """How many CPU cores the ord indexes help with (Admin -> Ords; 2026-10-20: "dedicate the number of

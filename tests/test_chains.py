@@ -59,3 +59,20 @@ def test_a_chain_whose_work_cannot_be_checked_says_so():
     """DigiByte-like: several mining algorithms. Blocks still proved by hash, merkle root and linkage."""
     multi = dataclasses.replace(NETWORKS["ltc"], name="multi", pow_algo="")
     assert multi.pow_algo == "" and config.Params.pow_algo == "scrypt"
+
+
+def test_every_chain_borrows_by_default_pepecoin_main_too():
+    """2026-10-30: "Borrow a node should be on by default for all chain". The add-on chains already borrowed
+    when this machine has no node of theirs; Pepecoin main now does too, unless a main node's config or cookie is
+    found or named on the command line. A choice made in Admin -> Chains still wins."""
+    from types import SimpleNamespace as NS
+    from arcade.web import __main__ as launcher
+    none = lambda net: [NS(credentials=None)]
+    found = lambda net: [NS(credentials=None), NS(credentials=object())]
+    plain = argparse.Namespace(ledger_conf=None, ledger_datadir=None, ledger_network="main")
+    assert launcher._ledger_default(plain, discover=none) == cores.BORROW
+    assert launcher._ledger_default(plain, discover=found) == cores.HERE
+    named = argparse.Namespace(ledger_conf="/x/pepecoin.conf", ledger_datadir=None, ledger_network="main")
+    assert launcher._ledger_default(named, discover=none) == cores.HERE
+    assert cores.mode({"core:main": "here"}, "main", cores.BORROW) == cores.HERE, "the operator's choice wins"
+    assert cores.mode({}, "main", cores.BORROW) == cores.BORROW
