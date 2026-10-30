@@ -160,6 +160,10 @@ class Session:
                 continue
             tried += 1
             said = await self._ask(ip, port)
+            if said and said[0].lower().startswith("::ffff:"):
+                # Arcades before the 2026-10-29 STUN fix answer an IPv4 asker as ::ffff:a.b.c.d; it is the same
+                # address, and comparing it as another one would call every NAT "new-port".
+                said = (str(ipaddress.ip_address(said[0]).ipv4_mapped), said[1])
             self.maps.append({"server": f"{ip}:{port}", "host": said[0] if said else None,
                               "port": said[1] if said else None})
 

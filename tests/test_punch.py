@@ -2,6 +2,8 @@
 servers, swap addresses over the link, and send to each other at the same time; each side says what got through."""
 
 import asyncio
+import ipaddress
+import struct
 
 from arcade.mesh import punch, stun
 
@@ -93,3 +95,35 @@ def test_not_linked_says_so():
     a, _ = _pair()
     rec = asyncio.run(a.run("cc" * 32))
     assert not rec["ok"] and "not linked" in rec["detail"]
+
+
+def test_an_old_arcades_ipv6_mapped_answer_is_the_same_ipv4_address():
+    """Arcades before the 2026-10-29 STUN fix answer ::ffff:81e0:d389 for 129.224.211.137 (seen in the first live
+    probe, 2026-10-30: Starlink was called "new-port" because of it)."""
+    class _Old(stun._Server):
+        def datagram_received(self, data, addr):
+            packet = stun.answer(data, addr)
+            tid = data[8:20]
+            value = struct.pack("!BBH", 0, 2, addr[1] ^ (stun.MAGIC >> 16)) + (
+                int(ipaddress.ip_address("::ffff:" + addr[0]))
+                ^ int.from_bytes(struct.pack("!I", stun.MAGIC) + tid, "big")).to_bytes(16, "big")
+            attrs = struct.pack("!HH", stun.XOR_MAPPED_ADDRESS, len(value)) + value
+            self.transport.sendto(struct.pack("!HHI", stun.BINDING_SUCCESS, len(attrs), stun.MAGIC) + tid + attrs,
+                                  addr)
+
+    async def run():
+        loop = asyncio.get_running_loop()
+        new, _ = await loop.create_datagram_endpoint(lambda: stun._Server({}), local_addr=("127.0.0.1", 0))
+        old, _ = await loop.create_datagram_endpoint(lambda: _Old({}), local_addr=("127.0.0.2", 0))
+        s = punch.Session("x" * 12, "a")
+        await s.open()
+        try:
+            await s.map([new.get_extra_info("sockname")[:2], old.get_extra_info("sockname")[:2]])
+            return s.maps
+        finally:
+            s.close()
+            new.close()
+            old.close()
+    maps = asyncio.run(run())
+    assert [m["host"] for m in maps] == ["127.0.0.1", "127.0.0.1"], maps
+    assert punch.nat_kind(maps, "10.9.9.9") == "same-port"

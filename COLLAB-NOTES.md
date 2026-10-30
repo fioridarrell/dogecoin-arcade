@@ -99,6 +99,9 @@ The operator: "try the punch". New `arcade/mesh/punch.py` (mesh extension, frame
   `GET /admin/api/mesh/punch` lists linked nodes and the last 20 results (ones other nodes asked for too).
 - Limits: one probe at a time, the same node at most once per 20 s, at most 4 IPv4 targets, ~40 tiny packets each.
 - Measured from a test machine before release: Starlink maps one port for @banana's STUN and Google's alike (`same-port`).
+- First live run (.25 -> Strawberry, same house): DIRECT both ways, on the home network and on the Starlink address
+  (the router hairpins). Follow-up: an arcade before the 10-29 STUN fix answers `::ffff:a.b.c.d`; the probe now reads
+  that as the IPv4 address it is, which had made Starlink look `new-port`.
 - Tests: `tests/test_punch.py` (two nodes punch over loopback through two STUN servers; NAT kinds; busy/cooldown;
   address limits).
 
