@@ -29931,6 +29931,36 @@ def create_app(state: AppState) -> FastAPI:
         out["stun_known"] = len(stun.known()) if stun is not None else 0
         return JSONResponse(out)
 
+    @app.get("/admin/api/mesh/punch")
+    def admin_mesh_punch_results(request: Request):
+        """The punch probe's last results (mesh/punch.py), the ones other nodes asked for too, and the linked nodes
+        a probe can be run with."""
+        _admin_check(request)
+        mesh = getattr(state, "mesh", None)
+        share = getattr(mesh, "punch", None)
+        if share is None or getattr(mesh, "loop", None) is None:
+            return JSONResponse({"ok": False, "detail": "this node is not on the mesh"})
+        return JSONResponse({"ok": True, "linked": sorted(mesh.node.links), "results": share.results},
+                            headers={"Cache-Control": "no-store"})
+
+    @app.post("/admin/api/mesh/punch")
+    def admin_mesh_punch(request: Request, payload: Any = Body(None)):
+        """Run the punch probe with a linked node: {"peer": its mesh id, or the start of it}. Takes about 15 s."""
+        _admin_check(request, write=True)
+        mesh = getattr(state, "mesh", None)
+        share = getattr(mesh, "punch", None)
+        if share is None or getattr(mesh, "loop", None) is None:
+            return JSONResponse({"detail": "this node is not on the mesh"}, status_code=400)
+        want = str((payload or {}).get("peer") or "").lower() if isinstance(payload, dict) else ""
+        match = [p for p in mesh.node.links if want and p.startswith(want)]
+        if len(match) != 1:
+            return JSONResponse({"detail": "name one linked node (its mesh id or the start of it)",
+                                 "linked": sorted(mesh.node.links)}, status_code=400)
+        try:
+            return JSONResponse(mesh._call(share.run(match[0]), timeout=60.0))
+        except Exception as exc:                           # noqa: BLE001
+            return JSONResponse({"detail": f"the probe failed: {exc}"}, status_code=500)
+
     def _welcome() -> tuple:
         """(book, signing key, share) of the welcome (arcade/welcome.py), or Nones while the mesh is off."""
         svc = getattr(state, "mesh", None)

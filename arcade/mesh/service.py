@@ -224,6 +224,7 @@ class MeshService:
         self.llmshare = None                    # llmshare.LlmShare: the LLM service with other arcades
         self.indexcheck = None                  # indexcheck.IndexCheck: indexes compared with other arcades'
         self.stun = None                        # stun.StunShare: STUN addresses for the fast lane, this node's and others'
+        self.punch = None                       # punch.PunchShare: the direct-UDP probe with a linked node
         self.stun_port: int | None = None       # this node's own STUN server (UDP), or None
         self._stun_transports: list = []
         self.tunnel_url: str | None = None
@@ -889,6 +890,11 @@ def for_state(state, *, listen_host: str | None = None, listen_port: int | None 
         return [h for h in (last.get("host"), v6) if h]
     service.stun = StunShare(own_hosts if stun_port else None, port=stun_port or 3478)
     service.node.add_extension(service.stun)
+    # The punch probe (punch.py): can this node and a linked one reach each other directly over UDP? It maps
+    # through other nodes' STUN (never its own: that would only see the home network).
+    from .punch import PunchShare
+    service.punch = PunchShare(lambda: [a for offers in service.stun.offers.values() for a in offers])
+    service.node.add_extension(service.punch)
     return service
 
 

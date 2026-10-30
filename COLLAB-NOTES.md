@@ -88,6 +88,20 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-30 The punch probe: can two linked arcades behind NAT reach each other directly over UDP? (Claude)
+The operator: "try the punch". New `arcade/mesh/punch.py` (mesh extension, frames "pu"); nothing else changes.
+- Each side opens one UDP socket, maps it through two STUN servers (other nodes' proved STUN first, never its own;
+  stun.l.google.com / stun.cloudflare.com only to make up two), and compares the ports: same port from both =
+  `same-port` (punchable), different = `new-port` (hard), own address = `open`.
+- The arrangement rides the existing link (no third server). Both send small `APUNCH1` packets to the other's outside
+  and home-network addresses for 8 s and answer each one; the asker gets both sides' reports.
+- Admin: `POST /admin/api/mesh/punch {"peer": "<mesh id or its start>"}` runs one (~15 s);
+  `GET /admin/api/mesh/punch` lists linked nodes and the last 20 results (ones other nodes asked for too).
+- Limits: one probe at a time, the same node at most once per 20 s, at most 4 IPv4 targets, ~40 tiny packets each.
+- Measured from a test machine before release: Starlink maps one port for @banana's STUN and Google's alike (`same-port`).
+- Tests: `tests/test_punch.py` (two nodes punch over loopback through two STUN servers; NAT kinds; busy/cooldown;
+  address limits).
+
 ### 2026-10-30 Defaults: Read only for every chain's ord index; every chain borrows its Core when none is here (Claude)
 The operator: "Read only on all chains should be on by default" and "Borrow a node should be on by default for all chain".
 - **Ords** (`state.ord_mode`): a chain with no `ord_index:<net>` choice is now **read** (no index here, its questions
