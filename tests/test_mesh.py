@@ -533,13 +533,13 @@ def test_a_peer_dials_back_only_where_it_sees_the_asker():
         try:
             await until(lambda: len(a.links) == 2, what="links")
             said = await b.ask_dial_back(b.listen_port, timeout=5)
-            assert said == {"reached": True, "seen": ["127.0.0.1"]}
+            assert said == {"reached": True, "seen": ["127.0.0.1"], "reached_at": ["127.0.0.1"]}
             # c does not listen: a dials where c's connection comes from, and fails.
             said = await c.ask_dial_back(45999, timeout=5)
-            assert said["reached"] is False and said["seen"] == ["127.0.0.1"]
+            assert said["reached"] is False and said["seen"] == ["127.0.0.1"] and said["reached_at"] == []
             # Asking again at once is not answered: once a minute per peer.
             said = await b.ask_dial_back(b.listen_port, timeout=0.5)
-            assert said == {"reached": False, "seen": []}
+            assert said == {"reached": False, "seen": [], "reached_at": []}
         finally:
             await stop(c, b, a)
     run(go())

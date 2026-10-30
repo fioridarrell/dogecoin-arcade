@@ -436,7 +436,8 @@ class MeshService:
             self.reachable = await self.node.reaches_itself(host, port)
             if not self.reachable and self.node.links:
                 said = await self.node.ask_dial_back(port)
-                self.reachable = said["reached"]
+                # Only a peer that dialled THIS address and got through proves it (node.ask_dial_back).
+                self.reachable = host in said.get("reached_at", [])
             if self.reachable:
                 self.meet = None
                 return host, port

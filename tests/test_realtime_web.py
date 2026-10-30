@@ -319,6 +319,39 @@ def test_a_node_announces_itself_when_its_address_is_new_and_not_otherwise(tmp_p
     assert again.last_announced["host"] == "2.2.2.2"
 
 
+def test_a_dial_back_on_the_home_network_does_not_prove_the_public_address(tmp_path):
+    """2026-10-29: .25 (Starlink, carrier NAT) cannot reach its own public IPv4, but a test machine beside it dialled it back
+    at 192.168.1.20 and got through, and .25 announced 129.222.44.64 as reachable all day. A dial-back counts only
+    when the peer reached this node at the very address being proved; otherwise the node meets over IPv6."""
+    told = []
+    svc = MeshService("arcade-test", nacl.signing.SigningKey.generate(),
+                      listen_host="127.0.0.1", listen_port=0,
+                      observe=lambda: ["129.222.44.64", "129.222.44.64",
+                                       "[2605:59ca:13cf:2e10:4b3e:ae74:97dd:c48e]:1", "[2605:59ca:13cf:2e10:4b3e:ae74:97dd:c48e]:1"],
+                      announce=lambda h, p: told.append((h, p))).start()
+    answers = {"said": {"reached": True, "seen": ["192.168.1.20"], "reached_at": ["192.168.1.20"]}}
+
+    async def reaches(host, port):
+        return False
+
+    async def dial_back(port, timeout=15.0):
+        return answers["said"]
+    svc.node.reaches_itself = reaches
+    svc.node.ask_dial_back = dial_back
+    svc.node.links = {"lan-peer": object()}
+    try:
+        assert svc._call(svc.announce_if_due(), timeout=10)
+        assert told[-1][0] == "2605:59ca:13cf:2e10:4b3e:ae74:97dd:c48e", told
+        assert svc.status()["reachable"] is False and svc.status()["meet"]
+        # A peer out on the internet that got through at the public address does prove it.
+        answers["said"] = {"reached": True, "seen": ["129.222.44.64"], "reached_at": ["129.222.44.64"]}
+        assert svc._call(svc.announce_if_due(), timeout=10)
+        assert told[-1][0] == "129.222.44.64" and svc.status()["reachable"] is True
+    finally:
+        svc.node.links = {}
+        svc.stop()
+
+
 def test_a_fixed_address_is_announced_without_looking(tmp_path):
     told = []
     svc = MeshService("arcade-test", nacl.signing.SigningKey.generate(),

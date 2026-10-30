@@ -1042,8 +1042,11 @@ class MeshNode:
 
     async def ask_dial_back(self, port: int, timeout: float = 15.0) -> dict:
         """Ask up to three peers to dial this node back on `port`, at the address
-        each of them sees it coming from. Returns {"reached": bool, "seen": [hosts]}:
-        whether any of them got through, and where they see this node."""
+        each of them sees it coming from. Returns {"reached": bool, "seen": [hosts], "reached_at": [hosts]}:
+        whether any of them got through, where they see this node, and the addresses the ones that got through
+        dialled. Only `reached_at` says WHICH address leads here: a peer on the same home network sees this node at
+        its private address and gets through there, which proves nothing about the public one (2026-10-29, .25 on
+        Starlink announced its carrier-NAT IPv4 all day because a test machine beside it dialled it back on the LAN)."""
         asks = []
         for link in list(self.links.values())[:3]:
             nonce = secrets.token_hex(8)
@@ -1054,7 +1057,7 @@ class MeshNode:
                 asks.append(waiter)
             except (LinkError, ConnectionError, OSError):
                 self._dialbacks.pop(nonce, None)
-        reached, seen = False, []
+        reached, seen, reached_at = False, [], []
         for waiter in asks:
             try:
                 said = await asyncio.wait_for(waiter, timeout)
@@ -1063,7 +1066,9 @@ class MeshNode:
             reached = reached or said.get("ok") is True
             if isinstance(said.get("host"), str):
                 seen.append(said["host"])
-        return {"reached": reached, "seen": seen}
+                if said.get("ok") is True:
+                    reached_at.append(said["host"])
+        return {"reached": reached, "seen": seen, "reached_at": reached_at}
 
     async def _dial_back(self, link: Link, header: dict) -> None:
         """A peer asks whether it can be reached. Dial it -- only ever at the
