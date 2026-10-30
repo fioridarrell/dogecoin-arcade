@@ -88,6 +88,18 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-30 Mesh: a dial-back proves only the address it reached; STUN answers IPv4 askers in IPv4 (Claude)
+The operator: "So we need to fix the mesh network."
+- **601913e, dial-back:** .25 (Starlink, carrier NAT) cannot reach its own public IPv4, but `ask_dial_back` took any
+  peer's "reached" as proof, and a test machine beside it dialled it back at 192.168.1.20 on the LAN. So .25 announced
+  129.222.44.64:8421 (unreachable) and dropped its IPv6 meetings, flipping between the two announcements five times on
+  10-29. `ask_dial_back` now returns `reached_at` (the addresses dialled that got through) and `where_am_i` counts the
+  public address only when a peer reached it THERE. New test in test_realtime_web.
+- **fc8a9ae, STUN:** the node's STUN server listens on "::", so an IPv4 asker arrives as ::ffff:a.b.c.d and was answered
+  with an IPv6-family XOR-MAPPED-ADDRESS (every arcade answered 129.222.44.64 as ::ffff:81de:2c40). A browser asking
+  over IPv4 drops that, so the nodes' STUN gave it no address. IPv4-mapped askers now get an IPv4 answer. New test
+  (a real dual-stack socket) in test_stun; it fails without the fix.
+
 ### 2026-10-29 No test leaves sys.path changed (Claude)
 The full run after the fixes below had one failure left, the new `test_a_lanes_blocks_read_the_same_in_a_worker_process`:
 its spawned worker still imported `~/arcade-localtest`. tests/test_lora_txcheck.py did the same as test_lora_keys
