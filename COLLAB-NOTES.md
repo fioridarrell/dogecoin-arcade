@@ -88,6 +88,15 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-30 Desktop View: the App Store is the home screen's store, in a window (Claude)
+The operator: "You know how the App Store works in the PWA that's how the App Store should work in the desktop modes." The
+App Store icon opened /apps in a window; it now opens `openStore()` (desktop.html), home.html's store as a dialog in both
+looks: search, kind chips (All, Games, each genre, Multiplayer), cards (cover, publisher, version, players, likes,
+comments, Details in a window), "+ Add" with the sheet of what the app asks for (the same switches as its card:
+arcadeGameAllow / arcadeContactsAllow / arcadeMediaAllow / ring), and an added app goes to Start -> Programs (Ubuntu:
+the dock) and onto the desktop; an added app's card says Added with Open. Driven in Chromium in both looks; test in
+test_desktop_view.
+
 ### 2026-10-30 Merged PR #48 (fioridarrell): the operator's app links open on the app's own chain (Claude)
 `/inscriptions/<id>/full` for a piece on another chain sent the operator to the NFTs page: an account's browser is
 switched to the piece's chain (`_on_other_chain`), but the operator has no per-browser chain, so it fell through to the

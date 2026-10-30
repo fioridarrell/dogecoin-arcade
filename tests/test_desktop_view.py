@@ -142,3 +142,19 @@ def test_picking_the_other_desktop_from_inside_one_loads_it():
     page, so the look stayed the old one until a reload (found filming the promo, 2026-10-29)."""
     me = (pathlib.Path(__file__).resolve().parent.parent / "arcade/web/templates/me.html").read_text()
     assert "if (want) shell.location.reload();" in me
+
+
+def test_the_app_store_is_the_home_screens_store_in_a_window():
+    """2026-10-30, the operator: "You know how the App Store works in the PWA that's how the App Store should work in the
+    desktop modes": search, kinds, cards, + Add with the sheet of what the app asks for (the card's own switches), and
+    an added app goes to Start -> Programs and the desktop. Driven in a real browser in both looks while it was built."""
+    desk = (TEMPLATES / "desktop.html").read_text()
+    assert "if (it.kind === 'store') { openStore(); return; }" in desk, "the App Store icon opens the store, not /apps"
+    for need in ("function openStore()", "class=\"w98-field st-q\"", "ST_GAMES", "data-add=", "data-open=",
+                 "arcadeGameAllow(page, true)", "arcadeContactsAllow(page, true)", "arcadeMediaAllow(page, true)",
+                 "_arcadeJson('/account/ring/apps', {app: page, on: true})", "setProgram(a.key, true);", "putOnDesk(a.key);",
+                 "anybody can publish a copy"):
+        assert need in desk, need
+    home = (TEMPLATES / "home.html").read_text()
+    for perm in ("wallet: ['Wallet access'", "contacts: ['Contacts'", "media: ['Camera & microphone'", "notify: ['Notifications'"):
+        assert perm in home and perm in desk, f"the desktop asks for {perm} as the home screen does"

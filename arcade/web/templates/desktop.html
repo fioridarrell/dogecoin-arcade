@@ -307,6 +307,54 @@ body.fullscreen #arc-bot { display: none !important; }
 .dlg-acts .dlg-note { flex: 1; }
 .dlg-runtop { display: flex; gap: 10px; align-items: flex-start; }
 .dlg-err { color: #a00; }
+/* The App Store (2026-10-30, the operator: "how the App Store works in the PWA ... that's how the App Store should work in
+   the desktop modes"): the home screen's store as a window, its cards and its sheet of what an app asks for. */
+.st { position: relative; }
+.st-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.st-chips .w98-btn { min-width: 0; padding: 2px 8px; }
+.st-chips .w98-btn[aria-pressed="true"] { box-shadow: inset -1px -1px var(--w98-hi), inset 1px 1px var(--w98-shadow), inset -2px -2px var(--w98-light), inset 2px 2px var(--w98-dark); font-weight: 700; }
+.st-sec { display: flex; align-items: baseline; gap: 8px; margin: 0; }
+.st-sec b { flex: 1; font-size: 12px; }
+.st-sec span { font-size: 11px; color: #404040; }
+.st-list { padding: 4px; display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 6px; align-content: start; }
+.st-card { display: flex; gap: 8px; padding: 6px; background: #fff; border: 1px solid #c0c0c0; color: #000; min-width: 0; }
+.st-cover { width: 64px; height: 64px; flex: none; display: flex; align-items: center; justify-content: center; overflow: hidden;
+  background: #6b4fa0; color: #fff; font-size: 10px; text-align: center; }
+.st-cover img { width: 100%; height: 100%; object-fit: cover; }
+.st-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 11px; }
+.st-name { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.st-name b { font-size: 12px; }
+.st-pill { font-size: 10px; padding: 0 4px; border: 1px solid #808080; background: #f0f0f0; white-space: nowrap; }
+.st-by { color: #404040; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.st-desc { margin: 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.st-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 2px; }
+.st-acts .w98-btn { min-width: 0; padding: 2px 10px; }
+.st-acts a { color: #000080; }
+.st-added { color: #006400; font-weight: 700; }
+.st-sheet { position: absolute; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.35); }
+.st-sheet[hidden] { display: none; }
+.st-box { width: min(380px, 94%); max-height: 94%; overflow: auto; background: var(--w98-face, #c0c0c0); padding: 10px; display: flex;
+  flex-direction: column; gap: 8px; color: #000;
+  box-shadow: inset -1px -1px #000, inset 1px 1px var(--w98-light, #dfdfdf), inset -2px -2px var(--w98-shadow, #808080), inset 2px 2px #fff; }
+.st-who { display: flex; gap: 8px; align-items: center; }
+.st-who .st-cover { width: 40px; height: 40px; }
+.st-who b { font-size: 13px; display: block; }
+.st-perm { display: grid; grid-template-columns: auto 1fr; gap: 8px; align-items: start; justify-items: start; text-align: left;
+  font-size: 11px; margin: 0; width: 100%; }
+.st-perm input { width: auto !important; margin: 2px 0 0 !important; }
+.st-perm > span { text-align: left; }
+.st-perm span span { display: block; color: #404040; }
+.st-perm b { display: block; color: #000; }
+[data-skin="ubuntu"] .st-perm b { color: #3d3d3d; }
+.st-sby { display: block; white-space: normal; overflow-wrap: anywhere; }
+.st-warn { margin: 0; font-size: 11px; color: #800000; }
+[data-skin="ubuntu"] .st-card { border: 1px solid #e0dcd9; border-radius: 10px !important; }
+[data-skin="ubuntu"] .st-cover { border-radius: 8px !important; }
+[data-skin="ubuntu"] .st-pill { border: 0; background: #f4f2f1; border-radius: 999px !important; padding: 0 7px; }
+[data-skin="ubuntu"] .st-chips .w98-btn[aria-pressed="true"] { background: var(--ub-orange); color: #fff; box-shadow: none; }
+[data-skin="ubuntu"] .st-acts a { color: var(--ub-orange); }
+[data-skin="ubuntu"] .st-box { background: #fff; border-radius: 12px !important; box-shadow: 0 8px 30px rgba(0,0,0,.35); }
+[data-skin="ubuntu"] .st-warn { color: #c7162b; }
 /* System Information: the tree on the left, its lines on the right */
 .si { flex: 1; min-height: 0; display: flex; gap: 4px; }
 .si-tree { width: 200px; flex: none; overflow: auto; background: #fff; padding: 3px;
@@ -730,6 +778,7 @@ body.fullscreen #arc-bot { display: none !important; }
     if (it.kind === 'sysinfo') { openSysinfo(); return; }
     if (it.kind === 'run') { openRun(); return; }
     if (it.kind === 'shortcuts') { openShortcuts(); return; }
+    if (it.kind === 'store') { openStore(); return; }
     if (it.kind === 'app') openWin({key: k, url: it.app.open, name: it.name, item: it});
     else openWin({key: k, url: it.href, name: it.name, item: it});
   }
@@ -1460,6 +1509,137 @@ body.fullscreen #arc-bot { display: none !important; }
     d.q('.dlg-store').addEventListener('click', function () { openKey('store'); });
     d.q('.dlg-close').addEventListener('click', function () { closeWin(d.win); });
     draw();
+  }
+  // The App Store (2026-10-30, the operator: "You know how the App Store works in the PWA that's how the App Store should work
+  // in the desktop modes"): home.html's store in a window -- search, kinds, cards, and the sheet of what an app asks
+  // for, the same switches as its card (wallet, contacts, camera & microphone, notifications). Adding puts it in
+  // Start -> Programs and on the desktop, where the home screen puts it on the home screen.
+  var ST_GAMES = {rpg: 1, shooter: 1, racing: 1, puzzle: 1, arcade: 1, strategy: 1, sports: 1, card: 1, board: 1};
+  var ST_PERM = {
+    wallet: ['Wallet access', 'Ask your wallet to trade, pay and sign. Each payment still shows its cost first.'],
+    contacts: ['Contacts', 'The names and addresses in your address book, nothing else.'],
+    media: ['Camera & microphone', 'Only while the app is open. The arcade shows when they are on, with a Stop button.'],
+    notify: ['Notifications', 'People in your address book can ring you in it while it is closed.']
+  };
+  function installed(k) { return inPrograms(k) || onDesk().indexOf(k) >= 0; }
+  function openStore() {
+    var open = wins.filter(function (x) { return x.key === 'store'; })[0];
+    if (open) { if (open.min) restore(open); focus(open); return; }
+    var d = dialog('store', 'App Store', byKey.store,
+      '<div class="dlg-row"><input class="w98-field st-q" type="search" placeholder="Search games, calls, tools…" aria-label="Search apps" autocomplete="off"></div>'
+      + '<div class="st-chips" role="toolbar" aria-label="Kinds of app"></div>'
+      + '<div class="st-sec"><b class="st-h">Popular</b><span class="st-n"></span></div>'
+      + '<div class="dlg-list st-list" role="list"></div>'
+      + '<div class="st-sheet" hidden><div class="st-box" role="dialog" aria-modal="true" aria-label="Add an app">'
+      + '<div class="st-who"><span class="st-cover st-sicon"></span><div><b class="st-stitle"></b><span class="st-by st-sby"></span></div></div>'
+      + '<p class="dlg-note">It asks for these before it is added. You can change them later on its card in the App Store or under Game access.</p>'
+      + '<div class="st-perms"></div><p class="st-warn"></p>'
+      + '<div class="dlg-acts"><button type="button" class="w98-btn st-no">Cancel</button><button type="button" class="w98-btn st-go">Allow and add</button></div>'
+      + '</div></div>', 760, 600);
+    d.root.classList.add('st');
+    var type = 'all', sheetApp = null, grants = {};
+    function chips() {
+      var seen = {}, list = [['All', 'all'], ['Games', 'games']];
+      APPS.forEach(function (a) { if (a.genre) seen[a.genre] = 1; });
+      Object.keys(seen).sort().forEach(function (g) { list.push([g.charAt(0).toUpperCase() + g.slice(1), g]); });
+      if (APPS.some(function (a) { return a.mp; })) list.push(['Multiplayer', 'mp']);
+      d.q('.st-chips').innerHTML = list.map(function (c) {
+        return '<button type="button" class="w98-btn" data-type="' + esc(c[1]) + '" aria-pressed="' + (type === c[1]) + '">' + esc(c[0]) + '</button>';
+      }).join('');
+    }
+    function cover(a) {
+      return a.cover ? '<img src="' + esc(a.cover) + '" alt="" loading="lazy">' : esc(a.name);
+    }
+    function cards() {
+      var s = d.q('.st-q').value.trim().toLowerCase();
+      var got = APPS.filter(function (a) {
+        if (type === 'games' && !ST_GAMES[a.genre]) return false;
+        if (type === 'mp' && !a.mp) return false;
+        if (type !== 'all' && type !== 'games' && type !== 'mp' && a.genre !== type) return false;
+        return !s || (a.name + ' ' + (a.genre || '') + ' ' + (a.by || '') + ' ' + (a.desc || '')).toLowerCase().indexOf(s) >= 0;
+      });
+      var label = (d.q('.st-chips [aria-pressed="true"]') || {}).textContent || 'All';
+      d.q('.st-h').textContent = s ? 'Results' : (type === 'all' ? 'Popular' : 'Popular in ' + label);
+      d.q('.st-n').textContent = got.length + (got.length === 1 ? ' app' : ' apps');
+      d.q('.st-list').innerHTML = got.length ? got.map(function (a) {
+        var meta = ['by ' + a.by, a.version ? 'v' + a.version : '', a.players].filter(Boolean).join(' · ');
+        return '<div class="st-card" role="listitem"><div class="st-cover">' + cover(a) + '</div><div class="st-body">'
+          + '<div class="st-name"><b>' + esc(a.name) + '</b>' + (a.mp ? '<span class="st-pill">multiplayer</span>' : '')
+          + (a.genre ? '<span class="st-pill">' + esc(a.genre) + '</span>' : '')
+          + (a.tdeck ? '<span class="st-pill" title="Also runs on the DogecoinArcade T-Deck">T-Deck</span>' : '') + '</div>'
+          + '<div class="st-by">' + esc(meta) + '</div>'
+          + (a.desc ? '<p class="st-desc">' + esc(a.desc) + '</p>' : '')
+          + '<div class="st-acts">'
+          + (installed(a.key) ? '<span class="st-added">✓ Added</span><button type="button" class="w98-btn" data-open="' + esc(a.key) + '">Open</button>'
+                              : '<button type="button" class="w98-btn" data-add="' + esc(a.key) + '">+ Add</button>')
+          + '<span>♥ ' + (a.likes || 0) + '</span><span>' + (a.comments || 0) + ' comments</span>'
+          + '<a href="/inscriptions/' + esc(a.page) + '/view" data-page="' + esc(a.page) + '">Details</a></div></div></div>';
+      }).join('') : '<p class="dlg-note">No apps match that. Try another word, or pick All.</p>';
+    }
+    function add(k) {
+      var a = byKey[k] && byKey[k].app; if (!a) return;
+      if (!a.perms || !a.perms.length) { finish(a); return; }
+      sheetApp = a; grants = {};
+      a.perms.forEach(function (p) { grants[p] = true; });
+      d.q('.st-sicon').innerHTML = cover(a);
+      d.q('.st-stitle').textContent = 'Add ' + a.name + '?';
+      d.q('.st-sby').textContent = 'published by ' + a.by + ' (' + a.address + ')';
+      d.q('.st-warn').textContent = 'Check that ' + a.by + ' is the app’s real publisher: anybody can publish a copy '
+        + 'of an app under a lookalike name. Anything you leave off, the app asks for again when it needs it.';
+      perms();
+      d.q('.st-sheet').hidden = false;
+      d.q('.st-go').focus();
+    }
+    function perms() {
+      d.q('.st-perms').innerHTML = sheetApp.perms.filter(function (p) { return ST_PERM[p]; }).map(function (p) {
+        return '<label class="st-perm"><input type="checkbox" data-perm="' + p + '"' + (grants[p] ? ' checked' : '') + '>'
+          + '<span><b>' + ST_PERM[p][0] + '</b><span>' + ST_PERM[p][1] + '</span></span></label>';
+      }).join('');
+      var all = sheetApp.perms.every(function (p) { return grants[p]; });
+      d.q('.st-go').textContent = all ? 'Allow and add' : 'Add';
+    }
+    function finish(a) {
+      setProgram(a.key, true);
+      putOnDesk(a.key);
+      cards();
+      say(a.name + ' added to ' + L('Start → Programs', 'your apps') + ' and the desktop');
+    }
+    d.q('.st-q').addEventListener('input', cards);
+    d.q('.st-chips').addEventListener('click', function (e) {
+      var b = e.target.closest('[data-type]'); if (!b) return;
+      type = b.dataset.type; chips(); cards();
+    });
+    d.q('.st-list').addEventListener('click', function (e) {
+      var link = e.target.closest('a[data-page]');
+      if (link) { e.preventDefault(); openWin({key: 'details:' + link.dataset.page, url: link.getAttribute('href'), name: 'Details', item: byKey.store}); return; }
+      var o = e.target.closest('[data-open]'); if (o) { openKey(o.dataset.open); return; }
+      var b = e.target.closest('[data-add]'); if (b) add(b.dataset.add);
+    });
+    d.q('.st-perms').addEventListener('change', function (e) {
+      var b = e.target.closest('[data-perm]'); if (!b) return;
+      grants[b.dataset.perm] = b.checked; perms();
+    });
+    d.q('.st-no').addEventListener('click', function () { d.q('.st-sheet').hidden = true; sheetApp = null; });
+    d.q('.st-go').addEventListener('click', function () {
+      var a = sheetApp, page = a.page; d.q('.st-sheet').hidden = true; sheetApp = null;
+      // The same switches the app's card has (base.html), kept under the page the app opens, as home.html does.
+      if (grants.wallet) arcadeGameAllow(page, true);
+      if (grants.contacts) arcadeContactsAllow(page, true);
+      if (grants.media) arcadeMediaAllow(page, true);
+      if (grants.notify) {
+        arcadePushOn().then(function (why) {
+          if (why) { say(why); return; }
+          return _arcadeJson('/account/ring/apps', {app: page, on: true}).then(function (j) {
+            if (!j._ok) { say(j.detail || 'Notifications could not be turned on.'); return; }
+            try { localStorage.setItem(ARCADE_RING_ON, 'yes'); } catch (e) {}
+            return arcadeRingBook(true);
+          });
+        });
+      }
+      finish(a);
+    });
+    chips(); cards();
+    d.q('.st-q').focus();
   }
   // Wallet Shortcuts: one per coin, on the desktop or not.
   function openShortcuts() {
