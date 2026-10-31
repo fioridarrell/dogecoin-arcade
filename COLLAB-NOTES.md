@@ -88,6 +88,13 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-30 Sign-up: tapping "Your name" no longer jumps to "The password again" (Claude)
+The operator, on an Android phone: every tap where the name goes brought him to the second password box. The "Create my
+account" button had the same id as its panel (`make`, the anchor `/join#make` links to), so `$("make")` was the
+PANEL: its click handler ran on every tap inside it, found the passwords not matching and focused `pw2`. Every
+device, not only Android. The button is now `make-go` (signup.html; the panel keeps `make` for the link).
+- Test: `test_signup_browser.py::test_tapping_the_name_box_stays_in_the_name_box` (fails on the old page).
+
 ### 2026-10-30 Joining a room waits for the player to unlock their wallet (Claude, from the Tank Simulator session)
 Game-agnostic (every page that joins a room). A locked wallet's "Join this game as you?" took longer than
 `realtime.js` waited (20 s): the page played offline, its room never reached the mesh, and the viewer's late answer

@@ -349,11 +349,31 @@ def test_the_page_asks_for_two_things(loaded):
     assert browser.find_element(By.ID, "tag").is_displayed()
     assert browser.find_element(By.ID, "pw").is_displayed()
     assert browser.find_element(By.ID, "pw2").is_displayed(), "the password twice: nobody can reset it"
-    assert browser.find_element(By.ID, "make").is_displayed()
+    assert browser.find_element(By.ID, "make-go").is_displayed()
     # And nothing about keys, seeds or derivation paths.
     body = browser.page_source.lower()
     assert "seed phrase" not in body.split("write these down")[0]
     assert "derivation" not in body and "secp256k1" not in body
+
+
+def test_tapping_the_name_box_stays_in_the_name_box(loaded):
+    """2026-10-30, on an Android phone: every tap on "Your name" jumped to "The password again". The button had the
+    panel's id ("make"), so the click handler sat on the whole panel and every tap in it pressed the button."""
+    from selenium.webdriver.common.by import By
+
+    browser, base, state, home = loaded
+    browser.delete_all_cookies()
+    _ready(browser, base)
+    free = state.accounts().free()
+    browser.find_element(By.ID, "tag").click()
+    time.sleep(0.5)
+    assert browser.execute_script("return document.activeElement.id") == "tag"
+    browser.find_element(By.ID, "tag").send_keys("staysput")
+    browser.find_element(By.ID, "pw").click()
+    time.sleep(0.5)
+    assert browser.execute_script("return document.activeElement.id") == "pw"
+    assert not browser.find_element(By.ID, "trouble").is_displayed(), "nothing pressed, nothing said"
+    assert state.accounts().free() == free
 
 
 def test_two_different_passwords_make_no_account(loaded):
@@ -368,7 +388,7 @@ def test_two_different_passwords_make_no_account(loaded):
     browser.find_element(By.ID, "pw").send_keys("a long enough password")
     browser.find_element(By.ID, "pw2").send_keys("a long enough pasword")
     assert "Not the same" in browser.find_element(By.ID, "pw2-says").text
-    browser.find_element(By.ID, "make").click()
+    browser.find_element(By.ID, "make-go").click()
     time.sleep(1)
     trouble = browser.find_element(By.ID, "trouble")
     assert trouble.is_displayed() and "not the same" in trouble.text
@@ -403,7 +423,7 @@ def test_making_an_account_shows_the_words_once_and_asks(loaded):
     browser.find_element(By.ID, "tag").send_keys("paperwork")
     browser.find_element(By.ID, "pw").send_keys("a long enough password")
     browser.find_element(By.ID, "pw2").send_keys("a long enough password")
-    browser.find_element(By.ID, "make").click()
+    browser.find_element(By.ID, "make-go").click()
 
     for _ in range(80):
         if browser.find_element(By.ID, "written").is_displayed():
@@ -449,7 +469,7 @@ def test_a_new_account_is_told_about_its_coins(loaded):
     browser.find_element(By.ID, "tag").send_keys("thirsty")
     browser.find_element(By.ID, "pw").send_keys("a long enough password")
     browser.find_element(By.ID, "pw2").send_keys("a long enough password")
-    browser.find_element(By.ID, "make").click()
+    browser.find_element(By.ID, "make-go").click()
     for _ in range(80):
         if browser.find_element(By.ID, "written").is_displayed():
             break
