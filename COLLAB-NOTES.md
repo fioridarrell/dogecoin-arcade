@@ -88,6 +88,14 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-30 Messenger: who you are talking to shows again in a home-screen window (Claude)
+The operator: "the messenger no longer shows who you're talking to at the top of the conversation". base.html hid every
+`header` in a page opened from the home screen (`html.inshell header{display:none}`, 4e9f246), meant for the site's tab
+strip; the conversation's `<header class="convo-head">` (name, Back, Address book) went too. Seen by phones since they
+open the home screen by default (f03d686). Now `html.inshell body > header`: the tab strip only.
+- Test: `test_home_screen.py` checks the scoped rule; reproduced in a Pixel-sized Chromium on Strawberry
+  (`.convo-head` display none inside the Messages window).
+
 ### 2026-10-30 Sign-up: tapping "Your name" no longer jumps to "The password again" (Claude)
 The operator, on an Android phone: every tap where the name goes brought him to the second password box. The "Create my
 account" button had the same id as its panel (`make`, the anchor `/join#make` links to), so `$("make")` was the

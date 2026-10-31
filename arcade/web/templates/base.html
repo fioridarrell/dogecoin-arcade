@@ -22,8 +22,10 @@
 /* The one rule that must hold before the shared stylesheet arrives (2026-10-20: the rest moved to /base.css, kept by
    the browser): without it, anything marked hidden would flash into view while the page loads. */
 [hidden]{display:none !important}
-/* A page in a window of the home screen (below): the icons are its tabs, so no tab strip; room for the pull strip. */
-html.inshell header{display:none !important}
+/* A page in a window of the home screen (below): the icons are its tabs, so no tab strip; room for the pull strip.
+   Only the site's own strip (body > header): a page's own headers stay (2026-10-30: "header" hid the Messenger's
+   who-you-are-talking-to line too). */
+html.inshell body > header{display:none !important}
 html.inshell body:not(.fullscreen){padding-top:18px}
 /* No robot helper over an app opened from the home screen (2026-10-24); on its pages it stays in the corner, as it
    always was (2026-10-25: "it should just be visible like it used to be in the lower right hand corner of the PWA pages"). */
