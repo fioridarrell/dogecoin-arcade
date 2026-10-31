@@ -16,6 +16,9 @@ from pathlib import Path
 
 import json
 
+import pathlib
+import shutil
+
 import pytest
 
 from arcade import update
@@ -232,9 +235,54 @@ def test_the_second_half_runs_in_the_code_just_installed(tmp_path, monkeypatch, 
     assert update.update(dry_run=False) == 0
     assert any(a[1:3] == ("install", "-q") for a in ran), ran
     python = str(venv / "bin" / "python")
-    assert handed_off == [[python, "-c", "import arcade"],
+    assert handed_off == [[python, "-c", update.WHOLE_PACKAGE],
                           [python, "-m", "arcade.update", "--services-only"]]
     assert "installed" in capsys.readouterr().out
+
+
+def test_windows_does_not_reinstall_under_a_running_arcade(tmp_path, monkeypatch):
+    """Issue #51 (2026-10-31): on Windows pip could not replace the files a running arcade had open, stopped halfway,
+    and left 176 of 396 files gone. The updater says to stop the arcade first, and runs no pip."""
+    home = tmp_path / ".dogecoinarcade"
+    (home / "venv" / "Scripts").mkdir(parents=True)
+    src = home / "src"
+    (src / ".git").mkdir(parents=True)
+    (src / "pyproject.toml").write_text("[project]\nname='dogecoinarcade'\n")
+    monkeypatch.setattr(update, "HOME", home)
+    monkeypatch.setattr(update, "_find_git", lambda: "git")
+    monkeypatch.setattr(update, "current_revision", lambda _c: "abc1234")
+    monkeypatch.setattr(update, "_serving", lambda port=8420: True)
+    monkeypatch.setattr(update.os, "name", "nt")
+
+    class Done:
+        returncode = 0
+        stdout = stderr = ""
+    ran = []
+    monkeypatch.setattr(update, "_run", lambda *a, **k: ran.append(a) or Done())
+    with pytest.raises(update.UpdateError, match="still running"):
+        update.update(dry_run=False)
+    assert not any("install" in a for a in ran), "no pip under a running arcade"
+
+
+def test_installed_means_the_whole_package_not_just_import_arcade(tmp_path):
+    """`import arcade` passed with config.py and the templates gone (issue #51); the check now needs the modules the
+    interface starts from, its templates, and no "~" folder pip left mid-replace."""
+    import subprocess
+    import sys as _sys
+
+    def check(root):
+        return subprocess.run([_sys.executable, "-c", update.WHOLE_PACKAGE], cwd=root, capture_output=True,
+                              env={"PYTHONPATH": str(root)}).returncode
+    pkg = pathlib.Path(update.__file__).resolve().parent
+    good = tmp_path / "good"
+    shutil.copytree(pkg, good / "arcade", ignore=shutil.ignore_patterns("__pycache__"))
+    assert check(good) == 0
+    (good / "arcade" / "~esh").mkdir()
+    assert check(good) != 0, "a pip leftover fails it"
+    bad = tmp_path / "bad"
+    shutil.copytree(pkg, bad / "arcade", ignore=shutil.ignore_patterns("__pycache__"))
+    (bad / "arcade" / "config.py").unlink()
+    assert check(bad) != 0, "a missing module fails it"
 
 
 def test_services_only_is_the_second_half_and_installs_nothing(tmp_path, monkeypatch):

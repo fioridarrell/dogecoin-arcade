@@ -129,6 +129,28 @@ def _find_git() -> str | None:
     return None
 
 
+#: What "installed" means after pip (2026-10-31, issue #51): `import arcade` alone passed with 176 of 396 files gone.
+#: The modules the interface starts from, its templates, and no "~"-named folder pip left behind mid-replace.
+WHOLE_PACKAGE = """
+import pathlib, arcade, arcade.config, arcade.update, arcade.web.app
+root = pathlib.Path(arcade.__file__).parent
+assert (root / "web" / "templates" / "base.html").is_file(), "templates missing"
+left = [str(p) for p in root.rglob("~*")]
+assert not left, "pip left half-replaced folders: " + ", ".join(left[:5])
+"""
+
+
+def _serving(port: int = 8420) -> bool:
+    import socket
+    with socket.socket() as probe:
+        probe.settimeout(0.4)
+        try:
+            probe.connect(("127.0.0.1", port))
+            return True
+        except OSError:
+            return False
+
+
 def _run(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(args, cwd=str(cwd) if cwd else None,
                           capture_output=True, text=True)
@@ -310,6 +332,13 @@ def update(dry_run: bool = False) -> int:
     if dry_run:
         print("  would reinstall into the existing environment")
     else:
+        # Windows will not let pip replace files a running arcade has open: it stops halfway and the package is left
+        # broken (2026-10-31, issue #51). The code was fetched; it is installed once the arcade is stopped.
+        if os.name == "nt" and _serving():
+            raise UpdateError(
+                "the arcade is still running (something answers on 127.0.0.1:8420).\n"
+                "  Windows cannot replace files it has open: stop arcade-web (its window or scheduled task),\n"
+                "  run dogecoinarcade-update again, then start the arcade.")
         pip = venv / ("Scripts/pip.exe" if os.name == "nt" else "bin/pip")
         result = _run(str(pip), "install", "-q", "--upgrade", f"{checkout}[web]")
         if result.returncode != 0:
@@ -319,8 +348,7 @@ def update(dry_run: bool = False) -> int:
         # in between -- or have it fail there -- and the environment is left with
         # no application in it, which is how a machine reaches the state where
         # every command, this one included, is a ModuleNotFoundError.
-        if subprocess.run([str(python), "-c", "import arcade"],
-                          capture_output=True).returncode != 0:
+        if subprocess.run([str(python), "-c", WHOLE_PACKAGE], capture_output=True).returncode != 0:
             raise UpdateError(
                 "pip finished, but the application no longer imports.\n"
                 f"  Repair it with: {python} {venv.parent / 'repair.py'}")

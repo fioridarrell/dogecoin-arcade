@@ -1353,15 +1353,33 @@ class AppState:
         lock: a reader never sees half a file (which read as no settings at
         all -- every quota and switch at its default for that request), and two
         writers never lose each other's change."""
-        import json, os
+        import json, os, time
         with self._settings_lock:
-            data = self.settings()
+            # Read the file itself, and never write from a read that failed (2026-10-31, issue #51): settings() answers
+            # {} when the file cannot be read for a moment (Windows: a scanner holding it), and writing that back
+            # with one key kept only that key -- auto_update: false went, and updates turned themselves back on.
+            path = self.home / self.SETTINGS_FILE
+            data = None
+            for attempt in range(10):
+                try:
+                    data = json.loads(path.read_text()) if path.exists() else {}
+                    break
+                except (OSError, ValueError):
+                    time.sleep(0.05 * (attempt + 1))
+            if not isinstance(data, dict):
+                raise OSError(f"{path} could not be read, so {name} was not saved (nothing else was lost)")
             data[name] = value
             self.home.mkdir(parents=True, exist_ok=True)
-            path = self.home / self.SETTINGS_FILE
             tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
             tmp.write_text(json.dumps(data, sort_keys=True, indent=1))
-            os.replace(tmp, path)
+            for attempt in range(10):                   # Windows refuses the swap while anything holds the file
+                try:
+                    os.replace(tmp, path)
+                    break
+                except PermissionError:
+                    if attempt == 9:
+                        raise
+                    time.sleep(0.05 * (attempt + 1))
 
     @property
     def key_path(self) -> Path:

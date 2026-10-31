@@ -88,6 +88,21 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-31 Windows: no automatic install under a running arcade; settings never rewritten from a failed read (Claude, issue #51)
+fioridarrell (Windows 11, archive install, ARCADE_NO_SUPERVISOR=1): automatic updates left `site-packages/arcade`
+half-replaced (176 of 396 files gone, `~`-named pip leftovers), then ModuleNotFoundError: arcade.config; and
+`auto_update: false` vanished from settings.json, so updates turned themselves back on.
+- `watcher._auto_update`: on Windows (`os.name == "nt"`) it installs nothing while the arcade runs; the Overview says
+  "an update is ready: stop the arcade, then run dogecoinarcade-update". Linux unchanged.
+- `update.py`: on Windows it refuses to run pip while something answers on 127.0.0.1:8420 (stop arcade-web first).
+  After pip, "installed" now means `update.WHOLE_PACKAGE` passes: arcade.config, arcade.update and arcade.web.app
+  import, the templates are there, and no `~` folder is left (it was only `import arcade`).
+- `AppState.set_setting`: reads the file itself (retrying a moment of PermissionError) and refuses to write when it
+  cannot read it; the swap retries too. It used to write `settings()`'s `{}` fallback back with one key.
+- Tests: test_watcher (Windows waits), test_update (no pip under a running arcade on Windows; the whole-package
+  check fails on a missing config.py or a `~esh` leftover), test_settings_write (a flaky read loses nothing; an
+  unreadable file is left alone). The new ones fail on the old code.
+
 ### 2026-10-30 Messenger: who you are talking to shows again in a home-screen window (Claude)
 The operator: "the messenger no longer shows who you're talking to at the top of the conversation". base.html hid every
 `header` in a page opened from the home screen (`html.inshell header{display:none}`, 4e9f246), meant for the site's tab

@@ -39,6 +39,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import os
 import subprocess
 import sys
 import threading
@@ -1002,6 +1003,14 @@ class BlockWatcher:
             return
         if installed == published or not available:
             self._said("up to date", installed=installed, published=published)
+            return
+        # Not on Windows while this process runs (2026-10-31, issue #51): pip replaces the package this interpreter
+        # is running from, Windows refuses to let go of files in use, and pip stops halfway -- 176 of 396 files gone,
+        # "~"-named leftovers, and the next start a ModuleNotFoundError. Here the update waits for the operator to
+        # stop the arcade and run the updater; the Overview says one is ready.
+        if os.name == "nt":
+            self._said("an update is ready: stop the arcade, then run dogecoinarcade-update",
+                       installed=installed, published=published)
             return
         # Written down BEFORE the subprocess, because the subprocess restarts
         # this service and systemd stops the parent with it. Everything after
