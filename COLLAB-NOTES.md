@@ -95,6 +95,9 @@ strip; the conversation's `<header class="convo-head">` (name, Back, Address boo
 open the home screen by default (f03d686). Now `html.inshell body > header`: the tab strip only.
 - Test: `test_home_screen.py` checks the scoped rule; reproduced in a Pixel-sized Chromium on Strawberry
   (`.convo-head` display none inside the Messages window).
+- Follow-up: on a phone the browser then moved the page ~50px as the opened conversation's layout settled, and the name
+  sat just above the screen. my_messages.html brings the conversation to the top again once it is drawn (checked in
+  the same Pixel-sized Chromium: header at the top).
 
 ### 2026-10-30 Sign-up: tapping "Your name" no longer jumps to "The password again" (Claude)
 The operator, on an Android phone: every tap where the name goes brought him to the second password box. The "Create my

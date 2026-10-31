@@ -525,9 +525,9 @@ async function drawConversation() {
   // On a phone the open conversation is one screen tall (base.html): bring it
   // to the top of the screen, so its bottom -- the newest message and the
   // composer -- is what you see.
-  if (opening && matchMedia("(max-width:760px)").matches) {
-    $("msgr").scrollIntoView({block: "start"});
-  }
+  const toTop = opening && matchMedia("(max-width:760px)").matches
+    ? () => window.scrollTo(0, $("msgr").getBoundingClientRect().top + window.scrollY) : null;
+  if (toTop) toTop();
 
   const letters = await mail.conversation(here);
   const thread = (await peerOf(here)) || {peer: here, tag: "", address: ""};
@@ -605,6 +605,9 @@ async function drawConversation() {
   // And once more after layout settles (fonts, the screen-tall box on a phone),
   // or the first view can stop a few lines short of the newest message.
   if (pinned) requestAnimationFrame(() => { box.scrollTop = box.scrollHeight; });
+  // The page too, once the conversation is drawn (2026-10-30): the browser moved it on by ~50px as the layout settled,
+  // and the name at the top -- who you are talking to -- sat just above the screen.
+  if (toTop) requestAnimationFrame(toTop);
   await mail.markRead(here);
 }
 
