@@ -445,7 +445,7 @@ def register(app, state, *, account_view: Callable, signed_in: Callable,
         if kind == "guest" or not address:
             return []
         kept = media_kept.get(address)
-        if kept and time.time() - kept[0] < turnlib.LOGIN_TTL / 2:
+        if kept and time.time() - kept[0] < (turnlib.LOGIN_TTL / 2 if kept[1] else 60):
             found = list(kept[1])
         else:
             found = []

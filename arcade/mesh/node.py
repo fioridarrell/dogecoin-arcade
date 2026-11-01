@@ -266,6 +266,7 @@ class MeshNode:
         #: Every node floods one every SUB_EVERY seconds, rooms or none, so this is the
         #: mesh-wide heartbeat (2026-10-13: orders show while their lister is online).
         self._heard: dict[str, float] = {}
+        self._via: dict[str, str] = {}             # origin -> the neighbour its SUBs come through
         self._seen: OrderedDict[str, None] = OrderedDict()
         # room -> {(origin, member)} this node's members have been told are there
         self._present: dict[str, set[tuple[str, str]]] = {}
@@ -1145,6 +1146,9 @@ class MeshNode:
             # keeping an older path instead let two nodes each point at the other.
             self.routes.setdefault(rid, {})[origin] = {"via": link.peer_id, "until": until}
         self._heard[origin] = time.time()
+        self._via[origin] = link.peer_id                    # first arrival: the way back to it (introduce.py)
+        if len(self._via) > 20_000:
+            self._via.clear()
         if len(self._heard) > 20_000:
             for old in sorted(self._heard, key=self._heard.get)[:10_000]:
                 del self._heard[old]

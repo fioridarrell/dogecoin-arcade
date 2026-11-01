@@ -57,6 +57,8 @@ MAX_QUEUE = 4096                        # chunks waiting to go before a sender i
 MAX_RECEIVED = 512                      # whole frames waiting to be handled before chunks are refused
 KNOCK_EVERY = 0.2                       # seconds between hellos while punching
 KNOCK_FOR = 10.0                        # how long a side keeps knocking
+SPRAY_EACH = 8                          # guesses per knock at a NAT that picks a new port per destination
+HARD_SOCKETS = 256                      # sockets the hard side opens; with 800 guesses, about 96% that one hits
 KEEP_EVERY = 1.5                        # a packet at least this often keeps the NAT's door open
 DEAD_WITH_DATA = 6.0                    # silent this long with data on the way: fall back now
 DEAD_IDLE = 20.0                        # silent this long with nothing to send: fall back too
@@ -99,6 +101,10 @@ class Path:
         self.sendto, self.deliver, self.on_down, self.on_confirmed = sendto, deliver, on_down, on_confirmed
         self.peer = peer
         self.targets: list[tuple[str, int]] = []
+        self.knock_for = KNOCK_FOR
+        self.fan: list = []                     # transports of a hard NAT's many sockets, while punching
+        self.on_through = None
+        self.spray_host: str | None = None      # the far NAT's address, to guess ports at
         self.addr: tuple[str, int] | None = None
         self.confirmed = False                  # the other side has heard this side
         self.dead = False
@@ -178,7 +184,7 @@ class Path:
             return
         self._emit_to(kind + body, addr)
 
-    def _emit_to(self, plain: bytes, addr) -> None:
+    def _emit_to(self, plain: bytes, addr, sendto=None) -> None:
         head = HEAD.pack(MAGIC, self.cid_out, self.pn)
         nonce = self.pn.to_bytes(24, "big")
         self.pn += 1
@@ -187,11 +193,11 @@ class Path:
         self.packets_out += 1
         self.bytes_out += len(packet)
         try:
-            self.sendto(packet, addr)
+            (sendto or self.sendto)(packet, addr)
         except OSError:
             pass
 
-    def received(self, data: bytes, addr) -> None:
+    def received(self, data: bytes, addr, via=None) -> None:
         """A packet with this path's connection id. Only one that opens is believed."""
         if self.dead or len(data) < HEAD.size + 17:
             return
@@ -206,6 +212,11 @@ class Path:
             return
         self._mark(pn)
         now = time.monotonic()
+        if via is not None and self.fan:                # the socket that got through is the one the NAT keeps
+            self.sendto = via.sendto
+            keep, self.fan = via, []
+            if self.on_through is not None:
+                self.on_through(keep)
         # The first address that answers stays, unless it went quiet: then the NAT moved.
         if self.addr is None or now - self.last_heard > 2.0:
             self.addr = (str(addr[0]), int(addr[1]))
@@ -410,17 +421,25 @@ class Path:
     # ---------------------------------------------------------------- the clock
 
     async def _run(self) -> None:
-        next_knock = next_scan = 0.0
+        next_knock = next_scan = next_fan = 0.0
         while not self.dead:
             now = time.monotonic()
             quiet = now - self.last_heard
             if not self.confirmed:
-                if now - self.started >= KNOCK_FOR:
+                if now - self.started >= self.knock_for:
                     self.down("no answer")
                     return
                 if now >= next_knock:
                     for target in self.targets:
                         self._emit(_HELLO, addr=target)
+                    if self.spray_host is not None:      # the other NAT's port cannot be known: guess
+                        for _ in range(SPRAY_EACH):
+                            self._emit(_HELLO, addr=(self.spray_host, random.randint(1024, 65535)))
+                    if self.fan and now >= next_fan:     # many outside ports, one of them a guess will hit
+                        for transport in self.fan:
+                            for target in self.targets:
+                                self._emit_to(_HELLO, target, transport.sendto)
+                        next_fan = now + 1.0
                     next_knock = now + KNOCK_EVERY
             else:
                 if quiet >= (DEAD_WITH_DATA if self.flight or self.queue else DEAD_IDLE):
@@ -442,6 +461,66 @@ class Path:
                 pass
 
 
+class Stream:
+    """A Path shaped like an asyncio reader and writer, so `handshake()` and `Link` run on it unchanged: a mesh link with
+    no TCP under it at all. One write + drain is one frame, as in wsock.py."""
+
+    is_path = True
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.buffer = bytearray()
+        self.pending = bytearray()
+        self.more = asyncio.Event()
+        self.gone = False
+        path.deliver = self._arrived
+        path.released.set()
+
+    async def _arrived(self, frame: bytes) -> None:
+        self.buffer += frame
+        self.more.set()
+
+    def end(self) -> None:
+        self.gone = True
+        self.more.set()
+
+    async def readexactly(self, n: int) -> bytes:
+        while len(self.buffer) < n:
+            if self.gone:
+                raise asyncio.IncompleteReadError(bytes(self.buffer), n)
+            self.more.clear()
+            await self.more.wait()
+        out = bytes(self.buffer[:n])
+        del self.buffer[:n]
+        return out
+
+    def write(self, data: bytes) -> None:
+        self.pending += data
+
+    async def drain(self) -> None:
+        if self.pending:
+            data, self.pending = bytes(self.pending), bytearray()
+            try:
+                await self.path.send_frame(data)
+            except PathDown as exc:
+                raise ConnectionError(str(exc)) from None
+
+    def get_extra_info(self, name: str, default=None):
+        return ("ws", 0) if name == "peername" else default        # no address to learn a peer by
+
+    def is_closing(self) -> bool:
+        return self.gone
+
+    def close(self) -> None:
+        self.end()
+        if not self.path.dead:
+            self.path.down("closed")
+        self.path.close()
+
+    async def wait_closed(self) -> None:
+        pass
+
+
 class _Socket(punchlib._Proto):
     """The node's one UDP socket: path packets by connection id, STUN answers as in punch.py."""
 
@@ -453,7 +532,7 @@ class _Socket(punchlib._Proto):
         if data[:5] == MAGIC:
             path = self.paths.get(data[5:13])
             if path is not None:
-                path.received(data, addr)
+                path.received(data, addr, self.transport)
             return
         super().datagram_received(data, addr)
 
@@ -474,6 +553,7 @@ class UdpShare:
         self.waiting: dict[str, asyncio.Future] = {}
         self.trying: set[str] = set()
         self.mapped: tuple[float, list[list]] | None = None
+        self.nat = "unknown"                    # punch.nat_kind of this node's socket
         self.tasks: set[asyncio.Task] = set()
 
     def _spawn(self, coro) -> None:
@@ -487,6 +567,8 @@ class UdpShare:
             log.error("udp", exc_info=task.exception())
 
     async def _open(self) -> None:
+        if self.node is not None and self.node._stopping:
+            raise ConnectionError("this node is stopping")
         if self.sock is None:
             loop = asyncio.get_running_loop()
             _, self.sock = await loop.create_datagram_endpoint(_Socket, sock=punchlib.udp_socket())
@@ -504,6 +586,7 @@ class UdpShare:
             except Exception:                              # noqa: BLE001
                 mesh = []
             await session.map(mesh + [s for s in self.public_stun if s not in mesh])
+            self.nat = punchlib.nat_kind(session.maps, punchlib.local_ipv4())
             self.mapped = (now, session.offer())
         return self.mapped[1]
 
@@ -571,7 +654,8 @@ class UdpShare:
     # ---------------------------------------------------------------- extension
 
     async def link_up(self, link) -> None:
-        self._spawn(self._try_soon(link.peer_id))
+        if not getattr(link.writer, "is_path", False):      # a link already on UDP has nothing to move to
+            self._spawn(self._try_soon(link.peer_id))
 
     async def _try_soon(self, peer: str) -> None:
         await asyncio.sleep(self.try_after)

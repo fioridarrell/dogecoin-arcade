@@ -57,6 +57,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import json
 import logging
 import os
 import re
@@ -227,6 +228,7 @@ class MeshService:
         self.stun = None                        # stun.StunShare: STUN addresses for the fast lane, this node's and others'
         self.punch = None                       # punch.PunchShare: the direct-UDP probe with a linked node
         self.udp = None                         # udp.UdpShare: the UDP path beside each link
+        self.introducer = None                  # introduce.Introducer: links with no TCP under them
         self.turn = None                        # turn.TurnServer: the media relay on the STUN port
         self.turnshare = None                   # turn.TurnShare: relays borrowed from arcades that can be reached
         self.stun_port: int | None = None       # this node's own STUN server (UDP), or None
@@ -918,6 +920,29 @@ def for_state(state, *, listen_host: str | None = None, listen_port: int | None 
         from .udp import UdpShare
         service.udp = UdpShare(lambda: [a for offers in service.stun.offers.values() for a in offers])
         service.node.add_extension(service.udp)
+        # Links with no TCP under them (introduce.py): met over the mesh, or over the chain's machine layer.
+        from .introduce import Introducer
+
+        intro_cursor = [0]
+
+        def read_intros(topic: str) -> list[dict]:
+            """Introductions published since the last look."""
+            if not state.store_path.exists():
+                return []
+            with state.store() as store:
+                rows = store.node_broadcasts(state.messaging.params.name, topic=topic, after=intro_cursor[0])
+            out = []
+            for row in rows:
+                intro_cursor[0] = max(intro_cursor[0], int(row["id"]))
+                try:
+                    out.append({"txid": row["txid"], "body": json.loads(row["body"])})
+                except (TypeError, ValueError):
+                    continue
+            return out
+
+        service.introducer = Introducer(service.udp, publish=state.send_broadcast, read=read_intros,
+                                        announced=announced)
+        service.node.add_extension(service.introducer)
     # The media server (turn.py): the relay for games, sound and pictures, on the STUN port. Its logins are keyed
     # from the mesh key, so they outlive a restart. ARCADE_MESH_TURN=0 turns it off.
     if stun_port and os.environ.get("ARCADE_MESH_TURN", "1") != "0":

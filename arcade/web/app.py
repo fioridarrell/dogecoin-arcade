@@ -29931,6 +29931,8 @@ def create_app(state: AppState) -> FastAPI:
         out["stun_known"] = len(stun.known()) if stun is not None else 0
         udp = getattr(mesh, "udp", None)
         out["udp"] = udp.status() if udp is not None else []
+        introducer = getattr(mesh, "introducer", None)
+        out["udp_only"] = introducer.status() if introducer is not None else []
         turn = getattr(mesh, "turn", None)
         out["media"] = turn.status() if turn is not None else None
         return JSONResponse(out)
