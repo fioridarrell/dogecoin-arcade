@@ -57,6 +57,22 @@ def _addrs(raw) -> list[tuple[str, int]]:
     return out
 
 
+def udp_socket() -> socket.socket:
+    """An IPv4 UDP socket on any port. On Windows a send to a closed port makes the NEXT receive fail with
+    WSAECONNRESET, and punching sends to addresses that may not answer; SIO_UDP_CONNRESET turns that off."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    no_reset(sock)
+    sock.setblocking(False)
+    sock.bind(("0.0.0.0", 0))
+    return sock
+
+
+def no_reset(sock: socket.socket) -> None:
+    code = getattr(socket, "SIO_UDP_CONNRESET", None)   # Windows only
+    if code is not None:
+        sock.ioctl(code, False)
+
+
 def local_ipv4() -> str | None:
     """This machine's address on its home network (no packet is sent)."""
     try:
@@ -119,8 +135,7 @@ class Session:
 
     async def open(self) -> None:
         loop = asyncio.get_running_loop()
-        transport, self.proto = await loop.create_datagram_endpoint(_Proto, local_addr=("0.0.0.0", 0),
-                                                                    family=socket.AF_INET)
+        transport, self.proto = await loop.create_datagram_endpoint(_Proto, sock=udp_socket())
         self.local_port = transport.get_extra_info("sockname")[1]
         self.proto.on_punch = self._on_punch
 

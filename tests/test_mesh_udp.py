@@ -242,3 +242,28 @@ def test_a_bad_wire_loses_nothing_and_keeps_the_order(loss):
         a.close()
         b.close()
     asyncio.run(run())
+
+
+def test_a_machine_without_so_reuseport_still_links_and_moves_to_udp(monkeypatch):
+    """Windows (PR #52): its Python has no SO_REUSEPORT at all."""
+    from arcade.mesh import node as nodelib
+    monkeypatch.setattr(nodelib, "_REUSE_PORT", False)
+
+    async def run():
+        async with _Two() as t:
+            await t.up()
+            await t.la.send({"t": "zz", "i": 1})
+            assert await _until(lambda: t.tb.got == [(1, b"")])
+    asyncio.run(run())
+
+
+def test_on_windows_a_closed_port_does_not_break_the_next_receive(monkeypatch):
+    from arcade.mesh import punch
+    calls = []
+
+    class _Sock:
+        def ioctl(self, code, value):
+            calls.append((code, value))
+    monkeypatch.setattr(punch.socket, "SIO_UDP_CONNRESET", 0x9800000C, raising=False)
+    punch.no_reset(_Sock())
+    assert calls == [(0x9800000C, False)]

@@ -121,11 +121,12 @@ def test_ice_lists_the_nodes_stun_then_the_public_one(tmp_path):
     state.mesh = _Mesh()
     client = TestClient(create_app(state))
     said = client.get("/realtime/ice").json()
-    assert [s["urls"] for s in said["iceServers"]] == [
-        "stun:[2001:db8::1]:3478", "stun:203.0.113.5:3478", "stun:stun.cloudflare.com:3478"]
+    assert [s["urls"] for s in said["iceServers"]] == ["stun:[2001:db8::1]:3478", "stun:203.0.113.5:3478"], \
+        "with arcade STUN known, no outside company is named"
+    _Mesh.stun.offers.clear()
+    assert [s["urls"] for s in client.get("/realtime/ice").json()["iceServers"]] == ["stun:stun.cloudflare.com:3478"]
     state.set_setting("realtime_public_stun", False)
-    assert [s["urls"] for s in client.get("/realtime/ice").json()["iceServers"]] == [
-        "stun:[2001:db8::1]:3478", "stun:203.0.113.5:3478"], "the operator turned the public one off"
+    assert client.get("/realtime/ice").json()["iceServers"] == [], "the operator turned the public one off"
 
 
 class _Answer:

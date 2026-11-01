@@ -36,7 +36,6 @@ import hashlib
 import logging
 import os
 import random
-import socket
 import struct
 import time
 from collections import deque
@@ -480,8 +479,7 @@ class UdpShare:
     async def _open(self) -> None:
         if self.sock is None:
             loop = asyncio.get_running_loop()
-            _, self.sock = await loop.create_datagram_endpoint(_Socket, local_addr=("0.0.0.0", 0),
-                                                               family=socket.AF_INET)
+            _, self.sock = await loop.create_datagram_endpoint(_Socket, sock=punchlib.udp_socket())
 
     async def _offer(self) -> list[list]:
         """Where the other side should aim, from one mapping of the node's one socket."""

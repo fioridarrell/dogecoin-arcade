@@ -34,7 +34,6 @@ import ipaddress
 import json
 import logging
 import os
-import socket
 import struct
 import time
 
@@ -391,7 +390,7 @@ class TurnServer:
         self.allocations[client] = allocation
         try:
             _, allocation.relay = await asyncio.get_running_loop().create_datagram_endpoint(
-                lambda: _Relay(allocation), local_addr=("0.0.0.0", 0), family=socket.AF_INET)
+                lambda: _Relay(allocation), sock=punchlib.udp_socket())
             allocation.address = await self._outside(allocation.relay, client)
         except OSError:
             self.allocations.pop(client, None)

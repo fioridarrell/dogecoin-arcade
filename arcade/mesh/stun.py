@@ -121,7 +121,8 @@ async def serve(host: str = "::", port: int = PORT, counter: dict | None = None,
     try:
         sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
         sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if os.name != "nt":                    # on Windows it would let another program take this port (PR #52)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind((host if ":" in host else "::", port))
         t, _ = await loop.create_datagram_endpoint(lambda: _Server(counter, turn), sock=sock)
         out.append(t)
