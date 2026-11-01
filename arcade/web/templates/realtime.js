@@ -109,6 +109,10 @@
 // picker (a screen, a window or a tab) and sends that as the picture, with the microphone; {ok: false, error:
 // 'cancelled'} if they closed the picker. The browser's own "Stop sharing" ends the picture only: state 'screen-off'.
 // start({audio: true}) again stops the screen and keeps the voice.
+// WHAT THE SCREEN PLAYS (2026-11-01): add sound: true and the picker offers it, mixed with the microphone into one track;
+// the answer's `sound` says if the browser gave any (the player can leave it out, and many browsers have none to give).
+// Muting then silences the microphone only.
+// room.media.volume(p.id, 0.4): how loud they are for you alone, 0 to 1. It starts at 1.
 //
 // Rectangles are in this page's CSS pixels (getBoundingClientRect), placed again when your layout moves; null hides
 // one. A picture can only be shared over a direct link ('not direct' otherwise: media never goes through the room).
@@ -194,9 +198,9 @@
   };
   Media.prototype.start = function (options) {
     options = options || {video: true, audio: true};
-    return this._ask('start', {video: !!options.video, audio: !!options.audio, screen: !!options.screen,
+    return this._ask('start', {video: !!options.video, audio: !!options.audio, screen: !!options.screen, sound: !!options.sound,
                                facing: options.facing === 'environment' ? 'environment' : options.facing === 'user' ? 'user' : ''}, 600000)
-      .then(function (said) { return {ok: true, video: !!said.video, audio: !!said.audio, screen: !!said.screen}; },
+      .then(function (said) { var r = {ok: true, video: !!said.video, audio: !!said.audio, screen: !!said.screen}; if (said.sound) r.sound = true; return r; },
             function (err) { return {ok: false, error: err.message}; });
   };
   Media.prototype.stop = function () { return this._ask('stop'); };
@@ -207,6 +211,7 @@
       .then(function () { return {ok: true}; }, function (err) { return {ok: false, error: err.message}; });
   };
   Media.prototype.hear = function (id, on) { return this._ask('hear', {peer: String(id), on: on !== false}); };
+  Media.prototype.volume = function (id, level) { return this._ask('volume', {peer: String(id), level: Number(level)}); };
   // place(id | 'me', {x, y, w, h} in this page's CSS pixels, or null to hide, {fit: 'cover' | 'contain', mirror})
   Media.prototype.place = function (who, rect, options) {
     options = options || {};

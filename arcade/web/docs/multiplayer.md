@@ -253,10 +253,12 @@ arcade.realtime.join('call-x7', {fast: true}).then(function (room) {
 
 | | |
 |---|---|
+| `start({screen, audio, sound})` | shares a screen instead of the camera. With `sound: true` the browser's picker offers what the screen plays, mixed with the microphone into one track; the answer has `sound: true` if the browser gave any. `mute({audio: true})` then silences the microphone only |
 | `start({video, audio})` | opens the camera, the microphone or both. Called again mid-call, the new tracks replace the old (the camera joins the microphone, say) |
 | `stop()` | camera and microphone off; every share ends |
 | `share(id, on)` | send your picture and sound to one player: `true`, `false`, or `{video, audio}` for one kind only. Refused with `not direct` until that player's link is direct |
 | `hear(id, on)` | play that player's sound. Nobody's sound plays until you say |
+| `volume(id, level)` | how loud that player is for you alone, `0` to `1`. It starts at `1`, and they are not told |
 | `place(id or 'me', rect, {fit, mirror})` | where a picture is drawn: `{x, y, w, h}` in your page's CSS pixels, or `null` to hide it. `fit` is `'cover'` or `'contain'`. At most 16 pictures |
 | `mute({video, audio})` | `true` mutes that kind, `false` unmutes it |
 | `on('media', fn(player, {video, audio}))` | a player is sending to you |

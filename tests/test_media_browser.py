@@ -343,6 +343,59 @@ def test_a_screen_goes_with_the_voice_and_the_browser_s_stop_keeps_the_voice(tmp
         state.mesh.stop()
 
 
+FAKE_SCREEN = """(() => { const real = navigator.mediaDevices.getDisplayMedia ? navigator.mediaDevices : null;
+  navigator.mediaDevices.getDisplayMedia = async (c) => { window.__asked = c;
+    const v = document.createElement('canvas'); v.width = 320; v.height = 180; const x = v.getContext('2d');
+    setInterval(() => { x.fillStyle = '#' + Math.floor(Math.random() * 4095).toString(16).padStart(3, '0'); x.fillRect(0, 0, 320, 180); }, 100);
+    const s = v.captureStream(10);
+    if (c.audio) { const a = new AudioContext(); await a.resume(); const o = a.createOscillator(); o.frequency.value = 880; const d = a.createMediaStreamDestination(); o.connect(d); o.start(); s.addTrack(d.stream.getAudioTracks()[0]); window.__tone = o; }
+    return s; }; })()"""
+LOUD = """(id) => new Promise((ok) => { const v = document.querySelector(`.arcade-media-layer video[data-media="${id}"]`);
+  const a = new AudioContext(); a.resume(); const n = a.createAnalyser(); n.fftSize = 2048; a.createMediaStreamSource(v.srcObject).connect(n);
+  const b = new Float32Array(1024); let top = 0, i = 0;
+  const t = setInterval(() => { n.getFloatTimeDomainData(b); for (const x of b) top = Math.max(top, Math.abs(x)); if (++i > 14) { clearInterval(t); a.close(); ok(top); } }, 100); })"""
+
+
+def test_a_screen_s_sound_goes_with_it_and_each_player_has_their_own_volume(tmp_path, no_nodes):
+    """2026-11-01. One audio track, mixed: muting the microphone leaves what is shared playing. An app that does not ask gets no sound."""
+    state, server, base = _server(tmp_path)
+    try:
+        with sync_api.sync_playwright() as pw:
+            chrome = _launch(pw)
+            pa, _, _ = _player(chrome, base)
+            pb, _, _ = _player(chrome, base)
+            ga, gb = _game(pa), _game(pb)
+            _until(ga, "window.room && window.room.media && window.room.me", "a in")
+            _until(gb, "window.room && window.room.media && window.room.me", "b in")
+            ida, idb = ga.evaluate("window.room.me.id"), gb.evaluate("window.room.me.id")
+            _until(ga, f"window.states[{idb!r}] === 'direct'", "a direct")
+            pa.evaluate(FAKE_SCREEN)
+            said = ga.evaluate("window.room.media.start({screen: true, audio: true})")
+            assert "sound" not in said and not pa.evaluate("window.__asked.audio"), "a page that did not ask gets none"
+            ga.evaluate(f"window.room.media.share({idb!r}, true)")
+            gb.evaluate(f"window.room.media.hear({ida!r}, true)")
+            said = ga.evaluate("window.room.media.start({screen: true, audio: true, sound: true})")
+            assert said.get("sound") is True, said
+            assert "Sharing your screen and its sound" in pa.inner_text(".arcade-media-pill")
+            ga.evaluate("window.room.media.mute({audio: true})")                       # the microphone only
+            _until(gb, f"window.has[{ida!r}] && window.has[{ida!r}].audio", "b hears a")
+            pb.wait_for_timeout(1500)
+            assert pb.evaluate(LOUD, ida) > .01, "what the screen plays arrives with the microphone muted"
+            tracks = pa.evaluate("document.querySelector('.arcade-media-layer video[data-media=me]').srcObject.getAudioTracks().length")
+            assert tracks == 1, "one track, mixed"
+            tile = f"document.querySelector('.arcade-media-layer video[data-media=\"{ida}\"]')"
+            assert pb.evaluate(tile + ".volume") == 1
+            gb.evaluate(f"window.room.media.volume({ida!r}, 0.25)")
+            assert pb.evaluate(tile + ".volume") == .25
+            gb.evaluate(f"window.room.media.volume({ida!r}, 7)")
+            assert pb.evaluate(tile + ".volume") == 1, "1 is the most"
+            ga.evaluate("window.room.media.stop()")
+            chrome.close()
+    finally:
+        server.stop()
+        state.mesh.stop()
+
+
 def test_ring_and_ringed_answer_in_the_viewer(tmp_path, no_nodes):
     """arcade.realtime.ring / ringed (arcade/ring.py) reach the viewer and come back: a page opened without a
     notification's ring has none, and a guest cannot ring anybody."""

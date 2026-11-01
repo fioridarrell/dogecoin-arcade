@@ -88,6 +88,16 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-11-01 Room media: a player's own volume, and what a shared screen plays (Claude)
+The operator: "Add audio sharing to the screen sharing", a volume and a mute for each person, and "game agnostic". For every
+page, nothing app-specific; a page that does not ask behaves as before.
+- `room.media.volume(id, 0..1)`: how loud that player is for this viewer alone. Kept by id, so it outlives a dropped link.
+- `room.media.start({screen: true, audio: true, sound: true})`: asks the browser for what the screen plays and mixes it with the
+  microphone into ONE track (no renegotiation mid-call). The answer has `sound: true` only if the browser gave any. `mute({audio})`
+  then silences the microphone in the mix, never what is shared. No `sound`, no change: the answer's fields are the same.
+- Docs: multiplayer.md. Test: test_media_browser.py (a tone from a stand-in screen, measured at the other player).
+- Open: `realtimeRejoin` still tears a call down on one failed `/realtime/send`. Pages must handle `rejoined`.
+
 ### 2026-11-01 Group chats: let somebody in; a newcomer reads the past; a phone's front and rear cameras (Claude, branch claude/riffs-groups)
 The operator: "you should be able to add people to an already created riff", "you should be able to select people from your
 address book", "you should be able to switch from your rear facing camera to your front".
