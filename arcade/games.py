@@ -102,6 +102,8 @@ def parse(json_text: Any) -> dict | None:
     out["notify"] = game.get("notify") is True
     # An app that reads the player's address book (arcade.contacts.list) says so: its card shows the Contacts switch.
     out["contacts"] = game.get("contacts") is True
+    # An app that opens the player's group chats (arcade.groups) says so: its card shows the Group chats switch.
+    out["groups"] = game.get("groups") is True
     out["minimized_timeout"] = minimized_timeout(game.get("minimized"))
     family = game.get("family")
     out["family"] = family if isinstance(family, str) and _FAMILY.match(family) else ""

@@ -8276,6 +8276,13 @@ def create_app(state: AppState) -> FastAPI:
             return contentlib._missing("no such request")
         return contentlib._json(_send_ref_now(kept))
 
+    @app.get("/r/groups.js")
+    def r_groups_js():
+        """The shim an inscribed page loads: arcade.groups, the signed-in player's group chats (2026-10-31)."""
+        body = (TEMPLATE_DIR / "groups.js").read_text()
+        return Response(body, media_type="application/javascript",
+                        headers={**contentlib.CORS, "Cache-Control": "public, max-age=3600"})
+
     @app.get("/r/contacts.js")
     def r_contacts_js():
         """The contacts shim an inscribed page loads: arcade.contacts.list(), the
@@ -10279,7 +10286,7 @@ def create_app(state: AppState) -> FastAPI:
                 "by": ("@" + who) if who else it["creator"][:12] + "…", "address": it["creator"],
                 "version": str(g.get("version") or "")[:24], "players": str(g.get("players") or "")[:40],
                 "likes": it.get("likes", 0), "comments": it.get("comments", 0),
-                "perms": [p for p in ("wallet", "contacts", "media", "notify") if g.get(p)],
+                "perms": [p for p in ("wallet", "contacts", "groups", "media", "notify") if g.get(p)],
                 "timeout": g.get("minimized_timeout"),
             })
         return apps
@@ -25851,6 +25858,7 @@ def create_app(state: AppState) -> FastAPI:
                         "wallet": bool(card["game"].get("wallet")),
                         "media": bool(card["game"].get("media")),
                         "contacts": bool(card["game"].get("contacts")),
+                        "groups": bool(card["game"].get("groups")),
                         "opens": _game_opens(ix, creator, card["txid"], card["game"]),
                         "publisher": f"@{tag}" if tag else "", "address": creator}
             else:

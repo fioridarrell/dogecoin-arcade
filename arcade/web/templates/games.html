@@ -114,6 +114,12 @@
              data-contacts="{{ g.opens or it.txid }}" data-game="{{ g.name }}"{% if not g.contacts %} hidden{% endif %}
              data-publisher="{{ ('@' ~ name_of(it.creator)) if name_of(it.creator) else '' }}"
              data-address="{{ it.creator }}"><input type="checkbox" style="margin:0;width:auto"> Contacts</label>
+      {# Group chats, per app (arcade.groups, 2026-10-31): shown on a card that says "groups": true. #}
+      <label class="gamegroups" title="Let this app read your group chats and post in them as you"
+             style="display:inline-flex;align-items:center;gap:5px;margin:0;font-size:.85rem;cursor:pointer;white-space:nowrap"
+             data-groups="{{ g.opens or it.txid }}" data-game="{{ g.name }}"{% if not g.groups %} hidden{% endif %}
+             data-publisher="{{ ('@' ~ name_of(it.creator)) if name_of(it.creator) else '' }}"
+             data-address="{{ it.creator }}"><input type="checkbox" style="margin:0;width:auto"> Group chats</label>
       {# Camera & microphone, per game (2026-10-22: "in the same way that they allow an app Wallet access on the
          game card"): shown on a card that says "media": true, or once this browser saw the game ask. #}
       <label class="gamemedia" title="Let this app use your camera and microphone"
@@ -233,6 +239,11 @@
       var id = b.dataset.walletbits;
       if (arcadeGameAllowed(id) || arcadeGameUses(id)) b.hidden = false;
     });
+    document.querySelectorAll('.gamegroups').forEach(function (l) {
+      var on = arcadeGroupsAllowed(l.dataset.groups);
+      l.querySelector('input').checked = on;
+      if (on || arcadeGroupsUses(l.dataset.groups)) l.hidden = false;
+    });
     document.querySelectorAll('.gamecontacts').forEach(function (l) {
       var on = arcadeContactsAllowed(l.dataset.contacts);
       l.querySelector('input').checked = on;
@@ -277,6 +288,14 @@
   document.addEventListener('arcade:access', draw);
   document.addEventListener('arcade:media', draw);
   document.addEventListener('arcade:contacts', draw);
+  document.addEventListener('arcade:groups', draw);
+  document.addEventListener('change', function (e) {
+    var l = e.target.closest && e.target.closest('.gamegroups'); if (!l) return;
+    var box = l.querySelector('input');
+    if (!box.checked) { arcadeGroupsAllow(l.dataset.groups, false); return; }
+    box.checked = false;
+    arcadeGroupsAsk(l.dataset.groups, l.dataset.game, l.dataset.publisher, l.dataset.address).then(draw);
+  });
   document.addEventListener('change', function (e) {
     var l = e.target.closest && e.target.closest('.gamecontacts'); if (!l) return;
     var box = e.target;

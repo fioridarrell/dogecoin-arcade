@@ -32,7 +32,7 @@
     // wallet access card comes up over it when it first reaches for the wallet or asks (the 'access' door below).
     var CHAIN = {network: "{{chain.network}}",
                  version: {{chain.params.pubkeyhash_version}}};
-    var doors = {access: 'viewer', contacts: 'viewer', storage: '/storage/', node: '/node/', swap: '/swap/', owner: '/owner/',
+    var doors = {access: 'viewer', contacts: 'viewer', groups: 'viewer', storage: '/storage/', node: '/node/', swap: '/swap/', owner: '/owner/',
                  realtime: '/realtime/', escrow: '/r/escrow/', state: '/r/state/', llm: 'viewer', app: 'viewer'};
 
     // Realtime rooms (arcade/web/realtime.py, templates/realtime.js): this page
@@ -1437,6 +1437,87 @@
     // card. An add or remove asked while one is open is refused "busy" (it is not queued: a page that asks
     // again later is asked again later, and a queue would stack cards up behind the one being read).
     var contactsCards = 0;               // contacts cards open now
+    // arcade.groups (2026-10-31, for Riffs): the player's encrypted group chats, for an app whose card has the Group chats
+    // switch turned on. The keys stay on this page, as the wallet's do: an app gets names and words. Every call needs the
+    // wallet unlocked, because the group keys are read with it. A page with no card gets nothing and asks nothing:
+    // a private chat is not something to hand a page nobody published as an app.
+    var groupsMe = null, groupsLooked = 0, groupsSynced = 0, groupsSent = 0, groupsCards = 0;
+    var GROUPS_LOOK_EVERY = 8000, GROUPS_SYNC_EVERY = 60000, GROUPS_SEND_GAP = 400, GROUPS_MAX_WORDS = 2000;
+    function groupsOpen(){
+      return import('/wallet.js').then(function(w){
+        return Promise.all([import('/messaging.js'), arcadeKeys(CHAIN, 'This app opens your group chats, which needs your wallet.')]);
+      }).then(function(got){
+        var mail = got[0], keys = got[1];
+        var me = groupsMe ? Promise.resolve(groupsMe) : mail.identity(keys.phrase);
+        return me.then(function(mine){ groupsMe = mine; return {mail: mail, keys: keys, me: mine}; });
+      });
+    }
+    function groupsFresh(s){
+      var now = Date.now(), jobs = [];
+      if (now - groupsSynced >= GROUPS_SYNC_EVERY) { groupsSynced = now; jobs.push(s.mail.syncMailbox(s.me).catch(function(){})); }
+      if (now - groupsLooked >= GROUPS_LOOK_EVERY) { groupsLooked = now; jobs.push(s.mail.collect(s.me).catch(function(){})); }
+      return Promise.all(jobs);
+    }
+    function groupsOne(s, id){
+      return s.mail.currentGroup(String(id || '')).then(function(group){
+        if (!group) throw new Error('not a group of yours');
+        return group;
+      });
+    }
+    function groupsDoor(m, answer){
+      var op = m.op || 'list';
+      if (viewer !== 'account' || (typeof ARCADE_SIGNED !== 'undefined' && !ARCADE_SIGNED)) {
+        answer({ok: false, error: viewer === 'wallet' ? 'operator: group chats are an account\'s' : 'sign in first'}); return;
+      }
+      arcadeGameOf(here).then(function(g){
+        if (!g.game) throw new Error('no card: only an app with a card can open group chats');
+        if (!arcadeGroupsOn(here, g)) {
+          arcadeGroupsUsed(here);
+          if (g.opens) arcadeGroupsUsed(g.opens);
+          throw new Error('off: turn on Group chats on this app\'s card');
+        }
+        return groupsOpen().then(function(s){ return groupsOp(op, m, s, g); });
+      }).then(function(said){ said.ok = true; answer(said); },
+              function(err){ answer({ok: false, error: String((err && err.message) || err)}); });
+    }
+    function groupsOp(op, m, s, g){
+      if (op === 'list') return groupsFresh(s).then(function(){ return s.mail.groups(); }).then(function(all){
+        var roots = {};
+        all.forEach(function(one){ roots[s.mail.rootOf(one)] = true; });
+        return Promise.all(Object.keys(roots).map(function(id){ return s.mail.currentGroup(id); })).then(function(line){
+          return {me: s.keys.address, groups: line.filter(function(one){ return one && one.current !== false; })
+                  .map(s.mail.groupForApp)};
+        });
+      });
+      if (op === 'read') return groupsFresh(s).then(function(){
+        return s.mail.groupLines(String(m.group || ''), {after: +m.after || 0, limit: +m.limit || 200});
+      }).then(function(lines){ return {lines: lines}; });
+      if (op === 'send') {
+        var words = String(m.text == null ? '' : m.text);
+        if (!words.trim()) throw new Error('nothing to send');
+        if (words.length > GROUPS_MAX_WORDS) throw new Error('too long: at most ' + GROUPS_MAX_WORDS + ' characters');
+        if (Date.now() - groupsSent < GROUPS_SEND_GAP) throw new Error('busy: wait a moment');
+        groupsSent = Date.now();
+        return groupsOne(s, m.group).then(function(group){ return s.mail.writeGroup(s.keys, s.me, group, words); })
+          .then(function(said){ return {txid: said.txid, fee: said.fee}; });
+      }
+      if (op === 'seal') return groupsOne(s, m.group).then(function(group){ return {sealed: s.mail.sealLive(group, String(m.text || ''))}; });
+      if (op === 'open') return groupsOne(s, m.group).then(function(group){ return {text: s.mail.openLive(group, m.sealed)}; });
+      if (op === 'create') {
+        var name = String(m.name || '').trim().slice(0, 60), who = Array.isArray(m.members) ? m.members.slice(0, 50).map(String) : [];
+        if (!name || !who.length) throw new Error('a group needs a name and at least one other person');
+        if (groupsCards) throw new Error('busy: this page already has a group question open');
+        groupsCards++;
+        return arcadeAsk('Make a new group chat?', '\u201c' + (g.name || gameName || 'This app') + '\u201d wants to make \u201c' + name
+          + '\u201d with ' + who.join(', ') + '. Each person gets the key in a message from your wallet.', 'Make the group')
+          .then(function(yes){
+            groupsCards--;
+            if (!yes) throw new Error('declined');
+            return s.mail.createGroup(s.keys, s.me, name, who, (typeof ARCADE_ME === 'string' ? ARCADE_ME : '') || '');
+          }).then(function(group){ return {group: s.mail.groupForApp(group)}; });
+      }
+      throw new Error('groups: op is list, read, send, seal, open or create');
+    }
     function contactsDoor(m, answer){
       var op = m.op || 'list';
       if (op === 'add' || op === 'remove') { contactsChange(op, m, answer); return; }
@@ -1798,6 +1879,7 @@
       if (m.arcade === 'access') { accessDoor(m, answer); return; }
       if (m.arcade === 'app') { appDoor(m, answer); return; }
       if (m.arcade === 'contacts') { contactsDoor(m, answer); return; }
+      if (m.arcade === 'groups') { groupsDoor(m, answer); return; }
       if (m.arcade === 'llm') { llmDoor(m, answer, e.source); return; }
       if (m.arcade === 'escrow') { escrowDoor(m, answer); return; }
       if (m.arcade === 'state' && m.op === 'update') {

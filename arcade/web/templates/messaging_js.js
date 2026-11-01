@@ -950,6 +950,52 @@ export async function writeGroup(wallet, me, group, words) {
   });
 }
 
+/* --- group chats for an app (arcade.groups, 2026-10-31, Riffs) ----------------
+ *
+ * An app is an inscription in a sandbox: it never holds a group's key. The arcade page keeps the key and hands the app
+ * the words. Two things are derived here so a chat can also be LIVE, over a realtime room, which is not encrypted:
+ * the room's name, which only members can work out, and a key that seals what is said in it. Both come from the group's
+ * current secret, so taking somebody out moves the room and changes that key, as it changes the group's.
+ */
+const fromSecret = (group, label) => nacl.hash(new Uint8Array([...new TextEncoder().encode(label),
+                                                               ...unhex(group.secret)]));
+
+/** The name of a group's live room: 32 hex characters only a member can work out. */
+export const liveRoom = (group) => hex(fromSecret(group, "arcade-group-room/1\n").slice(0, 16));
+
+/** Seal words for the live room. The chain record is the group's ordinary message; this is only for right now. */
+export function sealLive(group, words) {
+  const nonce = nacl.randomBytes(24);
+  const box = nacl.secretbox(new TextEncoder().encode(words), nonce,
+                             fromSecret(group, "arcade-group-live/1\n").slice(0, 32));
+  return btoa(String.fromCharCode(...nonce, ...box));
+}
+
+/** The words of a sealed live message, or null when it was not sealed with this group's key. */
+export function openLive(group, sealed) {
+  try {
+    const both = Uint8Array.from(atob(String(sealed)), (c) => c.charCodeAt(0));
+    const plain = nacl.secretbox.open(both.subarray(24), both.subarray(0, 24),
+                                      fromSecret(group, "arcade-group-live/1\n").slice(0, 32));
+    return plain ? new TextDecoder().decode(plain) : null;
+  } catch (e) { return null; }
+}
+
+/** What an app is told about a group: never its secret, and members by name and address only. */
+export function groupForApp(group) {
+  return {id: rootOf(group), name: group.name, room: liveRoom(group),
+          members: (group.members || []).map((m) => ({tag: m.tag || "", address: m.address || ""}))};
+}
+
+/** The lines of a group, oldest first. A line's `from` is the address that paid for it, which no member can forge. */
+export async function groupLines(root, {after = 0, limit = 200} = {}) {
+  const lines = (await conversation(`group:${root}`)).filter((l) => (l.when || 0) >= after);
+  return lines.slice(-Math.max(1, Math.min(limit, 500))).map((l) => ({
+    txid: l.txid, when: l.when || 0, height: l.height || 0, mine: !!l.mine,
+    from: l.from_address || "", text: text(l),
+  }));
+}
+
 /** Take somebody out: a new key for everybody who stays. */
 export async function removeFromGroup(wallet, me, group, key) {
   const staying = group.members.filter((m) => m.key !== key);

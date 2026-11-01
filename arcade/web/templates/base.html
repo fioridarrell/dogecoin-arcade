@@ -1867,6 +1867,26 @@ function arcadeContactsAsk(id, game, publisher, address){
     .then(function(yes){ if (yes) arcadeContactsAllow(id, true); return !!yes; });
 }
 
+// GROUP CHATS, PER APP (arcade.groups, 2026-10-31, for Riffs). Off until the player turns it on: it opens private chats.
+var ARCADE_GROUPS = 'arcade.groups.allow:', ARCADE_GROUPS_USES = 'arcade.groups.uses:';
+function arcadeGroupsAllowed(id){ try { return localStorage.getItem(ARCADE_GROUPS + id) === 'yes'; } catch (e) { return false; } }
+function arcadeGroupsAllow(id, on){
+  try { if (on) localStorage.setItem(ARCADE_GROUPS + id, 'yes'); else localStorage.removeItem(ARCADE_GROUPS + id); } catch (e) {}
+  document.dispatchEvent(new CustomEvent('arcade:groups', {detail: {id: id, on: !!on}}));
+}
+function arcadeGroupsUses(id){ try { return localStorage.getItem(ARCADE_GROUPS_USES + id) === 'yes'; } catch (e) { return false; } }
+function arcadeGroupsUsed(id){ try { localStorage.setItem(ARCADE_GROUPS_USES + id, 'yes'); } catch (e) {} }
+function arcadeGroupsOn(page, g){ return arcadeGroupsAllowed(page) || !!(g && g.opens && arcadeGroupsAllowed(g.opens)); }
+function arcadeGroupsAsk(id, game, publisher, address){
+  return arcadeAsk('Let this app open your group chats?',
+    '\u201c' + (game || 'This app') + '\u201d is published by ' + (publisher || 'an account with no @name')
+    + (address ? ' (' + address + ')' : '') + '. It will read your group chats and post in them as you. Each post is a '
+    + 'small test-chain transaction from your wallet and can never be erased. An app can send what it reads to its own '
+    + 'server: only allow an app you trust, after checking its publisher. You can turn it off again on the app\u2019s card.',
+    'Allow group chats')
+    .then(function(yes){ if (yes) arcadeGroupsAllow(id, true); return !!yes; });
+}
+
 // Ticked on its card (the box is kept under the page Play opens, as Wallet access is).
 function arcadeMediaOn(page, g){ return arcadeMediaAllowed(page) || !!(g && g.opens && arcadeMediaAllowed(g.opens)); }
 

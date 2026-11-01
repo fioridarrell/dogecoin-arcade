@@ -1518,6 +1518,7 @@ body.fullscreen #arc-bot { display: none !important; }
   var ST_PERM = {
     wallet: ['Wallet access', 'Ask your wallet to trade, pay and sign. Each payment still shows its cost first.'],
     contacts: ['Contacts', 'The names and addresses in your address book, nothing else.'],
+    groups: ['Group chats', 'Read your group chats and post in them as you. Each post is a test-chain transaction.'],
     media: ['Camera & microphone', 'Only while the app is open. The arcade shows when they are on, with a Stop button.'],
     notify: ['Notifications', 'People in your address book can ring you in it while it is closed.']
   };
@@ -1625,6 +1626,7 @@ body.fullscreen #arc-bot { display: none !important; }
       // The same switches the app's card has (base.html), kept under the page the app opens, as home.html does.
       if (grants.wallet) arcadeGameAllow(page, true);
       if (grants.contacts) arcadeContactsAllow(page, true);
+      if (grants.groups) arcadeGroupsAllow(page, true);
       if (grants.media) arcadeMediaAllow(page, true);
       if (grants.notify) {
         arcadePushOn().then(function (why) {
