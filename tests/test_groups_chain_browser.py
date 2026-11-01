@@ -1,0 +1,100 @@
+"""arcade.groups on a real chain: two accounts in two browsers on regtest, nothing stubbed. An app posts in a group through
+the bridge, and the other member's app reads the line back out of the chain with its own key."""
+
+import json
+import pathlib
+import sys
+import time
+
+import pytest
+
+pytest.importorskip("selenium", reason="browser tests need selenium: pip install .[dev]")
+from selenium.webdriver.common.by import By                       # noqa: E402
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import browsers                                                     # noqa: E402
+from test_account_offer import _settled                             # noqa: E402
+from test_trade_browser import _inscribe, _signed_up, world        # noqa: E402,F401
+
+PAGE_ID = "cd" * 32
+PAGE = b"""<!doctype html><meta charset="utf-8"><body><script src="/r/groups.js"></script>
+<input id="job"><button id="go">go</button><pre id="out"></pre>
+<script>
+document.getElementById('go').onclick = function () {
+  var j = JSON.parse(document.getElementById('job').value), g = arcade.groups;
+  (j.op === 'list' ? g.list() : j.op === 'read' ? g.read(j.id) : g.send(j.id, j.text)).then(function (r) {
+    document.getElementById('out').textContent = JSON.stringify({value: r}); },
+    function (e) { document.getElementById('out').textContent = JSON.stringify({error: String(e.message || e)}); });
+};
+</script>"""
+
+
+def _app(driver, base):
+    browsers.allow_wallet(driver, base, PAGE_ID)
+    driver.execute_script("localStorage.setItem(arguments[0], 'yes')", f"arcade.groups.allow:{PAGE_ID}")
+    driver.get(f"{base}/inscriptions/{PAGE_ID}/full")
+    frame = driver.find_element(By.CSS_SELECTOR, ".inscription-frame")
+    driver.switch_to.frame(frame)
+    for _ in range(120):
+        if driver.execute_script("return !!document.getElementById('go')"):
+            return
+        time.sleep(0.25)
+    raise AssertionError("the app did not load")
+
+
+def _do(driver, **job):
+    driver.execute_script("document.getElementById('out').textContent=''; document.getElementById('job').value = arguments[0];"
+                          "document.getElementById('go').click();", json.dumps(job))
+    end = time.time() + 60
+    while time.time() < end:
+        said = driver.execute_script("return document.getElementById('out').textContent")
+        if said:
+            return json.loads(said)
+        time.sleep(0.1)
+    raise AssertionError(f"no answer to {job}")
+
+
+def test_a_line_posted_through_the_bridge_is_read_back_from_the_chain_by_the_other_member(world):   # noqa: F811
+    base, state, node, a, b = world
+    _inscribe(state, PAGE_ID, 7, "n" + "G" * 33, "text/html", PAGE, said={"app": {"name": "Chats", "groups": True}})
+    _signed_up(a, base, state, node, "alicegroup")
+    _signed_up(b, base, state, node, "bobgroup")
+    _settled(state, node.rpc)
+    made = a.execute_async_script("""
+        const done = arguments[0];
+        import("/messaging.js").then((mail) => mail.identity(window.wallet.phrase).then((me) =>
+          mail.createGroup(window.wallet, me, "Canoe club", ["@bobgroup"], "alicegroup")))
+          .then((g) => done({id: g.id}), (e) => done({error: String(e.message || e)}));""")
+    assert "error" not in made, made
+    _settled(state, node.rpc)
+
+    _app(a, base)
+    listed = _do(a, op="list")
+    assert "error" not in listed, listed
+    group = listed["value"]["groups"][0]
+    assert group["id"] == made["id"] and {m["tag"] for m in group["members"]} >= {"alicegroup", "bobgroup"}
+    sent = _do(a, op="send", id=group["id"], text="bay route is done")
+    assert "error" not in sent, sent
+    txid = sent["value"]["txid"]
+    assert len(txid) == 64 and txid in node.rpc.call("getrawmempool"), "a real transaction, in the pool"
+    assert "bay route is done" not in json.dumps(node.rpc.call("getrawtransaction", txid, 1)), "sealed on the chain"
+    _settled(state, node.rpc)
+
+    _app(b, base)
+    end = time.time() + 60
+    while time.time() < end:
+        heard = _do(b, op="list")
+        assert "error" not in heard, heard
+        if heard["value"]["groups"]:
+            break
+        time.sleep(2)
+    assert heard["value"]["groups"], "Bob's key arrived by the invite on the chain"
+    assert heard["value"]["groups"][0]["room"] == group["room"], "both can work out the same room"
+    while time.time() < end:
+        lines = _do(b, op="read", id=group["id"])["value"]
+        if lines:
+            break
+        time.sleep(2)
+    assert [l["text"] for l in lines] == ["bay route is done"], lines
+    assert lines[0]["from"] == listed["value"]["me"], "credited to the address that paid, which nobody can forge"
+    assert lines[0]["height"] > 0, "in a block"

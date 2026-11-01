@@ -822,6 +822,8 @@ body.fullscreen #arc-bot { display: none !important; }
     restore: '<svg width="9" height="9" viewBox="0 0 9 9" aria-hidden="true"><path d="M2 0h7v6H7V2H2zM0 3h7v6H0zM1 5v3h5V5z" fill="#000" fill-rule="evenodd"/></svg>',
     close: '<svg width="8" height="7" viewBox="0 0 8 7" aria-hidden="true"><path d="M0 0h2l2 2 2-2h2L5 3.5 8 7H6L4 5 2 7H0l3-3.5z" fill="#000"/></svg>'
   };
+  // A ring answered (base.html): the app comes up in a window, and everything else on the desktop stays open.
+  window.arcadeDeskOpen = function (url, name) { openWin({key: 'ring:' + url.split('?')[0], url: url, name: name}); };
   function openWin(o) {
     var dlg = !!o.body && !o.panel;
     if (o.url && !o.body) {

@@ -206,6 +206,7 @@ wrong shape is simply left out rather than refusing the app.
 | `wallet` | `true`: the app asks the player's wallet to trade, pay, send, mint or sign. Its card shows **Wallet access**. See below. | — |
 | `media` | `true`: the app uses the camera or microphone. Its card shows **Camera & microphone**. | — |
 | `contacts` | `true`: the app reads the player's address book (`arcade.contacts.list`). Its card shows **Contacts**. | — |
+| `groups` | `true`: the app opens the player's group chats (`arcade.groups`). Its card shows **Group chats**. | — |
 | `notify` | `true`: people can ring the player in this app while it is closed (`arcade.realtime.ring`). Its card shows **Notifications**. | — |
 | `minimized` | How long your app keeps running after a player minimizes it on the installed app's home screen: `{"timeout": 300}` is 300 seconds, then it is closed; `0` is no limit; left out, 15 minutes. See *Minimized* below. | up to 86400 seconds |
 
@@ -389,6 +390,10 @@ inscribe apps with.
 
 Two more switches work the same way as Wallet access, each shown on a card that says it needs it:
 
+* **Group chats** (`"groups": true`): your app may read the player's encrypted group chats and post in them, with
+  `arcade.groups` from `/r/groups.js`. It is off until the player turns it on, and each post is a small test-chain
+  transaction from their wallet. The keys stay with the viewer: your app gets names and words, plus a room name only
+  members can work out and `seal`/`open` for live messages. A page with no card gets nothing.
 * **Contacts** (`"contacts": true`): your app may read the player's address book with `arcade.contacts.list()`,
   names and addresses only. Until the player turns it on, the list is empty. Adding or removing a person
   (`arcade.contacts.add`, `arcade.contacts.remove`) asks the player each time, switch or not.

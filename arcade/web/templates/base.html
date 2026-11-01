@@ -2821,5 +2821,57 @@ if (typeof ARCADE_SIGNED !== "undefined" && (ARCADE_SIGNED || ARCADE_ME)) {
 }
 </script>
 {% include "_helper.html" %}
+<script>
+/* RINGING IN AN OPEN PAGE (2026-10-31: "If I have the arcade desktop open in my browser and somebody is trying to get a hold
+   of me, I want them to be able to call me and my arcade start ringing"). Every page of a signed-in account checks in
+   (arcade/ring.py's rules stay the node's: a contact, an app with Notifications on, a proved caller). One ring on screen
+   at a time; Answer opens the app, in a window on the desktop. Another tab answering closes it here too. */
+(function(){
+  if (typeof ARCADE_SIGNED === 'undefined' || !ARCADE_SIGNED || !window.fetch) return;   // signed in, with or without an @name
+  var EVERY = 5000, showing = null, shown = {}, ctx = null, beat = null, title = document.title, flash = null;
+  var tabs = window.BroadcastChannel ? new BroadcastChannel('arcade-ring') : null;
+  function tone(on){
+    clearInterval(beat); beat = null; if (!on) return;
+    try { ctx = ctx || new (window.AudioContext || window.webkitAudioContext)(); if (ctx.state === 'suspended') ctx.resume(); } catch (e) { return; }
+    function ring(){ [0, .28, 1, 1.28].forEach(function(at){ var o = ctx.createOscillator(), g = ctx.createGain(), t = ctx.currentTime + at;
+      o.frequency.value = 660; g.gain.setValueAtTime(.0001, t); g.gain.exponentialRampToValueAtTime(.18, t + .03); g.gain.exponentialRampToValueAtTime(.0001, t + .22);
+      o.connect(g); g.connect(ctx.destination); o.start(t); o.stop(t + .24); }); }
+    ring(); beat = setInterval(ring, 3000);
+  }
+  function close(){
+    tone(false); clearInterval(flash); flash = null; document.title = title;
+    if (showing) { showing.box.remove(); showing = null; }
+  }
+  function show(r){
+    shown[r.id] = true;
+    var box = document.createElement('div');
+    box.setAttribute('role', 'alertdialog'); box.setAttribute('aria-label', 'Incoming call');
+    box.style.cssText = 'position:fixed;right:18px;bottom:18px;z-index:2147483000;width:min(340px,calc(100vw - 36px));background:#181d21;color:#e9eef0;border:1px solid #2a3238;border-radius:14px;padding:16px;box-shadow:0 10px 40px #000a;font:15px/1.4 system-ui,sans-serif';
+    var who = document.createElement('div'); who.style.cssText = 'font-size:18px;font-weight:700'; who.textContent = r.from;
+    var what = document.createElement('div'); what.style.cssText = 'color:#a3b0b8;margin:2px 0 12px'; what.textContent = (r.line || 'is ringing you') + ' \u00b7 ' + r.app;
+    var row = document.createElement('div'); row.style.cssText = 'display:flex;gap:10px';
+    function btn(t, bg, fg){ var b = document.createElement('button'); b.type = 'button'; b.textContent = t; b.style.cssText = 'flex:1;min-height:44px;border:0;border-radius:10px;font:inherit;font-weight:700;cursor:pointer;background:' + bg + ';color:' + fg; row.appendChild(b); return b; }
+    var no = btn('Decline', '#ff7a63', '#1a0a07'), yes = btn('Answer', '#3fbf74', '#06150c');
+    no.onclick = function(){ if (tabs) tabs.postMessage(r.id); close(); };
+    yes.onclick = function(){
+      if (tabs) tabs.postMessage(r.id);
+      close();
+      if (window.arcadeDeskOpen) window.arcadeDeskOpen(r.url, r.app); else location.href = r.url;
+    };
+    box.appendChild(who); box.appendChild(what); box.appendChild(row); document.body.appendChild(box);
+    showing = {id: r.id, box: box}; tone(true);
+    var on = false; flash = setInterval(function(){ on = !on; document.title = on ? 'Ringing: ' + r.from : title; }, 1000);
+    setTimeout(function(){ if (showing && showing.id === r.id) close(); }, 40000);
+    yes.focus();
+  }
+  if (tabs) tabs.onmessage = function(e){ shown[e.data] = true; if (showing && showing.id === e.data) close(); };
+  function look(){
+    fetch('/account/ring/live', {credentials: 'same-origin', cache: 'no-store'}).then(function(r){ return r.ok ? r.json() : {rings: []}; })
+      .then(function(j){ if (showing) return; var r = (j.rings || []).filter(function(x){ return !shown[x.id]; })[0]; if (r) show(r); })
+      .catch(function(){});
+  }
+  look(); setInterval(look, EVERY);
+})();
+</script>
 </body>
 </html>

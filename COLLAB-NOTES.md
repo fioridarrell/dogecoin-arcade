@@ -88,6 +88,20 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-31 arcade.groups, and a ring that reaches an open page (Claude, branch claude/riffs-groups)
+The operator: "Start with the bridge and then build the app to use the bridge", and "If I have the arcade desktop open in my
+browser and somebody is trying to get a hold of me, I want them to be able to call me and my arcade start ringing."
+- **`/r/groups.js`, `arcade.groups`:** an app with `"groups": true` on its card, and the player's Group chats switch on, can
+  list, read and post in the Messenger's group chats, make a group after a yes card, and save a file (its frame cannot
+  download). The keys never leave the viewer. No new chain data: these are the group chats of 2026-09-25.
+- **Live messages:** rooms are not encrypted, so an app gets `room` (from the group's secret, so only members can name it,
+  and it changes when somebody is removed) and `seal`/`open`.
+- **Rings:** `/account/ring/live`, polled by every page of a signed-in account, marks the account reachable: the node now
+  holds its ring room without any push device, and the page shows Answer and Decline with a ring tone. The rules are
+  unchanged: a contact, an app with Notifications on, a proved caller.
+- Tests: `tests/test_groups_bridge_browser.py`, `tests/test_groups_chain_browser.py` (regtest, two browsers),
+  `tests/test_ring.py`, `tests/test_ring_browser.py`.
+
 ### 2026-10-31 UDP beside TCP on mesh links; a media server on every node; no Cloudflare needed for media (Claude, branch claude/mesh-udp)
 The operator: "Add UDP to the mesh along TCP for a backup", "add a multimedia server for games, audio, and video using
 UDP", "The point of adding UDP so we don't have to rely on Cloudflare at all."

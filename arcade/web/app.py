@@ -10435,6 +10435,10 @@ def create_app(state: AppState) -> FastAPI:
     # caller in their address book, proved by the caller's own certificate.
 
     _rings = ringlib.Rings(lambda: getattr(state, "mesh", None))
+    #: Accounts with an arcade page open now, and the rings waiting for that page (2026-10-31: "If I have the arcade
+    #: desktop open in my browser and somebody is trying to get a hold of me ... my arcade start ringing").
+    _ring_tabs: dict[str, float] = {}
+    _ring_waiting: dict[str, list] = {}
     _ring_thread: dict[str, Any] = {}
 
     def _ring_setting(pubkey: str) -> dict:
@@ -10447,7 +10451,8 @@ def create_app(state: AppState) -> FastAPI:
         """A ring for an account on this node: woken only if every rule holds (arcade/ring.py)."""
         push = state.push()
         pubkey = _owners().get(to)
-        if push is None or pubkey is None or not isinstance(said, dict):
+        tab_open = pubkey is not None and time.time() - _ring_tabs.get(pubkey, 0) < ringlib.TAB_FOR
+        if (push is None and not tab_open) or pubkey is None or not isinstance(said, dict):
             return False
         caller, app_id = str(said.get("f") or "")[:64], str(said.get("app") or "")
         if not re.fullmatch(r"[0-9a-f]{64}", app_id) or not caller or caller == to:
@@ -10470,22 +10475,28 @@ def create_app(state: AppState) -> FastAPI:
                 "line": ringlib.clean_line(said.get("line"), ringlib.RING_LINE),
                 "link": str(said.get("link") or "")[:ringlib.RING_LINK]}
         _rings.keep(ring)
-        push.tell(pubkey, "ring:" + ring["id"], json.dumps({"f": caller, "app": app_id, "line": ring["line"]}))
+        if tab_open:                                           # an arcade page is open: it rings there and then
+            _ring_waiting.setdefault(pubkey, []).append(ring)
+        if push is not None:
+            push.tell(pubkey, "ring:" + ring["id"], json.dumps({"f": caller, "app": app_id, "line": ring["line"]}))
         return True
 
     def _ring_loop() -> None:
-        """Hold the ring rooms of this node's accounts that have a phone and an app switched on; wake them."""
-        push = state.push()
-        if push is None or _ring_thread.get("thread") is not None:
+        """Hold the ring rooms of this node's accounts that have a phone, or an arcade page open, and an app switched
+        on; wake them."""
+        if _ring_thread.get("thread") is not None:
             return
 
         def loop():
             while not getattr(state, "shutting_down", False):
                 try:
-                    phones = push.subscribed()
+                    push = state.push()
+                    phones = push.subscribed() if push is not None else set()
                     hold = set()
+                    now = time.time()
                     for address, pubkey in _owners().items():
-                        if pubkey in phones and _ring_setting(pubkey)["apps"]:
+                        reachable = pubkey in phones or now - _ring_tabs.get(pubkey, 0) < ringlib.TAB_FOR
+                        if reachable and _ring_setting(pubkey)["apps"]:
                             hold.add(address)
                     _rings.hold(hold)
                     for to, said, node in _rings.heard_now():
@@ -10577,6 +10588,34 @@ def create_app(state: AppState) -> FastAPI:
                                  "why": "they have no phone to wake for this app, or their arcade is away"})
         threading.Thread(target=_rings.say, args=(to, ring), daemon=True).start()
         return JSONResponse({"ok": True, "rung": True})
+
+    @app.get("/account/ring/live")
+    def ring_live(request: Request):
+        """An open arcade page checks in: this account can be rung here, and anything ringing it now."""
+        account = _signed_in_account(request)
+        now = time.time()
+        _ring_tabs[account.pubkey] = now
+        if len(_ring_tabs) > 10_000:
+            for old in sorted(_ring_tabs, key=_ring_tabs.get)[:5_000]:
+                del _ring_tabs[old]
+        _ring_loop()
+        kept = [r for r in _ring_waiting.get(account.pubkey, []) if now - r["at"] < ringlib.TAB_RING]
+        if kept:
+            _ring_waiting[account.pubkey] = kept
+        else:
+            _ring_waiting.pop(account.pubkey, None)
+        out = []
+        for ring in kept:
+            tag = ""
+            try:
+                tag = state.token_index(_account_chain()).tag_of(ring["from"]) or ""
+            except Exception:                                      # noqa: BLE001
+                pass
+            found = _game_by_txid(ring["app"])
+            name = (found["game"].get("name") if found else _game_of_page(ring["app"]).get("name")) or "an app"
+            out.append({"id": ring["id"], "from": f"@{tag}" if tag else ring["from"][:10] + "\u2026", "app": name,
+                        "line": ring["line"], "url": f"/inscriptions/{ring['app']}/full?ring={ring['id']}"})
+        return JSONResponse({"rings": out}, headers={"Cache-Control": "no-store"})
 
     @app.get("/account/ring/{ring_id}")
     def ring_get(request: Request, ring_id: str):
