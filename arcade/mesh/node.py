@@ -83,6 +83,7 @@ import json
 import logging
 import random
 import secrets
+import socket
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -96,6 +97,10 @@ from .link import Link, LinkError, handshake
 
 log = logging.getLogger("arcade.mesh")
 GUESTLIKE = lambda m: str(m).startswith("guest-")   # noqa: E731 -- a guest has no certificate to wait for
+# Windows has no SO_REUSEPORT, and asyncio refuses reuse_port=True there ("reuse_port not
+# supported by socket module"), so the mesh never started. Ask for it only where it exists;
+# no SO_REUSEADDR in its place: on Windows that lets another program bind the same port.
+_REUSE_PORT = hasattr(socket, "SO_REUSEPORT")
 
 
 def room_id(room: str) -> str:
@@ -282,7 +287,7 @@ class MeshNode:
     async def start(self) -> None:
         if self.listen_port is not None:
             self._server = await asyncio.start_server(self._accept, self.listen_host,
-                                                      self.listen_port, reuse_port=True)
+                                                      self.listen_port, reuse_port=_REUSE_PORT or None)
             if self.listen_port == 0:   # tests ask for any free port
                 self.listen_port = self._server.sockets[0].getsockname()[1]
         if self.ws_port is not None:
@@ -418,14 +423,14 @@ class MeshNode:
                 log.exception("mesh meeter")
 
     async def _meet(self, addr: tuple[str, int]) -> None:
-        import socket
         entry = self.addrs[addr]
         loop = asyncio.get_running_loop()
         sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
         writer = None
         try:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+            if _REUSE_PORT:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
             sock.bind((self.meet_from or "::", self.listen_port))
             sock.setblocking(False)
             await asyncio.wait_for(loop.sock_connect(sock, (addr[0], addr[1], 0, 0)), MEET_WAIT)
