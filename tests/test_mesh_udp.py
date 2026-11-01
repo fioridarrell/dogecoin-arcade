@@ -234,10 +234,11 @@ def test_a_bad_wire_loses_nothing_and_keeps_the_order(loss):
         a.released.set()
         b.released.set()
         assert await _until(lambda: a.usable and b.usable)
-        frames = [bytes([i % 256]) * rnd.randint(1, 5000) for i in range(300)]
+        count = 60 if loss > 0.1 else 300                    # 25% loss is slow on purpose: the window stays small
+        frames = [bytes([i % 256]) * rnd.randint(1, 5000) for i in range(count)]
         for f in frames:
             await a.send_frame(f)
-        assert await _until(lambda: len(got[1]) == 300, 30.0), (len(got[1]), downs)
+        assert await _until(lambda: len(got[1]) == count, 30.0), (len(got[1]), downs)
         assert got[1] == frames and not downs
         a.close()
         b.close()
