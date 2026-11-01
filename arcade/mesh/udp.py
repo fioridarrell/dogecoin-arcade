@@ -68,7 +68,8 @@ ANSWER_WAIT = 15.0                      # seconds a node has to say ready
 MAP_KEEP = 60.0                         # seconds one STUN answer is trusted
 
 _HELLO, _ACK, _DATA = b"H", b"A", b"D"
-_ACK_BODY = struct.Struct(">QQ")        # next chunk wanted, bitmap of the 64 after it
+_ACK_NEXT = struct.Struct(">Q")         # next chunk wanted, then a bitmap of the MAP_BITS after it
+MAP_BITS = 1024
 _DATA_HEAD = struct.Struct(">QB")       # chunk number, more of this frame to come
 
 
@@ -272,12 +273,12 @@ class Path:
     def _rto(self) -> float:
         if self.srtt is None:
             return 1.0
-        return min(3.0, max(0.05, self.srtt + 4 * self.rttvar))
+        return min(3.0, max(0.2, self.srtt + 4 * self.rttvar))
 
     def _lost(self, now: float) -> None:
         """One halving per round trip, however many chunks that trip lost."""
         if now >= self.loss_until:
-            self.window = max(4.0, self.window / 2)
+            self.window = max(float(INITIAL_WINDOW), self.window / 2)
             self.loss_until = now + (self.srtt or 0.2)
 
     def _resend(self, now: float) -> None:
@@ -285,19 +286,21 @@ class Path:
         for out in list(self.flight.values()):
             if out.sacked:
                 continue
-            early = out.seq + 3 <= self.top_sacked and now - out.at > (self.srtt or 0.05)
-            if now - out.at >= min(1.0, rto * 2 ** min(out.sends - 1, 4)) or early:
+            # Later chunks arrived and this one did not, and it has had a whole round trip to.
+            early = out.seq + 3 <= self.top_sacked and now - out.at > 1.5 * (self.srtt or 0.05)
+            if now - out.at >= min(1.5, rto * 2 ** min(out.sends - 1, 4)) or early:
                 if out.sends >= MAX_RESENDS:
-                    self.down("a chunk would not go through")
+                    self.down(f"chunk {out.seq} would not go through")
                     return
                 self._lost(now)
                 self.resends += 1
                 self._send_chunk(out, now)
 
     def _on_ack(self, body: bytes, now: float) -> None:
-        if len(body) != _ACK_BODY.size:
+        if len(body) != _ACK_NEXT.size + MAP_BITS // 8:
             return
-        wanted, bits = _ACK_BODY.unpack(body)
+        wanted = _ACK_NEXT.unpack_from(body)[0]
+        bits = int.from_bytes(body[_ACK_NEXT.size:], "big")
         if wanted > self.next_seq:
             return
         done = [seq for seq in self.flight if seq < wanted]
@@ -306,12 +309,16 @@ class Path:
             if out.sends == 1:
                 self._measure(now - out.at)
             self.window = min(MAX_WINDOW, self.window + (1.0 if self.window < 256 else 16.0 / self.window))
-        for i in range(64):
-            if (bits >> i) & 1:
-                out = self.flight.get(wanted + 1 + i)
-                if out is not None:
-                    out.sacked = True
-                    self.top_sacked = max(self.top_sacked, out.seq)
+        i = 0
+        while bits:
+            step = (bits & -bits).bit_length() - 1
+            i += step
+            bits >>= step + 1
+            out = self.flight.get(wanted + 1 + i)
+            i += 1
+            if out is not None:
+                out.sacked = True
+                self.top_sacked = max(self.top_sacked, out.seq)
         self._push(now)
 
     def _measure(self, sample: float) -> None:
@@ -365,10 +372,11 @@ class Path:
             self.ack_timer = None
         self.ack_due = 0
         bits = 0
-        for i in range(64):
-            if self.rx_next + 1 + i in self.rx_held:
-                bits |= 1 << i
-        self._emit(_ACK, _ACK_BODY.pack(self.rx_next, bits))
+        for seq in self.rx_held:
+            at = seq - self.rx_next - 1
+            if 0 <= at < MAP_BITS:
+                bits |= 1 << at
+        self._emit(_ACK, _ACK_NEXT.pack(self.rx_next) + bits.to_bytes(MAP_BITS // 8, "big"))
 
     async def _hand_up(self) -> None:
         await self.released.wait()
@@ -402,7 +410,7 @@ class Path:
     # ---------------------------------------------------------------- the clock
 
     async def _run(self) -> None:
-        next_knock = 0.0
+        next_knock = next_scan = 0.0
         while not self.dead:
             now = time.monotonic()
             quiet = now - self.last_heard
@@ -419,7 +427,9 @@ class Path:
                     self.down("silent")
                     return
                 self._push(now)
-                self._resend(now)
+                if now >= next_scan:
+                    self._resend(now)
+                    next_scan = now + 0.02
                 if self.dead:
                     return
                 if now - self.last_sent >= KEEP_EVERY:

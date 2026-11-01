@@ -36,6 +36,7 @@ log = logging.getLogger("arcade.mesh.punch")
 MAGIC = b"APUNCH1"
 DURATION = 8.0              # seconds each side sends
 EVERY = 0.2                 # seconds between packets to one address
+BUFFER = 4 * 1024 * 1024    # bytes a UDP socket may hold for us
 MAX_ADDRS = 4               # addresses one side may give
 COOLDOWN = 20.0             # seconds between probes answered for one node
 KEEP = 20                   # results kept for Admin
@@ -62,6 +63,11 @@ def udp_socket() -> socket.socket:
     WSAECONNRESET, and punching sends to addresses that may not answer; SIO_UDP_CONNRESET turns that off."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     no_reset(sock)
+    for option in (socket.SO_RCVBUF, socket.SO_SNDBUF):  # the default drops a window's worth arriving at once
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, option, BUFFER)
+        except OSError:
+            pass
     sock.setblocking(False)
     sock.bind(("0.0.0.0", 0))
     return sock
