@@ -169,3 +169,25 @@ def test_a_borrowed_relay_is_named_by_the_proof_not_the_answer():
         name = got[0]["username"]
         assert turn.password_for(SECRET, name) == got[0]["credential"]
     asyncio.run(run())
+
+
+def test_who_gets_which_relay():
+    class _Stun:
+        def __init__(self, hosts): self.hosts = hosts
+        def mine(self): return self.hosts
+
+    srv = turn.TurnServer(SECRET)
+    srv.transport = object()
+    far = [{"urls": ["turn:203.0.113.9:3478?transport=udp"], "username": "u", "credential": "c"}]
+    # A public arcade: anybody, anywhere, reaches it.
+    got = turn.player_relays(srv, _Stun([("198.51.100.1", 3478)]), 3478, "10.0.0.2", "8.8.8.8", "addr", far)
+    assert got[0]["urls"] == ["turn:198.51.100.1:3478?transport=udp"] and got[1:] == far
+    # Behind NAT, a player away from home: its own relay is out of reach, the borrowed one is the way.
+    assert turn.player_relays(srv, _Stun([]), 3478, "192.168.1.5", "8.8.8.8", "addr", far) == far
+    # Behind NAT, a player at home: its own node too.
+    got = turn.player_relays(srv, _Stun([]), 3478, "192.168.1.5", "192.168.1.9", "addr", far)
+    assert got[0]["urls"] == ["turn:192.168.1.5:3478?transport=udp"] and got[1:] == far
+    # No relay here at all, or its month is used up.
+    assert turn.player_relays(None, None, None, None, "8.8.8.8", "addr", far) == far
+    srv.limit_gb = lambda: 0.0
+    assert turn.player_relays(srv, _Stun([("198.51.100.1", 3478)]), 3478, None, "8.8.8.8", "addr", far) == far

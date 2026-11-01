@@ -39,7 +39,6 @@ thread while it waits, and it does nothing but wait on the mesh's queue.
 
 from __future__ import annotations
 
-import ipaddress
 import base64
 import logging
 import json
@@ -455,20 +454,10 @@ def register(app, state, *, account_view: Callable, signed_in: Callable,
                 except Exception as exc:                 # noqa: BLE001 -- none borrowed this time
                     log.info("media relay: %s", exc)
             media_kept[address] = (time.time(), found)
-        if server is None or not server.available():
-            return found
-        hosts = list(getattr(service.stun, "mine", lambda: [])())
         asker = request.headers.get("cf-connecting-ip") or (request.client.host if request.client else "")
-        lan = punchlib.local_ipv4()
-        try:
-            if lan and ipaddress.ip_address(asker).is_private:
-                hosts.insert(0, (lan, service.stun_port))
-        except ValueError:
-            pass
-        if hosts:
-            username, password = turnlib.login(server.secret, address)
-            return [turnlib.ice_server(hosts[:MAX_ICE_NODES], username, password)] + found
-        return found
+        return turnlib.player_relays(server, getattr(service, "stun", None), getattr(service, "stun_port", None),
+                                     punchlib.local_ipv4(), asker, address,
+                                     found)
 
     @app.get("/realtime/ice")
     def realtime_ice(request: Request):

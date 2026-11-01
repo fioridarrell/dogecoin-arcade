@@ -551,3 +551,21 @@ def ice_server(hosts: list, username: str, credential: str) -> dict:
     """What a browser's RTCPeerConnection takes."""
     urls = [f"turn:[{h}]:{p}?transport=udp" if ":" in h else f"turn:{h}:{p}?transport=udp" for h, p in hosts]
     return {"urls": urls, "username": username, "credential": credential}
+
+
+def player_relays(server: TurnServer | None, stun_share, port: int | None, lan: str | None, asker: str, address: str,
+                  borrowed: list[dict]) -> list[dict]:
+    """What a signed-in player is offered: this node's relay where the player can reach it, the proved address for
+    anybody and the home-network one for a player at home, and the relays borrowed from other arcades."""
+    if server is None or not server.available():
+        return borrowed
+    hosts = list(stun_share.mine()) if stun_share is not None else []
+    try:
+        if lan and port and _plain(asker).is_private:
+            hosts.insert(0, (lan, port))
+    except ValueError:
+        pass
+    if not hosts:
+        return borrowed
+    username, password = login(server.secret, address)
+    return [ice_server(hosts[:4], username, password)] + borrowed

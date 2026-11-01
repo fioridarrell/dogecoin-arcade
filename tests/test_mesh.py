@@ -832,6 +832,37 @@ def test_websocket_addresses_are_checked():
 
 # ------------------------------------------------------------------ Core through the mesh (2026-10-12)
 
+def test_both_cores_dialling_at_once_do_not_close_each_others_stream():
+    from arcade.mesh.corelink import CoreBridge
+
+    async def go():
+        async def echo(reader, writer):
+            while data := await reader.read(100):
+                writer.write(data); await writer.drain()
+        sa, sb = await asyncio.start_server(echo, "127.0.0.1", 0), await asyncio.start_server(echo, "127.0.0.1", 0)
+        a, b = mk(), mk()
+        ba = CoreBridge({"test": sa.sockets[0].getsockname()[1]}, None)
+        bb = CoreBridge({"test": sb.sockets[0].getsockname()[1]}, None)
+        a.add_extension(ba); b.add_extension(bb)
+        await started(a, b)
+        try:
+            a.add_address(*addr(b))
+            await until(lambda: ba.listeners and bb.listeners, what="both open a port")
+            pa, pb = next(iter(ba.listeners.values()))[1], next(iter(bb.listeners.values()))[1]
+            (r1, w1), (r2, w2) = await asyncio.gather(asyncio.open_connection("127.0.0.1", pa),
+                                                      asyncio.open_connection("127.0.0.1", pb))
+            w1.write(b"one"); w2.write(b"two")
+            await asyncio.gather(w1.drain(), w2.drain())
+            assert await asyncio.wait_for(r1.read(10), 5) == b"one"
+            assert await asyncio.wait_for(r2.read(10), 5) == b"two"
+            w1.close(); w2.close()
+        finally:
+            await a.stop(); await b.stop()
+            sa.close(); sb.close()
+            await asyncio.sleep(0.2)
+    run(go())
+
+
 def test_core_peers_through_the_mesh_both_ways_and_only_to_the_core_port():
     """Two stand-in Core nodes: a's Core dials the port its arcade opened for b, and the bytes reach
     b's Core peer port, and the answer comes back. addnode is asked to add, and to remove on unlink."""

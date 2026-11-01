@@ -169,7 +169,9 @@ class CoreBridge:
             if link is None:
                 writer.close()
                 return
-            sid, self._next = self._next, self._next + 1
+            # Each side numbers its own streams apart from the other's: both Cores usually dial at once, and two
+            # streams with one number closed each other (2026-10-31, seen on the first UDP link).
+            sid, self._next = self._next * 2 + (self.node.node_id < peer), self._next + 1
             self.streams[(peer, sid)] = {"w": writer, "buf": [], "task": self.node._spawn(self._pump(link, sid, reader))}
             try:
                 await link.send({"t": "cs", "op": "open", "s": sid, "c": chain})

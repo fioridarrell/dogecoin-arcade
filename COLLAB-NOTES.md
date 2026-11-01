@@ -107,7 +107,17 @@ UDP", "The point of adding UDP so we don't have to rely on Cloudflare at all."
   to its monthly limit. Set `media_server.limit_gb` to 0 to opt out.
 - Includes PR #52 (fioridarrell): the mesh starts on Windows. Added for Windows: UDP sockets turn off WSAECONNRESET,
   and the STUN port takes no SO_REUSEADDR there. Not yet run on real Windows.
-- Tests: `tests/test_mesh_udp.py`, `tests/test_mesh_turn.py`. Measured a test machine<->.25: 24 MB in order, 8 MB/s; Firefox relay-only call
+- **`arcade/mesh/introduce.py`, links with no TCP at all:** two nodes that cannot dial each other swap keys and addresses
+  hop by hop over the mesh (signed, along the SUB paths), punch, and run the normal handshake over UDP. A node with no
+  links publishes the introduction sealed to the other's mesh key, on the machine layer (topic `mesh/intro/v1`, spends a
+  fee, at most every 30 minutes). A `new-port` NAT opens 256 sockets while the other side guesses ports (22 s, about 800
+  tiny packets); two `new-port` NATs do not try. Such a link has no backup: if the path dies the link does, and they meet again.
+- **Relays for browsers behind NAT:** `/realtime/ice` gives a signed-in player a login on reachable arcades' relays,
+  borrowed over the mesh; a failed lookup is kept 60 s, not hours.
+- **`corelink.py` fix, any transport:** both sides numbered streams from 1, so two Cores dialing at once closed each
+  other's stream. Each side now has its own numbers. Older arcades keep the old numbering, so the race stays with them.
+- Tests: `tests/test_mesh_udp.py`, `tests/test_mesh_turn.py`, `tests/test_mesh_introduce.py`. Two real regtest Cores synced
+  400 blocks over a UDP-only link with the introducing node gone. Measured a test machine<->.25: 24 MB in order, 8 MB/s; Firefox relay-only call
   through two relays over the Starlink address: 300/300 game packets, audio and video, 0 lost.
 
 ### 2026-10-31 Windows: no automatic install under a running arcade; settings never rewritten from a failed read (Claude, issue #51)
