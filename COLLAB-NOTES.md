@@ -88,6 +88,28 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-10-31 UDP beside TCP on mesh links; a media server on every node; no Cloudflare needed for media (Claude, branch claude/mesh-udp)
+The operator: "Add UDP to the mesh along TCP for a backup", "add a multimedia server for games, audio, and video using
+UDP", "The point of adding UDP so we don't have to rely on Cloudflare at all."
+- **`arcade/mesh/udp.py`:** a link still forms over TCP, a WebSocket or a tunnel, then the two nodes punch and send every
+  frame over UDP (sealed under keys from the link, reliable, in order, window halves on loss). The connection stays
+  open as the backup; if the path goes quiet, undelivered chunks go down it, then new frames: nothing above the link
+  notices. Older arcades ignore "ud" and stay on TCP. `ARCADE_MESH_UDP=0` turns it off. `/admin/api/mesh` -> `udp`.
+- **`arcade/mesh/turn.py`:** a TURN relay on the STUN port (no new dependency). Every WebRTC use gets it unchanged: game
+  fast lane, calls, Spaces, Screen Share. It only moves ciphertext. Signed-in players only, logins expire, no
+  sending to this machine or into a private network, limits per allocation, per login and in all; 100 GB a month by default
+  (setting `media_server.limit_gb`; 0 stops it). `ARCADE_MESH_TURN=0` turns it off. `/admin/api/mesh` -> `media`.
+- **Behind NAT:** relay sockets learn their outside address from arcade STUN and punch each other. A player who cannot
+  reach their own node borrows a relay from an arcade another node has proved reachable (`TurnShare`, frames "tu").
+- **Cloudflare:** `/realtime/ice` names public STUN only when no arcade STUN is known, and the operator's Cloudflare TURN
+  only when no arcade relay can be had.
+- **For SadFrog's side:** after updating, a VPS with its STUN port open serves as a relay for other arcades' players, up
+  to its monthly limit. Set `media_server.limit_gb` to 0 to opt out.
+- Includes PR #52 (fioridarrell): the mesh starts on Windows. Added for Windows: UDP sockets turn off WSAECONNRESET,
+  and the STUN port takes no SO_REUSEADDR there. Not yet run on real Windows.
+- Tests: `tests/test_mesh_udp.py`, `tests/test_mesh_turn.py`. Measured a test machine<->.25: 24 MB in order, 8 MB/s; Firefox relay-only call
+  through two relays over the Starlink address: 300/300 game packets, audio and video, 0 lost.
+
 ### 2026-10-31 Windows: no automatic install under a running arcade; settings never rewritten from a failed read (Claude, issue #51)
 fioridarrell (Windows 11, archive install, ARCADE_NO_SUPERVISOR=1): automatic updates left `site-packages/arcade`
 half-replaced (176 of 396 files gone, `~`-named pip leftovers), then ModuleNotFoundError: arcade.config; and
