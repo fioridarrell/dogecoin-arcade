@@ -88,6 +88,14 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-11-01 Room media: a screen beside the camera, a second picture for any page (Claude)
+The operator: a person's voice or camera box stays, and a shared screen "should open a new box". Game agnostic.
+- `room.media.showScreen({sound})` / `hideScreen()`: the screen as a second picture. The camera and microphone are not touched.
+  Own senders (`peer.xsenders`), own stream, named first over the ordered media channel (`{x: stream id}`) so the track never
+  arrives before its name. An older viewer ignores that message and just sees one more track on the first stream.
+- Drawn and heard as `id#screen` / `me#screen` through `place` and `volume`. Its sound is its own track, so no mixing here.
+- `start({screen: true})` still works as before. Docs: multiplayer.md. Tests: test_media_browser.py.
+
 ### 2026-11-01 Room media: a player's own volume, and what a shared screen plays (Claude)
 The operator: "Add audio sharing to the screen sharing", a volume and a mute for each person, and "game agnostic". For every
 page, nothing app-specific; a page that does not ask behaves as before.

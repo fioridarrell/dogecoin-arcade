@@ -396,6 +396,54 @@ def test_a_screen_s_sound_goes_with_it_and_each_player_has_their_own_volume(tmp_
         state.mesh.stop()
 
 
+def test_a_screen_goes_beside_the_camera_as_a_second_picture_with_its_own_sound(tmp_path, no_nodes):
+    """2026-11-01: the camera stays, the screen is a new box. Stopping the screen leaves the camera, and a page that never asks sees nothing new."""
+    state, server, base = _server(tmp_path)
+    try:
+        with sync_api.sync_playwright() as pw:
+            chrome = _launch(pw)
+            pa, _, _ = _player(chrome, base)
+            pb, _, _ = _player(chrome, base)
+            ga, gb = _game(pa), _game(pb)
+            _until(ga, "window.room && window.room.media && window.room.me", "a in")
+            _until(gb, "window.room && window.room.media && window.room.me", "b in")
+            ida, idb = ga.evaluate("window.room.me.id"), gb.evaluate("window.room.me.id")
+            _until(ga, f"window.states[{idb!r}] === 'direct'", "a direct")
+            pa.evaluate(FAKE_SCREEN)
+            assert ga.evaluate("window.room.media.start({video: true, audio: true})")["video"] is True
+            ga.evaluate(f"window.room.media.share({idb!r}, true)")
+            gb.evaluate(f"window.room.media.hear({ida!r}, true)")
+            gb.evaluate(f"window.room.media.place({ida!r}, {{x: 0, y: 0, w: 320, h: 180}})")
+            cam = f"document.querySelector('.arcade-media-layer video[data-media=\"{ida}\"]')"
+            scr = f"document.querySelector('.arcade-media-layer video[data-media=\"{ida}#screen\"]')"
+            _until(pb, f"(() => {{ var v = {cam}; return v && v.videoWidth > 0; }})()", "a's camera")
+            said = ga.evaluate("window.room.media.showScreen({sound: true})")
+            assert said == {"ok": True, "sound": True}, said
+            gb.evaluate(f"window.room.media.place({ida!r} + '#screen', {{x: 0, y: 200, w: 320, h: 180}}, {{fit: 'contain'}})")
+            ga.evaluate("window.room.media.place('me#screen', {x: 0, y: 0, w: 160, h: 90})")
+            _until(pb, f"(() => {{ var v = {scr}; return v && v.videoWidth > 0 && v.style.display !== 'none'; }})()", "a's screen, a second picture")
+            assert pb.evaluate(f"{cam}.videoWidth > 0"), "the camera goes on"
+            assert pb.evaluate(f"{cam}.srcObject.getVideoTracks().length") == 1
+            assert "Sharing your screen and its sound" in pa.inner_text(".arcade-media-pill")
+            pb.wait_for_timeout(1200)
+            assert pb.evaluate(f"(id) => ({LOUD})(id)", ida + "#screen") > .01, "the screen has a sound of its own"
+            gb.evaluate(f"window.room.media.volume({ida!r} + '#screen', 0.25)")
+            assert pb.evaluate(f"{scr}.volume") == .25 and pb.evaluate(f"{cam}.volume") == 1, "and its own volume"
+            # The browser's own Stop sharing: the screen goes, the camera stays.
+            pa.evaluate("""() => { const v = document.querySelector('.arcade-media-layer video[data-media="me#screen"]');
+                v.srcObject.getVideoTracks().forEach(t => { t.stop(); t.dispatchEvent(new Event('ended')); }); }""")
+            _until(ga, "window.log.some(function (e) { return e[0] === 'state' && e[1] === 'screen-off'; })", "told screen-off")
+            _until(pb, f"!{scr}", "the second picture gone", timeout=20000)
+            assert pb.evaluate(f"{cam}.videoWidth > 0")
+            assert not gb.evaluate("window.log.some(function (e) { return e[0] === 'media-off'; })"), "they never went away"
+            assert ga.evaluate("window.room.media.showScreen({sound: true})")["ok"], "and again"
+            ga.evaluate("window.room.media.hideScreen()")
+            chrome.close()
+    finally:
+        server.stop()
+        state.mesh.stop()
+
+
 def test_ring_and_ringed_answer_in_the_viewer(tmp_path, no_nodes):
     """arcade.realtime.ring / ringed (arcade/ring.py) reach the viewer and come back: a page opened without a
     notification's ring has none, and a guest cannot ring anybody."""

@@ -113,6 +113,11 @@
 // the answer's `sound` says if the browser gave any (the player can leave it out, and many browsers have none to give).
 // Muting then silences the microphone only.
 // room.media.volume(p.id, 0.4): how loud they are for you alone, 0 to 1. It starts at 1.
+// A SCREEN BESIDE THE CAMERA (2026-11-01): room.media.showScreen({sound: true}), on the player's press, sends the screen as a second
+// picture and leaves the camera and microphone as they are. {ok, sound} or {ok: false, error: 'cancelled'}. Everybody you share with
+// gets it; it is drawn and heard under its own name: room.media.place(p.id + '#screen', rect), 'me#screen', and
+// room.media.volume(p.id + '#screen', 0.4). Say so to the others yourself, as you say anything else. hideScreen() ends it, and
+// the browser's own Stop sharing gives state 'screen-off'.
 //
 // Rectangles are in this page's CSS pixels (getBoundingClientRect), placed again when your layout moves; null hides
 // one. A picture can only be shared over a direct link ('not direct' otherwise: media never goes through the room).
@@ -204,6 +209,11 @@
             function (err) { return {ok: false, error: err.message}; });
   };
   Media.prototype.stop = function () { return this._ask('stop'); };
+  Media.prototype.showScreen = function (options) {
+    return this._ask('screen', {on: true, sound: !!(options && options.sound)}, 600000)
+      .then(function (said) { return said.sound ? {ok: true, sound: true} : {ok: true}; }, function (err) { return {ok: false, error: err.message}; });
+  };
+  Media.prototype.hideScreen = function () { return this._ask('screen', {on: false}); };
   Media.prototype.share = function (id, on) {
     // on: true / false, or {video, audio} for one kind only (your voice to everybody, your picture to a few)
     var said = on && typeof on === 'object' ? {video: !!on.video, audio: !!on.audio} : on !== false;

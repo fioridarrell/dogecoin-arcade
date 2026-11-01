@@ -598,8 +598,8 @@
     }
     function mediaPc(name, h, peer, pc){
       var polite = h.me.id > peer.p.id;                    // the one that did not offer the first time gives way
-      peer.making = false; peer.ignoring = false; peer.senders = [];
-      peer.remote = null;
+      peer.making = false; peer.ignoring = false; peer.senders = []; peer.xsenders = [];
+      peer.remote = null; peer.xremote = null; peer.xid = '';
       var mc = peer.m = pc.createDataChannel('m', {negotiated: true, id: 2, ordered: true});
       mc.onopen = function(){ if (peer.pc === pc) mediaPeerUp(name, h, peer); };
       pc.onnegotiationneeded = function(){
@@ -613,6 +613,7 @@
       mc.onmessage = function(ev){
         if (peer.pc !== pc) return;
         var msg; try { msg = JSON.parse(ev.data); } catch (err) { return; }
+        if (msg && typeof msg.x === 'string') { peer.xid = msg.x; return; }   // which stream is their second picture
         var d = msg && msg.d;
         if (!d || (d.type !== 'offer' && d.type !== 'answer') || typeof d.sdp !== 'string') return;
         var collision = d.type === 'offer' && (peer.making || pc.signalingState !== 'stable');
@@ -625,6 +626,18 @@
       };
       pc.ontrack = function(ev){
         if (peer.pc !== pc) return;
+        // Their second picture, a screen beside their camera: its own stream, its own box, its own sound.
+        if (ev.streams && ev.streams[0] && peer.xid && ev.streams[0].id === peer.xid) {
+          var extra = peer.xremote || (peer.xremote = new MediaStream()), redraw = function(){ mediaDraw(h); };
+          mediaOf(h);
+          extra.addTrack(ev.track);
+          var gone = function(t){ try { extra.removeTrack(t); } catch (err) {} redraw(); };
+          ev.track.onended = function(){ gone(ev.track); };
+          ev.track.onunmute = redraw;
+          ev.streams[0].onremovetrack = function(e){ gone(e.track); };
+          redraw();
+          return;
+        }
         var stream = peer.remote || (peer.remote = new MediaStream());
         mediaOf(h);
         mediaWatch();
@@ -672,6 +685,22 @@
     function mediaPeerUp(name, h, peer){
       var md = h.media;
       if (md && md.stream && md.share[peer.p.id]) mediaAttach(h, peer);
+      if (md && md.xstream && md.share[peer.p.id]) mediaAttachX(h, peer);
+    }
+    // The second picture goes on its own senders, so that swapping the camera can never touch it. The stream's id is said
+    // first, on the ordered channel that also carries the offer: the track never arrives before its name.
+    function mediaAttachX(h, peer){
+      var md = h.media;
+      if (!peer.pc || !md) return;
+      var kinds = md.share[peer.p.id] || {}, want = md.xstream && kinds.video ? md.xstream.getTracks() : [];
+      if (!want.length || (peer.xfor && peer.xfor !== md.xstream)) {
+        (peer.xsenders || []).forEach(function(s){ try { peer.pc.removeTrack(s); } catch (err) {} });
+        peer.xsenders = []; peer.xfor = null;
+      }
+      if (!want.length || (peer.xsenders || []).length || !peer.m || peer.m.readyState !== 'open') return;
+      peer.m.send(JSON.stringify({x: md.xstream.id}));
+      peer.xfor = md.xstream;
+      peer.xsenders = want.map(function(t){ return peer.pc.addTrack(t, md.xstream); });
     }
     // What goes to this player now: the tracks of the kinds shared with them (2026-10-22: a call of up to
     // 20, where everybody's voice goes to everybody and each sees only a few pictures; and "if somebody doesn't want
@@ -698,11 +727,13 @@
     function mediaDetach(peer){
       (peer.senders || []).forEach(function(s){ try { peer.pc.removeTrack(s); } catch (err) {} });
       peer.senders = [];
+      (peer.xsenders || []).forEach(function(s){ try { peer.pc.removeTrack(s); } catch (err) {} });
+      peer.xsenders = []; peer.xfor = null;
     }
     function mediaGone(h, peer){
       var md = h.media;
       if (peer.said) { peer.said = ''; mediaEvent(rtName(h), h, {type: 'media-off', member: peer.p}); }
-      peer.remote = null;
+      peer.remote = null; peer.xremote = null;
       if (md) { delete md.share[peer.p.id]; delete md.hear[peer.p.id]; delete md.place[peer.p.id]; mediaDraw(h); }
     }
     function rtName(h){ for (var k in rt) if (rt[k] === h) return k; return ''; }
@@ -714,6 +745,7 @@
       if (md.stream) md.stream.getTracks().forEach(function(t){ t.stop(); });
       var had = !!md.stream;
       mediaUnmix(md.mix); md.mix = null;
+      if (md.xstream) { md.xstream.getTracks().forEach(function(t){ t.stop(); }); md.xstream = null; }
       md.stream = null; md.video = md.audio = md.screen = false; md.share = {};
       if (quiet) { h.media = null; mediaDraw(h, true); }
       else { mediaDraw(h); if (had && !silent) mediaEvent(rtName(h), h, {type: 'media-state', state: 'off'}); }
@@ -746,7 +778,44 @@
       if (md.mix) md.mix.mic.gain.value = md.muted.audio ? 0 : 1;
       else md.stream.getAudioTracks().forEach(function(t){ t.enabled = !md.muted.audio; });
     }
-    function mediaAnyOn(){ for (var k in rt) if (rt[k].media && rt[k].media.stream) return rt[k]; return null; }
+    function mediaAnyOn(){ for (var k in rt) if (rt[k].media && (rt[k].media.stream || rt[k].media.xstream)) return rt[k]; return null; }
+    // A screen beside the camera (2026-11-01): a second picture of a player's own, for any page. The camera and microphone go
+    // on untouched. The browser's own Stop sharing ends this picture only.
+    function mediaXOff(name, h, told){
+      var md = h.media;
+      if (!md || !md.xstream) return;
+      var x = md.xstream; md.xstream = null;
+      x.getTracks().forEach(function(t){ t.stop(); });
+      if (h.fast) Object.keys(md.share).forEach(function(id){ var pr = h.fast.peers[id]; if (pr) mediaAttachX(h, pr); });
+      mediaDraw(h);
+      if (told) mediaEvent(name, h, {type: 'media-state', state: 'screen-off'});
+    }
+    function mediaXOn(name, h, md, m, answer){
+      var md0 = navigator.mediaDevices;
+      if (!(md0 && typeof md0.getDisplayMedia === 'function')) {
+        answer({ok: false, error: 'no screen', why: 'this browser cannot share its screen (a phone cannot)'}); return;
+      }
+      mediaAllowed().then(function(yes){
+        if (!yes) { answer({ok: false, error: 'off', why: 'Camera & microphone is off on this app\u2019s card'}); return; }
+        return md0.getDisplayMedia({video: {width: {max: 1920}, height: {max: 1080}, frameRate: {max: 15}},
+                                    audio: m.sound ? {echoCancellation: false, noiseSuppression: false, autoGainControl: false} : false})
+          .then(function(stream){
+            if (rt[name] !== h) { stream.getTracks().forEach(function(t){ t.stop(); }); throw new Error('left the room'); }
+            mediaXOff(name, h, false);
+            md.xstream = stream;
+            stream.getVideoTracks().forEach(function(t){
+              t.contentHint = 'detail';
+              t.addEventListener('ended', function(){ if (md.xstream === stream) mediaXOff(name, h, true); });
+            });
+            if (h.fast) Object.keys(md.share).forEach(function(id){ var pr = h.fast.peers[id]; if (pr) mediaAttachX(h, pr); });
+            mediaDraw(h);
+            answer(Object.assign({ok: true}, stream.getAudioTracks().length ? {sound: true} : {}));
+          });
+      }).catch(function(err){
+        var why = String((err && (err.name || err.message)) || err);
+        answer(err && err.name === 'NotAllowedError' ? {ok: false, error: 'cancelled', why: why} : {ok: false, error: why});
+      });
+    }
     // The card's switch: on, or (a page that is no game, with no card to tick) asked here, as Wallet access is.
     function mediaAllowed(){
       if (arcadeMediaAllowed(here)) return Promise.resolve(true);
@@ -840,6 +909,10 @@
         return;
       }
       if (m.do === 'stop') { mediaStop(h); answer({ok: true}); return; }
+      if (m.do === 'screen') {
+        if (m.on) mediaXOn(name, h, md, m, answer); else { mediaXOff(name, h, false); answer({ok: true}); }
+        return;
+      }
       if (m.do === 'share') {
         if (!peer) { answer({ok: false, error: 'no such player'}); return; }
         // on: true (both kinds), false (neither) or {video, audio}
@@ -851,6 +924,7 @@
         }
         md.share[peer.p.id] = kinds;
         mediaAttach(h, peer);
+        mediaAttachX(h, peer);
         answer({ok: true, sending: !!md.stream});
         return;
       }
@@ -867,8 +941,9 @@
         mediaDraw(h); answer({ok: true}); return;
       }
       if (m.do === 'place') {
-        var key = m.who === 'me' ? 'me' : String(m.who || '');
-        if (key !== 'me' && !(h.fast.peers[key])) { answer({ok: false, error: 'no such player'}); return; }
+        var key = m.who === 'me' ? 'me' : String(m.who || '');       // 'id#screen' or 'me#screen': their second picture
+        var owner = key.replace(/#screen$/, '');
+        if (owner !== 'me' && !(h.fast.peers[owner])) { answer({ok: false, error: 'no such player'}); return; }
         var r = m.rect;
         if (r == null) delete md.place[key];
         else {
@@ -885,7 +960,7 @@
         mediaMutes(md);
         mediaDraw(h); answer({ok: true, muted: md.muted}); return;
       }
-      answer({ok: false, error: 'media ops are start, stop, share, hear, volume, place and mute'});
+      answer({ok: false, error: 'media ops are start, stop, screen, share, hear, volume, place and mute'});
     }
     // The layer over the game's frame: the pictures where the game placed them, every voice the game hears (a
     // picture not placed still plays its sound), and the on-air pill with its Stop.
@@ -939,7 +1014,9 @@
         if (h.fast) for (var id in h.fast.peers) {
           var pr = h.fast.peers[id];
           if (pr.remote && pr.remote.getTracks().length) keep[id] = pr.remote;
+          if (pr.xremote && pr.xremote.getTracks().length) keep[id + '#screen'] = pr.xremote;
         }
+        if (md.xstream) keep['me#screen'] = md.xstream;
       }
       for (var k in tiles) if (!keep[k]) {
         try { tiles[k].srcObject = null; tiles[k].remove(); } catch (err) {}
@@ -949,7 +1026,8 @@
       Object.keys(keep).forEach(function(key){
         var v = mediaTile(md, key), at = md.place[key];
         if (v.srcObject !== keep[key]) { v.srcObject = keep[key]; v.play().catch(function(){}); }
-        v.muted = key === 'me' || !md.hear[key];       // your own sound never; theirs once the game hears them
+        var who = key.replace(/#screen$/, '');
+        v.muted = who === 'me' || !md.hear[who];       // your own sound never; theirs once the game hears them
         v.volume = key in md.volume ? md.volume[key] : 1;
         if (at && at.w > 0 && at.h > 0) {
           v.style.display = 'block';
@@ -981,7 +1059,7 @@
         el.append(dot, words, stop);
         mediaLayer().appendChild(el);
       }
-      var md = on.media, what = md.screen ? (md.mix && md.mix.sound ? 'Sharing your screen and its sound'
+      var md = on.media, what = md.xstream ? (md.xstream.getAudioTracks().length ? 'Sharing your screen and its sound' : 'Sharing your screen') : md.screen ? (md.mix && md.mix.sound ? 'Sharing your screen and its sound'
                                              : md.audio ? 'Sharing your screen, microphone on' : 'Sharing your screen')
         : md.video && md.audio ? 'Camera and microphone on' : md.video ? 'Camera on' : 'Microphone on';
       if (md.muted.video && md.muted.audio) what += ' (muted)';
