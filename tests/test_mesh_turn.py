@@ -1,0 +1,171 @@
+"""The media server (arcade/mesh/turn.py): a relay spoken to as a browser speaks to it."""
+
+import asyncio
+import hashlib
+import hmac
+import os
+import struct
+import time
+
+from arcade.mesh import stun, turn
+
+SECRET = b"s" * 32
+
+
+class _Client(asyncio.DatagramProtocol):
+    def __init__(self):
+        self.q = asyncio.Queue()
+
+    def connection_made(self, transport):
+        self.t = transport
+
+    def datagram_received(self, data, addr):
+        self.q.put_nowait(data)
+
+    async def ask(self, packet, to):
+        self.t.sendto(packet, to)
+        return await asyncio.wait_for(self.q.get(), 3)
+
+
+def _signed(kind, attrs, user, password, realm, nonce, tid=None):
+    tid = tid or os.urandom(12)
+    key = hashlib.md5(f"{user}:{realm}:{password}".encode()).digest()
+    full = attrs + [(turn.A_USERNAME, user.encode()), (turn.A_REALM, realm.encode()), (turn.A_NONCE, nonce)]
+    return turn.build(kind, tid, full, key)
+
+
+async def _server(**kw):
+    loop = asyncio.get_running_loop()
+    srv = turn.TurnServer(SECRET, **kw)
+    t, _ = await loop.create_datagram_endpoint(lambda: stun._Server({}, srv), local_addr=("127.0.0.1", 0))
+    srv.transport = t
+    return srv, t, t.get_extra_info("sockname")[:2]
+
+
+async def _allocate(srv_addr, user, password):
+    loop = asyncio.get_running_loop()
+    _, c = await loop.create_datagram_endpoint(_Client, local_addr=("127.0.0.1", 0))
+    want = [(turn.A_TRANSPORT, bytes([17, 0, 0, 0]))]
+    first = turn.parse(await c.ask(turn.build(turn.ALLOCATE, os.urandom(12), want), srv_addr))
+    assert first[0] == 0x110 | turn.ALLOCATE and first[2][turn.A_ERROR][2:4] == bytes([4, 1])
+    realm, nonce = first[2][turn.A_REALM].decode(), first[2][turn.A_NONCE]
+    tid = os.urandom(12)
+    reply = turn.parse(await c.ask(_signed(turn.ALLOCATE, want, user, password, realm, nonce, tid), srv_addr))
+    return c, reply, realm, nonce, tid
+
+
+def _xor(host, port):
+    import ipaddress
+    return struct.pack("!BBHI", 0, 1, port ^ (stun.MAGIC >> 16), int(ipaddress.IPv4Address(host)) ^ stun.MAGIC)
+
+
+def _relayed(reply, tid):
+    v = reply[2][turn.A_RELAYED]
+    return turn.peer_address(v)
+
+
+def test_a_wrong_password_gets_no_relay_and_an_expired_login_neither():
+    async def run():
+        srv, t, addr = await _server()
+        u, _ = turn.login(SECRET, "player")
+        c, reply, *_ = await _allocate(addr, u, "not-the-password")
+        assert reply[0] == 0x110 | turn.ALLOCATE and not srv.allocations
+        old, pw = turn.login(SECRET, "player", ttl=-5)
+        c2, reply2, *_ = await _allocate(addr, old, pw)
+        assert reply2[0] == 0x110 | turn.ALLOCATE and not srv.allocations
+        c.t.close(); c2.t.close(); t.close()
+    asyncio.run(run())
+
+
+def test_two_players_through_the_relay_both_ways_on_a_channel_and_by_indication():
+    async def run():
+        srv, t, addr = await _server()
+        u, p = turn.login(SECRET, "a")
+        c, reply, realm, nonce, tid = await _allocate(addr, u, p)
+        assert reply[0] == 0x100 | turn.ALLOCATE
+        relay = _relayed(reply, tid)
+        loop = asyncio.get_running_loop()
+        _, peer = await loop.create_datagram_endpoint(_Client, local_addr=("127.0.0.1", 0))
+        peer_at = peer.t.get_extra_info("sockname")[:2]
+        real_relay = ("127.0.0.1", relay[1])
+
+        peer.t.sendto(b"before", real_relay)                  # no permission yet: dropped
+        await asyncio.sleep(0.05)
+        assert c.q.empty()
+
+        # may_reach refuses this machine's own addresses, so ask as a client on a private address may
+        srv_allowed = srv._allowed
+        srv._allowed = lambda p, cl: True
+        r = turn.parse(await c.ask(_signed(turn.PERMISSION, [(turn.A_PEER, _xor(*peer_at))], u, p, realm, nonce), addr))
+        assert r[0] == 0x100 | turn.PERMISSION
+        peer.t.sendto(b"hello", real_relay)
+        got = turn.parse(await asyncio.wait_for(c.q.get(), 3))
+        assert got[0] == 0x010 | turn.DATA and got[2][turn.A_DATA] == b"hello"
+
+        r = turn.parse(await c.ask(_signed(turn.BIND, [(turn.A_PEER, _xor(*peer_at)),
+                                                       (turn.A_CHANNEL, struct.pack("!HH", 0x4001, 0))],
+                                           u, p, realm, nonce), addr))
+        assert r[0] == 0x100 | turn.BIND
+        c.t.sendto(struct.pack("!HH", 0x4001, 5) + b"world" + b"\0\0\0", addr)
+        assert await asyncio.wait_for(peer.q.get(), 3) == b"world"
+        peer.t.sendto(b"back", real_relay)
+        data = await asyncio.wait_for(c.q.get(), 3)
+        assert data[:4] == struct.pack("!HH", 0x4001, 4) and data[4:8] == b"back"
+        srv._allowed = srv_allowed
+        assert srv.bytes == len(b"hello") + len(b"world") + len(b"back")
+        c.t.close(); peer.t.close(); srv.close(); t.close()
+    asyncio.run(run())
+
+
+def test_a_relay_is_no_way_into_a_private_network_or_this_machine():
+    assert not turn.may_reach("127.0.0.1", "8.8.8.8")
+    assert not turn.may_reach("192.168.1.20", "8.8.8.8")
+    assert not turn.may_reach("10.0.0.5", "::ffff:8.8.8.8")
+    assert not turn.may_reach("169.254.169.254", "192.168.1.9"), "cloud metadata"
+    assert not turn.may_reach("8.8.4.4", "8.8.8.8", ("8.8.4.4",)), "its own address"
+    assert turn.may_reach("8.8.4.4", "1.1.1.1")
+    assert turn.may_reach("192.168.1.20", "192.168.1.9"), "a player on the home network, to the next room"
+
+
+def test_the_month_limit_ends_the_service_and_a_login_cannot_hoard():
+    async def run():
+        srv, t, addr = await _server(limit_gb=lambda: 0.0)
+        u, p = turn.login(SECRET, "a")
+        c, reply, *_ = await _allocate(addr, u, p)
+        assert reply[0] == 0x110 | turn.ALLOCATE and reply[2][turn.A_ERROR][2:4] == bytes([4, 86])
+        assert not srv.available() and srv.status()["over"]
+        c.t.close(); t.close()
+    asyncio.run(run())
+
+
+def test_a_month_of_usage_survives_a_restart(tmp_path):
+    f = tmp_path / "u.json"
+    s = turn.TurnServer(SECRET, usage_file=str(f))
+    s.bytes = 123
+    s._save()
+    assert turn.TurnServer(SECRET, usage_file=str(f)).bytes == 123
+
+
+def test_a_borrowed_relay_is_named_by_the_proof_not_the_answer():
+    class _Link:
+        def __init__(self, share, me): self.share, self.me, self.peer_id = share, me, "bb"
+        async def send(self, header):
+            await self.share.on_frame(self.me, header, b"")
+
+    async def run():
+        srv = turn.TurnServer(SECRET)
+        srv.transport = object()
+        asker, giver = turn.TurnShare(None, lambda: {"cc": [("203.0.113.9", 3478)]}), turn.TurnShare(srv)
+        class _N: pass
+        asker.node, giver.node = _N(), _N()
+        asker.node.node_id = "aa" * 32
+        back = _Link(asker, None)
+        forward = _Link(giver, back)
+        forward.peer_id = "cc"
+        back.peer_id = "aa"
+        asker.node.links = {"cc": forward}
+        got = await asker.borrow("player")
+        assert got and got[0]["urls"] == ["turn:203.0.113.9:3478?transport=udp"]
+        name = got[0]["username"]
+        assert turn.password_for(SECRET, name) == got[0]["credential"]
+    asyncio.run(run())

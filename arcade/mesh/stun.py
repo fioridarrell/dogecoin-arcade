@@ -7,7 +7,7 @@ known (realtime.py `/realtime/ice`, the operator can turn the public one off).
 
 Only a Binding answer (RFC 5389): the request's transaction id back with XOR-MAPPED-ADDRESS, nothing kept, no
 authentication -- it tells a sender its own address and nothing else, so it cannot be used to reach anybody.
-It is not a relay; a relay (TURN) is paid for by a game's builder (the plan, section 6).
+The relay (TURN) on this same port is turn.py.
 
 A node's STUN is offered to browsers only after another node has reached it: `StunShare` asks each linked node to
 send it a Binding request ("st" frames), and only the addresses that answered are offered on the mesh. A node
@@ -96,8 +96,9 @@ def mapped_address(packet: bytes, tid: bytes) -> tuple[str, int] | None:
 
 
 class _Server(asyncio.DatagramProtocol):
-    def __init__(self, counter: dict):
+    def __init__(self, counter: dict, turn=None):
         self.counter = counter
+        self.turn = turn                       # turn.TurnServer: the media relay, on this same port
 
     def connection_made(self, transport):
         self.transport = transport
@@ -107,9 +108,11 @@ class _Server(asyncio.DatagramProtocol):
         if reply is not None:
             self.counter["answered"] = self.counter.get("answered", 0) + 1
             self.transport.sendto(reply, addr)
+        elif self.turn is not None:
+            self.turn.received(data, addr, self.transport)
 
 
-async def serve(host: str = "::", port: int = PORT, counter: dict | None = None):
+async def serve(host: str = "::", port: int = PORT, counter: dict | None = None, turn=None):
     """Start answering on `host`:`port` (UDP); IPv4 too when the system maps it onto an IPv6 socket.
     Returns the transports (close them to stop)."""
     loop = asyncio.get_running_loop()
@@ -120,10 +123,10 @@ async def serve(host: str = "::", port: int = PORT, counter: dict | None = None)
         sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind((host if ":" in host else "::", port))
-        t, _ = await loop.create_datagram_endpoint(lambda: _Server(counter), sock=sock)
+        t, _ = await loop.create_datagram_endpoint(lambda: _Server(counter, turn), sock=sock)
         out.append(t)
     except OSError:
-        t, _ = await loop.create_datagram_endpoint(lambda: _Server(counter), local_addr=("0.0.0.0", port))
+        t, _ = await loop.create_datagram_endpoint(lambda: _Server(counter, turn), local_addr=("0.0.0.0", port))
         out.append(t)
     return out
 

@@ -39,6 +39,7 @@ thread while it waits, and it does nothing but wait on the mesh's queue.
 
 from __future__ import annotations
 
+import ipaddress
 import base64
 import logging
 import json
@@ -53,6 +54,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from ..mesh.node import MAX_PAYLOAD, MeshError
 
 log = logging.getLogger("arcade.realtime")
+from ..mesh import punch as punchlib, turn as turnlib
 from ..mesh.service import GUEST, cert_message
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
@@ -429,6 +431,45 @@ def register(app, state, *, account_view: Callable, signed_in: Callable,
         relay_kept[address] = (time.time(), servers)
         return servers
 
+    media_kept: dict[str, tuple] = {}
+
+    def arcade_relays(request: Request) -> list[dict]:
+        """The arcade network's media servers for a signed-in player (mesh/turn.py): this node's where the player can
+        reach it, and borrowed ones from arcades that anybody can reach."""
+        try:
+            service = mesh()
+        except MeshError:
+            return []
+        server, shared = getattr(service, "turn", None), getattr(service, "turnshare", None)
+        kind, address = identity(request)
+        if kind == "guest" or not address:
+            return []
+        kept = media_kept.get(address)
+        if kept and time.time() - kept[0] < turnlib.LOGIN_TTL / 2:
+            found = list(kept[1])
+        else:
+            found = []
+            if shared is not None:
+                try:
+                    found = service._call(shared.borrow(address), timeout=5.0) or []
+                except Exception as exc:                 # noqa: BLE001 -- none borrowed this time
+                    log.info("media relay: %s", exc)
+            media_kept[address] = (time.time(), found)
+        if server is None or not server.available():
+            return found
+        hosts = list(getattr(service.stun, "mine", lambda: [])())
+        asker = request.headers.get("cf-connecting-ip") or (request.client.host if request.client else "")
+        lan = punchlib.local_ipv4()
+        try:
+            if lan and ipaddress.ip_address(asker).is_private:
+                hosts.insert(0, (lan, service.stun_port))
+        except ValueError:
+            pass
+        if hosts:
+            username, password = turnlib.login(server.secret, address)
+            return [turnlib.ice_server(hosts[:MAX_ICE_NODES], username, password)] + found
+        return found
+
     @app.get("/realtime/ice")
     def realtime_ice(request: Request):
         """The STUN servers a browser should use for the fast lane (2026-10-18, the operator: "Nodes, then public"):
@@ -442,9 +483,13 @@ def register(app, state, *, account_view: Callable, signed_in: Callable,
             share = None
         for host, port in (share.known() if share is not None else [])[:MAX_ICE_NODES]:
             servers.append({"urls": f"stun:[{host}]:{port}" if ":" in host else f"stun:{host}:{port}"})
-        if state.settings().get("realtime_public_stun", True) is not False:
+        # A public STUN only when no arcade's is known: nothing here should need an outside company.
+        if not servers and state.settings().get("realtime_public_stun", True) is not False:
             servers.append({"urls": PUBLIC_STUN})
-        relay = relay_for(request, request.query_params.get("app", ""))
+        # Arcade relays first; the operator's rented one (relay_for) only if no arcade relay can be had
+        # (2026-10-31: "The point of adding UDP so we don't have to rely on Cloudflare at all").
+        own = arcade_relays(request)
+        relay = own or relay_for(request, request.query_params.get("app", ""))
         servers.extend(relay)
         return JSONResponse({"ok": True, "iceServers": servers, "relay": bool(relay)},
                             headers={"Cache-Control": "no-store"})

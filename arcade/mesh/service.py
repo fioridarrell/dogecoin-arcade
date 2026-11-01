@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import logging
 import os
 import re
@@ -226,6 +227,8 @@ class MeshService:
         self.stun = None                        # stun.StunShare: STUN addresses for the fast lane, this node's and others'
         self.punch = None                       # punch.PunchShare: the direct-UDP probe with a linked node
         self.udp = None                         # udp.UdpShare: the UDP path beside each link
+        self.turn = None                        # turn.TurnServer: the media relay on the STUN port
+        self.turnshare = None                   # turn.TurnShare: relays borrowed from arcades that can be reached
         self.stun_port: int | None = None       # this node's own STUN server (UDP), or None
         self._stun_transports: list = []
         self.tunnel_url: str | None = None
@@ -283,6 +286,8 @@ class MeshService:
             self._call(self._tunnel_stop(), timeout=15)
         except Exception:                              # noqa: BLE001
             pass
+        if self.turn is not None:
+            self.loop.call_soon_threadsafe(self.turn.close)
         for t in self._stun_transports:
             self.loop.call_soon_threadsafe(t.close)
         try:
@@ -307,8 +312,10 @@ class MeshService:
     async def _stun_server(self) -> None:
         from . import stun
         try:
-            self._stun_transports = await stun.serve(port=self.stun_port)
+            self._stun_transports = await stun.serve(port=self.stun_port, turn=self.turn)
             log.info("mesh: STUN on UDP %s", self.stun_port)
+            if self.turn is not None and self._stun_transports:
+                self.turn.transport = self._stun_transports[0]
         except OSError as exc:
             log.warning("mesh: STUN not started on UDP %s: %s", self.stun_port, exc)
             self.stun_port = None
@@ -724,6 +731,16 @@ class MeshService:
         return await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(get(), self.loop))
 
 
+def _media_limit(state) -> float:
+    """The operator's monthly limit for the media server, in GB (setting media_server.limit_gb)."""
+    from .turn import MONTH_LIMIT_GB
+    said = (state.settings().get("media_server") or {}) if hasattr(state, "settings") else {}
+    try:
+        return float(said.get("limit_gb", MONTH_LIMIT_GB)) if isinstance(said, dict) else MONTH_LIMIT_GB
+    except (TypeError, ValueError):
+        return MONTH_LIMIT_GB
+
+
 def for_state(state, *, listen_host: str | None = None, listen_port: int | None = DEFAULT_PORT,
               peers: list[tuple[str, int]] | None = None,
               announce_at: tuple[str, int] | None = None,
@@ -901,6 +918,18 @@ def for_state(state, *, listen_host: str | None = None, listen_port: int | None 
         from .udp import UdpShare
         service.udp = UdpShare(lambda: [a for offers in service.stun.offers.values() for a in offers])
         service.node.add_extension(service.udp)
+    # The media server (turn.py): the relay for games, sound and pictures, on the STUN port. Its logins are keyed
+    # from the mesh key, so they outlive a restart. ARCADE_MESH_TURN=0 turns it off.
+    if stun_port and os.environ.get("ARCADE_MESH_TURN", "1") != "0":
+        from .turn import TurnServer
+        service.turn = TurnServer(
+            hashlib.blake2b(bytes(key), digest_size=32, person=b"arcm-turn").digest(),
+            lambda: [a for offers in service.stun.offers.values() for a in offers],
+            usage_file=Path(state.home) / "media-usage.json", own_addresses=own_hosts,
+            limit_gb=lambda: _media_limit(state))
+    from .turn import TurnShare
+    service.turnshare = TurnShare(service.turn, lambda: {p: h for p, h in service.stun.offers.items() if h})
+    service.node.add_extension(service.turnshare)
     return service
 
 
