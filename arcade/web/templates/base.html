@@ -1880,7 +1880,8 @@ function arcadeGroupsOn(page, g){ return arcadeGroupsAllowed(page) || !!(g && g.
 function arcadeGroupsAsk(id, game, publisher, address){
   return arcadeAsk('Let this app open your group chats?',
     '\u201c' + (game || 'This app') + '\u201d is published by ' + (publisher || 'an account with no @name')
-    + (address ? ' (' + address + ')' : '') + '. It will read your group chats and post in them as you. Each post is a '
+    + (address ? ' (' + address + ')' : '') + '. It will read your group chats, post in them as you, and see the names in '
+    + 'your address book, to choose who to add. Each post is a '
     + 'small test-chain transaction from your wallet and can never be erased. An app can send what it reads to its own '
     + 'server: only allow an app you trust, after checking its publisher. You can turn it off again on the app\u2019s card.',
     'Allow group chats')

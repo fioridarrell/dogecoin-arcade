@@ -23,6 +23,8 @@
 //   room.on('message', function (d) { arcade.groups.open(g.id, d.s).then(show); });   // null: not sealed by this group
 //
 // create(name, members): after the player taps yes, a new group with those @names or addresses.
+// add(id, members): after the player taps yes, lets them in. They can read what has been said under the group's key.
+// people(): the player's address book, [{address, tag}], for choosing who to make or add a group with.
 //
 // Rejects with an Error saying why: "off: ...", "no card: ...", "sign in first", "declined", "busy: ...", "too long: ...",
 // "not a group of yours", "no viewer ...", or what the chain said.
@@ -61,6 +63,10 @@
     send: function (id, text) { return ask({op: 'send', group: id, text: text}); },
     seal: function (id, text) { return ask({op: 'seal', group: id, text: text}).then(function (r) { return r.sealed; }); },
     open: function (id, sealed) { return ask({op: 'open', group: id, sealed: sealed}).then(function (r) { return r.text; }); },
+    people: function () { return ask({op: 'people'}).then(function (r) { return r.people; }); },
+    add: function (id, members) {
+      return ask({op: 'add', group: id, members: members}, 600000).then(function (r) { return r.group; });
+    },
     save: function (name, bytes) {                       // the frame cannot download: the viewer does
       var data = bytes.buffer ? bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) : bytes;
       return ask({op: 'save', name: name, data: data});

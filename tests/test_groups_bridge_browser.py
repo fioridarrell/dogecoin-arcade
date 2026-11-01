@@ -26,6 +26,7 @@ PAGE = b"""<!doctype html><meta charset="utf-8"><title>Chats</title><body>
 document.getElementById('go').onclick = function () {
   var job = JSON.parse(document.getElementById('job').value), g = arcade.groups;
   var call = job.op === 'list' ? g.list() : job.op === 'read' ? g.read(job.id)
+           : job.op === 'people' ? g.people()
            : job.op === 'seal' ? g.seal(job.id, job.text) : g.open(job.id, job.sealed);
   call.then(function (r) { done(job.slot, {value: r}); }, function (e) { done(job.slot, {error: String(e.message || e)}); });
 };
@@ -138,6 +139,7 @@ def test_an_app_reads_a_group_only_with_its_switch_on_and_never_gets_a_key(brows
     assert _call(browser, frame, "open", op="open", id="aabb", sealed=sealed)["value"] == "hello now"
     assert _call(browser, frame, "bad", op="open", id="aabb", sealed="bm90IHNlYWxlZA==")["value"] is None
     assert "not a group" in _call(browser, frame, "none", op="read2", id="zz")["error"]
+    assert _call(browser, frame, "people", op="people")["value"] == [], "the book, through the same switch"
 
 
 def test_the_seal_and_the_keys_stay_with_the_viewer():

@@ -757,7 +757,10 @@
             return (want.video || want.audio ? md0.getUserMedia({
               // No shape forced: a phone's camera stays portrait, a PC's landscape (2026-10-23: "All should
               // maintain their aspect ratios"); only capped, for a call of up to 20.
-              video: want.video ? {width: {max: 1280}, height: {max: 1280}} : false, audio: want.audio
+              // `facing` picks a phone's front or rear camera ('ideal': a computer with one camera still gets it).
+              video: want.video ? Object.assign({width: {max: 1280}, height: {max: 1280}},
+                                                m.facing ? {facingMode: {ideal: m.facing === 'environment' ? 'environment' : 'user'}} : {}) : false,
+              audio: want.audio
             }) : Promise.resolve(new MediaStream())).then(function(stream){
               if (shown) shown.getVideoTracks().forEach(function(t){
                 t.contentHint = 'detail';                 // words on a screen stay sharp, at fewer frames
@@ -1516,6 +1519,25 @@
             return s.mail.createGroup(s.keys, s.me, name, who, (typeof ARCADE_ME === 'string' ? ARCADE_ME : '') || '');
           }).then(function(group){ return {group: s.mail.groupForApp(group)}; });
       }
+      if (op === 'people') return s.mail.book().then(function(all){
+        return {people: (all || []).filter(function(c){ return c && c.address; })
+                .map(function(c){ return {address: c.address, tag: c.tag || ''}; })};
+      });
+      if (op === 'add') {
+        var more = Array.isArray(m.members) ? m.members.slice(0, 50).map(String) : [];
+        if (!more.length) throw new Error('name somebody to add');
+        if (groupsCards) throw new Error('busy: this page already has a group question open');
+        groupsCards++;
+        return groupsOne(s, m.group).then(function(group){
+          return arcadeAsk('Add to this group chat?', '\u201c' + (g.name || gameName || 'This app') + '\u201d wants to add ' + more.join(', ')
+            + ' to \u201c' + group.name + '\u201d. They get its key in a message from your wallet, so they can read what has been said in it.', 'Add them')
+            .then(function(yes){
+              if (!yes) throw new Error('declined');
+              return s.mail.addToGroup(s.keys, s.me, group, more);
+            });
+        }).then(function(group){ groupsCards--; return {group: s.mail.groupForApp(group)}; },
+                function(err){ groupsCards--; throw err; });
+      }
       if (op === 'save') {
         // An app's frame cannot start a download, so the page does, for bytes the app hands over: a file named by the app,
         // saved where the player's browser saves things. Only ever a plain download, so it opens nothing by itself.
@@ -1526,7 +1548,7 @@
         setTimeout(function(){ URL.revokeObjectURL(url); }, 60000);
         return {saved: file};
       }
-      throw new Error('groups: op is list, read, send, seal, open, create or save');
+      throw new Error('groups: op is list, read, send, seal, open, create, add, people or save');
     }
     function contactsDoor(m, answer){
       var op = m.op || 'list';

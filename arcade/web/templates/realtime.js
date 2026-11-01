@@ -99,6 +99,7 @@
 //     room.media.on('state', function (s) { ... });         // 'on', 'off' (the player pressed Stop too), 'denied'
 //     room.media.share(p.id, {video: false, audio: true});  // one kind only: your voice, not your picture
 //     room.media.start({video: true, audio: true});          // again, mid-call: the camera joins the microphone
+//     room.media.start({video: true, audio: true, facing: 'environment'});  // a phone's rear camera ('user': its front one)
 //     room.media.mute({video: false, audio: true});           // true = muted
 //     room.media.stop();                                      // camera and microphone off, every share ends
 //   });
@@ -193,7 +194,8 @@
   };
   Media.prototype.start = function (options) {
     options = options || {video: true, audio: true};
-    return this._ask('start', {video: !!options.video, audio: !!options.audio, screen: !!options.screen}, 600000)
+    return this._ask('start', {video: !!options.video, audio: !!options.audio, screen: !!options.screen,
+                               facing: options.facing === 'environment' ? 'environment' : options.facing === 'user' ? 'user' : ''}, 600000)
       .then(function (said) { return {ok: true, video: !!said.video, audio: !!said.audio, screen: !!said.screen}; },
             function (err) { return {ok: false, error: err.message}; });
   };

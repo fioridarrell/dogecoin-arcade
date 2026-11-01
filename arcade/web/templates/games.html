@@ -115,7 +115,7 @@
              data-publisher="{{ ('@' ~ name_of(it.creator)) if name_of(it.creator) else '' }}"
              data-address="{{ it.creator }}"><input type="checkbox" style="margin:0;width:auto"> Contacts</label>
       {# Group chats, per app (arcade.groups, 2026-10-31): shown on a card that says "groups": true. #}
-      <label class="gamegroups" title="Let this app read your group chats and post in them as you"
+      <label class="gamegroups" title="Let this app read your group chats, post in them as you, and see your address book"
              style="display:inline-flex;align-items:center;gap:5px;margin:0;font-size:.85rem;cursor:pointer;white-space:nowrap"
              data-groups="{{ g.opens or it.txid }}" data-game="{{ g.name }}"{% if not g.groups %} hidden{% endif %}
              data-publisher="{{ ('@' ~ name_of(it.creator)) if name_of(it.creator) else '' }}"

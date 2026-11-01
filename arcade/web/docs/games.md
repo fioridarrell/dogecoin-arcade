@@ -391,7 +391,7 @@ inscribe apps with.
 Two more switches work the same way as Wallet access, each shown on a card that says it needs it:
 
 * **Group chats** (`"groups": true`): your app may read the player's encrypted group chats and post in them, with
-  `arcade.groups` from `/r/groups.js`. It is off until the player turns it on, and each post is a small test-chain
+  `arcade.groups` from `/r/groups.js`, and see the names in their address book to choose who to add. It is off until the player turns it on, and each post is a small test-chain
   transaction from their wallet. The keys stay with the viewer: your app gets names and words, plus a room name only
   members can work out and `seal`/`open` for live messages. A page with no card gets nothing.
 * **Contacts** (`"contacts": true`): your app may read the player's address book with `arcade.contacts.list()`,

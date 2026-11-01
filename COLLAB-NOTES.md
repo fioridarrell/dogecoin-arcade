@@ -88,6 +88,16 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-11-01 Group chats: let somebody in; a newcomer reads the past; a phone's front and rear cameras (Claude, branch claude/riffs-groups)
+The operator: "you should be able to add people to an already created riff", "you should be able to select people from your
+address book", "you should be able to switch from your rear facing camera to your front".
+- `mail.addToGroup`: the same key, so the newcomer can read what was said under it. Any member may: holding the key is enough
+  to hand it on. Everybody is sent the longer list; a list is only believed from a holder of that key, and only grows.
+- `mail.collect`: a NEW group key makes it read the mailbox once more from the start. It used to walk past those lines
+  without the key and never return, so a newcomer saw only what came after.
+- `arcade.groups`: `add`, after a yes card, and `people`, the address book, under the Group chats switch.
+- `room.media.start({facing: 'user' | 'environment'})`, as `ideal`, so a one-camera machine still gets its camera.
+
 ### 2026-10-31 arcade.groups, and a ring that reaches an open page (Claude, branch claude/riffs-groups)
 The operator: "Start with the bridge and then build the app to use the bridge", and "If I have the arcade desktop open in my
 browser and somebody is trying to get a hold of me, I want them to be able to call me and my arcade start ringing."

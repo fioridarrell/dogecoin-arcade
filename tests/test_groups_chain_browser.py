@@ -98,3 +98,59 @@ def test_a_line_posted_through_the_bridge_is_read_back_from_the_chain_by_the_oth
     assert [l["text"] for l in lines] == ["bay route is done"], lines
     assert lines[0]["from"] == listed["value"]["me"], "credited to the address that paid, which nobody can forge"
     assert lines[0]["height"] > 0, "in a block"
+
+
+def test_somebody_added_later_reads_what_was_said_and_everybody_sees_them(world):   # noqa: F811
+    base, state, node, a, b = world
+    # Both browsers are signed up by the test above: Alice makes a group with one other, then lets a third person in.
+    third = browsers.launch()
+    try:
+        _signed_up(third, base, state, node, "carolgroup")
+        _settled(state, node.rpc)
+        a.switch_to.default_content()
+        b.switch_to.default_content()
+        a.get(f"{base}/join")
+        made = a.execute_async_script("""
+            const done = arguments[0];
+            Promise.all([import("/messaging.js"), import("/wallet.js")]).then(async ([mail, w]) => {
+              const keys = await w.opened(ARCADE_CHAIN), me = await mail.identity(keys.phrase);
+              const g = await mail.createGroup(keys, me, "Late club", ["@bobgroup"], "alicegroup");
+              return {id: g.id};
+            }).then(done, (e) => done({error: String(e.message || e)}));""")
+        assert "error" not in made, made
+        _settled(state, node.rpc)
+        grown = a.execute_async_script("""
+            const done = arguments[1];
+            Promise.all([import("/messaging.js"), import("/wallet.js")]).then(async ([mail, w]) => {
+              const keys = await w.opened(ARCADE_CHAIN), me = await mail.identity(keys.phrase);
+              const g = await mail.groupById(arguments[0]);
+              await mail.writeGroup(keys, me, g, "before carol");
+              const more = await mail.addToGroup(keys, me, g, ["@carolgroup"]);
+              let again = "";
+              try { await mail.addToGroup(keys, me, more, ["@carolgroup"]); } catch (e) { again = String(e.message || e); }
+              return {members: more.members.map((m) => m.tag), again};
+            }).then(done, (e) => done({error: String(e.message || e)}));""", made["id"])
+        assert "error" not in grown, grown
+        assert "carolgroup" in grown["members"] and "already" in grown["again"]
+        _settled(state, node.rpc)
+
+        def seen(driver):
+            end = time.time() + 60
+            while time.time() < end:
+                found = [g for g in _do(driver, op="list")["value"]["groups"] if g["id"] == made["id"]]
+                if found and any(m["tag"] == "carolgroup" for m in found[0]["members"]):
+                    return found[0]
+                time.sleep(2)
+            raise AssertionError("the group never showed everybody")
+
+        _app(third, base)
+        assert {m["tag"] for m in seen(third)["members"]} >= {"alicegroup", "bobgroup", "carolgroup"}
+        end, lines = time.time() + 60, []
+        while time.time() < end and not lines:
+            lines = _do(third, op="read", id=made["id"])["value"]
+            time.sleep(2)
+        assert [l["text"] for l in lines] == ["before carol"], "the newcomer reads what was said before"
+        _app(b, base)
+        seen(b)                                                      # who was already in sees the newcomer
+    finally:
+        third.quit()

@@ -524,6 +524,8 @@ async function rewindTo(after) {
 }
 
 /** Fetch what the node has seen since last time, and open what is ours. */
+const collected = {fresh: false};   // a new group key arrived during this scan
+
 export async function collect(me, {onProgress} = {}) {
   let after = await cursorFor(hex(me.publicKey));
   if (!after) {
@@ -546,7 +548,7 @@ export async function collect(me, {onProgress} = {}) {
     if (letter.mine && !letter.height) awaiting.set(letter.txid, letter);
   }
 
-  const highest = after;
+  let highest = after, reread = false;
   after = await rewindTo(after);
   let held = await groups();
   let opened = 0, looked = 0;
@@ -636,8 +638,15 @@ export async function collect(me, {onProgress} = {}) {
     // number would make every later scan start from there.
     await rememberCursor(hex(me.publicKey), Math.max(highest, after));
     if (onProgress) onProgress({looked, opened, more: said.more});
-    if (!said.more) break;
+    if (!said.more) {
+      // Somebody let in to a group has just got a key to everything said before, and this scan went past those lines
+      // without it, in the same pass or an earlier one. Read the mailbox once more from the start (2026-11-01).
+      if (!collected.fresh || reread) break;
+      collected.fresh = false; reread = true; highest = Math.max(highest, after); after = 0;
+      continue;
+    }
   }
+  collected.fresh = false;
   return {looked, opened, cursor: after};
 }
 
@@ -996,6 +1005,25 @@ export async function groupLines(root, {after = 0, limit = 200} = {}) {
   }));
 }
 
+/** Let somebody in: the same key, so they can read what was said under it, and everybody told who is here now.
+ *  One message per person. Any member may: holding the key is all it takes to hand it on. */
+export async function addToGroup(wallet, me, group, names) {
+  if (!group.current) throw new Error("this group moved to a new key; add them in that one");
+  const members = [...group.members], arriving = [];
+  for (const who of names) {
+    const them = await lookUp(who);
+    if (!them.key) throw new Error(`${who} has no messaging key published yet`);
+    if (members.some((m) => m.key === them.key)) continue;
+    const one = {tag: them.tag || "", key: them.key, address: them.address};
+    members.push(one); arriving.push(one);
+  }
+  if (!arriving.length) throw new Error("everybody named is already in this group");
+  const grown = {...group, members};
+  await saveGroup(grown);
+  await invite(wallet, me, grown, members);
+  return grown;
+}
+
 /** Take somebody out: a new key for everybody who stays. */
 export async function removeFromGroup(wallet, me, group, key) {
   const staying = group.members.filter((m) => m.key !== key);
@@ -1015,8 +1043,15 @@ export async function removeFromGroup(wallet, me, group, key) {
 async function takeInvite(group, letter) {
   const had = await groupById(group.id);
   if (!had) {
+    collected.fresh = true;
     await saveGroup({...group, current: true, via: letter.txid,
                      invited_by: letter.from_address || ""});
+  } else if (had.secret === group.secret && Array.isArray(group.members)) {
+    // Somebody was let in. Only a holder of this group's key can say so, and a list only ever grows here: taking
+    // somebody out is a new key.
+    const known = new Set((had.members || []).map((m) => m.key));
+    const added = group.members.filter((m) => m && m.key && !known.has(m.key));
+    if (added.length) await saveGroup({...had, members: [...(had.members || []), ...added]});
   }
   if (group.rotated_from) {
     const old = await groupById(group.rotated_from);
