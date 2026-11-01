@@ -837,8 +837,13 @@ def test_both_cores_dialling_at_once_do_not_close_each_others_stream():
 
     async def go():
         async def echo(reader, writer):
-            while data := await reader.read(100):
-                writer.write(data); await writer.drain()
+            try:
+                while data := await reader.read(100):
+                    writer.write(data); await writer.drain()
+            except (ConnectionError, OSError):
+                pass
+            finally:
+                writer.close()
         sa, sb = await asyncio.start_server(echo, "127.0.0.1", 0), await asyncio.start_server(echo, "127.0.0.1", 0)
         a, b = mk(), mk()
         ba = CoreBridge({"test": sa.sockets[0].getsockname()[1]}, None)
@@ -856,9 +861,11 @@ def test_both_cores_dialling_at_once_do_not_close_each_others_stream():
             assert await asyncio.wait_for(r1.read(10), 5) == b"one"
             assert await asyncio.wait_for(r2.read(10), 5) == b"two"
             w1.close(); w2.close()
+            await asyncio.gather(w1.wait_closed(), w2.wait_closed())
         finally:
             await a.stop(); await b.stop()
             sa.close(); sb.close()
+            await sa.wait_closed(); await sb.wait_closed()
             await asyncio.sleep(0.2)
     run(go())
 

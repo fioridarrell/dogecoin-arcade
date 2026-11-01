@@ -553,6 +553,7 @@ class UdpShare:
         self.waiting: dict[str, asyncio.Future] = {}
         self.trying: set[str] = set()
         self.mapped: tuple[float, list[list]] | None = None
+        self.opening = asyncio.Lock()
         self.nat = "unknown"                    # punch.nat_kind of this node's socket
         self.tasks: set[asyncio.Task] = set()
 
@@ -569,9 +570,10 @@ class UdpShare:
     async def _open(self) -> None:
         if self.node is not None and self.node._stopping:
             raise ConnectionError("this node is stopping")
-        if self.sock is None:
-            loop = asyncio.get_running_loop()
-            _, self.sock = await loop.create_datagram_endpoint(_Socket, sock=punchlib.udp_socket())
+        async with self.opening:                    # two first uses at once must not each open one
+            if self.sock is None:
+                loop = asyncio.get_running_loop()
+                _, self.sock = await loop.create_datagram_endpoint(_Socket, sock=punchlib.udp_socket())
 
     async def _offer(self) -> list[list]:
         """Where the other side should aim, from one mapping of the node's one socket."""

@@ -299,7 +299,8 @@ class Introducer:
 
     async def _open_fan(self, peer: str, path: udp.Path, targets: list) -> None:
         loop = asyncio.get_running_loop()
-        made = []
+        made: list = []
+        self.sockets[peer] = made                      # kept from the start: on_stop may come while these open
         for _ in range(udp.HARD_SOCKETS):
             try:
                 transport, proto = await loop.create_datagram_endpoint(udp._Socket, sock=punchlib.udp_socket())
@@ -307,7 +308,6 @@ class Introducer:
                 break
             proto.paths = self.share.sock.paths
             made.append(transport)
-        self.sockets[peer] = made
         path.fan = list(made)
 
         def through(keep) -> None:
