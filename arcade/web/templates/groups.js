@@ -61,6 +61,10 @@
     send: function (id, text) { return ask({op: 'send', group: id, text: text}); },
     seal: function (id, text) { return ask({op: 'seal', group: id, text: text}).then(function (r) { return r.sealed; }); },
     open: function (id, sealed) { return ask({op: 'open', group: id, sealed: sealed}).then(function (r) { return r.text; }); },
+    save: function (name, bytes) {                       // the frame cannot download: the viewer does
+      var data = bytes.buffer ? bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) : bytes;
+      return ask({op: 'save', name: name, data: data});
+    },
     create: function (name, members) {
       return ask({op: 'create', name: name, members: members}, 600000).then(function (r) { return r.group; });
     }

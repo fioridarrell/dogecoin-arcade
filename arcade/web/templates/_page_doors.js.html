@@ -1516,7 +1516,17 @@
             return s.mail.createGroup(s.keys, s.me, name, who, (typeof ARCADE_ME === 'string' ? ARCADE_ME : '') || '');
           }).then(function(group){ return {group: s.mail.groupForApp(group)}; });
       }
-      throw new Error('groups: op is list, read, send, seal, open or create');
+      if (op === 'save') {
+        // An app's frame cannot start a download, so the page does, for bytes the app hands over: a file named by the app,
+        // saved where the player's browser saves things. Only ever a plain download, so it opens nothing by itself.
+        var bytes = m.data instanceof ArrayBuffer ? m.data : null, file = String(m.name || 'file').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').slice(0, 120);
+        if (!bytes) throw new Error('nothing to save');
+        var link = document.createElement('a'), url = URL.createObjectURL(new Blob([bytes], {type: 'application/octet-stream'}));
+        link.href = url; link.download = file; document.body.appendChild(link); link.click(); link.remove();
+        setTimeout(function(){ URL.revokeObjectURL(url); }, 60000);
+        return {saved: file};
+      }
+      throw new Error('groups: op is list, read, send, seal, open, create or save');
     }
     function contactsDoor(m, answer){
       var op = m.op || 'list';
