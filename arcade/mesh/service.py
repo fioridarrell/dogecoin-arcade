@@ -225,6 +225,7 @@ class MeshService:
         self.indexcheck = None                  # indexcheck.IndexCheck: indexes compared with other arcades'
         self.stun = None                        # stun.StunShare: STUN addresses for the fast lane, this node's and others'
         self.punch = None                       # punch.PunchShare: the direct-UDP probe with a linked node
+        self.udp = None                         # udp.UdpShare: the UDP path beside each link
         self.stun_port: int | None = None       # this node's own STUN server (UDP), or None
         self._stun_transports: list = []
         self.tunnel_url: str | None = None
@@ -895,6 +896,11 @@ def for_state(state, *, listen_host: str | None = None, listen_port: int | None 
     from .punch import PunchShare
     service.punch = PunchShare(lambda: [a for offers in service.stun.offers.values() for a in offers])
     service.node.add_extension(service.punch)
+    # UDP alongside TCP on every link that can have it (udp.py); ARCADE_MESH_UDP=0 keeps a node on its connections.
+    if os.environ.get("ARCADE_MESH_UDP", "1") != "0":
+        from .udp import UdpShare
+        service.udp = UdpShare(lambda: [a for offers in service.stun.offers.values() for a in offers])
+        service.node.add_extension(service.udp)
     return service
 
 

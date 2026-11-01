@@ -1,0 +1,244 @@
+"""UDP beside TCP on a mesh link (arcade/mesh/udp.py): two real nodes over loopback, and a path pair over a bad wire."""
+
+import asyncio
+import os
+import random
+
+import nacl.signing
+import pytest
+
+from arcade.mesh import stun, udp
+from arcade.mesh.link import LinkError
+from arcade.mesh.node import MeshNode
+
+
+class _Taker:
+    """An extension that records frames of its own kind, in order."""
+    kinds = ("zz",)
+
+    def __init__(self):
+        self.got = []
+        self.node = None
+
+    async def link_up(self, link): pass
+    async def link_down(self, peer_id): pass
+    async def rebalance(self): pass
+
+    async def on_frame(self, link, header, blob):
+        self.got.append((header.get("i"), bytes(blob)))
+
+
+async def _until(check, timeout=8.0):
+    end = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < end:
+        if check():
+            return True
+        await asyncio.sleep(0.01)
+    return bool(check())
+
+
+class _Two:
+    """Two nodes, the lower id first, linked by TCP; with UDP on each unless told otherwise."""
+
+    def __init__(self, second_udp=True):
+        self.second_udp = second_udp
+
+    async def __aenter__(self):
+        keys = sorted((nacl.signing.SigningKey.generate() for _ in range(2)), key=lambda k: bytes(k.verify_key).hex())
+        loop = asyncio.get_running_loop()
+        self.stun, _ = await loop.create_datagram_endpoint(lambda: stun._Server({}), local_addr=("127.0.0.1", 0))
+        self.servers = [self.stun.get_extra_info("sockname")[:2]]
+        self.a = MeshNode(keys[0], "t", listen_host="127.0.0.1", listen_port=0)
+        self.b = MeshNode(keys[1], "t", listen_host="127.0.0.1", listen_port=0)
+        self.ua = udp.UdpShare(lambda: self.servers, try_after=0.05)
+        self.ub = udp.UdpShare(lambda: self.servers, try_after=0.05)
+        self.ta, self.tb = _Taker(), _Taker()
+        self.a.add_extension(self.ua)
+        self.a.add_extension(self.ta)
+        if self.second_udp:
+            self.b.add_extension(self.ub)
+        self.b.add_extension(self.tb)
+        await self.a.start()
+        await self.b.start()
+        self.a.add_address("127.0.0.1", self.b.listen_port)
+        assert await _until(lambda: self.b.node_id in self.a.links and self.a.node_id in self.b.links)
+        self.la, self.lb = self.a.links[self.b.node_id], self.b.links[self.a.node_id]
+        return self
+
+    async def up(self):
+        assert await _until(lambda: self.la.path is not None and self.lb.path is not None), self.ua.status()
+
+    async def __aexit__(self, *exc):
+        await self.a.stop()
+        await self.b.stop()
+        self.stun.close()
+
+
+def _tcp_writes(link):
+    """Count frames by the connection, by kind."""
+    seen = []
+    write = link._write
+
+    async def counted(header, blob=b""):
+        seen.append(header.get("t"))
+        await write(header, blob)
+    link._write = counted
+    return seen
+
+
+def test_a_link_moves_to_udp_and_frames_arrive_in_order_without_touching_tcp():
+    async def run():
+        async with _Two() as t:
+            await t.up()
+            seen = _tcp_writes(t.la)
+            for i in range(200):
+                await t.la.send({"t": "zz", "i": i}, b"x" * 50)
+            assert await _until(lambda: len(t.tb.got) == 200)
+            assert [g[0] for g in t.tb.got] == list(range(200))
+            assert "zz" not in seen, "every frame went by UDP"
+            assert t.ub.status()[0]["frames_in"] >= 200
+    asyncio.run(run())
+
+
+def test_both_directions_and_a_full_size_frame_are_cut_up_and_put_back():
+    async def run():
+        async with _Two() as t:
+            await t.up()
+            big = os.urandom(60_000)
+            await t.la.send({"t": "zz", "i": 1}, big)
+            await t.lb.send({"t": "zz", "i": 2}, big[::-1])
+            assert await _until(lambda: t.tb.got and t.ta.got)
+            assert t.tb.got == [(1, big)] and t.ta.got == [(2, big[::-1])]
+    asyncio.run(run())
+
+
+def test_when_udp_dies_nothing_is_lost_or_repeated_and_the_link_stays(monkeypatch):
+    """The wire is cut with frames in flight, both ways. The backup carries what was not delivered, then the rest."""
+    monkeypatch.setattr(udp, "DEAD_WITH_DATA", 0.3)
+
+    async def run():
+        async with _Two() as t:
+            await t.up()
+            pa, pb = t.la.path, t.lb.path
+            pa.sendto = pb.sendto = lambda *a: None          # the wire goes
+            for i in range(300):
+                await t.la.send({"t": "zz", "i": i}, b"y" * 2000)
+                await t.lb.send({"t": "zz", "i": i}, b"z" * 2000)
+            for i in range(300, 320):
+                await t.la.send({"t": "zz", "i": i})
+                await t.lb.send({"t": "zz", "i": i})
+            assert await _until(lambda: len(t.tb.got) == 320 and len(t.ta.got) == 320), (len(t.tb.got), len(t.ta.got))
+            assert [g[0] for g in t.tb.got] == list(range(320))
+            assert [g[0] for g in t.ta.got] == list(range(320))
+            assert await _until(lambda: t.la.path is None and t.lb.path is None and not t.ua.paths and not t.ub.paths)
+            assert t.a.links[t.b.node_id] is t.la and t.b.links[t.a.node_id] is t.lb, "the same link throughout"
+    asyncio.run(run())
+
+
+def test_a_failed_path_is_opened_again(monkeypatch):
+    monkeypatch.setattr(udp, "DEAD_IDLE", 0.2)
+    monkeypatch.setattr(udp, "RETRY_FIRST", 0.01)
+
+    async def run():
+        async with _Two() as t:
+            await t.up()
+            first = t.la.path
+            first.sendto = t.lb.path.sendto = lambda *a: None
+            assert await _until(lambda: t.la.path is None and t.ua.paths == {})
+            await asyncio.sleep(0.05)
+            await t.ua.rebalance()
+            await t.up()
+            assert t.la.path is not first
+            await t.la.send({"t": "zz", "i": 7})
+            assert await _until(lambda: t.tb.got == [(7, b"")])
+    asyncio.run(run())
+
+
+def test_only_the_backup_going_ends_the_link_and_the_path_with_it():
+    async def run():
+        async with _Two() as t:
+            await t.up()
+            path = t.la.path
+            t.lb.writer.close()
+            assert await _until(lambda: t.b.node_id not in t.a.links or t.a.links[t.b.node_id] is not t.la)
+            assert path.dead
+    asyncio.run(run())
+
+
+def test_a_forged_or_repeated_packet_changes_nothing():
+    async def run():
+        async with _Two() as t:
+            await t.up()
+            pb = t.lb.incoming or t.ub.paths[t.a.node_id]
+            taken = []
+            wire = t.la.path.sendto
+
+            def tap(packet, addr):
+                taken.append(packet)
+                wire(packet, addr)
+            t.la.path.sendto = tap
+            await t.la.send({"t": "zz", "i": 1}, b"real")
+            assert await _until(lambda: len(t.tb.got) == 1)
+            data = next(p for p in taken if len(p) > 60)
+            where = pb.addr
+            pb.received(data, ("9.9.9.9", 1))                                # replayed, from elsewhere
+            bad = data[:-1] + bytes([data[-1] ^ 1])
+            pb.received(udp.HEAD.pack(udp.MAGIC, pb.cid_in, 10 ** 6) + bad[udp.HEAD.size:], ("9.9.9.9", 1))
+            await asyncio.sleep(0.05)
+            assert t.tb.got == [(1, b"real")] and pb.bad == 1
+            assert pb.addr == where, "only a packet that opens moves the path"
+    asyncio.run(run())
+
+
+def test_a_node_without_udp_stays_on_its_connection(monkeypatch):
+    monkeypatch.setattr(udp, "ANSWER_WAIT", 0.2)
+
+    async def run():
+        async with _Two(second_udp=False) as t:
+            assert await _until(lambda: t.b.node_id in t.ua.retry)
+            await t.la.send({"t": "zz", "i": 1})
+            assert await _until(lambda: t.tb.got == [(1, b"")])
+            assert t.la.path is None and not t.ua.paths
+    asyncio.run(run())
+
+
+def _pair(wire):
+    k1, k2 = os.urandom(32), os.urandom(32)
+    got = [[], []]
+    downs = []
+
+    def maker(i, out, inn):
+        async def deliver(frame):
+            got[i].append(frame)
+        return udp.Path(out, inn, lambda d, a: wire(i, d), deliver, lambda p, why: downs.append(why))
+    return maker(0, k1, k2), maker(1, k2, k1), got, downs
+
+
+@pytest.mark.parametrize("loss", [0.0, 0.05, 0.25])
+def test_a_bad_wire_loses_nothing_and_keeps_the_order(loss):
+    rnd = random.Random(7)
+
+    async def run():
+        loop = asyncio.get_running_loop()
+        paths = []
+
+        def wire(i, data):
+            if rnd.random() < loss:
+                return
+            loop.call_later(rnd.uniform(0, 0.01), paths[1 - i].received, data, ("127.0.0.1", 1000 + i))
+        a, b, got, downs = _pair(wire)
+        paths += [a, b]
+        a.addr, b.addr = ("127.0.0.1", 1001), ("127.0.0.1", 1000)
+        a.start([b.addr])
+        b.start([a.addr])
+        a.released.set()
+        b.released.set()
+        assert await _until(lambda: a.usable and b.usable)
+        frames = [bytes([i % 256]) * rnd.randint(1, 5000) for i in range(300)]
+        for f in frames:
+            await a.send_frame(f)
+        assert await _until(lambda: len(got[1]) == 300, 30.0), (len(got[1]), downs)
+        assert got[1] == frames and not downs
+        a.close()
+        b.close()
+    asyncio.run(run())

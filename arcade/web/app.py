@@ -29929,6 +29929,8 @@ def create_app(state: AppState) -> FastAPI:
         stun = getattr(mesh, "stun", None)
         out["stun_mine"] = [f"{h}:{p}" for h, p in stun.mine()] if stun is not None else []
         out["stun_known"] = len(stun.known()) if stun is not None else 0
+        udp = getattr(mesh, "udp", None)
+        out["udp"] = udp.status() if udp is not None else []
         return JSONResponse(out)
 
     @app.get("/admin/api/mesh/punch")

@@ -304,6 +304,10 @@ class MeshNode:
             self._ws_server.close()
         # Links first: since Python 3.12 the server's wait_closed() waits for every
         # connection it accepted, and those end only when their links do.
+        for ext in list(self.extensions):
+            closing = getattr(ext, "on_stop", None)     # udp.UdpShare: its paths and its socket
+            if closing is not None:
+                await closing()
         for link in list(self.links.values()):
             await link.close()
         for task in list(self._tasks):
@@ -548,6 +552,7 @@ class MeshNode:
                 if len(link.pings) > 8:
                     link.pings.pop(next(iter(link.pings)))
                 await link.send({"t": "ping", "n": n})
+                await link.keep_backup()
         except (LinkError, ConnectionError, OSError):
             pass
 

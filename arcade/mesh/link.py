@@ -44,6 +44,10 @@ class LinkError(Exception):
     """The other side is not a node we can talk to: wrong network, bad proof, or gone."""
 
 
+class PathDown(Exception):
+    """A link's UDP path is gone: use the connection (udp.py)."""
+
+
 @dataclass(frozen=True)
 class Hello:
     network: str        # e.g. "pepecoin-main": nodes of different chains never link
@@ -94,6 +98,8 @@ class Link:
         self._recv_n = 0
         self._lock = asyncio.Lock()
         self.closed = False
+        self.path = None                          # udp.Path while this side sends over UDP; this link is the backup
+        self.incoming = None                      # udp.Path the other side sends over
 
     @property
     def host(self) -> str:
@@ -148,8 +154,44 @@ class Link:
         if self.closed:
             raise LinkError("link is closed")
         async with self._lock:                    # nonces must go out in order
-            self.writer.write(_frame(self._seal(self.pack(header, blob))))
-            await self.writer.drain()
+            if self.path is not None:
+                if self.path.usable:
+                    try:
+                        await self.path.send_frame(self.pack(header, blob))
+                        return
+                    except PathDown:
+                        pass
+                await self._fall_back(self.path)
+            await self._write(header, blob)
+
+    async def _write(self, header: dict, blob: bytes = b"") -> None:
+        self.writer.write(_frame(self._seal(self.pack(header, blob))))
+        await self.writer.drain()
+
+    async def attach(self, path) -> None:
+        """Send over a UDP path from now on (udp.py). "go" is the last frame by this connection."""
+        async with self._lock:
+            await self._write({"t": "ud", "op": "go"})
+            self.path = path
+
+    async def _fall_back(self, path) -> None:
+        if self.path is not path:
+            return
+        self.path = None
+        for out in path.unfinished():
+            await self._write({"t": "ud", "op": "late", "s": out.seq, "m": out.more}, out.chunk)
+        await self._write({"t": "ud", "op": "end", "n": path.next_seq})
+
+    async def fall_back(self, path) -> None:
+        """The path failed: what it had not delivered goes by this connection, before anything new."""
+        async with self._lock:
+            await self._fall_back(path)
+
+    async def keep_backup(self) -> None:
+        """A frame down the backup while traffic goes by UDP: it must not idle out, and must be seen to work."""
+        async with self._lock:
+            if self.path is not None:
+                await self._write({"t": "ka"})
 
     async def recv(self) -> tuple[dict, bytes]:
         return self.unpack(self._open(await _read_frame(self.reader)))
