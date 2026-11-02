@@ -88,6 +88,10 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-11-02 · fioridarrell's fork · branch `fix-mesh-private-lan-dial` (from upstream `main` 4597a8a)
+The mesh's one UDP socket was aiming at a peer's home-network address on every link, including with `--mesh-core off`. `Session.offer` always appended `local_ipv4()`, and `udp.py`, `introduce.py` and the punch probe dialed every IPv4 address a peer sent. A node now dials and advertises a private, link-local, loopback or CGNAT address only when the peer's public address is one STUN observed here. Setting `mesh_lan_dial`: `auto` (default), `on`, `off`. `ARCADE_MESH_LAN_DIAL` overrides it. Public hole punching is unchanged. Tests: `tests/test_punch.py`, `tests/test_mesh_udp.py`, `tests/test_mesh_introduce.py`. Write-up: `docs/mesh-private-lan-dial.md`.
+- **For Martin:** review, then whatever you want on `main`. Darrell opens the PR from this branch. Nothing was pushed to `martinseeger2002`.
+
 ### 2026-11-01 Leaving a group chat (Claude)
 The operator: "a way to be able to leave a group chat" in Messages and in apps. A left-line sealed to the group, credited by paying
 address, so it cannot be forged; somebody who STAYS makes the new key, because whoever makes a key holds it (creator first, next

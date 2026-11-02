@@ -27,6 +27,10 @@ frames. The receiver finishes the path up to that number before it reads on.
 Frames "ud": {"op": "try", "n", "a"} asks a linked node to open a path; {"op": "ready", "n", "a"} is its yes;
 {"op": "no", "n", "why"} its no; "go", "late" ("s", "m", chunk as blob) and "end" ("n") as above. "ka" (node.py) keeps
 the backup alive. An arcade without this code ignores them all, and its links stay on TCP.
+
+The addresses in "a" are the ones STUN saw. A home-network address is added, and dialed, only when the peer is on
+this NAT (or mesh_lan_dial is "on"): see punch.dialable. This is the node's one UDP socket, so a private address it
+should not have aimed at is a packet to that address on the LAN here.
 """
 
 from __future__ import annotations
@@ -543,9 +547,10 @@ class UdpShare:
 
     kinds = ("ud",)
 
-    def __init__(self, stun_servers=None, try_after: float = TRY_AFTER, public_stun=()):
+    def __init__(self, stun_servers=None, try_after: float = TRY_AFTER, public_stun=(), lan_dial=None):
         self.stun_servers = stun_servers or (lambda: [])
         self.try_after, self.public_stun = try_after, tuple(public_stun)
+        self.lan_dial = lan_dial
         self.node = None
         self.sock: _Socket | None = None
         self.paths: dict[str, Path] = {}
@@ -553,6 +558,8 @@ class UdpShare:
         self.waiting: dict[str, asyncio.Future] = {}
         self.trying: set[str] = set()
         self.mapped: tuple[float, list[list]] | None = None
+        self.outside: list[str] = []            # what STUN observed for this socket
+        self._lan_extra: list[list] = []        # home-network addresses, offered per peer
         self.opening = asyncio.Lock()
         self.nat = "unknown"                    # punch.nat_kind of this node's socket
         self.tasks: set[asyncio.Task] = set()
@@ -576,7 +583,7 @@ class UdpShare:
                 _, self.sock = await loop.create_datagram_endpoint(_Socket, sock=punchlib.udp_socket())
 
     async def _offer(self) -> list[list]:
-        """Where the other side should aim, from one mapping of the node's one socket."""
+        """The outside addresses of the node's one socket. Home-network addresses are kept aside for offer_for."""
         await self._open()
         now = time.monotonic()
         if self.mapped is None or now - self.mapped[0] > MAP_KEEP:
@@ -589,8 +596,36 @@ class UdpShare:
                 mesh = []
             await session.map(mesh + [s for s in self.public_stun if s not in mesh])
             self.nat = punchlib.nat_kind(session.maps, punchlib.local_ipv4())
-            self.mapped = (now, session.offer())
+            self.outside = punchlib.outside_hosts(session.maps)
+            full = session.offer(include_lan=True)
+            safe = [a for a in full if punchlib.share_with_remote(a[0], False)]
+            self._lan_extra = [a for a in full if a not in safe]
+            # What every peer may be told. offer_for adds the home-network ones for a peer on this NAT.
+            self.mapped = (now, safe)
         return self.mapped[1]
+
+    def _mode(self) -> str:
+        return punchlib.call_mode(self.lan_dial)
+
+    async def offer_for(self, peer_raw=None) -> list[list]:
+        """Addresses to send this peer. Home-network ones only when it is on this NAT, or mesh_lan_dial is on.
+
+        An introduction passes no peer addresses: that frame is relayed, so a home address stays out of it unless
+        the operator asked for LAN dialing."""
+        offer = [list(a) for a in await self._offer()]
+        peer = punchlib._addrs(peer_raw) if peer_raw is not None else []
+        if punchlib.include_lan(self.outside, peer, self._mode()):
+            for extra in self._lan_extra:
+                if list(extra) not in offer and len(offer) < punchlib.MAX_ADDRS:
+                    offer.append(list(extra))
+        return offer
+
+    def dial_targets(self, raw) -> list[tuple[str, int]]:
+        parsed = punchlib._addrs(raw)
+        kept = punchlib.dialable(parsed, self.outside, self._mode())
+        if len(kept) != len(parsed):
+            log.debug("mesh: not dialing %d home-network address(es)", len(parsed) - len(kept))
+        return kept
 
     def _new_path(self, link, nonce: bytes) -> Path:
         peer = link.peer_id
@@ -695,7 +730,7 @@ class UdpShare:
         fut = asyncio.get_running_loop().create_future()
         self.waiting[nonce] = fut
         try:
-            offer = await self._offer()
+            offer = await self.offer_for(None)
             await link.send({"t": "ud", "op": "try", "n": nonce, "a": offer})
             try:
                 answer = await asyncio.wait_for(fut, ANSWER_WAIT)
@@ -704,7 +739,7 @@ class UdpShare:
             if answer.get("op") != "ready" or self.node.links.get(peer) is not link:
                 self._later(peer)
                 return
-            self._new_path(link, bytes.fromhex(nonce)).start(punchlib._addrs(answer.get("a")))
+            self._new_path(link, bytes.fromhex(nonce)).start(self.dial_targets(answer.get("a")))
         except (LinkError, ConnectionError, OSError):
             self._later(peer)
         finally:
@@ -721,10 +756,10 @@ class UdpShare:
             raw = bytes.fromhex(nonce)
         except ValueError:
             return
-        offer = await self._offer()
+        offer = await self.offer_for(header.get("a"))
         path = self._new_path(link, raw)
         await link.send({"t": "ud", "op": "ready", "n": nonce, "a": offer})
-        path.start(punchlib._addrs(header.get("a")))
+        path.start(self.dial_targets(header.get("a")))
 
     async def on_frame(self, link, header: dict, blob: bytes) -> None:
         op = header.get("op")

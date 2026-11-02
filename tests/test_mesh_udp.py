@@ -3,6 +3,7 @@
 import asyncio
 import os
 import random
+import time
 
 import nacl.signing
 import pytest
@@ -256,6 +257,35 @@ def test_a_machine_without_so_reuseport_still_links_and_moves_to_udp(monkeypatch
             await t.la.send({"t": "zz", "i": 1})
             assert await _until(lambda: t.tb.got == [(1, b"")])
     asyncio.run(run())
+
+
+def test_a_remote_home_address_is_neither_offered_nor_dialed():
+    """The one UDP socket's offer and its targets, without a link: the filter udp.py actually calls."""
+    async def run():
+        share = udp.UdpShare(lan_dial=lambda: "auto")
+        always = udp.UdpShare(lan_dial=lambda: "on")
+        for one in (share, always):
+            one.mapped = (time.monotonic(), [["129.222.44.64", 40000]])
+            one.outside = ["129.222.44.64"]
+            one._lan_extra = [["192.168.1.55", 32805]]
+        try:
+            remote = await share.offer_for([["156.67.28.112", 41658], ["192.168.1.25", 41658]])
+            same = await share.offer_for([["129.222.44.64", 40000]])
+            blind = await share.offer_for(None)
+            asked = await always.offer_for(None)
+        finally:
+            for one in (share, always):
+                if one.sock is not None and one.sock.transport is not None:
+                    one.sock.transport.close()
+        raw = [["156.67.28.112", 41658], ["192.168.1.55", 32805], ["192.168.1.25", 41658],
+               ["10.1.2.3", 9], ["100.64.12.1", 9], ["169.254.1.1", 9], ["127.0.0.1", 9]]
+        return remote, same, blind, asked, share.dial_targets(raw), always.dial_targets(raw)
+    remote, same, blind, asked, targets, allowed = asyncio.run(run())
+    assert remote == blind == [["129.222.44.64", 40000]]
+    assert same == [["129.222.44.64", 40000], ["192.168.1.55", 32805]]
+    assert asked == [["129.222.44.64", 40000], ["192.168.1.55", 32805]]
+    assert targets == [("156.67.28.112", 41658)]
+    assert ("192.168.1.55", 32805) in allowed and ("127.0.0.1", 9) not in allowed
 
 
 def test_on_windows_a_closed_port_does_not_break_the_next_receive(monkeypatch):
