@@ -102,6 +102,9 @@
             <select id="group-drop" style="width:auto;padding:3px 6px;font-size:{{ '16px' if node_side else '.78rem' }}"></select>
             <button type="button" class="ghost small" id="group-remove">Remove from the group</button>
           </div>
+          <div class="convo-sub" id="group-out" hidden style="margin-top:4px">
+            <button type="button" class="ghost small" id="group-leave">Leave this group</button>
+          </div>
         </div>
         <a class="ghost small btn" id="to-book" href="{{ '/contacts' if node_side else '/me/contacts' }}"
            style="margin-left:auto">Address book</a>
@@ -533,13 +536,14 @@ async function drawConversation() {
   const thread = (await peerOf(here)) || {peer: here, tag: "", address: ""};
   const group = mail.groupOfPeer(here) ? (thread.group || await mail.currentGroup(mail.groupOfPeer(here))) : null;
   $("group-admin").hidden = true;
+  $("group-out").hidden = !group || group.current === false;
   if (group) {
     // Names for everybody who has spoken, before the lines are drawn.
     await Promise.all([...new Set(letters.filter((l) => !l.mine)
       .map((l) => l.from_address).filter(Boolean))].map(tagOf));
     await Promise.all((group.members || []).map((m) => m.address && !m.tag ? tagOf(m.address) : null));
     $("convo-name").textContent = nameOf({group});
-    $("convo-sub").textContent = (group.members || []).map(memberName).join(", ")
+    $("convo-sub").textContent = mail.present(group).map(memberName).join(", ")
       + (group.current === false ? " \u00b7 this group moved to a new key" : "");
     $("to-book").hidden = true;
     const mine = me && group.creator === mail.hex(me.publicKey);
@@ -554,7 +558,7 @@ async function drawConversation() {
       $("group-admin").hidden = !$("group-drop").options.length;
     }
     $("cost-note").textContent =
-      `Only the ${(group.members || []).length} people in this group can read it. `
+      `Only the ${mail.present(group).length} people in this group can read it. `
       + "Each thing you say is one small transaction, however many are in the group. "
       + "Enter sends; Shift+Enter starts a new line.";
   } else {
@@ -796,6 +800,28 @@ $("group-remove").onclick = async () => {
   }
 };
 
+// Leaving (2026-11-01): one line in the group; somebody who stays makes the new key (messaging.js). Asked first, because it spends.
+$("group-leave").onclick = async () => {
+  const gid = mail.groupOfPeer(here);
+  const group = gid && await mail.currentGroup(gid);
+  if (!group) return;
+  const yes = await arcadeAsk("Leave this group?", "It costs one small message from your wallet, and this chat leaves your list. Somebody who stays then makes "
+    + "a new key you never see; until they do, what the group says is still sealed to the old key. Somebody in the group can ask you back.", "Leave the group");
+  if (!yes) return;
+  say("");
+  $("group-leave").disabled = true;
+  try {
+    await mail.leaveGroup(keys, me, group);
+    sentSince = true;
+    $("back").click();
+    await drawThreads();
+  } catch (e) {
+    say(String(e.message || e));
+  } finally {
+    $("group-leave").disabled = false;
+  }
+};
+
 $("new").onclick = () => {
   $("newconv").hidden = false;
   $("who-new").focus();
@@ -858,6 +884,8 @@ async function check(loud) {
       const moved = await mail.tendHolderChats(keys, me);
       if (moved.joined || moved.left) sentSince = true;
     } catch (e) { /* tried again on the next look */ }
+    // Somebody left a group, and it is this account's turn to make the new key (messaging.js settleLeavers).
+    try { if (await mail.settleLeavers(keys, me)) sentSince = true; } catch (e) { /* tried again on the next look */ }
     // The open conversation first: drawing it marks it read, and drawing
     // the list before that leaves a badge on the thread being looked at.
     if (here) await drawConversation();

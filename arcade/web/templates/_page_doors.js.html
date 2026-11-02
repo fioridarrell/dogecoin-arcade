@@ -326,13 +326,41 @@
       for (var i = 0; i < t.length; i++) u[i] = t.charCodeAt(i);
       return u.buffer;
     }
-    var fastIce = null;
+    var fastIce = null, fastIceAt = 0, ICE_KEEP = 2 * 3600 * 1000;
     function fastServers(){
       // Which app asks: the operator chooses the apps their relay serves (realtime.py relay_for, 2026-10-23).
-      if (!fastIce) fastIce = fetch('/realtime/ice?app=' + encodeURIComponent(here), {cache: 'no-store'}).then(function(r){ return r.json(); })
-        .then(function(j){ return (j && j.iceServers) || []; })
-        .catch(function(){ fastIce = null; return []; });
+      // Relay logins expire: a page left open must not go on handing out a dead one (2026-11-01).
+      if (Date.now() - fastIceAt > ICE_KEEP) fastIce = null;
+      if (!fastIce) {
+        fastIceAt = Date.now();
+        fastIce = fetch('/realtime/ice?app=' + encodeURIComponent(here), {cache: 'no-store'}).then(function(r){ return r.json(); })
+          .then(function(j){ return (j && j.iceServers) || []; })
+          .catch(function(){ fastIce = null; return []; });
+      }
       return fastIce;
+    }
+    // How a link really goes, from the browser's own count of the pair in use (2026-11-01): 'direct', 'relay' (a relay of the
+    // arcades), 'cloudflare', 'connecting' or 'none'. A far side's relay shows here as 'relay': only its owner can tell whose it is.
+    function fastRouteOf(stats){
+      var pairId = '', pair = null, byId = {};
+      stats.forEach(function(r){
+        byId[r.id] = r;
+        if (r.type === 'transport' && r.selectedCandidatePairId) pairId = r.selectedCandidatePairId;
+      });
+      pair = byId[pairId] || null;
+      if (!pair) stats.forEach(function(r){ if (!pair && r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded') pair = r; });
+      if (!pair) return '';
+      var near = byId[pair.localCandidateId] || {}, far = byId[pair.remoteCandidateId] || {};
+      if (near.candidateType === 'relay') return /cloudflare/i.test(near.url || '') ? 'cloudflare' : 'relay';
+      return far.candidateType === 'relay' ? 'relay' : 'direct';
+    }
+    function fastRoutes(h, answer){
+      var out = {}, ids = h.fast ? Object.keys(h.fast.peers) : [];
+      Promise.all(ids.map(function(id){
+        var peer = h.fast.peers[id];
+        if (peer.state !== 'direct' || !peer.pc) { out[id] = peer.state === 'room' ? 'none' : 'connecting'; return null; }
+        return peer.pc.getStats().then(function(stats){ out[id] = fastRouteOf(stats) || 'direct'; }, function(){ out[id] = 'direct'; });
+      })).then(function(){ answer({ok: true, routes: out}); });
     }
     function fastStart(name, h){
       if (typeof RTCPeerConnection !== 'function') return;     // no WebRTC here: the room carries everything
@@ -1145,6 +1173,7 @@
       var held = rt[name];
       if (m.op === 'fast') { if (held) fastSend(held, m); return; }   // many a second: never answered
       if (!held) { answer({ok: false, error: 'join the room first'}); return; }
+      if (m.op === 'fastroutes') { fastRoutes(held, answer); return; }
       if (m.op === 'fastlink') { fastLink(name, held, m.link, m.max); answer({ok: true, fast: !!held.fast}); return; }
       if (m.op === 'media') { mediaDoor(name, held, m, answer); return; }
       if (m.op === 'send') {
@@ -1577,7 +1606,8 @@
       var now = Date.now(), jobs = [];
       if (now - groupsSynced >= GROUPS_SYNC_EVERY) { groupsSynced = now; jobs.push(s.mail.syncMailbox(s.me).catch(function(){})); }
       if (now - groupsLooked >= GROUPS_LOOK_EVERY) { groupsLooked = now; jobs.push(s.mail.collect(s.me).catch(function(){})); }
-      return Promise.all(jobs);
+      // Somebody left, and it is this player's turn to make the new key: their browser, with their wallet already open for this.
+      return Promise.all(jobs).then(function(){ return jobs.length && s.mail.settleLeavers(s.keys, s.me).catch(function(){}); });
     }
     function groupsOne(s, id){
       return s.mail.currentGroup(String(id || '')).then(function(group){
@@ -1605,8 +1635,8 @@
       if (op === 'list') return groupsFresh(s).then(function(){ return s.mail.groups(); }).then(function(all){
         var roots = {};
         all.forEach(function(one){ roots[s.mail.rootOf(one)] = true; });
-        return Promise.all(Object.keys(roots).map(function(id){ return s.mail.currentGroup(id); })).then(function(line){
-          return {me: s.keys.address, groups: line.filter(function(one){ return one && one.current !== false; })
+        return Promise.all([Promise.all(Object.keys(roots).map(function(id){ return s.mail.currentGroup(id); })), s.mail.leftGroups()]).then(function(got){
+          return {me: s.keys.address, groups: got[0].filter(function(one){ return one && one.current !== false && !got[1].has(s.mail.rootOf(one)); })
                   .map(s.mail.groupForApp)};
         });
       });
@@ -1656,6 +1686,19 @@
         }).then(function(group){ groupsCards--; return {group: s.mail.groupForApp(group)}; },
                 function(err){ groupsCards--; throw err; });
       }
+      if (op === 'leave') {
+        if (groupsCards) throw new Error('busy: this page already has a group question open');
+        groupsCards++;
+        return groupsOne(s, m.group).then(function(group){
+          return arcadeAsk('Leave this group chat?', '\u201c' + (g.name || gameName || 'This app') + '\u201d wants to take you out of \u201c' + group.name
+            + '\u201d. It costs one small message from your wallet. Somebody who stays then makes a new key you never see; until they do, what the group says is still sealed to the old key. Somebody in the group can ask you back.', 'Leave the group')
+            .then(function(yes){
+              if (!yes) throw new Error('declined');
+              return s.mail.leaveGroup(s.keys, s.me, group);
+            });
+        }).then(function(root){ groupsCards--; return {left: root}; },
+                function(err){ groupsCards--; throw err; });
+      }
       if (op === 'save') {
         // An app's frame cannot start a download, so the page does, for bytes the app hands over: a file named by the app,
         // saved where the player's browser saves things. Only ever a plain download, so it opens nothing by itself.
@@ -1666,7 +1709,7 @@
         setTimeout(function(){ URL.revokeObjectURL(url); }, 60000);
         return {saved: file};
       }
-      throw new Error('groups: op is list, read, send, seal, open, create, add, people or save');
+      throw new Error('groups: op is list, read, send, seal, open, create, add, leave, people or save');
     }
     function contactsDoor(m, answer){
       var op = m.op || 'list';

@@ -256,6 +256,7 @@ arcade.realtime.join('call-x7', {fast: true}).then(function (room) {
 | `start({screen, audio, sound})` | shares a screen instead of the camera. With `sound: true` the browser's picker offers what the screen plays, mixed with the microphone into one track; the answer has `sound: true` if the browser gave any. `mute({audio: true})` then silences the microphone only |
 | `start({video, audio})` | opens the camera, the microphone or both. Called again mid-call, the new tracks replace the old (the camera joins the microphone, say) |
 | `stop()` | camera and microphone off; every share ends |
+| `fast.routes()` | how each link really goes, by player id: `'direct'`, `'relay'` (an arcade's relay), `'cloudflare'`, `'connecting'` or `'none'`. Measured by the browser. A relay on the far side reads `'relay'`: only its owner can tell whose it is |
 | `share(id, on)` | send your picture and sound to one player: `true`, `false`, or `{video, audio}` for one kind only. Refused with `not direct` until that player's link is direct |
 | `hear(id, on)` | play that player's sound. Nobody's sound plays until you say |
 | `showScreen({sound})` | the screen as a second picture, beside the camera: the camera and microphone go on untouched. On the player's press. `hideScreen()` ends it, and the browser's own Stop sharing gives state `'screen-off'` |

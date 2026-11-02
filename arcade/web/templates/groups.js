@@ -24,6 +24,8 @@
 //
 // create(name, members): after the player taps yes, a new group with those @names or addresses.
 // add(id, members): after the player taps yes, lets them in. They can read what has been said under the group's key.
+// leave(id): after the player taps yes, one small message says they left. Somebody who stays then makes a new key, so the group's
+// `room` changes: read list() again now and then, and follow it. Somebody in the group can ask them back.
 // people(): the player's address book, [{address, tag}], for choosing who to make or add a group with.
 //
 // Rejects with an Error saying why: "off: ...", "no card: ...", "sign in first", "declined", "busy: ...", "too long: ...",
@@ -61,6 +63,7 @@
       return ask({op: 'read', group: id, after: o.after, limit: o.limit}).then(function (r) { return r.lines; });
     },
     send: function (id, text) { return ask({op: 'send', group: id, text: text}); },
+    leave: function (id) { return ask({op: 'leave', group: id}, 600000); },
     seal: function (id, text) { return ask({op: 'seal', group: id, text: text}).then(function (r) { return r.sealed; }); },
     open: function (id, sealed) { return ask({op: 'open', group: id, sealed: sealed}).then(function (r) { return r.text; }); },
     people: function () { return ask({op: 'people'}).then(function (r) { return r.people; }); },

@@ -154,3 +154,130 @@ def test_somebody_added_later_reads_what_was_said_and_everybody_sees_them(world)
         seen(b)                                                      # who was already in sees the newcomer
     finally:
         third.quit()
+
+
+def test_leaving_takes_you_out_of_what_is_said_next_and_those_who_stay_carry_on(world):   # noqa: F811
+    """2026-11-01: a way to leave a group chat. Real keys on a real chain: the one who left cannot read what comes next."""
+    base, state, node, a, b = world
+    third = browsers.launch()
+    try:
+        _signed_up(third, base, state, node, "danagroup")
+        _settled(state, node.rpc)
+        a.switch_to.default_content(); b.switch_to.default_content()
+        a.get(f"{base}/join"); b.get(f"{base}/join")
+        made = a.execute_async_script("""
+            const done = arguments[0];
+            Promise.all([import("/messaging.js"), import("/wallet.js")]).then(async ([mail, w]) => {
+              const keys = await w.opened(ARCADE_CHAIN), me = await mail.identity(keys.phrase);
+              const g = await mail.createGroup(keys, me, "Exit club", ["@bobgroup", "@danagroup"], "alicegroup");
+              await mail.writeGroup(keys, me, g, "before bob left");
+              return {id: g.id, me: mail.hex(me.publicKey)};
+            }).then(done, (e) => done({error: String(e.message || e)}));""")
+        assert "error" not in made, made
+        _settled(state, node.rpc)
+        _app(a, base); _app(b, base); _app(third, base)
+
+        def group(driver, want=True):
+            end = time.time() + 90
+            while time.time() < end:
+                found = [g for g in _do(driver, op="list")["value"]["groups"] if g["id"] == made["id"]]
+                if bool(found) == want and want is False:
+                    return None
+                if found and want is True:
+                    return found[0]
+                if found and callable(want) and want(found[0]):
+                    return found[0]
+                time.sleep(2)
+            raise AssertionError(f"never as wanted: {want}")
+
+        room_before = group(b)["room"]
+        bob = _do(b, op="list")["value"]["me"]
+        b.switch_to.default_content()
+        b.get(f"{base}/join")
+        left = b.execute_async_script("""
+            const done = arguments[1];
+            Promise.all([import("/messaging.js"), import("/wallet.js")]).then(async ([mail, w]) => {
+              const keys = await w.opened(ARCADE_CHAIN), me = await mail.identity(keys.phrase);
+              const g = await mail.currentGroup(arguments[0]);
+              return {left: await mail.leaveGroup(keys, me, g), secret: g.secret};
+            }).then(done, (e) => done({error: String(e.message || e)}));""", made["id"])
+        assert "error" not in left, left
+        _settled(state, node.rpc)
+        moved = lambda g: all(m["address"] != bob for m in g["members"])      # noqa: E731
+        # The creator's browser reads the line and makes the new key. The one who left never touches it.
+        group(a, lambda g: moved(g) and g["room"] != room_before)
+        _settled(state, node.rpc)
+        stays = group(third, lambda g: moved(g) and g["room"] != room_before)
+        assert {m["tag"] for m in stays["members"]} == {"alicegroup", "danagroup"}
+        a.switch_to.default_content()
+        a.get(f"{base}/join")
+        said = a.execute_async_script("""
+            const done = arguments[2];
+            Promise.all([import("/messaging.js"), import("/wallet.js")]).then(async ([mail, w]) => {
+              const keys = await w.opened(ARCADE_CHAIN), me = await mail.identity(keys.phrase);
+              const g = await mail.currentGroup(arguments[0]);
+              await mail.writeGroup(keys, me, g, "after bob left");
+              return {creator: g.creator === arguments[1], rotated: !!g.rotated_from, secret: g.secret};
+            }).then(done, (e) => done({error: String(e.message || e)}));""", made["id"], made["me"])
+        assert said["creator"] is True and said["rotated"] is True, said
+        assert said["secret"] != left["secret"]
+        _settled(state, node.rpc)
+        end, lines = time.time() + 60, []
+        while time.time() < end and "after bob left" not in lines:
+            lines = [l["text"] for l in _do(third, op="read", id=made["id"])["value"]]
+            time.sleep(2)
+        assert "after bob left" in lines, "those who stay carry on"
+        _app(b, base)
+        for _ in range(8):
+            _do(b, op="list"); time.sleep(2)
+        assert group(b, False) is None, "gone from the list of the one who left"
+        b.switch_to.default_content()
+        b.get(f"{base}/join")
+        theirs = b.execute_async_script("""
+            const done = arguments[2];
+            import("/messaging.js").then(async (mail) => {
+              const words = (await mail.groupLines(arguments[0], {limit: 100})).map((l) => l.text);
+              const held = (await mail.groups()).filter((g) => mail.rootOf(g) === arguments[0]).map((g) => g.secret);
+              return {words, held, listed: (await mail.threads()).some((t) => t.peer === "group:" + arguments[0])};
+            }).then(done, (e) => done({error: String(e.message || e)}));""", made["id"], said["secret"])
+        assert "after bob left" not in theirs["words"], theirs
+        assert said["secret"] not in theirs["held"], "the one who left never had the new key"
+        assert theirs["listed"] is False, theirs
+        # Asked back: a later invite that names them brings the chat back.
+        a.execute_async_script("""
+            const done = arguments[1];
+            Promise.all([import("/messaging.js"), import("/wallet.js")]).then(async ([mail, w]) => {
+              const keys = await w.opened(ARCADE_CHAIN), me = await mail.identity(keys.phrase);
+              await mail.addToGroup(keys, me, await mail.currentGroup(arguments[0]), ["@bobgroup"]);
+            }).then(() => done(1), (e) => done(String(e.message || e)));""", made["id"])
+        _settled(state, node.rpc)
+        _app(b, base)
+        group(b)
+        # The creator leaves: the first of those who stay makes the key, and looks after the group from then on.
+        before = group(third)["room"]
+        a.switch_to.default_content()
+        a.get(f"{base}/join")
+        out = a.execute_async_script("""
+            const done = arguments[1];
+            Promise.all([import("/messaging.js"), import("/wallet.js")]).then(async ([mail, w]) => {
+              const keys = await w.opened(ARCADE_CHAIN), me = await mail.identity(keys.phrase);
+              const g = await mail.currentGroup(arguments[0]);
+              await mail.leaveGroup(keys, me, g);
+              return {first: g.members.filter((m) => m.key !== mail.hex(me.publicKey))[0].tag};
+            }).then(done, (e) => done({error: String(e.message || e)}));""", made["id"])
+        assert out == {"first": "danagroup"}, out
+        _settled(state, node.rpc)
+        now = group(third, lambda g: g["room"] != before and all(m["tag"] != "alicegroup" for m in g["members"]))
+        assert {m["tag"] for m in now["members"]} == {"bobgroup", "danagroup"}
+        third.switch_to.default_content()
+        third.get(f"{base}/join")
+        owner = third.execute_async_script("""
+            const done = arguments[1];
+            Promise.all([import("/messaging.js"), import("/wallet.js")]).then(async ([mail, w]) => {
+              const keys = await w.opened(ARCADE_CHAIN), me = await mail.identity(keys.phrase);
+              const g = await mail.currentGroup(arguments[0]);
+              return g.creator === mail.hex(me.publicKey);
+            }).then(done, (e) => done(String(e.message || e)));""", made["id"])
+        assert owner is True, owner
+    finally:
+        third.quit()

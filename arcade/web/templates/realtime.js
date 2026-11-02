@@ -259,6 +259,11 @@
     if (options.to != null) m.to = [].concat(options.to).map(String);
     window.parent.postMessage(m, '*');
   };
+  // How each link really goes, by player id: 'direct', 'relay' (an arcade's), 'cloudflare', 'connecting' or 'none'. Measured by the
+  // browser, not guessed. A relay on the far side reads 'relay' here: only its owner can tell whose it is.
+  Fast.prototype.routes = function () {
+    return ask({op: 'fastroutes', room: this.room.name}).then(function (said) { return said.routes || {}; }, function () { return {}; });
+  };
   // With whom this player links directly: an array of player ids, or null for everybody (the default). max: how
   // many links at most (19 unless a host asks for more, up to 60). Answers {ok, fast}.
   Fast.prototype.link = function (ids, options) {

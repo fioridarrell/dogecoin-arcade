@@ -444,6 +444,45 @@ def test_a_screen_goes_beside_the_camera_as_a_second_picture_with_its_own_sound(
         state.mesh.stop()
 
 
+def test_a_page_can_ask_how_each_link_really_goes(tmp_path, no_nodes):
+    """2026-11-01: direct, relay, Cloudflare relay or not connected. What the browser reports, including a relay's url."""
+    state, server, base = _server(tmp_path)
+    try:
+        with sync_api.sync_playwright() as pw:
+            chrome = _launch(pw)
+            pa, _, _ = _player(chrome, base)
+            pb, _, _ = _player(chrome, base)
+            ga, gb = _game(pa), _game(pb)
+            _until(ga, "window.room && window.room.me", "a in")
+            _until(gb, "window.room && window.room.me", "b in")
+            idb = gb.evaluate("window.room.me.id")
+            _until(ga, f"window.states[{idb!r}] === 'direct'", "a direct")
+            assert ga.evaluate("window.room.fast.routes()") == {idb: "direct"}, "two browsers on one machine"
+            fake = """(c) => { RTCPeerConnection.prototype.getStats = async () => new Map([['t', {id: 't', type: 'transport', selectedCandidatePairId: 'p'}],
+                ['p', {id: 'p', type: 'candidate-pair', localCandidateId: 'l', remoteCandidateId: 'r'}],
+                ['l', Object.assign({id: 'l', type: 'local-candidate'}, c.near)], ['r', Object.assign({id: 'r', type: 'remote-candidate'}, c.far)]]); }"""
+            cases = [({"candidateType": "relay", "url": "turn:156.67.28.112:3478?transport=udp"}, {"candidateType": "host"}, "relay"),
+                     ({"candidateType": "relay", "url": "turn:turn.cloudflare.com:3478?transport=udp"}, {"candidateType": "srflx"}, "cloudflare"),
+                     ({"candidateType": "srflx"}, {"candidateType": "relay"}, "relay"),
+                     ({"candidateType": "prflx"}, {"candidateType": "srflx"}, "direct")]
+            for near, far, want in cases:
+                pa.evaluate(fake, {"near": near, "far": far})
+                assert ga.evaluate("window.room.fast.routes()") == {idb: want}, (near, far)
+            chrome.close()
+    finally:
+        server.stop()
+        state.mesh.stop()
+
+
+def test_a_relay_login_is_asked_for_again_once_it_has_grown_old(tmp_path, no_nodes):
+    """A login lasts 6 hours and a page can stay open for days: it must not keep offering a dead one."""
+    source = pathlib.Path(__file__).resolve().parent.parent / "arcade" / "web" / "templates" / "_page_doors.js.html"
+    text = source.read_text()
+    assert "ICE_KEEP = 2 * 3600 * 1000" in text and "if (Date.now() - fastIceAt > ICE_KEEP) fastIce = null;" in text
+    from arcade.mesh import turn
+    assert turn.LOGIN_TTL >= 2 * 2 * 3600, "kept for less than half a login"
+
+
 def test_ring_and_ringed_answer_in_the_viewer(tmp_path, no_nodes):
     """arcade.realtime.ring / ringed (arcade/ring.py) reach the viewer and come back: a page opened without a
     notification's ring has none, and a guest cannot ring anybody."""

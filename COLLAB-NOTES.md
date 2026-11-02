@@ -88,6 +88,19 @@ coding agent, so it is written for agents first and people second.
 
 ## Log (newest first)
 
+### 2026-11-01 Leaving a group chat (Claude)
+The operator: "a way to be able to leave a group chat" in Messages and in apps. A left-line sealed to the group, credited by paying
+address, so it cannot be forged; somebody who STAYS makes the new key, because whoever makes a key holds it (creator first, next
+after 6 hours per place). `mail.leaveGroup`, `mail.settleLeavers`, `mail.present`; `arcade.groups.leave(id)`. Until the new key goes
+out, new lines are sealed to the old key: the card says so. `room` changes with the key, so apps must follow `list()`.
+
+### 2026-11-01 Which way a link really goes; a relay login no longer goes stale (Claude)
+The operator wants to see direct, relay, Cloudflare relay or not connected. Game agnostic.
+- `room.fast.routes()`: from the browser's selected candidate pair. `'direct'`, `'relay'`, `'cloudflare'`, `'connecting'`, `'none'`.
+- `fastServers` kept `/realtime/ice` for the life of the page, and logins last 6 hours (`LOGIN_TTL`, `TURN_TTL`), so a page left
+  open offered dead relays and links that needed one failed. It now asks again after 2 hours.
+- Open: `realtimeRejoin` on one failed send; an offer sent while the peer is away is not retried.
+
 ### 2026-11-01 Room media: a screen beside the camera, a second picture for any page (Claude)
 The operator: a person's voice or camera box stays, and a shared screen "should open a new box". Game agnostic.
 - `room.media.showScreen({sound})` / `hideScreen()`: the screen as a second picture. The camera and microphone are not touched.
