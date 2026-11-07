@@ -66,10 +66,11 @@ def test_the_wallet_page_has_the_doginals_section_and_the_configured_base(client
     page = app.get("/me/wallet").text
     # Read from the chain by this node; nothing outside the arcade is asked (2026-10-15: the outside Doginals API removed).
     assert 'id="doginals"' in page and "dogesoft" not in page.lower()
-    # Through this node (2026-10-15): the browser asks nothing outside this arcade.
-    assert '"/account/doginal-txs"' in page and "localStorage.setItem(DG_TX + net" in page
+    # Through this node (2026-10-15): the browser asks nothing outside this arcade; since 2026-11-06 one page at a time,
+    # built by the arcade (/account/doginals/page), not every coin and transaction from the browser.
+    assert "/account/doginals/page?" in page and '"/account/doginal-txs"' not in page
     assert "Inscriptions can't be checked right now" in page and "/content/${encodeURIComponent(g.id)}" in page
-    assert '"/account/doginal/send"' in page and "/account/coins?chain=" in page
+    assert '"/account/doginal/send"' in page
 
 
 def _spy(monkeypatch):
@@ -211,9 +212,9 @@ def test_a_coin_carrying_a_doginal_is_held_not_spendable(client, monkeypatch, tm
     assert row["spendable"] == row["balance"] - 200_000 - int(row.get("leaving") or 0) + int(row.get("incoming") or 0)
     assert row["spendable"] == 300_000_000, "the plain coin is still spendable"
     page = app.get("/me/wallet").text
-    assert ('const inscWord = c.network === "doge" ? "Doginals" : (c.network === "ltc" || c.network === "ltctest") ? '
-            '"Litecoin inscriptions" : c.network === "main" ? "Pepinals"') in page
-    assert ': c.network === "bel" ? "Bellinals" : c.network === "lky" ? "Luckinals" : c.network === "wjk" ? "Wojakinals" : c.network === "dgb" ? "DigiByte ordinals" : "inscriptions";' in page
+    assert 'const inscWord = c.network === "doge" ? "Doginals" : c.network === "main" ? "Pepinals"' in page
+    assert "Litecoin inscriptions" not in page, "no ords on Litecoin (2026-11-05)"
+    assert ': c.network === "bel" ? "Bellinals" : c.network === "lky" ? "Luckinals" : c.network === "wjk" ? "Wojakinals" : c.network === "dgb" ? "DigiByte ordinals" : c.network === "flop" ? "Flopinals" : "inscriptions";' in page
     assert "held in ${inscWord}" in page
 
 
@@ -251,7 +252,9 @@ def test_moving_a_doginal_needs_dogecoin_besides_it(client, monkeypatch, tmp_pat
     assert 1_000_000 < row["doginal_send_need"] < row["doginal_lock_need"]
     assert row["doginal_lock_need"] > htlc.DOGINAL_RESERVE, "the reserve and the lock's own fee"
     wallet = app.get("/me/wallet").text
-    assert "sendShort" in wallet and "swapShort" in wallet and 'swap.setAttribute("aria-disabled", "true")' in wallet
+    # The Wallet's card has Send and List only (2026-11-05, the operator: "There shouldn't be two list options"): no Swap there,
+    # so only Send waits for DOGE; a swap is made on the market page, which still waits for it (below).
+    assert "sendShort" in wallet and "send.disabled = true" in wallet
     market = (pathlib.Path(__file__).resolve().parent.parent / "arcade/web/templates/swap_pair.html").read_text()
     assert 'id="dg-need"' in market and "doginal_lock_need" in market, "a visitor's Sell and List sale wait for DOGE too"
 
@@ -278,7 +281,9 @@ def test_the_wallet_asks_how_far_the_ord_index_has_walked(client, monkeypatch, t
     assert got.json() == {"chain": "doge", "reach": 4_700_000, "tip": 6_426_000}
     assert "/account/doginal-index" in door.PUBLIC_PAGES
     page = app.get("/me/wallet").text
-    assert "/account/doginal-index?chain=" in page and "shown here as the index gets to each" in page
+    # Since 2026-11-06 the arcade says how far the index has got with each page (`reach`), and the page asks again in a
+    # minute while coins wait for it (DG_LIVE_MS), when the arcade has built the list again.
+    assert "d.reach" in page and "DG_LIVE_MS" in page and "shown here as the index gets to each" in page
 
 
 def test_the_tokens_tab_reads_drc20_balances_from_the_most_complete_index(client, monkeypatch, tmp_path):
@@ -557,3 +562,78 @@ def test_a_listing_holds_what_it_lists_until_it_is_unlisted_or_taken(client, mon
     held.clear()
     assert app.get("/account/token20?chain=doge").json()["balances"][0]["listed_units"] == "0", "unlisted: free again"
     _ = _json
+
+
+def test_the_wallet_reads_its_doginals_numbers_and_collections_many_at_once(client, monkeypatch, tmp_path):
+    """2026-11-05, the operator: "they should be ordered by inscription number earliest first", "if they are a part of a
+    collection, they should have the collection metadata with them" -- the known collections (Explore's, from the
+    collections' own sites) included. One call for many ids; the numbers from the most complete index copy."""
+    from arcade.web import door
+    app, state = client
+    _doge_account(app, state, monkeypatch, tmp_path)
+    asked = []
+
+    class Index:
+        def lookup(self, q):
+            asked.append(q)
+            return {"numbers": {INS: {"number": 3053, "height": 4610566, "content_type": "image/png", "size": 408}},
+                    "walked_to": 6_444_000}
+    monkeypatch.setattr(type(state), "ord_indexes", lambda self: {"doge": Index()})
+
+    class Known:
+        def in_collection(self, chain, iid):
+            return {"slug": "dogepunks", "collection": "DogePunks", "name": "DogePunk #61", "position": 61,
+                    "source": "nintondo"} if iid == INS else None
+    monkeypatch.setattr(type(state), "known_collections", lambda self: Known(), raising=False)
+    got = app.post("/account/doginal-meta", json={"chain": "doge", "ids": [INS, T2 + "i0", INS.upper()]})
+    assert got.status_code == 200, got.text
+    meta = got.json()["meta"]
+    assert meta[INS]["number"] == 3053 and meta[INS]["collection"]["name"] == "DogePunks"
+    assert meta[INS]["collection"]["item"] == "DogePunk #61" and meta[INS]["collection"]["slug"] == "dogepunks"
+    assert T2 + "i0" not in meta, "one the index does not hold yet is left out, to be asked again"
+    assert asked == [{"what": "numbers", "ids": [INS, T2 + "i0"]}], "each id once, lowercased"
+    assert app.post("/account/doginal-meta", json={"chain": "doge", "ids": ["nope"]}).status_code == 400
+    assert "/account/doginal-meta" in door.PUBLIC_POST and "/account/doginal-card" in door.PUBLIC_PAGES
+
+
+def test_the_wallet_is_told_which_are_token_operations(client, monkeypatch, tmp_path):
+    """2026-11-05, the operator: "The DRC 20 mints should be [out] from the ORD grid but we shouldn't count them towards
+    tokens because we already have a token index". The index's `protocol` becomes `token` for this chain's token "p";
+    another JSON protocol is not a token, and an older walker that gives no protocol says nothing either way."""
+    app, state = client
+    _doge_account(app, state, monkeypatch, tmp_path)
+    mint, name, old = T2 + "i0", T2 + "i1", T2 + "i2"
+
+    class Index:
+        def lookup(self, q):
+            return {"numbers": {mint: {"number": 7, "content_type": "text/plain", "protocol": "drc-20"},
+                                name: {"number": 8, "content_type": "text/plain", "protocol": "dns"},
+                                old: {"number": 9, "content_type": "text/plain"}}, "walked_to": 6_444_000}
+    monkeypatch.setattr(type(state), "ord_indexes", lambda self: {"doge": Index()})
+    meta = app.post("/account/doginal-meta", json={"chain": "doge", "ids": [mint, name, old]}).json()["meta"]
+    assert meta[mint]["token"] is True and meta[name]["token"] is False and "token" not in meta[old]
+
+
+def test_the_wallet_card_says_everything_about_one(client, monkeypatch, tmp_path):
+    """The card: the index's details, its collection, and the content link."""
+    app, state = client
+    _doge_account(app, state, monkeypatch, tmp_path)
+
+    class Index:
+        def lookup(self, q):
+            assert q == {"what": "number", "id": INS}
+            return {"number": {"inscription": {"id": INS, "number": 3053, "height": 4610566, "content_type": "image/png",
+                                               "size": 408, "output": f"{T1}:0", "offset": 0, "owner": ME}}}
+    monkeypatch.setattr(type(state), "ord_indexes", lambda self: {"doge": Index()})
+    got = app.get(f"/account/doginal-card?chain=doge&id={INS}")
+    assert got.status_code == 200, got.text
+    said = got.json()
+    assert said["inscription"]["number"] == 3053 and said["inscription"]["owner"] == ME
+    assert said["content"] == f"/content/{INS}" and said["listing"] is None
+    wallet = app.get("/me/wallet").text
+    assert "openDgCard" in wallet and "Open content" in wallet and "/account/doginals/list/sign" in wallet
+
+
+def test_the_index_answers_many_numbers_at_once(tmp_path):
+    from arcade import doginal_index as di
+    assert "numbers" in di.NEWER_QUESTIONS and di.NUMBERS_MAX >= 100

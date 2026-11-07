@@ -190,3 +190,39 @@ def test_the_ring_routes_are_open_to_signed_in_accounts_on_the_public_site():
         assert door.public_path(path, "POST"), path
     assert door.public_path("/account/ring/apps")
     assert door.public_path("/account/ring/" + "ab" * 8)
+
+
+def test_an_open_arcade_page_rings_with_no_phone_and_by_the_same_rules(client, monkeypatch):
+    """2026-10-31: the arcade open in a browser rings. No push device at all."""
+    app, state = client
+    state.mesh = Mesh()
+    alice_key, bob_key = SigningKey.generate(), SigningKey.generate()
+    a_addr, b_addr = "nA" + "a" * 32, "nB" + "b" * 32
+    for k, addr in ((alice_key, a_addr), (bob_key, b_addr)):
+        _as(app, state, k)
+        state.set_setting(f"address:{k.verify_key.encode().hex()}", addr)
+    ring = {"to": b_addr, "app": APP, "line": "Video call", "link": "call=x7", "sig": "sig-" + a_addr, "expires": 2_000_000_000}
+
+    # Bob has no page open: nothing rings.
+    _as(app, state, alice_key)
+    assert app.post("/account/ring", headers=LOCAL, json=ring).json()["rung"] is False
+
+    # His page is open, but Alice is not in his book yet.
+    _as(app, state, bob_key)
+    assert app.get("/account/ring/live", headers=LOCAL).json() == {"rings": []}
+    app.post("/account/ring/apps", headers=LOCAL, json={"app": APP, "on": True})
+    _as(app, state, alice_key)
+    assert app.post("/account/ring", headers=LOCAL, json=ring).json()["rung"] is False
+
+    # In his book: it rings in the open page, with nothing sent to any phone.
+    _as(app, state, bob_key)
+    app.post("/account/ring/allow", headers=LOCAL, json={"allow": [a_addr]})
+    app.get("/account/ring/live", headers=LOCAL)
+    _as(app, state, alice_key)
+    assert app.post("/account/ring", headers=LOCAL, json=ring).json()["rung"] is True
+    assert app.get("/account/ring/live", headers=LOCAL).json() == {"rings": []}, "only the person rung hears it"
+    _as(app, state, bob_key)
+    said = app.get("/account/ring/live", headers=LOCAL).json()["rings"]
+    assert len(said) == 1 and said[0]["line"] == "Video call"
+    assert said[0]["url"] == f"/inscriptions/{APP}/full?ring={said[0]['id']}"
+    assert app.get(f"/account/ring/{said[0]['id']}", headers=LOCAL).json()["link"] == "call=x7", "the app gets its link"

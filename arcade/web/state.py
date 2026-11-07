@@ -986,20 +986,67 @@ class AppState:
         return self._admin_sessions
 
     def claim_operator(self, pubkey: str) -> None:
-        self.set_setting("operator", (pubkey or "").strip().lower())
+        pubkey = (pubkey or "").strip().lower()
+        if pubkey != self.operator:
+            # The last owner's word that it owns this node goes with it (arcade/owner.py).
+            self.set_setting("owner_statement", None)
+        self.set_setting("operator", pubkey)
 
     def operator_tag(self) -> str:
         """The @name of whoever runs this arcade, as the chain has it ("" when none): the operator account's address on
-        the messaging chain, or the node's own derived address for an arcade whose operator is its node (as on .25).
+        the messaging chain, or the node's own derived address for an arcade whose operator is its node (as on .25) --
+        which includes a username-and-password operator, with no wallet of its own (app._account_view; 2026-11-04: a
+        Lite test node lost its @name to "This node is mine").
 
         What this arcade says about itself to linked arcades (mesh/operators.py, "me") and what Admin -> Overview's
         Arcades panel shows on its own row (2026-10-21, approving the mockup). Only ever this arcade's OWN
-        operator: never an account that merely signed in here."""
+        operator: never an account that merely signed in here. Since 2026-11-04 its owner chooses (arcade_name):
+        the arcade's own name, or the owner account's."""
+        if self.arcade_name() == "node":
+            return self.node_tag()
+        return self._tag_of(self.owner_address())
+
+    #: Which @name the arcade answers to when an account owns it (2026-11-04, "Who runs this node", Plan B): "node",
+    #: its own key's; "owner", the account's. Unset, it is the node's own when its key has one, and the owner's
+    #: otherwise (SadFrog, on a node whose own key holds @orange but which went by its owner's @name: "it should be
+    #: presenting as @orange with @[the owner] as owner").
+    ARCADE_NAME = "arcade_name"
+
+    def arcade_name(self) -> str:
+        """"node" or "owner": whose @name this arcade answers to. An arcade with no owner account answers to its own."""
+        if not self.owner_address():
+            return "node"
+        said = self.setting(self.ARCADE_NAME)
+        if said in ("node", "owner"):
+            return said
+        return "node" if self.node_tag() else "owner"
+
+    def node_tag(self) -> str:
+        """The @name of this node's own key (the place: it signs the arcade's broadcasts and takes its fees)."""
+        return self._tag_of(self.derived_address)
+
+    def owner_tag(self) -> str:
+        """The @name of the account that owns this arcade (the person), "" for none or a password with no wallet."""
+        return self._tag_of(self.owner_address())
+
+    def owner_kind(self) -> str:
+        """What owns this arcade: "account" (keys in its owner's browser), "password" (a username and password with no
+        wallet of its own) or "" (nobody yet: the node runs itself)."""
+        if not self.operator:
+            return ""
+        return "account" if self.owner_address() else "password"
+
+    def owner_address(self) -> str:
+        """The owner account's address on the messaging chain, "" without an owner account (no operator, or a
+        username and password, which has no wallet of its own)."""
+        op = self.operator
+        if not op:
+            return ""
+        return str(self.setting(f"address:{self.messaging.network}:{op}") or self.setting(f"address:{op}") or "")
+
+    def _tag_of(self, address) -> str:
         try:
             chain = next(c for c in self.token_chains if c.network == self.messaging.network)
-            op = self.operator
-            address = ((self.setting(f"address:{chain.network}:{op}") or self.setting(f"address:{op}")) if op
-                       else self.derived_address)
             return (self.token_index(chain).tag_of(address) or "") if address else ""
         except Exception:                                  # noqa: BLE001 -- said without a name
             return ""
@@ -1353,15 +1400,36 @@ class AppState:
         lock: a reader never sees half a file (which read as no settings at
         all -- every quota and switch at its default for that request), and two
         writers never lose each other's change."""
-        import json, os
+        import json, os, time
         with self._settings_lock:
-            data = self.settings()
+            # Read the file itself, and never write from a read that failed (2026-10-31, issue #51): settings() answers
+            # {} when the file cannot be read for a moment (Windows: a scanner holding it), and writing that back
+            # with one key kept only that key -- auto_update: false went, and updates turned themselves back on.
+            path = self.home / self.SETTINGS_FILE
+            data = None
+            for attempt in range(10):
+                try:
+                    data = json.loads(path.read_text()) if path.exists() else {}
+                    break
+                except (OSError, ValueError):
+                    time.sleep(0.05 * (attempt + 1))
+            if not isinstance(data, dict):
+                raise OSError(f"{path} could not be read, so {name} was not saved (nothing else was lost)")
             data[name] = value
             self.home.mkdir(parents=True, exist_ok=True)
-            path = self.home / self.SETTINGS_FILE
             tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
             tmp.write_text(json.dumps(data, sort_keys=True, indent=1))
-            os.replace(tmp, path)
+            for attempt in range(10):                   # Windows refuses the swap while anything holds the file
+                try:
+                    os.replace(tmp, path)
+                    break
+                except PermissionError:
+                    if attempt == 9:
+                        raise
+                    time.sleep(0.05 * (attempt + 1))
+            # settings() keys its cache on the file's mtime and size, which two quick writes of values the same
+            # length can leave unchanged (2026-11-04: a handover's new operator read back as the old one).
+            self._settings_cached = None
 
     @property
     def key_path(self) -> Path:
@@ -1430,6 +1498,13 @@ class AppState:
         return chains
 
     @property
+    def arcade_chains(self) -> list[ChainContext]:
+        """The ready chains that carry the arcade's own tokens, NFTs and inscriptions (Params.class_b): token_chains less
+        Litecoin, Litecoin testnet and Kotia (2026-11-05, tbuuol: no token protocols there). What the Create, Tokens,
+        Collections and Exchange pages switch between; the wallet still shows every chain's coins."""
+        return [c for c in self.token_chains if getattr(c.params, "class_b", True)]
+
+    @property
     def all_chains(self) -> list[ChainContext]:
         """Every chain this node has, ready or not, for the pages to SHOW: a
         picker draws Dogecoin grayed out while it syncs (2026-10-13: "Have
@@ -1489,17 +1564,24 @@ class AppState:
 
     def _refresh_sync_later(self, chain: ChainContext) -> "threading.Thread | None":
         asking = self.__dict__.setdefault("_sync_asking", {})
-        if chain.network in asking:
-            return asking[chain.network]
+        # One step under a lock: a second caller was handed the thread between these two lines, and chain_sync's join then
+        # raised "cannot join thread before it is started" (2026-10-31, Darrell, a Windows start; issue #51).
+        with self.__dict__.setdefault("_sync_asking_lock", threading.Lock()):
+            if chain.network in asking:
+                return asking[chain.network]
 
-        def ask():
+            def ask():
+                try:
+                    self._sync_now(chain)
+                finally:
+                    asking.pop(chain.network, None)
+            thread = threading.Thread(target=ask, name=f"arcade-sync-{chain.network}", daemon=True)
+            asking[chain.network] = thread
             try:
-                self._sync_now(chain)
-            finally:
+                thread.start()
+            except RuntimeError:                         # no thread to be had: the next caller must be able to ask
                 asking.pop(chain.network, None)
-        thread = threading.Thread(target=ask, name=f"arcade-sync-{chain.network}", daemon=True)
-        asking[chain.network] = thread
-        thread.start()
+                raise
         return thread
 
     def _sync_now(self, chain: ChainContext) -> dict:
@@ -1512,10 +1594,12 @@ class AppState:
             progress = float(info.get("verificationprogress", 0) or 0)
             # A Core older than Bitcoin 0.16 never says `initialblockdownload` (Kotia 1.0.0, 2026-10-25: grayed out for
             # good while synced): there, its progress says it.
-            downloading = info.get("initialblockdownload", progress < 0.9999)
-            # verificationprogress is an estimate. A chain whose chainTxData is a stub (Wojakcoin: 100 tx/s)
-            # never reaches 0.9999 at a live tip, so caught-up headers are what "ready" means there.
-            progress_ok = progress >= 0.9999 or not getattr(chain.params, "trust_progress", True)
+            # verificationprogress is an estimate. A chain whose chainTxData is a stub (Wojakcoin: 100 tx/s;
+            # Flopcoin, 2026-11-04: 0.99988 at a live tip, so it went in and out of "ready" and off the Wallet's coin
+            # list) never reaches 0.9999 at a live tip, so caught-up headers are what "ready" means there.
+            trusted = getattr(getattr(chain, "params", None), "trust_progress", True)
+            downloading = info.get("initialblockdownload", progress < 0.9999 if trusted else headers - blocks > 2)
+            progress_ok = progress >= 0.9999 or not trusted
             said = {"online": True, "blocks": blocks, "headers": headers,
                     "progress": min(1.0, progress),
                     "ready": (not downloading
@@ -1572,13 +1656,13 @@ class AppState:
                 self._token_chain = self.token_chain_path.read_text().strip()
             except OSError:
                 self._token_chain = self.messaging.network
-        for chain in self.token_chains:
+        for chain in self.arcade_chains:
             if chain.network == self._token_chain:
                 return chain
         return self.ledger
 
     def switch_token_chain(self, network: str) -> ChainContext:
-        for chain in self.token_chains:
+        for chain in self.arcade_chains:
             if chain.network == network:
                 self._token_chain = network
                 try:
@@ -1647,6 +1731,30 @@ class AppState:
             self._ledger_indexes[chain.network] = index
         return index
 
+    def ledger_snapshots(self, chain: ChainContext):
+        """The index copies of `chain` (arcade/ledger_snapshot.py, 2026-11-02): made for linked arcades far behind,
+        or fetched from them when this one is."""
+        from ..ledger_snapshot import LedgerSnapshots
+        kept = self.__dict__.setdefault("_ledger_snapshots", {})
+        index = self.token_index(chain)
+        snaps = kept.get(chain.network)
+        if snaps is None or snaps.index is not index:
+            snaps = kept[chain.network] = LedgerSnapshots(index, chain.network,
+                                                          setting=lambda key, default=None: self.setting(key, default))
+        return snaps
+
+    def ledger_confirmation(self, chain: ChainContext):
+        """The background confirmation of an index that came as a copy: a second index read from this arcade's own
+        node, at the lowest priority (ledger_snapshot.Confirmation)."""
+        from ..ledger import LedgerIndex
+        from ..ledger_snapshot import Confirmation
+        kept = self.__dict__.setdefault("_ledger_confirmations", {})
+        snaps = self.ledger_snapshots(chain)
+        conf = kept.get(chain.network)
+        if conf is None or conf.snaps is not snaps:
+            conf = kept[chain.network] = Confirmation(snaps, lambda path: LedgerIndex(path, chain.params, chain.rpc))
+        return conf
+
     # --- collections ----------------------------------------------------------
 
     _collections: tuple = ()
@@ -1655,6 +1763,10 @@ class AppState:
     _talk: Any = None
     #: The realtime mesh (arcade/mesh/service.py), when this node runs one.
     mesh: Any = None
+    #: The node modules installed from packages (arcade/modhost.py), set by create_app.
+    module_host: Any = None
+    #: The stratum server for this network's ASICs (arcade/stratum.py Service), when the Mining module is on.
+    stratum: Any = None
     _offers: Any = None
     _listings: Any = None
 
@@ -1780,14 +1892,16 @@ class AppState:
         return keyed
 
     def ord_mode(self, net: str) -> str:
-        """walk | help | off for one chain's ord index (Admin -> Ords). Dogecoin helps unless told otherwise (it did
-        first, as `doginal_index`); every other chain is off until its operator turns it on."""
+        """walk | help | read | off for one chain's ord index (Admin -> Ords). Read only on every chain unless the
+        operator chose otherwise (2026-10-30: "Read only on all chains should be on by default"): no index
+        here, its questions asked of a linked arcade that keeps one. An old `doginal_index` choice still counts for
+        Dogecoin."""
         from ..doginal_index import MODES
         chosen = self.setting(f"ord_index:{net}")
         if chosen is None and net == "doge":
-            chosen = self.setting("doginal_index") or "help"
-        chosen = str(chosen or "off")
-        return chosen if chosen in MODES else "off"
+            chosen = self.setting("doginal_index")
+        chosen = str(chosen or "read")
+        return chosen if chosen in MODES else "read"
 
     def ord_cores(self) -> int:
         """How many CPU cores the ord indexes help with (Admin -> Ords; 2026-10-20: "dedicate the number of

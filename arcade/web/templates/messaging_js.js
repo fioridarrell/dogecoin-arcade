@@ -524,6 +524,8 @@ async function rewindTo(after) {
 }
 
 /** Fetch what the node has seen since last time, and open what is ours. */
+const collected = {fresh: false};   // a new group key arrived during this scan
+
 export async function collect(me, {onProgress} = {}) {
   let after = await cursorFor(hex(me.publicKey));
   if (!after) {
@@ -546,7 +548,7 @@ export async function collect(me, {onProgress} = {}) {
     if (letter.mine && !letter.height) awaiting.set(letter.txid, letter);
   }
 
-  const highest = after;
+  let highest = after, reread = false;
   after = await rewindTo(after);
   let held = await groups();
   let opened = 0, looked = 0;
@@ -595,7 +597,7 @@ export async function collect(me, {onProgress} = {}) {
         const group = inviteIn(letter);
         if (group) {
           if (letter.sender === hex(me.publicKey)) { letter.hidden = true; letter.mine = true; await keep(letter); }
-          await takeInvite(group, letter); held = await groups();
+          await takeInvite(group, letter, me); held = await groups();
         }
         opened += 1;
         continue;
@@ -605,13 +607,15 @@ export async function collect(me, {onProgress} = {}) {
       for (const group of held) {
         const said = openMessage(bytes, groupIdentity(group));
         if (said === null) continue;
-        await keep({
+        const line = {
           txid: candidate.txid, cursor: candidate.cursor, when: candidate.when,
           height: candidate.height, from_address: candidate.from_address,
           sender: hex(said.sender), peer: `group:${rootOf(group)}`, group: group.id,
           // Our own line read back on another device: ours, not a stranger's.
           mine: hex(said.sender) === hex(me.publicKey), body: hex(said.plain),
-        });
+        };
+        await keep(line);
+        await heardLeaving(group, line, me);
         opened += 1;
         break;
       }
@@ -636,8 +640,15 @@ export async function collect(me, {onProgress} = {}) {
     // number would make every later scan start from there.
     await rememberCursor(hex(me.publicKey), Math.max(highest, after));
     if (onProgress) onProgress({looked, opened, more: said.more});
-    if (!said.more) break;
+    if (!said.more) {
+      // Somebody let in to a group has just got a key to everything said before, and this scan went past those lines
+      // without it, in the same pass or an earlier one. Read the mailbox once more from the start (2026-11-01).
+      if (!collected.fresh || reread) break;
+      collected.fresh = false; reread = true; highest = Math.max(highest, after); after = 0;
+      continue;
+    }
   }
+  collected.fresh = false;
   return {looked, opened, cursor: after};
 }
 
@@ -893,6 +904,7 @@ async function invite(wallet, me, group, members) {
     id: group.id, root: rootOf(group), name: group.name, secret: group.secret,
     public: group.public, members: group.members, creator: group.creator,
     rotated_from: group.rotated_from || null, created: group.created,
+    invited: Math.floor(Date.now() / 1000),
   });
   const sent = [];
   for (const m of members) {
@@ -950,6 +962,71 @@ export async function writeGroup(wallet, me, group, words) {
   });
 }
 
+/* --- group chats for an app (arcade.groups, 2026-10-31, Riffs) ----------------
+ *
+ * An app is an inscription in a sandbox: it never holds a group's key. The arcade page keeps the key and hands the app
+ * the words. Two things are derived here so a chat can also be LIVE, over a realtime room, which is not encrypted:
+ * the room's name, which only members can work out, and a key that seals what is said in it. Both come from the group's
+ * current secret, so taking somebody out moves the room and changes that key, as it changes the group's.
+ */
+const fromSecret = (group, label) => nacl.hash(new Uint8Array([...new TextEncoder().encode(label),
+                                                               ...unhex(group.secret)]));
+
+/** The name of a group's live room: 32 hex characters only a member can work out. */
+export const liveRoom = (group) => hex(fromSecret(group, "arcade-group-room/1\n").slice(0, 16));
+
+/** Seal words for the live room. The chain record is the group's ordinary message; this is only for right now. */
+export function sealLive(group, words) {
+  const nonce = nacl.randomBytes(24);
+  const box = nacl.secretbox(new TextEncoder().encode(words), nonce,
+                             fromSecret(group, "arcade-group-live/1\n").slice(0, 32));
+  return btoa(String.fromCharCode(...nonce, ...box));
+}
+
+/** The words of a sealed live message, or null when it was not sealed with this group's key. */
+export function openLive(group, sealed) {
+  try {
+    const both = Uint8Array.from(atob(String(sealed)), (c) => c.charCodeAt(0));
+    const plain = nacl.secretbox.open(both.subarray(24), both.subarray(0, 24),
+                                      fromSecret(group, "arcade-group-live/1\n").slice(0, 32));
+    return plain ? new TextDecoder().decode(plain) : null;
+  } catch (e) { return null; }
+}
+
+/** What an app is told about a group: never its secret, and members by name and address only. */
+export function groupForApp(group) {
+  return {id: rootOf(group), name: group.name, room: liveRoom(group),
+          members: present(group).map((m) => ({tag: m.tag || "", address: m.address || ""}))};
+}
+
+/** The lines of a group, oldest first. A line's `from` is the address that paid for it, which no member can forge. */
+export async function groupLines(root, {after = 0, limit = 200} = {}) {
+  const lines = (await conversation(`group:${root}`)).filter((l) => (l.when || 0) >= after);
+  return lines.slice(-Math.max(1, Math.min(limit, 500))).map((l) => ({
+    txid: l.txid, when: l.when || 0, height: l.height || 0, mine: !!l.mine,
+    from: l.from_address || "", text: text(l),
+  }));
+}
+
+/** Let somebody in: the same key, so they can read what was said under it, and everybody told who is here now.
+ *  One message per person. Any member may: holding the key is all it takes to hand it on. */
+export async function addToGroup(wallet, me, group, names) {
+  if (!group.current) throw new Error("this group moved to a new key; add them in that one");
+  const members = [...group.members], arriving = [];
+  for (const who of names) {
+    const them = await lookUp(who);
+    if (!them.key) throw new Error(`${who} has no messaging key published yet`);
+    if (members.some((m) => m.key === them.key)) continue;
+    const one = {tag: them.tag || "", key: them.key, address: them.address};
+    members.push(one); arriving.push(one);
+  }
+  if (!arriving.length) throw new Error("everybody named is already in this group");
+  const grown = {...group, members};
+  await saveGroup(grown);
+  await invite(wallet, me, grown, members);
+  return grown;
+}
+
 /** Take somebody out: a new key for everybody who stays. */
 export async function removeFromGroup(wallet, me, group, key) {
   const staying = group.members.filter((m) => m.key !== key);
@@ -965,12 +1042,126 @@ export async function removeFromGroup(wallet, me, group, key) {
   return next;
 }
 
+/* --- leaving (2026-11-01) --------------------------------------------------
+ *
+ * "We need a way to be able to leave a group chat." A key cannot be handed back, so somebody who STAYS makes the new one: whoever
+ * makes a key holds it, so one made by the person leaving would prove nothing (the operator asked who sends the key).
+ *  * Leaving is one line in the group, sealed like any other. It is credited to the address that paid for it, so nobody can say
+ *    that somebody else left. Your other devices read the same line. The chat goes from your list at once.
+ *  * The others stop counting you straight away. Until a new key goes out, what they write is still sealed to the old one, which
+ *    you hold: that gap lasts until the one whose turn it is opens the arcade with their wallet.
+ *  * Whose turn: the creator, or if the creator is the one who left, the first of those who stay; if they do not come, the next
+ *    after RANK_WAIT, and so on. The one who makes the key sends it, one small message per person. Only a line from a member's
+ *    own address starts this, and only once for each time they leave.
+ *  * Asked back in later, you are in again.
+ */
+export const GROUP_LEFT_MARK = "\u0000arcade-group-left/1\n";
+const RANK_WAIT = 6 * 3600;
+
+async function leftAt(root) {
+  const store = await groupShelf("readonly");
+  return (await awaited(store.get(`left:${root}`))) || 0;
+}
+async function setLeft(root, at) {
+  const store = await groupShelf("readwrite");
+  if (at) await awaited(store.put(at, `left:${root}`)); else await awaited(store.delete(`left:${root}`));
+}
+/** The groups this browser has left, by their lasting id. */
+export async function leftGroups() {
+  const store = await groupShelf("readonly");
+  const keys = await awaited(store.getAllKeys());
+  return new Set(keys.filter((k) => typeof k === "string" && k.startsWith("left:")).map((k) => k.slice(5)));
+}
+
+/** Who is in a group now: not those who have said they left and are waiting for the new key to shut them out. */
+export const present = (group) => {
+  const gone = new Set((group.gone || []).map((g) => g.key));
+  return (group.members || []).filter((m) => !gone.has(m.key));
+};
+
+/** Leave a group: one small message, whatever its size. */
+export async function leaveGroup(wallet, me, group) {
+  const stamp = Math.floor(Date.now() / 1000);
+  await writeGroup(wallet, me, group, GROUP_LEFT_MARK + JSON.stringify({at: stamp}));
+  await setLeft(rootOf(group), stamp);
+  return rootOf(group);
+}
+
+/** What a left-line carries, or null when the letter is not one. */
+function leftIn(letter) {
+  const said = bodyOf(letter).text || "";
+  if (!said.startsWith(GROUP_LEFT_MARK)) return null;
+  try { return JSON.parse(said.slice(GROUP_LEFT_MARK.length)) || {}; } catch (e) { return null; }
+}
+
+/** A left-line read from the mailbox. It counts only from the member's own address, which nobody else can spend from. */
+async function heardLeaving(group, letter, me) {
+  const said = leftIn(letter);
+  if (!said) return;
+  const who = (group.members || []).find((m) => m.address && m.address === letter.from_address);
+  if (!who) return;
+  const at = letter.when || +said.at || 1, root = rootOf(group);
+  if (who.key === hex(me.publicKey)) {
+    if (at >= (await leftAt(root))) await setLeft(root, at);
+    return;
+  }
+  const now = await currentGroup(root);
+  if (!now || now.id !== group.id || !now.current) return;                // a new key has already shut them out
+  if ((now.gone || []).some((g) => g.key === who.key) || ((now.back || {})[who.key] || 0) >= at) return;
+  await saveGroup({...now, gone: [...(now.gone || []), {key: who.key, at}]});
+}
+
+/** Whose turn it is to make the new key, by place among those who stay: the creator first. */
+function turnOf(group, staying, mine) {
+  const line = [...staying].sort((a, b) => (b.key === group.creator) - (a.key === group.creator));
+  return line.findIndex((m) => m.key === mine);
+}
+
+/** Make the new key for those who stay, if it is this person's turn. Called with the wallet open, after reading the mailbox. */
+export async function settleLeavers(wallet, me) {
+  const mine = hex(me.publicKey), left = await leftGroups(), now = Math.floor(Date.now() / 1000);
+  for (const group of await groups()) {
+    if (!group.current || !(group.gone || []).length || left.has(rootOf(group))) continue;
+    const staying = present(group), turn = turnOf(group, staying, mine);
+    if (turn < 0 || now < Math.max(...group.gone.map((g) => g.at)) + turn * RANK_WAIT) continue;
+    const pair = nacl.box.keyPair();
+    const next = {id: await groupId(pair.publicKey), root: rootOf(group), name: group.name,
+                  secret: hex(pair.secretKey), public: hex(pair.publicKey), members: staying,
+                  creator: staying.some((m) => m.key === group.creator) ? group.creator : mine, current: true,
+                  created: now, rotated_from: group.id};
+    await saveGroup(next);
+    await saveGroup({...group, current: false, moved_to: next.id});
+    await invite(wallet, me, next, staying);
+    return next;                                                          // one at a time: each spends
+  }
+  return null;
+}
+
 /** An invite that arrived: keep the group, and retire the one it replaces. */
-async function takeInvite(group, letter) {
+async function takeInvite(group, letter, me) {
+  // Asked back in after leaving: only by an invite made later, that names you. Others are old letters read again.
+  const root = group.root || group.id, gone = await leftAt(root);
+  const madeAt = Math.max(group.created || 0, group.invited || 0);
+  if (gone && madeAt > gone && (group.members || []).some((m) => m.key === hex(me.publicKey))) await setLeft(root, 0);
   const had = await groupById(group.id);
   if (!had) {
+    collected.fresh = true;
     await saveGroup({...group, current: true, via: letter.txid,
                      invited_by: letter.from_address || ""});
+  } else if (had.secret === group.secret && Array.isArray(group.members)) {
+    // Somebody was let in. Only a holder of this group's key can say so, and a list only ever grows here: taking
+    // somebody out is a new key.
+    const known = new Set((had.members || []).map((m) => m.key));
+    const added = group.members.filter((m) => m && m.key && !known.has(m.key));
+    // Somebody who left and is asked back before the new key went out: in again, and their old leaving no longer counts.
+    const wanted = new Set(group.members.map((m) => m.key)), stamp = group.invited || 0;
+    const returning = (had.gone || []).filter((g) => wanted.has(g.key) && stamp > g.at);
+    if (added.length || returning.length) {
+      const back = {...(had.back || {})};
+      for (const g of returning) back[g.key] = stamp;
+      await saveGroup({...had, members: [...(had.members || []), ...added], back,
+                       gone: (had.gone || []).filter((g) => !returning.includes(g))});
+    }
   }
   if (group.rotated_from) {
     const old = await groupById(group.rotated_from);
@@ -1278,6 +1469,7 @@ export async function threads() {
       known_groups.set(r, g);
     }
   }
+  const left = await leftGroups();
   for (const thread of out) {
     const gid = groupOfPeer(thread.peer);
     if (gid) {
@@ -1288,7 +1480,7 @@ export async function threads() {
   }
   // A group you were added to shows up even before anybody has said anything.
   for (const [root, g] of known_groups) {
-    if (!g.current || out.some((t) => t.peer === `group:${root}`)) continue;
+    if (!g.current || left.has(root) || out.some((t) => t.peer === `group:${root}`)) continue;
     out.push({peer: `group:${root}`, group: g, tag: "", address: "", inBook: false,
               last: g.created || 0, unread: 0, count: 0,
               preview: "No messages yet", outgoing: false});
@@ -1298,7 +1490,7 @@ export async function threads() {
     thread.unread = letters.filter(
       (l) => !l.hidden && peerOf(l) === thread.peer && !l.mine && (l.when || 0) > seen).length;
   }
-  return out.sort((a, b) => b.last - a.last);
+  return out.filter((t) => !left.has(groupOfPeer(t.peer))).sort((a, b) => b.last - a.last);
 }
 
 /** One conversation, oldest first, which is the order it was said in. */
@@ -1482,6 +1674,7 @@ export function text(letter) {
     return letter.mine ? `\u{1F465} You added them to \u201c${name}\u201d`
                        : `\u{1F465} Added you to the group \u201c${name}\u201d`;
   }
+  if (body.text && body.text.startsWith(GROUP_LEFT_MARK)) return letter.mine ? "You left the group" : "Left the group";
   if (body.file === null) return body.text;
   return body.text || `[sent ${body.file.name}]`;
 }

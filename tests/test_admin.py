@@ -48,7 +48,7 @@ def _operator(app, state):
 def test_at_the_node_machine_it_opens_without_a_password(public):
     app, state = public
     page = app.get("/admin", headers=LOCAL)
-    assert page.status_code == 200 and "The node's coins" in page.text
+    assert page.status_code == 200 and "This node's till" in page.text
     got = app.get("/admin/api/state", headers=LOCAL).json()
     assert got["local"] is True
     assert {"seats", "accounts", "quotas", "wallets", "faucet"} <= set(got)
@@ -224,7 +224,11 @@ def test_the_ords_tab_lists_each_chain_with_its_official_start_and_saves_its_mod
     assert app.post("/admin/api/ords", headers={**LOCAL, **WRITE}, json={"net": "doge", "mode": "fly"}).status_code == 400
     assert app.post("/admin/api/ords", headers={**LOCAL, **WRITE}, json={"net": "btc", "mode": "off"}).status_code == 400
     assert app.post("/admin/api/ords", headers=LOCAL, json={"net": "main", "mode": "help"}).status_code == 403
-    assert state.ord_mode("main") == "off" and state.ord_mode("doge") == "help", "off until turned on; Dogecoin helps"
+    assert state.ord_mode("main") == "read" and state.ord_mode("doge") == "read", \
+        "Read only on every chain until the operator chooses (2026-10-30)"
+    state.set_setting("doginal_index", "walk")
+    assert state.ord_mode("doge") == "walk", "an old Dogecoin choice still counts"
+    state.set_setting("doginal_index", None)
     assert app.post("/admin/api/ords", headers={**LOCAL, **WRITE}, json={"net": "main", "mode": "help"}).json()["ok"]
     assert state.ord_mode("main") == "help"
     from arcade import doginal_index as dx
@@ -514,7 +518,9 @@ def test_overview_lists_every_arcade_this_one_first_with_its_cores_ords_and_link
     finally:
         state.mesh = was
         state.set_setting("share:regtest", None)
-    assert got["ok"] and got["total"] == 4 and got["running"] == 3 and got["linked"] == 2
+    # `gone` is known only from its announcement on the chain (said nothing this hour): listed, not counted
+    # running (2026-11-03).
+    assert got["ok"] and got["total"] == 3 and got["running"] == 2 and got["linked"] == 2
     rows = got["rows"]
     mine = rows[0]
     assert mine["me"] and mine["tag"] == "strawberry" and mine["node"] == me[:12] and mine["link"] == {"state": "me"}
@@ -532,10 +538,89 @@ def test_overview_lists_every_arcade_this_one_first_with_its_cores_ords_and_link
     assert s["tag"] == "" and s["cores"] == [] and s["link"]["state"] == "slow", "over a second is slow"
     assert [(o["role"], o["helped"]) for o in s["ords"]] == [("help", 4200)], "helping on the PEP index"
     assert [o["role"] for o in g["ords"]] == ["read"], "read only"
-    assert g["link"] == {"state": "none"} and g["cores"] == [], "a Core is known only from an arcade linked now"
+    assert g["link"] == {"state": "quiet"} and g["cores"] == [], "a Core is known only from an arcade linked now"
     assert g["tag"] == "faraway", "what an arcade said stays shown after its link is down"
     assert app.get("/admin/api/arcades", headers=EDGE).status_code != 200, "never shown to a stranger"
 
+
+def test_overview_shows_arcades_seen_through_a_linked_one(public):
+    """2026-11-02 (the phone "is not listing all the arcades seen by strawberry"): an arcade a linked arcade
+    says it is linked to is running, and its row says "via" that arcade, with the tag and host it was said under."""
+    app, state = public
+    me, straw, avocado, pep = "a" * 64, "b" * 64, "c" * 64, "d" * 64
+    was = getattr(state, "mesh", None)
+    state.mesh = _mesh_of(me, [straw], rtts={straw: 9.0}, said={
+        straw: {"tag": "strawberry", "hosts": [], "at": time.time(),
+                "links": [{"id": avocado, "tag": "avacado", "host": "avo.example.com"}, {"id": pep}, {"id": me}]}})
+    try:
+        got = app.get("/admin/api/arcades", headers=LOCAL).json()
+    finally:
+        state.mesh = was
+    assert got["running"] == 3 and got["linked"] == 1
+    rows = got["rows"][1:]
+    assert [r["node"] for r in rows] == [straw[:12], avocado[:12], pep[:12]], "linked first, then seen through"
+    assert rows[1]["tag"] == "avacado" and rows[1]["host"] == "avo.example.com"
+    assert rows[1]["link"] == {"state": "via", "by": "strawberry", "by_node": straw[:12]}
+    assert rows[2]["tag"] == "" and rows[2]["link"]["state"] == "via"
+    assert rows[1]["cores"] == [], "nothing of its own is claimed for it"
+
+
+def test_overview_names_an_arcade_that_says_none_from_its_announcement_on_the_chain(public):
+    """2026-11-02: a new operator on Windows claimed @dogefeed from the address that announces his arcade, and his
+    arcade said no name, so the list showed his mesh id. An arcade that says none gets the @name of the one address that
+    announced its mesh key; a key two addresses announced (anybody can announce another's key) gets none, and what an
+    arcade says itself still wins."""
+    app, state = public
+    me, quiet, twice, says = "a" * 64, "b" * 64, "c" * 64, "d" * 64
+    net = state.messaging.network
+    chain = next(c for c in state.token_chains if c.network == net)
+    with state.token_index(chain).open() as db:
+        for tag, address in (("dogefeed", "nFeed"), ("mallory", "nMallory"), ("realname", "nSays")):
+            db.conn.execute("INSERT INTO tag(tag,address,claimed_txid,block_height,position) VALUES(?,?,?,?,0)",
+                            (tag, address, tag.ljust(64, "0")[:64], 100))
+        db.conn.commit()
+    with state.store() as store:
+        for i, (address, key) in enumerate((("nFeed", quiet), ("nFeed", quiet), ("nSays", twice),
+                                            ("nMallory", twice), ("nMallory", says))):
+            store.add_mesh_announcement(f"{i:064x}", net, address, "203.0.113.7", 8421, key, 100 + i, 1_700_000_000)
+    was = getattr(state, "mesh", None)
+    state.mesh = _mesh_of(me, [quiet, twice, says], rtts={quiet: 10.0, twice: 20.0, says: 30.0},
+                          said={quiet: {"tag": "", "hosts": []}, says: {"tag": "said_itself", "hosts": []}})
+    try:
+        got = app.get("/admin/api/arcades", headers=LOCAL).json()
+    finally:
+        state.mesh = was
+    rows = {r["node"]: r for r in got["rows"][1:]}
+    assert rows[quiet[:12]]["tag"] == "dogefeed" and rows[quiet[:12]]["tag_from"] == "chain"
+    assert rows[twice[:12]]["tag"] == "" and "tag_from" not in rows[twice[:12]], "announced by two addresses: no name"
+    assert rows[says[:12]]["tag"] == "said_itself" and "tag_from" not in rows[says[:12]], "its own word first"
+
+
+def test_an_arcade_only_announced_on_the_chain_is_listed_but_not_counted_running(public):
+    """2026-11-03, "Why are only eight out of the 13 linked?": three test arcades that had stopped the evening
+    before still counted running, because arcades re-announce on the chain only once a day. Running is word from the
+    mesh within the hour -- a link, a reached address, a linked arcade's say, or its own hello; an announcement alone
+    is listed last as not heard from."""
+    app, state = public
+    me, linked, hello, ghost = "a" * 64, "b" * 64, "c" * 64, "d" * 64
+    was = getattr(state, "mesh", None)
+    state.mesh = _mesh_of(me, [linked], rtts={linked: 9.0},
+                          said={hello: {"tag": "think", "hosts": [], "at": time.time() - 600},
+                                ghost: {"tag": "", "hosts": [], "at": time.time() - 7200}})
+    store_was = state.store
+    state.store = _store_announcing(state, [linked, hello, ghost, me])
+    try:
+        got = app.get("/admin/api/arcades", headers=LOCAL).json()
+    finally:
+        state.mesh = was
+        state.store = store_was
+    assert got["running"] == 2 and got["linked"] == 1 and got["total"] == 3
+    rows = got["rows"][1:]
+    assert [r["node"] for r in rows] == [linked[:12], hello[:12], ghost[:12]], "the quiet one last"
+    assert rows[1]["link"] == {"state": "none"}, "a hello this hour: running, not linked"
+    assert rows[2]["link"] == {"state": "quiet"}, "an announcement alone"
+    page = app.get("/admin", headers=LOCAL).text
+    assert "not heard from" in page
 
 def _store_announcing(state, keys):
     """state.store, with these mesh keys announced on the chain in the last day."""
@@ -598,3 +683,22 @@ def test_the_update_channel_is_live_or_test(public):
     assert app.post("/admin/api/settings", headers={**LOCAL, **WRITE},
                     json={"update_channel": "nightly"}).status_code == 400
     assert state.setting("update_channel") == "test"
+
+
+def test_index_copies_can_be_turned_off_for_serving_and_fetching(public):
+    """2026-11-02: index copies between arcades, opt-out (a phone turns serving off). Both on by default, each
+    its own switch in Admin -> Chains, and each chain row says what its copies are doing."""
+    app, state = public
+    chains = app.get("/admin/api/state", headers=LOCAL).json()["chains"]
+    assert chains["copies"] == {"serve": True, "fetch": True}
+    assert app.post("/admin/api/settings", headers={**LOCAL, **WRITE},
+                    json={"serve_index_copies": False}).status_code == 200
+    try:
+        chains = app.get("/admin/api/state", headers=LOCAL).json()["chains"]
+        assert chains["copies"] == {"serve": False, "fetch": True}
+        mine = next(r for r in chains["rows"] if r["net"] == state.messaging.network)
+        assert mine["copy"]["serving"] is False and mine["copy"]["fetching_allowed"] is True
+    finally:
+        state.set_setting("serve_index_copies", None)
+    page = app.get("/admin", headers=LOCAL).text
+    assert 'id="serve_index_copies"' in page and 'id="fetch_index_copies"' in page

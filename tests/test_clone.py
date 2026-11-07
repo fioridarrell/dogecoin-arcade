@@ -6,6 +6,8 @@ come from whichever node somebody is looking at (D-153).
 """
 
 import gzip
+import os
+import time
 import hashlib
 import json
 import pathlib
@@ -153,9 +155,16 @@ def test_a_directory_that_is_not_a_checkout_is_refused(tmp_path):
 
 # --- through the web ----------------------------------------------------------
 
+def _made(app, state, network="main"):
+    """Ask for the copy, and wait for the one background build that starts (bootstrap.current background=True)."""
+    app.get(f"/bootstrap/{network}.json")
+    bootstrap.join(state.home, network, 30)
+
+
 def test_the_page_offers_the_program_and_the_index(client):
     app, state = client
     an_index(state.home / "main-ledger.sqlite")
+    _made(app, state)
     body = app.get("/clone").text
     assert "source.tar.gz" in body
     assert "/bootstrap/main.sqlite.gz" in body
@@ -179,6 +188,7 @@ def test_the_installer_s_own_three_names_are_served(client):
 def test_the_bootstrap_and_its_manifest_are_served(client):
     app, state = client
     an_index(state.home / "main-ledger.sqlite")
+    _made(app, state)
     blob = app.get("/bootstrap/main.sqlite.gz")
     assert blob.status_code == 200
     assert blob.headers["x-arcade-height"] == "900"
@@ -198,6 +208,7 @@ def test_a_public_instance_serves_all_of_it(client):
     """This is the point: a clone can clone."""
     app, state = client
     an_index(state.home / "main-ledger.sqlite")
+    _made(app, state)
     state.public = True
     try:
         for path in ("/clone", "/source.tar.gz", "/source.tar.gz.sha256",
@@ -228,3 +239,103 @@ def test_an_operator_is_told_what_to_do_and_what_not_to(client):
             and "is stealing them" in page), \
         "the twelve-words rule as /clone says it since dc30507: typed at making, then " \
         "checked only on Restore, in the browser, and anything else that asks is stealing"
+
+
+def test_the_install_command_names_this_arcade_as_the_first_peer(client):
+    """2026-11-02: a new arcade meets the one it was installed from at once. The page gives the installer this
+    arcade's public name -- never the address it was opened on when that is this machine, which nobody else can use."""
+    app, state = client
+    page = app.get("/clone").text
+    assert "python3 installer/install.py</pre>" in page, "opened on this machine: no peer named, the installer's default"
+    state.set_setting("public_hosts", ["app.example.com"])
+    page = app.get("/clone").text
+    assert "install.py --first-peer https://app.example.com</pre>" in page
+    state.set_setting("public_hosts", [])
+    page = app.get("/clone", headers={"host": "arcade.example.org", "x-forwarded-proto": "https"}).text
+    assert "install.py --first-peer https://arcade.example.org</pre>" in page, "or the https name it was opened on"
+    page = app.get("/join/keys", headers={"host": "arcade.example.org", "x-forwarded-proto": "https"}).text
+    assert "install.py --first-peer https://arcade.example.org</pre>" in page
+
+
+def test_a_request_never_makes_the_copy_and_only_one_is_made_at_a_time(client, monkeypatch):
+    """2026-11-02, live on .25: every request for the missing testnet copy made one inside the request (a VACUUM INTO of
+    454 MB); four ran at once, none finished before its request gave up, and each cut-off one left ~400 MB behind."""
+    import threading
+    app, state = client
+    an_index(state.home / "main-ledger.sqlite")
+    gate, started = threading.Event(), []
+    real = bootstrap.make
+
+    def slow(home, network, *a, **k):
+        started.append(network)
+        gate.wait(10)
+        return real(home, network, *a, **k)
+    monkeypatch.setattr(bootstrap, "make", slow)
+    try:
+        for _ in range(3):
+            r = app.get("/bootstrap/main.json")
+            assert r.status_code == 503 and r.headers["retry-after"] == "120", r.text
+        assert app.get("/clone").status_code == 200, "the page answers while the copy is made"
+        assert started == ["main"], "one build however many ask, and none for a chain with no index"
+    finally:
+        gate.set()
+    end = time.time() + 20
+    while bootstrap.building(state.home, "main") and time.time() < end:
+        time.sleep(0.1)
+    assert app.get("/bootstrap/main.json").status_code == 200, "and once made, it is served"
+
+
+def test_a_build_cut_off_by_a_restart_is_cleaned_up_and_a_running_one_is_not(tmp_path):
+    where = bootstrap.folder(tmp_path)
+    dead, alive = where / "tmpdead", where / "tmpalive"
+    for d in (dead, alive):
+        d.mkdir()
+        (d / "test.sqlite").write_bytes(b"x" * 100)
+    old = time.time() - 2 * bootstrap.LEFTOVER_AFTER
+    os.utime(dead / "test.sqlite", (old, old)); os.utime(dead, (old, old))
+    assert bootstrap.leftovers(tmp_path) == 1
+    assert not dead.exists() and alive.exists()
+
+
+def test_the_source_is_packed_when_the_arcade_starts_not_on_the_pages_first_visit(app_state, monkeypatch):
+    """2026-11-02: "/clone doesn't do anything". The first visit after every update packed the source while the
+    page waited (27 s on .25) and the browser gave up. Now it is packed in the background as the arcade starts."""
+    import time
+    from fastapi.testclient import TestClient
+    from arcade.web.app import create_app
+    from arcade.web.state import AppState
+    monkeypatch.setattr(AppState, "running_version", property(lambda self: "abc1234"))
+    with TestClient(create_app(app_state)):
+        for _ in range(300):
+            said = bootstrap.source(app_state.home)
+            if said is not None and said.get("revision") == "abc1234":
+                break
+            time.sleep(0.1)
+        else:
+            raise AssertionError("not packed at startup")
+
+
+def test_the_page_answers_at_once_while_the_download_is_being_packed(client, monkeypatch):
+    """The pack at startup took about 3 minutes on .25 right after an update; the page does not wait for it."""
+    import threading
+    import time
+    from arcade import bootstrap as B
+    app, state = client
+    started, release = threading.Event(), threading.Event()
+    real = B.source_archive
+
+    def slow(*a, **k):
+        started.set()
+        release.wait(10)
+        return real(*a, **k)
+    monkeypatch.setattr(B, "source_archive", slow)
+    t = threading.Thread(target=lambda: app.get("/source.tar.gz.sha256"))
+    t.start()
+    try:
+        assert started.wait(5)
+        begun = time.monotonic()
+        page = app.get("/clone").text
+        assert time.monotonic() - begun < 3 and "packing the download now" in page
+    finally:
+        release.set()
+        t.join(15)

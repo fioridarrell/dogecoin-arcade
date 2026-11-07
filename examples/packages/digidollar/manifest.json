@@ -1,0 +1,394 @@
+{
+  "kind": "module",
+  "api": 1,
+  "name": "digidollar",
+  "version": "0.4.2",
+  "title": "DigiDollar",
+  "summary": "DigiByte's stablecoin from your own wallet: mint, hold, send, receive and redeem DigiDollars, a form for each step, with its price and health.",
+  "pages": "anyone",
+  "needs": {
+    "chains": {
+      "dgb": [
+        "getblockchaininfo",
+        "getblockcount",
+        "getdigidollardeploymentinfo",
+        "getoracleprice",
+        "getdigidollarstats",
+        "estimatecollateral",
+        "scantxoutset",
+        "getrawtransaction",
+        "gettxout"
+      ],
+      "dgbtest": [
+        "getblockchaininfo",
+        "getblockcount",
+        "getdigidollardeploymentinfo",
+        "getoracleprice",
+        "getdigidollarstats",
+        "estimatecollateral",
+        "scantxoutset",
+        "getrawtransaction",
+        "gettxout"
+      ]
+    },
+    "max_fee": 50000000
+  },
+  "commands": {
+    "ddstats": {
+      "audience": "anyone",
+      "args": [
+        "[chain]"
+      ],
+      "help": "DigiDollar on this arcade's DigiByte: the oracle's price, the supply and how well it is backed.\n\nddstats [main|test]   the test chain (testnet26) unless you say main",
+      "form": {
+        "title": "DigiDollar now",
+        "button": "Show",
+        "fields": {
+          "chain": {
+            "label": "Chain",
+            "type": "choice",
+            "choices": [
+              [
+                "test",
+                "DigiByte testnet"
+              ],
+              [
+                "main",
+                "DigiByte mainnet"
+              ]
+            ]
+          }
+        }
+      }
+    },
+    "ddcollateral": {
+      "audience": "anyone",
+      "args": [
+        "amount",
+        "[tier]",
+        "[chain]"
+      ],
+      "help": "The DGB a mint of this many dollars locks, for this long.\n\nddcollateral <dollars> [tier] [main|test]   tier 0 is one hour (test chains), 1 thirty days, up to 9 for ten years",
+      "form": {
+        "title": "Cost",
+        "button": "Work it out",
+        "note": "What a mint of this many dollars locks, for this long.",
+        "fields": {
+          "amount": {
+            "label": "Dollars",
+            "type": "number",
+            "value": "100"
+          },
+          "tier": {
+            "label": "Lock",
+            "type": "choice",
+            "choices": [
+              [
+                "0",
+                "1 hour (test chain only)"
+              ],
+              [
+                "1",
+                "30 days"
+              ],
+              [
+                "2",
+                "90 days"
+              ],
+              [
+                "3",
+                "180 days"
+              ],
+              [
+                "4",
+                "1 year"
+              ],
+              [
+                "5",
+                "2 years"
+              ],
+              [
+                "6",
+                "3 years"
+              ],
+              [
+                "7",
+                "5 years"
+              ],
+              [
+                "8",
+                "7 years"
+              ],
+              [
+                "9",
+                "10 years"
+              ]
+            ]
+          },
+          "chain": {
+            "label": "Chain",
+            "type": "choice",
+            "choices": [
+              [
+                "test",
+                "DigiByte testnet"
+              ],
+              [
+                "main",
+                "DigiByte mainnet"
+              ]
+            ]
+          }
+        }
+      }
+    },
+    "ddgather": {
+      "audience": "user",
+      "args": [
+        "[chain]"
+      ],
+      "help": "Put many small coins of yours into one, so a mint or a redeem can pay from it.\n\nddgather [main|test]   up to 50 coins at a time, back to your own address; your wallet signs it",
+      "form": {
+        "title": "Gather",
+        "button": "Gather my coins",
+        "note": "Up to 50 small coins into one, back to you. A mint spends only a few coins.",
+        "fields": {
+          "chain": {
+            "label": "Chain",
+            "type": "choice",
+            "choices": [
+              [
+                "test",
+                "DigiByte testnet"
+              ],
+              [
+                "main",
+                "DigiByte mainnet"
+              ]
+            ]
+          }
+        }
+      }
+    },
+    "ddmint": {
+      "audience": "user",
+      "args": [
+        "amount",
+        "[tier]",
+        "[chain]"
+      ],
+      "help": "Mint DigiDollars from your own DGB: it stays locked in a vault until the tier's time is up.\n\nddmint <dollars> [tier] [main|test]   your wallet shows the transaction and signs it; mainnet once the operator turns it on",
+      "form": {
+        "title": "Mint",
+        "button": "Mint…",
+        "note": "Locks your DGB in a vault; your wallet shows it and signs.",
+        "fields": {
+          "amount": {
+            "label": "Dollars ($100 to $100,000)",
+            "type": "number",
+            "value": "100"
+          },
+          "tier": {
+            "label": "Lock",
+            "type": "choice",
+            "choices": [
+              [
+                "0",
+                "1 hour (test chain only)"
+              ],
+              [
+                "1",
+                "30 days"
+              ],
+              [
+                "2",
+                "90 days"
+              ],
+              [
+                "3",
+                "180 days"
+              ],
+              [
+                "4",
+                "1 year"
+              ],
+              [
+                "5",
+                "2 years"
+              ],
+              [
+                "6",
+                "3 years"
+              ],
+              [
+                "7",
+                "5 years"
+              ],
+              [
+                "8",
+                "7 years"
+              ],
+              [
+                "9",
+                "10 years"
+              ]
+            ]
+          },
+          "chain": {
+            "label": "Chain",
+            "type": "choice",
+            "choices": [
+              [
+                "test",
+                "DigiByte testnet"
+              ],
+              [
+                "main",
+                "DigiByte mainnet"
+              ]
+            ]
+          }
+        }
+      }
+    },
+    "ddvaults": {
+      "audience": "user",
+      "args": [
+        "[chain]"
+      ],
+      "help": "Your vaults and what you hold: each vault's dollars, the DGB it locks, when it unlocks, and Redeem once it has.\n\nddvaults [main|test]   a vault's id (its first 12 characters) is what ddredeem takes",
+      "form": {
+        "title": "My vaults",
+        "button": "Show my vaults",
+        "note": "Redeem appears beside a vault once it unlocks.",
+        "fields": {
+          "chain": {
+            "label": "Chain",
+            "type": "choice",
+            "choices": [
+              [
+                "test",
+                "DigiByte testnet"
+              ],
+              [
+                "main",
+                "DigiByte mainnet"
+              ]
+            ]
+          }
+        }
+      }
+    },
+    "ddredeem": {
+      "audience": "user",
+      "args": [
+        "vault",
+        "[chain]"
+      ],
+      "help": "Redeem a vault once it unlocks: burn the DigiDollars it minted and take back all its DGB.\n\nddredeem <vault> [main|test]   the vault's id, from ddvaults; your wallet shows the transaction and signs it"
+    },
+    "ddreceive": {
+      "audience": "user",
+      "args": [
+        "[chain]"
+      ],
+      "help": "Your DigiDollar address, to be paid at, and the DigiDollars you hold.\n\nddreceive [main|test]   anyone may send DigiDollars to it; it is your wallet's key, on that chain",
+      "form": {
+        "title": "Receive",
+        "button": "Show my address",
+        "note": "Your DigiDollar address (TD... test, DD... mainnet), and what you hold.",
+        "fields": {
+          "chain": {
+            "label": "Chain",
+            "type": "choice",
+            "choices": [
+              [
+                "test",
+                "DigiByte testnet"
+              ],
+              [
+                "main",
+                "DigiByte mainnet"
+              ]
+            ]
+          }
+        }
+      }
+    },
+    "ddsend": {
+      "audience": "user",
+      "args": [
+        "address",
+        "amount",
+        "[chain]"
+      ],
+      "help": "Send DigiDollars to a DigiDollar address (DD... on mainnet, TD... on the test chain).\n\nddsend <address> <dollars> [main|test]   your wallet shows the transaction and signs it",
+      "form": {
+        "title": "Send",
+        "button": "Send…",
+        "note": "DigiDollars to anyone's DigiDollar address. The fee is in DGB.",
+        "fields": {
+          "address": {
+            "label": "To (a DigiDollar address)",
+            "type": "text"
+          },
+          "amount": {
+            "label": "Dollars ($1 to $100,000)",
+            "type": "number"
+          },
+          "chain": {
+            "label": "Chain",
+            "type": "choice",
+            "choices": [
+              [
+                "test",
+                "DigiByte testnet"
+              ],
+              [
+                "main",
+                "DigiByte mainnet"
+              ]
+            ]
+          }
+        }
+      }
+    },
+    "ddmainnet": {
+      "audience": "operator",
+      "args": [
+        "[state]",
+        "[confirm]"
+      ],
+      "help": "Whether this arcade's people may mint and send DigiDollars on DigiByte mainnet, with real DGB.\n\nddmainnet [status|on|off] [yes]   off until turned on; on needs yes",
+      "form": {
+        "title": "Mainnet (operator)",
+        "button": "Apply",
+        "note": "Off until you turn it on. Read the module's README first.",
+        "fields": {
+          "state": {
+            "label": "Mainnet mints",
+            "type": "choice",
+            "choices": [
+              [
+                "status",
+                "Say whether they are on"
+              ],
+              [
+                "on",
+                "Turn on"
+              ],
+              [
+                "off",
+                "Turn off"
+              ]
+            ]
+          },
+          "confirm": {
+            "label": "Type yes to turn on",
+            "type": "text"
+          }
+        }
+      }
+    }
+  }
+}

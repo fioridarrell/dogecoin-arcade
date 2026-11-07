@@ -83,7 +83,9 @@ def test_only_the_installed_app_is_sent_to_the_home_screen():
     head = base[:base.index("</head>")]
     assert "display-mode: standalone" in head and "location.replace(" in head
     assert "if (!installed || window.top !== window || location.pathname === '/home') return;" in head
-    assert "html.inshell header{display:none !important}" in head
+    # Only the site's tab strip: a bare "header" also hid the Messenger's who-you-are-talking-to line (2026-10-30).
+    assert "html.inshell body > header{display:none !important}" in head
+    assert "html.inshell header{" not in head
     home = (TEMPLATES / "home.html").read_text()
     assert "navigator.wakeLock.request('screen')" in home, "the screen stays awake while the app is open"
 

@@ -533,13 +533,13 @@ def test_a_peer_dials_back_only_where_it_sees_the_asker():
         try:
             await until(lambda: len(a.links) == 2, what="links")
             said = await b.ask_dial_back(b.listen_port, timeout=5)
-            assert said == {"reached": True, "seen": ["127.0.0.1"]}
+            assert said == {"reached": True, "seen": ["127.0.0.1"], "reached_at": ["127.0.0.1"]}
             # c does not listen: a dials where c's connection comes from, and fails.
             said = await c.ask_dial_back(45999, timeout=5)
-            assert said["reached"] is False and said["seen"] == ["127.0.0.1"]
+            assert said["reached"] is False and said["seen"] == ["127.0.0.1"] and said["reached_at"] == []
             # Asking again at once is not answered: once a minute per peer.
             said = await b.ask_dial_back(b.listen_port, timeout=0.5)
-            assert said == {"reached": False, "seen": []}
+            assert said == {"reached": False, "seen": [], "reached_at": []}
         finally:
             await stop(c, b, a)
     run(go())
@@ -832,6 +832,44 @@ def test_websocket_addresses_are_checked():
 
 # ------------------------------------------------------------------ Core through the mesh (2026-10-12)
 
+def test_both_cores_dialling_at_once_do_not_close_each_others_stream():
+    from arcade.mesh.corelink import CoreBridge
+
+    async def go():
+        async def echo(reader, writer):
+            try:
+                while data := await reader.read(100):
+                    writer.write(data); await writer.drain()
+            except (ConnectionError, OSError):
+                pass
+            finally:
+                writer.close()
+        sa, sb = await asyncio.start_server(echo, "127.0.0.1", 0), await asyncio.start_server(echo, "127.0.0.1", 0)
+        a, b = mk(), mk()
+        ba = CoreBridge({"test": sa.sockets[0].getsockname()[1]}, None)
+        bb = CoreBridge({"test": sb.sockets[0].getsockname()[1]}, None)
+        a.add_extension(ba); b.add_extension(bb)
+        await started(a, b)
+        try:
+            a.add_address(*addr(b))
+            await until(lambda: ba.listeners and bb.listeners, what="both open a port")
+            pa, pb = next(iter(ba.listeners.values()))[1], next(iter(bb.listeners.values()))[1]
+            (r1, w1), (r2, w2) = await asyncio.gather(asyncio.open_connection("127.0.0.1", pa),
+                                                      asyncio.open_connection("127.0.0.1", pb))
+            w1.write(b"one"); w2.write(b"two")
+            await asyncio.gather(w1.drain(), w2.drain())
+            assert await asyncio.wait_for(r1.read(10), 5) == b"one"
+            assert await asyncio.wait_for(r2.read(10), 5) == b"two"
+            w1.close(); w2.close()
+            await asyncio.gather(w1.wait_closed(), w2.wait_closed())
+        finally:
+            await a.stop(); await b.stop()
+            sa.close(); sb.close()
+            await sa.wait_closed(); await sb.wait_closed()
+            await asyncio.sleep(0.2)
+    run(go())
+
+
 def test_core_peers_through_the_mesh_both_ways_and_only_to_the_core_port():
     """Two stand-in Core nodes: a's Core dials the port its arcade opened for b, and the bytes reach
     b's Core peer port, and the answer comes back. addnode is asked to add, and to remove on unlink."""
@@ -980,3 +1018,217 @@ def test_two_offers_at_once_make_one_core_peer_per_arcade_and_chain():
     chains = asyncio.run(go())
     assert chains == ["doge", "ltc", "main", "test"], "every chain run here gets its arcade peer"
     assert sorted(asked) == [("doge", "add"), ("ltc", "add"), ("main", "add"), ("test", "add")], "and one addnode each"
+
+
+# The TCP dial the UDP fix did not cover: a neighbour's home LAN, port 8421.
+_PEER = "ab" * 32
+_OURS = "129.222.44.64"
+_HOME = ("192.168.1.20", 8421)
+_OTHER_HOME = ("192.168.1.20", 8421)
+_PUBLIC = ("156.67.28.112", 8421)
+
+
+def _watch_dials(monkeypatch):
+    dialed = []
+
+    async def refuse(*args, **kwargs):
+        if args:
+            dialed.append(tuple(args[:2]))
+        raise OSError("refused")
+
+    monkeypatch.setattr(meshlib.asyncio, "open_connection", refuse)
+    return dialed
+
+
+def test_the_dialer_does_not_open_tcp_to_another_nats_home_address(monkeypatch):
+    """Live: TCP to 192.168.1.20:8421 while that node sits on somebody else's LAN.
+    The public endpoint is still dialed. The home addresses are not."""
+    dialed = _watch_dials(monkeypatch)
+
+    async def go():
+        node = mk(listen=False, target=4)
+        node.outside_addrs = lambda: [_OURS]
+        node.add_address(*_PUBLIC, _PEER)
+        node.add_address(*_HOME, _PEER)
+        node.add_address(*_OTHER_HOME, _PEER)
+        await node.start()
+        try:
+            await until(lambda: _PUBLIC in dialed, what="public tcp")
+            await asyncio.sleep(0.3)
+            assert _HOME not in dialed and _OTHER_HOME not in dialed, dialed
+            assert _HOME not in node.addrs or node.addrs[_HOME]["fail"] == 0
+        finally:
+            await node.stop()
+    run(go())
+
+
+def test_the_dialer_opens_tcp_to_a_home_address_on_this_nat(monkeypatch):
+    dialed = _watch_dials(monkeypatch)
+
+    async def go():
+        node = mk(listen=False, target=4)
+        node.outside_addrs = lambda: [_OURS]
+        node.add_address(_OURS, 8421, _PEER)
+        node.add_address(*_HOME, _PEER)
+        await node.start()
+        try:
+            await until(lambda: _HOME in dialed and (_OURS, 8421) in dialed, what="same-nat tcp")
+        finally:
+            await node.stop()
+    run(go())
+
+
+def test_mesh_lan_dial_off_does_not_open_tcp_to_a_home_address_on_this_nat(monkeypatch):
+    dialed = _watch_dials(monkeypatch)
+
+    async def go():
+        node = mk(listen=False, target=4)
+        node.outside_addrs = lambda: [_OURS]
+        node.lan_dial = "off"
+        node.add_address(_OURS, 8421, _PEER)
+        node.add_address(*_HOME, _PEER)
+        await node.start()
+        try:
+            await until(lambda: (_OURS, 8421) in dialed, what="public tcp")
+            await asyncio.sleep(0.3)
+            assert _HOME not in dialed, dialed
+        finally:
+            await node.stop()
+    run(go())
+
+
+def test_a_configured_home_address_is_still_dialed(monkeypatch):
+    """--mesh-peer names a node on this LAN before STUN can show the shared public address."""
+    dialed = _watch_dials(monkeypatch)
+
+    async def go():
+        node = mk(listen=False, peers=[_HOME], target=2)
+        node.outside_addrs = lambda: [_OURS]
+        await node.start()
+        try:
+            await until(lambda: _HOME in dialed, what="configured home tcp")
+        finally:
+            await node.stop()
+    run(go())
+
+
+def test_gossip_keeps_a_home_address_only_for_this_nat():
+    async def go():
+        node = mk(listen=False)
+        node.outside_addrs = lambda: [_OURS]
+        far, near, house = "cd" * 32, "ef" * 32, "11" * 32
+
+        class Link:
+            def __init__(self, peer_id):
+                self.peer_id = peer_id
+
+        await node._handle(Link(far), {"t": "addrs", "a": [
+            {"h": "192.168.1.20", "p": 8421, "id": far},
+            {"h": "156.67.28.112", "p": 8421, "id": far},
+        ]}, b"")
+        assert _PUBLIC in node.addrs and _HOME not in node.addrs
+        # Listed first, before the public address. Still kept when that public address is ours.
+        await node._handle(Link(near), {"t": "addrs", "a": [
+            {"h": "192.168.1.20", "p": 8421, "id": near},
+            {"h": _OURS, "p": 8421, "id": near},
+        ]}, b"")
+        assert _HOME in node.addrs and node.addrs[_HOME]["id"] == near
+        node.addrs[_HOME]["ok"] = time.time()
+        node.addrs[(_OURS, 8421)]["ok"] = time.time()
+        # `far` is on another network (156.67.28.112). It must not be handed the home address.
+        told = {row["h"] for row in node._rows_for(far)}
+        assert "192.168.1.20" not in told and _OURS in told
+        node.add_address(_OURS, 9000, house)
+        node.addrs[(_OURS, 9000)]["ok"] = time.time()
+        assert "192.168.1.20" in {row["h"] for row in node._rows_for(house)}
+    run(go())
+
+
+def test_an_arcade_links_with_every_arcade_it_knows_and_a_small_one_keeps_its_target():
+    """2026-11-02: "all arcade should share each of their chains and ORD indexes with all other arcades". Sharing
+    rides on direct links, so a node with the default target links to every arcade it has an address for (up to
+    EVERYONE_MAX), not six of them; a node that set a smaller target on purpose (a phone on battery) keeps it, and the
+    tuner drops no link from a node that links everyone."""
+    async def go():
+        others = [mk() for _ in range(8)]
+        a, small = mk(), mk(target=2)
+        await started(a, small, *others)
+        try:
+            for o in others:
+                a.add_address(*addr(o))
+                small.add_address(*addr(o))
+            await until(lambda: len([p for p in a.links if p != small.node_id]) == 8, timeout=10,
+                        what="a linked to all eight")
+            await asyncio.sleep(1.5)
+            assert small._outbound() == 2, "a small target is kept"
+            assert a.everyone() and not small.everyone()
+            assert await a.tune_once(settle=0) is None, "no link is spare when linking everyone"
+        finally:
+            for n in (a, small, *others):
+                await n.stop()
+    run(go())
+
+
+# ------------------------------------------------------------------ a peer that stops reading (2026-11-05)
+
+def test_a_frame_that_cannot_go_out_cuts_the_link(monkeypatch):
+    """.25 and Strawberry each held a link to an arcade that stopped reading: the send buffers filled, each side's reader
+    waited to send its reply, and nothing moved for five hours. A send now has SEND_TIMEOUT; past it the link is cut
+    (unsent bytes dropped) and LinkError raised, so the reader and the minute's rebalance carry on."""
+    monkeypatch.setattr(linklib, "SEND_TIMEOUT", 0.2)
+
+    class Transport:
+        aborted = False
+
+        def abort(self):
+            Transport.aborted = True
+
+    class Stuck:
+        transport = Transport()
+
+        def write(self, data):
+            pass
+
+        async def drain(self):
+            await asyncio.sleep(60)                     # the other side never reads
+
+        def get_extra_info(self, name, default=None):
+            return default
+
+    async def go():
+        link = linklib.Link(None, Stuck(), b"\x01" * 32, True, b"\x02" * 32, b"\x03" * 32, None)
+        started = time.monotonic()
+        with pytest.raises(linklib.LinkError):
+            await link.send({"t": "dx", "op": "hi"})
+        assert time.monotonic() - started < 2 and link.closed and Transport.aborted
+        with pytest.raises(linklib.LinkError):
+            await link.send({"t": "dx", "op": "hi"})    # closed: refused at once
+    run(go())
+
+
+def test_one_stuck_extension_does_not_hold_up_the_minute_for_the_rest(monkeypatch):
+    """The ord index's hello rides the minute's rebalance: an extension before it that never finishes left every index
+    unheard (lookups fell back to .25's own 7% walk). Each extension now has REBALANCE_TIMEOUT."""
+    monkeypatch.setattr(meshlib, "REBALANCE_EVERY", 0.05)
+    monkeypatch.setattr(meshlib, "REBALANCE_TIMEOUT", 0.2)
+    ran = []
+
+    class Stuck:
+        async def rebalance(self):
+            ran.append("stuck")
+            await asyncio.sleep(60)
+
+    class Hello:
+        async def rebalance(self):
+            ran.append("hello")
+
+    async def go():
+        a = mk()
+        a.add_extension(Stuck())
+        a.add_extension(Hello())
+        await started(a)
+        try:
+            await until(lambda: ran.count("hello") >= 2, timeout=5, what="the next extension's rebalance, twice")
+        finally:
+            await stop(a)
+    run(go())

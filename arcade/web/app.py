@@ -18,6 +18,7 @@ import json
 import logging
 import math
 import re
+import decimal
 import threading
 import time
 import html
@@ -46,11 +47,14 @@ from fastapi.responses import (
 from fastapi.templating import Jinja2Templates
 
 from . import brand as brandlib
+from . import terms as termslib
 
 from .. import backup, media, tokens as tokenlib, wallet as walletlib
 from ..ledger import COIN, AmountError, format_amount, parse_amount
 from ..config import NETWORKS, MainnetRefused, WrongChain, unpayable_versions
+from .. import apikeys as apikeylib
 from .. import inscribe as inscribelib
+from .. import owner as ownerlib
 from .. import games as gameslib
 from .. import ring as ringlib
 from .. import gamestate as gamestatelib
@@ -58,6 +62,7 @@ from .. import bids as bidslib
 from .. import standing as standinglib
 from .. import collections as collectionlib
 from .. import approvals as approvalslib
+from .. import modules as modulelib
 from .. import send_refs as sendrefs
 from .. import payload as P
 from .. import referee as refereelib
@@ -86,7 +91,7 @@ from ..messaging import contact, content, group
 from ..script import b58check_decode, b58check_encode, hash160, segwit_decode
 from ..messaging.derive import DerivationError, derive_identity
 from ..messaging.envelope import (
-    MAX_ANNOUNCE_NAME, MAX_ANNOUNCE_NAME_CLASS_B,
+    MAX_ANNOUNCE_NAME, MAX_ANNOUNCE_NAME_CLASS_B, parse_announced_extras,
     announcement_fits_one_output, build_key_announcement,
 )
 from .. import pageapi
@@ -95,11 +100,13 @@ from .. import seed as seedlib
 from .. import accounts as accountslib
 from .. import faucet as faucetlib
 from .. import admin as adminlib
+from .. import digidollar as digidollib
 from .. import funding as fundinglib
 from .. import listings as listingslib
 from .. import utxos as utxoslib
 from .. import coinlist as coinlistlib
 from .. import coinwalk as coinwalklib
+from .. import walkstore as walkstorelib
 from .. import blkscan
 from .. import doginals as doginalslib
 from .. import update as updatelib
@@ -127,7 +134,7 @@ from .state import AppState, ChainContext
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 TEMPLATES = Jinja2Templates(directory=str(TEMPLATE_DIR))
-TEMPLATES.env.globals["brand"] = brandlib.current()   # create_app reads it again
+TEMPLATES.env.globals["brand"] = brandlib.CURRENT   # the face of this request (brand.py)
 
 
 def _fromjson(text: str):
@@ -431,6 +438,24 @@ class _BrowserChain:
                 _BROWSER_CHAIN.reset(token)
 
 
+class _HostFace:
+    """ASGI middleware wearing, for one request, the face `pick(request)` gives the web address it came in by
+    (brand.py `brand_hosts`; None: the node's own face). SadFrog's side, 2026-11-03: one node published as
+    pepecoinarcade.com and digibyte-arcade.com shows each its own name, colours and icons."""
+
+    def __init__(self, app, pick):
+        self.app, self.pick = app, pick
+
+    async def __call__(self, scope, receive, send):
+        face = self.pick(Request(scope)) if scope["type"] == "http" else None
+        token = brandlib._HOST.set(face) if face else None
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            if token is not None:
+                brandlib._HOST.reset(token)
+
+
 def _session_cookie_headers(token: str, secure: bool) -> list[tuple[bytes, bytes]]:
     """The Set-Cookie header of a session cookie, shaped exactly as the sign-in routes set it."""
     shaped = Response()
@@ -508,6 +533,7 @@ NAV = [
     # Who the arcade works with (2026-10-15: "Between the exchange and the Docs tab,
     # add an affiliate tab").
     ("/affiliates",   "Affiliates",   None,        True),
+    ("/globe",        "Globe",        None,        True),
     ("/approvals",    "Approvals",    None,        True),
     ("/docs",         "Docs",         None,        True),
 ]
@@ -539,6 +565,7 @@ ACCOUNT_NAV = [
     ("/exchange",        "Exchange",     "mainnet",   True),
     ("/explore",         "Explore",      None,        True),
     ("/affiliates",      "Affiliates",   None,        True),
+    ("/globe",           "Globe",        None,        True),
     ("/docs",            "Docs",         None,        True),
 ]
 
@@ -637,7 +664,8 @@ def secure_context(request: Request) -> bool:
     if proto == "https":
         return True
     name = (request.headers.get("host", "").rsplit(":", 1)[0]).strip().lower()
-    return name in LOOPBACK or name.startswith("127.")
+    # *.localhost too, as browsers treat it (an ssh tunnel opened as node.localhost:8430 is a secure context).
+    return name in LOOPBACK or name.startswith("127.") or name.endswith(".localhost")
 
 
 def locked(title: str, detail: str, status: int = 403) -> HTMLResponse:
@@ -650,12 +678,39 @@ def locked(title: str, detail: str, status: int = 403) -> HTMLResponse:
 
 
 def _request_outside(state, request) -> bool:
-    """door.from_outside for one request: its headers, Host and TCP peer."""
+    """door.from_outside for one request: its headers, Host and TCP peer. A call with an operator's API key is the
+    operator at the machine, wherever it comes from (arcade/apikeys.py; the key's own limits were checked first)."""
+    key = apikeylib.CURRENT.get()
+    if key is not None and key.operator:
+        return False
     client = getattr(request, "client", None)
     return doorlib.from_outside(request.headers, request.headers.get("host", ""),
                                 state.public_hosts,
                                 peer=client.host if client else None,
                                 local_hosts=getattr(state, "local_hosts", ()))
+
+
+def _terms_visitor(state, request) -> bool:
+    """Does this node ask this request for the terms: the switch is on, and it is a public visitor (terms.py)."""
+    if not termslib.on(state):
+        return False
+    client = getattr(request, "client", None)
+    return doorlib.public_visitor(request.headers, request.headers.get("host", ""), state.public_hosts,
+                                  peer=client.host if client else None, local_hosts=state.local_hosts)
+
+
+def _terms_first(state, request):
+    """A redirect to the terms when this request is a public visitor opening a page who has not accepted them as they
+    stand now, else None (terms.py). The cheap questions first: this runs for every request the node answers."""
+    if not termslib.opens_a_page(request.method, request.url.path, request.headers) \
+            or termslib.exempt(request.url.path) or apikeylib.CURRENT.get() is not None \
+            or not _terms_visitor(state, request):
+        return None
+    if request.cookies.get(termslib.COOKIE) == termslib.version(termslib.text(state)):
+        return None
+    where = request.url.path + (f"?{request.url.query}" if request.url.query else "")
+    return RedirectResponse("/terms?" + urllib.parse.urlencode({"back": where}), status_code=303,
+                            headers={"Cache-Control": "no-store"})
 
 
 def the_door(state: AppState):
@@ -711,7 +766,15 @@ def the_door(state: AppState):
             return locked("Not here", "Nothing is served at this address but "
                           "inscribed pages.", status=404)
 
+        terms = _terms_first(state, request)
+        if terms is not None:
+            return terms
+
         outside = _request_outside(state, request)
+        # An operator's API key is the operator, even on an instance that is public as a whole (--public).
+        key = apikeylib.CURRENT.get()
+        if key is not None and key.operator:
+            return await call_next(request)
 
         # Being on the operator's machine needs no cookie, so a page on any
         # other site the operator has open could otherwise post to this one as
@@ -899,6 +962,31 @@ DESK_DEFAULT = "ubuntu"
 #: mobile the website make it look like the PWA by default"): "home" (the installed app's home screen) or "" (the website).
 PHONE_DEFAULT = "home"
 
+def announcement_changed(prior: Any, face: Any, bio: Any, url: Any) -> bool:
+    """Whether a key announcement would say something the published one does not.
+
+    ``prior`` is the published profile (``pfp``/``bio``/``url``). A changed
+    face, bio or link is a new statement worth its fee, not a repeat of one
+    already on the chain, so the 'already published' refusal must not apply.
+    """
+    prior = prior or {}
+    return any(str(new or "") != str(prior.get(k) or "")
+               for k, new in (("pfp", face), ("bio", bio), ("url", url)))
+
+
+def announcement_is_new(existing: Any, payload: bytes) -> bool:
+    """Whether `payload` says a face, bio or link the newest of this key's announcements on the CHAIN
+    (scanner.find_own_announcements, its last field) does not. Never the store: after a reset it is empty, and every
+    face would look new, paying again for what is already there. Both sides as the envelope reads them (a face as
+    its 32 bytes in hex)."""
+    if not existing:
+        return False
+    newest = existing[-1]
+    said = (newest[6] if len(newest) > 6 else None) or {}
+    new = parse_announced_extras(payload)
+    return announcement_changed(said, new.get("pfp"), new.get("bio"), new.get("url"))
+
+
 def create_app(state: AppState) -> FastAPI:
     TEMPLATES._screen_of = state.screen          # the feed card's screen_text()
     # The operator's own choice of face (admin panel, `brand` setting) when the service did not
@@ -908,7 +996,10 @@ def create_app(state: AppState) -> FastAPI:
             brandlib.use(str(state.setting("brand")))
         except ValueError:
             pass
-    TEMPLATES.env.globals["brand"] = brandlib.current()   # this node's name, colours, icons (brand.py)
+    TEMPLATES.env.globals["brand"] = brandlib.CURRENT   # this node's name, colours, icons, or its web address's (brand.py)
+    # ARCADE Lite wears no coin's face until its operator picks one (brand.CORE).
+    brandlib.fallback = lambda: (brandlib.CORE if not state.setting("brand")
+                                 and modulelib.edition(state.settings()) == "lite" else brandlib.DEFAULT)
     # [Claude 2026-10-14] Inscriptions stay put: a wallet's ordinary sends never spend a coin carrying one (arcade/doginals.py).
     # Read from each chain by its own node (2026-10-15, the outside Doginals API removed): Doginals on Dogecoin, and the same ord
     # envelopes on small Pepecoin MAINNET coins ("do the same for small .01 pep txs. Not made by the Arcade").
@@ -956,8 +1047,11 @@ def create_app(state: AppState) -> FastAPI:
         _others.setdefault(5, set()).add("ltc")            # Litecoin's legacy "3" P2SH
         for _lchain in state.addons:
             # Kotia (2026-10-23) has no ord envelopes on its coins, and the guard's reader does not know its
-            # timed transactions (Params.tx_time): no guard there, as on any chain without ords.
-            if _lchain.network == "doge" or _lchain.params.tx_time:
+            # timed transactions (Params.tx_time): no guard there, as on any chain without ords. Litecoin and
+            # Litecoin testnet neither (2026-11-05, tbuuol: no token protocols on LTC, tLTC and KOT): with no ord
+            # index every small coin there waited "unknown" and the Wallet called it "held in Litecoin
+            # inscriptions". A chain without an ord index (doginal_index.STARTS) has no guard.
+            if _lchain.network == "doge" or _lchain.params.tx_time or _lchain.network not in _ORD_STARTS:
                 continue
             # Litecoin (2026-10-17, SadFrog's side): the same guard, reading Doginals-format envelopes
             # (arcade/ltc_ord.py) through the Litecoin node. On regtest a node's wallet carried an
@@ -1019,11 +1113,18 @@ def create_app(state: AppState) -> FastAPI:
         except Exception as exc:              # noqa: BLE001 -- never block startup
             log.info("filler not started: %s", exc)
         try:                                  # known collections from Nintondo, when the operator switched it on
-            _start_known_import()
+            if modulelib.job_on(state.settings(), "known-collections"):
+                _start_known_import()
         except Exception as exc:              # noqa: BLE001 -- never block startup
             log.info("known collections not started: %s", exc)
+        try:                                  # the Run your own page's download, packed now rather than on its first visit
+            # (2026-11-02: "/clone doesn't do anything" -- the first visit after every update packed the
+            # source while the page waited, 27 s on .25, and the browser gave up before it came)
+            threading.Thread(target=_packed_source, name="arcade-pack-source", daemon=True).start()
+        except Exception as exc:              # noqa: BLE001 -- never block startup
+            log.info("source not packed: %s", exc)
         try:                                  # mail for phones already subscribed
-            push = state.push()
+            push = state.push() if modulelib.job_on(state.settings(), "push-mail") else None
             if push is not None:              # notes every account's mail
                 _watch_for_mail()
         except Exception as exc:              # noqa: BLE001 -- never block startup
@@ -1039,7 +1140,7 @@ def create_app(state: AppState) -> FastAPI:
                   "offer to finish the rest when it starts again.",
                   file=sys.stderr, flush=True)
 
-    app = FastAPI(title=brandlib.current().name, docs_url=None, redoc_url=None,
+    app = FastAPI(title=brandlib.own().name, docs_url=None, redoc_url=None,
                   lifespan=_lifespan)
     app.middleware("http")(_request_timer())
     app.middleware("http")(the_door(state))
@@ -1108,6 +1209,11 @@ def create_app(state: AppState) -> FastAPI:
             request.cookies.get(ADMIN_COOKIE, ""), state.operator)
 
     def _nav_for(request: Request) -> list:
+        """The tabs, less those of modules switched off here (arcade/modules.py)."""
+        settings = state.settings()
+        return [entry for entry in _nav_tabs(request) if modulelib.path_on(settings, entry[0])]
+
+    def _nav_tabs(request: Request) -> list:
         """The tabs: an account's own, the operator's machine's, and Admin for the
         operator either way (the panel itself asks for what it needs). On the
         node's own machine, a signed-in account can switch between its own view
@@ -1167,7 +1273,8 @@ def create_app(state: AppState) -> FastAPI:
     # these were no-store: a stale copy of the code that derives somebody's keys has no acceptable failure mode).
     ASSETS = {"/wallet.js": "wallet_js.js", "/coins.js": "coins.js", "/signin.js": "signin.js",
               "/messaging.js": "messaging_js.js", "/qrscan.js": "qrscan.js", "/base.css": "base_css.css",
-              "/desk98.css": "desk98_css.css", "/deskubuntu.css": "deskubuntu_css.css"}
+              "/desk98.css": "desk98_css.css", "/deskubuntu.css": "deskubuntu_css.css",
+              "/deskdogefeedx.css": "deskdogefeedx_css.css"}
     _asset_kept: dict = {}
 
     def _assets_mark() -> str:
@@ -1234,6 +1341,7 @@ def create_app(state: AppState) -> FastAPI:
             # beats a menu of eleven with seven missing.
             "nav": _nav_for(request),
             "public": _account_view(request),
+            "terms_link": _terms_visitor(state, request),
             # Whether the operator is looking: their machine, or signed in from
             # outside. Offers "Not sensitive" on a screened post (feed.html).
             "operator_here": _reads_the_plans(request),
@@ -1266,6 +1374,11 @@ def create_app(state: AppState) -> FastAPI:
             # The look a computer's browser opens in until its reader picks one under Themes (base.html, desktop.html)
             "desk_default": DESK_DEFAULT,
             "phone_default": PHONE_DEFAULT,
+            # What runs here (arcade/modules.py): base.html leaves out the desktop and the home screen when they are off
+            "modules_on": modulelib.enabled(state.settings()),
+            "edition_lite": modulelib.edition(state.settings()) == "lite",
+            # a fresh install that has not chosen Full or Lite yet (_edition_ask.html)
+            "edition_ask": modulelib.asking(state.settings()),
         }
         base.update(context)
         # What a POST decided, picked up by the GET it redirected to. Last,
@@ -1379,6 +1492,8 @@ def create_app(state: AppState) -> FastAPI:
         and the wallet before concluding the protection worked. A check nobody
         can verify from the outside is a poor check even when it is sound.
         """
+        if apikeylib.CURRENT.get() is not None:
+            return                    # an API key is not a browser: no other site's page can send it
         import secrets as _s
         if not _s.compare_digest(token or "", state.csrf_token):
             raise HTTPException(
@@ -1426,29 +1541,79 @@ def create_app(state: AppState) -> FastAPI:
         were for the pages that read only them."""
         mesh = getattr(state, "mesh", None)
         live, me, linked = set(), "", 0
+        now = time.time()
         if mesh is not None and getattr(mesh, "loop", None) is not None:
             me = mesh.node_id
             links = set(dict(mesh.node.links))
             linked = len(links)
-            now = time.time()
             live = links | {e.get("id") for e in list(mesh.node.addrs.values())
                             if e.get("id") and now - float(e.get("ok") or 0) < 3600}
+            live |= set(_seen_through(mesh, links))
+            # Its own "me" hello within the hour (mesh/operators.py) is word from it too: a link up for hours that
+            # just dropped has an old dial time but a fresh hello.
+            said = dict(getattr(getattr(mesh, "operators", None), "peers", {}) or {})
+            live |= {p for p, s in said.items() if now - float((s or {}).get("at") or 0) < 3600}
+        # Announced on the chain in the last day but not heard on the mesh within the hour: listed, never counted
+        # running (2026-11-03, "Why are only eight out of the 13 linked?": three test arcades that had stopped
+        # the evening before were counted running for a day, as arcades re-announce only daily).
+        quiet = set()
         try:
             with state.store() as store:
-                live |= {str(r["mesh_key"]) for r in store.mesh_peers(state.messaging.network,
-                                                                      since=int(time.time()) - 86400)}
+                quiet = {str(r["mesh_key"]) for r in store.mesh_peers(state.messaging.network,
+                                                                      since=int(now) - 86400)}
         except Exception:                                 # noqa: BLE001 -- the count is a nicety
             pass
-        live.discard(me)
-        live.discard(None)
-        live.discard("")
+        for gone in (me, None, ""):
+            live.discard(gone)
+            quiet.discard(gone)
+        quiet -= live
         out = {"running": len(live), "linked": linked}
         if with_ids:
             out["ids"] = sorted(live)
+            out["quiet"] = sorted(quiet)
         return out
+
+    def _seen_through(mesh, links) -> dict:
+        """The arcades a linked arcade said, in the last couple of minutes, it is linked to (mesh/operators.py "me"
+        `links`, 2026-11-02: a phone keeping three links "is not listing all the arcades seen by strawberry").
+        Display only."""
+        from ..mesh.operators import seen_through
+        operators = getattr(mesh, "operators", None)
+        try:
+            return seen_through(dict(getattr(operators, "peers", {}) or {}), links, mesh.node_id or "")
+        except Exception:                                  # noqa: BLE001 -- the list is a nicety
+            return {}
+
+    def _chain_tags(peers: list[str]) -> dict[str, str]:
+        """The @name the chain gives each of these arcades (mesh keys), for the ones that say none themselves
+        (2026-11-02: a new operator on Windows claimed @dogefeed from the address that announces his arcade, and his
+        arcade still said no name, so every list showed only his mesh id). The name of the address that paid for the
+        arcade's mesh announcement (messaging/scanner.py: its fee address). Anybody can announce somebody else's key --
+        it only fails to connect -- so a key announced by more than one address gets no name. Display only, like the
+        name an arcade says itself."""
+        peers = [p for p in peers if p]
+        if not peers:
+            return {}
+        try:
+            chain = next(c for c in state.token_chains if c.network == state.messaging.network)
+            with state.store() as store:
+                senders = store.mesh_key_senders(state.messaging.network, peers)
+            index = state.token_index(chain)
+            out = {}
+            for peer, addresses in senders.items():
+                if len(addresses) == 1:
+                    tag = index.tag_of(next(iter(addresses))) or ""
+                    if tag:
+                        out[peer] = tag
+            return out
+        except Exception:                                  # noqa: BLE001 -- shown by mesh id
+            return {}
 
     @app.get("/", response_class=HTMLResponse)
     def overview(request: Request):
+        # ARCADE Lite opens on its own window, for visitors, users and the operator alike (arcade/lite/web.py).
+        if modulelib.edition(state.settings()) == "lite":
+            return _lite_home(request)
         # On a public instance the front page is the SPLASH, not the
         # operator's wallet. `/` is in the door's allowlist because a public
         # arcade has to have a front page at all -- so the route itself has
@@ -1479,7 +1644,7 @@ def create_app(state: AppState) -> FastAPI:
     def overview_dashboard(request: Request):
         """The node's dashboard Overview was (chain cards, counts, contact code, scan)."""
         if _account_view(request):
-            return RedirectResponse("/feed", status_code=303)
+            return RedirectResponse("/feed" if modulelib.path_on(state.settings(), "/feed") else "/", status_code=303)
         stats = {}
         if state.store_path.exists():
             with state.store() as store:
@@ -2208,6 +2373,52 @@ def create_app(state: AppState) -> FastAPI:
             attached_name=file_name, attached_type=file_type,
             share_profile=share_profile)
 
+    def _console_message(to: str, text: str) -> dict:
+        """A text message from the node's identity, for the console's sendmessage: one transaction, sent at once as
+        send_in_thread sends one on testnet, with its guards (one send at a time, not the same message twice) and
+        our own copy kept. A message that needs more than one transaction is the Messenger's, which shows progress."""
+        if state.messaging.is_mainnet:
+            raise ValueError("the console sends messages on testnet only; send this one from Messages")
+        if not text.strip():
+            raise ValueError("write something")
+        if not state.unlocked:
+            state.ensure_identity()
+        peer_key = _resolve_recipient(state, to)
+        plan = plan_message(state.identity, peer_key, content.build(text=text))
+        if plan.transactions > 1:
+            raise ValueError(f"that message takes {plan.transactions} transactions: send it from Messages, which "
+                             "shows its progress")
+        digest = hashlib.sha256(peer_key + text.encode()).hexdigest()
+        with state.messaging.rpc() as rpc:
+            funding = Miner(rpc, state.messaging.params).status()
+            if not funding.funded:
+                raise ValueError(f"cannot send: {funding.describe()}")
+            sender = MessageSender(rpc, state.messaging.params)
+            address = funded_address(rpc, prefer=state.derived_address)
+            try:
+                sender.prepare(address, plan.chunk_payloads[0])
+            except SendError:                              # the identity address cannot pay: the one that can
+                address = funded_address(rpc)
+            if state.is_repeat_send(digest):
+                raise ValueError("that exact message was just sent; change something or wait a minute")
+            if not state.begin_send():
+                raise ValueError("a message is already being sent; wait for it to finish")
+            try:
+                txids = sender.send_all(address, plan.chunk_payloads)
+                state.note_send(digest)
+            finally:
+                state.end_send()
+        with state.store() as store:
+            record_sent(store, txids[0], peer_key, state.identity.fingerprint, text.encode(), txids=txids)
+        return {"txid": txids[0], "to": peer_key.hex()}
+
+    def _console_peer(who: str) -> bytes:
+        """A correspondent's key from what the console was given: the key itself, an @name, a contact code or an
+        address with an announced key."""
+        if re.fullmatch(r"[0-9a-fA-F]{64}", who or ""):
+            return bytes.fromhex(who)
+        return _resolve_recipient(state, who)
+
     # --- inbox ----------------------------------------------------------------
 
     @app.get("/inbox", response_class=HTMLResponse)
@@ -2652,9 +2863,11 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.post("/backup/{which}/save")
     def backup_save(request: Request, which: str, folder: str = Form(""),
-                    csrf_token: str = Form("")):
+                    csrf_token: str = Form(""), password: str = Form("")):
         try:
             check_csrf(csrf_token)
+            # backupwallet writes the wallet file, which is the keys.
+            _require_local_or_admin_password(request, password)
             chain = _chain_for(which)
             target = Path(folder.strip()).expanduser() if folder.strip() \
                 else backup.default_backup_dir()
@@ -2678,10 +2891,11 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.post("/backup/{which}/print", response_class=HTMLResponse)
     def backup_print(request: Request, which: str, understand: str = Form(""),
-                     csrf_token: str = Form("")):
+                     csrf_token: str = Form(""), password: str = Form("")):
         """Render every private key once, for printing. Never written to disk."""
         try:
             check_csrf(csrf_token)
+            _require_local_or_admin_password(request, password)
             if understand != "yes":
                 raise ValueError("tick the box first -- these keys spend your coins")
             chain = _chain_for(which)
@@ -2701,9 +2915,11 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.post("/backup/{which}/import-key")
     def backup_import_key(request: Request, which: str, key: str = Form(""),
-                          label: str = Form("imported"), csrf_token: str = Form("")):
+                          label: str = Form("imported"), csrf_token: str = Form(""),
+                          password: str = Form("")):
         try:
             check_csrf(csrf_token)
+            _require_local_or_admin_password(request, password)
             chain = _chain_for(which)
             running = imports.get(which)
             if running and not running.done:
@@ -2727,9 +2943,11 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.post("/backup/{which}/restore")
     def backup_restore(request: Request, which: str, source: str = Form(""),
-                       understand: str = Form(""), csrf_token: str = Form("")):
+                       understand: str = Form(""), csrf_token: str = Form(""),
+                       password: str = Form("")):
         try:
             check_csrf(csrf_token)
+            _require_local_or_admin_password(request, password)
             if understand != "yes":
                 raise ValueError(
                     "tick the box to confirm you want to replace the wallet that "
@@ -3749,10 +3967,39 @@ def create_app(state: AppState) -> FastAPI:
                              "face": _face_for(address),
                              **{k: v for k, v in _profile_of(address, waiting).items()
                                 if k in ("bio", "url", "name", "mainnet")},
-                             **_profile_facts(chain, address)},
+                             **_profile_facts(chain, address),
+                             "pay": [] if not address or address == mine["address"]
+                             else _pay_coins(request, wanted),
+                             "pay_signin": _account_view(request) and signed_in(request) is None},
                       here=f"/u/{wanted}",
                       mine=mine, kinds=feedlib.BY_NAME, when=_when,
                       node=chain.status())
+
+    def _pay_coins(request: Request, tag: str) -> list[dict[str, Any]]:
+        """The coins a profile's Pay offers (SadFrog, 2026-11-02: "an option to pay that person right there or send
+        crypto"), real coins first, each with the link that opens the Wallet's Send sheet on that coin.
+
+        Asked of `_where_to_pay` and `_check_address`, which is what the send itself asks, so a coin is listed exactly
+        when a send would be taken. That also leaves out a name still waiting for its block: it is nobody's to be paid
+        under yet.
+
+        An account's link names the @tag, looked up again at Review, as every send is. The node's send reads a claim
+        on the chain being paid (`_tag_address`), not where tags live, so the operator's link carries the address.
+        """
+        public = _account_view(request)
+        out: list[dict[str, Any]] = []
+        for chain in sorted(_account_chains() if public else [c for c, _ in _node_wallets()],
+                            key=lambda c: not c.is_mainnet):
+            try:
+                where = _where_to_pay(tag, chain)
+                if _check_address(where, mainnet=chain, segwit_ok=True):
+                    continue
+            except Exception:                              # noqa: BLE001 -- nowhere to pay them there, or unreadable
+                continue
+            ask = urllib.parse.urlencode({"to": f"@{tag}" if public else where, "coin": chain.network})
+            out.append({"network": chain.network, "label": chain.label, "address": where,
+                        "href": f"{'/me/wallet' if public else '/wallet'}?{ask}"})
+        return out
 
     def _profile_facts(chain, address: str) -> dict[str, Any]:
         """The rest of a profile's header (2026-10-08, the redesign the operator
@@ -4261,6 +4508,15 @@ def create_app(state: AppState) -> FastAPI:
             return RedirectResponse(back if net else f"/feed/{txid}/tip", status_code=303)
         return RedirectResponse(back, status_code=303)
 
+    #: What can be done to a post, by the word for it (feed_act and the console's feed commands).
+    _FEED_KINDS = {"like": feedlib.LIKE, "unlike": feedlib.UNLIKE,
+                   "dislike": feedlib.DISLIKE, "undislike": feedlib.UNDISLIKE,
+                   "reply": feedlib.REPLY, "share": feedlib.SHARE,
+                   "edit": feedlib.EDIT, "delete": feedlib.DELETE,
+                   # An unshare deletes the share itself: the txid in the path is
+                   # the viewer's own share, not the post (2026-09-29).
+                   "unshare": feedlib.DELETE}
+
     @app.post("/feed/{txid}/{doing}")
     def feed_act(request: Request, txid: str, doing: str,
                  text: str = Form(""), csrf_token: str = Form(""),
@@ -4270,13 +4526,7 @@ def create_app(state: AppState) -> FastAPI:
         One route for all of them: they are one message type with a kind
         byte, and a route per kind would be six copies of this (D-138).
         """
-        kinds = {"like": feedlib.LIKE, "unlike": feedlib.UNLIKE,
-                 "dislike": feedlib.DISLIKE, "undislike": feedlib.UNDISLIKE,
-                 "reply": feedlib.REPLY, "share": feedlib.SHARE,
-                 "edit": feedlib.EDIT, "delete": feedlib.DELETE,
-                 # An unshare deletes the share itself: the txid in the path is
-                 # the viewer's own share, not the post (2026-09-29).
-                 "unshare": feedlib.DELETE}
+        kinds = _FEED_KINDS
         try:
             check_csrf(csrf_token)
             if doing == "mute":
@@ -4302,6 +4552,37 @@ def create_app(state: AppState) -> FastAPI:
         except Exception as exc:
             state.flash(str(exc), "err")
         return RedirectResponse(back or "/feed", status_code=303)
+
+    def _console_feed(sort: str, author: str, count: int) -> list[dict]:
+        """A page of the feed as the Feed tab draws it (newest, or popular), or one person's posts: the console's."""
+        network = state.messaging.network
+        address = _tag_address(state, author, mainnet=state.messaging) if author else ""
+        rows, _next, waiting = _feed_page(network, author=address, limit=count, sort=sort)
+        return [{"txid": p.txid, "by": _name_of(p.author) or p.author, "text": p.text, "when": p.block_time,
+                 "likes": p.likes, "replies": len(p.replies), "shares": p.shares, "mine": p.mine,
+                 "confirmed": bool(p.height)} for p in _shown(rows, network, waiting) if not (p.deleted or p.muted)]
+
+    def _console_feed_post(text: str) -> str:
+        """A post from the node, as feed_post makes one (text only): its txid."""
+        complaint = _needs_a_name()
+        if complaint:
+            raise ValueError(complaint)
+        if not text.strip():
+            raise ValueError("say something")
+        return state.post(text.strip())
+
+    def _console_feed_act(doing: str, txid: str, text: str = "") -> str:
+        """A like, reply, share, edit or delete from the node, as feed_act makes one: its txid. Mute is local."""
+        if doing in ("mute", "unmute"):
+            with state.store() as store:
+                store.mute(text.strip() or txid, on=doing == "mute")
+            return ""
+        if doing not in _FEED_KINDS:
+            raise ValueError(f"nothing called {doing!r} is done to a post")
+        complaint = _needs_a_name()
+        if complaint:
+            raise ValueError(complaint)
+        return state.send_feed_act(_FEED_KINDS[doing], txid, text)
 
     @app.post("/contacts/scan")
     def contacts_scan(request: Request, csrf_token: str = Form("")):
@@ -4362,6 +4643,35 @@ def create_app(state: AppState) -> FastAPI:
             state.flash(f"Could not add that: {exc}", "err")
         return RedirectResponse("/contacts/more", status_code=303)
 
+    def _claim_node_tag(tag: str) -> tuple[str, str]:
+        """Claim `tag` for the node's own address when it is not already its name: (the name, the claim's txid, or ""
+        when there was nothing to claim). Raises TagError / TokenError / ValueError with the reason."""
+        chain, index = _tag_chain()
+        if not state.unlocked:
+            state.ensure_identity()
+        home = state.derived_address
+        if not home:
+            raise taglib.TagError("this wallet has no identity address yet.")
+        asked = (tag or "").strip().lstrip("@")
+        current = index.tag_of(home) or ""
+        if not asked or asked.lower() == current.lower():
+            return current, ""
+        wanted = taglib.validate(asked)
+        holder = index.address_of(wanted)
+        if holder and holder != home:
+            raise taglib.TagError(f"@{wanted} is taken.")
+        if holder == home:
+            return wanted, ""
+        payload = P.AnyData(data=taglib.encode(wanted)).encode()
+        with chain.rpc() as rpc:
+            sender = tokenlib.TokenSender(rpc, chain.params)
+            prepared = sender.prepare(home, payload)
+            prepared.what = f"claim @{wanted}"
+            txid = sender.broadcast(prepared)
+        state.pending_tokens.append({"txid": txid, "what": f"claim @{wanted}", "at": time.time(),
+                                     "network": chain.network})
+        return wanted, txid
+
     @app.post("/publish", response_class=HTMLResponse)
     def publish_identity(request: Request, tag: str = Form(""),
                          csrf_token: str = Form("")):
@@ -4378,33 +4688,9 @@ def create_app(state: AppState) -> FastAPI:
         wins -- the card says before the button is pressed rather than after.
         """
         check_csrf(csrf_token)
-        chain, index = _tag_chain()
         wanted, claimed_txid = "", ""
         try:
-            if not state.unlocked:
-                state.ensure_identity()
-            home = state.derived_address
-            if not home:
-                raise taglib.TagError("this wallet has no identity address yet.")
-            asked = (tag or "").strip().lstrip("@")
-            current = index.tag_of(home) or ""
-            if asked and asked.lower() != current.lower():
-                wanted = taglib.validate(asked)
-                holder = index.address_of(wanted)
-                if holder and holder != home:
-                    raise taglib.TagError(f"@{wanted} is taken.")
-                if holder != home:
-                    payload = P.AnyData(data=taglib.encode(wanted)).encode()
-                    with chain.rpc() as rpc:
-                        sender = tokenlib.TokenSender(rpc, chain.params)
-                        prepared = sender.prepare(home, payload)
-                        prepared.what = f"claim @{wanted}"
-                        claimed_txid = sender.broadcast(prepared)
-                    state.pending_tokens.append(
-                        {"txid": claimed_txid, "what": f"claim @{wanted}",
-                         "at": time.time(), "network": chain.network})
-            else:
-                wanted = current
+            wanted, claimed_txid = _claim_node_tag(tag)
         except HTTPException:
             raise
         except (taglib.TagError, tokenlib.TokenError, ValueError) as exc:
@@ -4418,6 +4704,97 @@ def create_app(state: AppState) -> FastAPI:
         return publish_key(request, csrf_token=csrf_token, confirmed="yes",
                            say_tag=wanted or None, claimed=claimed_txid)
 
+    def _key_announcement(say_tag: str | None, claimed: str):
+        """The node's key announcement, prepared and not sent: (sender, prepared). Raises with the reason."""
+        # Publish WHO the key belongs to, not just the key. Without this the
+        # announcement is filed under whichever address funded it, which is
+        # not the address anyone was told to use.
+        home = state.derived_address or ""
+        try:
+            _, home_hash = b58check_decode(home) if home else (0, b"")
+        except HTTPException:
+            raise          # a rejected form is a 400, not an error page
+        except Exception:
+            home_hash = b""
+        # Key, this address, the same wallet's address on the other chain,
+        # and the @tag that address holds. The tag replaces the name a
+        # person typed: a reader can check a tag against the chain, and
+        # could only ever take a name on trust (D-032).
+        other_hash, tag = _announced_extras()
+        # The tag just claimed, when one was: the claim may not be in a
+        # block yet, so reading it back off the chain would announce the
+        # old name (or none) and the two statements would disagree until
+        # somebody published again. The announcement is this wallet's own
+        # statement; the claim transaction is what makes it true (D-076).
+        tag = say_tag if say_tag is not None else tag
+        # The picture goes out with the name and the addresses: one
+        # search then finds everything somebody needs to know about
+        # whoever holds that tag (D-138). Only if this wallet still holds
+        # the piece -- announcing one you have sold would be announcing
+        # somebody else's property.
+        face = _my_picture()
+        # This node's Dogecoin address too, when it runs Dogecoin (2026-10-15): anybody can pay it DOGE by @tag.
+        doge_hash = b""
+        try:
+            if getattr(state, "doge", None) is not None and state.doge in state.token_chains:
+                doge_hash = b58check_decode(state.home_address(state.doge))[1]
+        except Exception:
+            doge_hash = b""
+        payload = build_key_announcement(
+            state.identity.public_bytes, home_hash, "",
+            other_hash160=other_hash, tag=tag, pfp=face,
+            bio=str(state.setting("bio", "") or ""),
+            url=str(state.setting("url", "") or ""), doge_hash160=doge_hash, chains=_node_chain_hashes())
+        # A long name will not fit one OP_RETURN, so it goes as Class B --
+        # a couple of dust outputs rather than none. Better than publishing
+        # half a name, permanently, for the cheaper fee.
+        single_output = announcement_fits_one_output(payload)
+        with state.messaging.rpc() as rpc:
+            # Ask the CHAIN, not the store, whether this key is already
+            # published. The store can be wrong in the one direction that
+            # costs money: a reset dropped the announcement rows, the page
+            # said "None seen yet" and offered to publish again -- for
+            # something already permanent, and sitting below the new
+            # starting block where no rescan could ever find it.
+            existing = find_own_announcements(
+                rpc, state.messaging.params, state.identity.public_bytes)
+            # A new face, bio or link is a new statement, not a repeat
+            # (2026-11-03: setting a PFP after the first announcement was
+            # refused as 'already published' and never reached the chain).
+            # Against the newest announcement ON THE CHAIN, not the store (announcement_is_new).
+            try:
+                _changed = announcement_is_new(existing, payload)
+            except Exception:
+                log.warning("announce: change check failed", exc_info=True)
+                _changed = False
+            if existing and not claimed and not _changed:
+                # Refuse, and do NOT write the rows back. Restoring them
+                # would undo a reset the user asked for -- these are the
+                # very transactions they cleared. Knowing the announcement
+                # exists is what saves the fee; storing it again is a
+                # separate thing they did not ask for.
+                latest = existing[-1]
+                where = (f"in block {latest[2]:,}" if latest[2]
+                         else "and waiting for a block")
+                raise ValueError(
+                    f"this key is already published {where}, as {latest[0]}. "
+                    f"{len(existing)} announcement"
+                    f"{'' if len(existing) == 1 else 's'} for this key "
+                    f"{'is' if len(existing) == 1 else 'are'} already on the "
+                    f"chain, so there is nothing to pay for. It is not listed "
+                    f"below because this installation starts at a later block "
+                    f"-- that is the starting point doing its job, not a key "
+                    f"gone missing. Publishing again would cost a second fee "
+                    f"for a record that is already permanent."
+                )
+            if not Miner(rpc, state.messaging.params).status().funded:
+                raise ValueError("no spendable coins yet -- see Wallet")
+            sender = MessageSender(rpc, state.messaging.params)
+            prepared = sender.prepare(
+                funded_address(rpc, prefer=home), payload,
+                class_c=single_output, change_address=home)
+            return sender, prepared
+
     @app.post("/publish-key", response_class=HTMLResponse)
     def publish_key(request: Request, csrf_token: str = Form(""), confirmed: str = Form(""),
                     say_tag: str | None = None, claimed: str = ""):
@@ -4430,86 +4807,9 @@ def create_app(state: AppState) -> FastAPI:
                 # Nothing for the user to do but wait for the node; there is no
                 # passphrase to enter any more.
                 state.ensure_identity()
-            # Publish WHO the key belongs to, not just the key. Without this the
-            # announcement is filed under whichever address funded it, which is
-            # not the address anyone was told to use.
-            home = state.derived_address or ""
-            try:
-                _, home_hash = b58check_decode(home) if home else (0, b"")
-            except HTTPException:
-                raise          # a rejected form is a 400, not an error page
-            except Exception:
-                home_hash = b""
-            # Key, this address, the same wallet's address on the other chain,
-            # and the @tag that address holds. The tag replaces the name a
-            # person typed: a reader can check a tag against the chain, and
-            # could only ever take a name on trust (D-032).
-            other_hash, tag = _announced_extras()
-            # The tag just claimed, when one was: the claim may not be in a
-            # block yet, so reading it back off the chain would announce the
-            # old name (or none) and the two statements would disagree until
-            # somebody published again. The announcement is this wallet's own
-            # statement; the claim transaction is what makes it true (D-076).
-            tag = say_tag if say_tag is not None else tag
-            # The picture goes out with the name and the addresses: one
-            # search then finds everything somebody needs to know about
-            # whoever holds that tag (D-138). Only if this wallet still holds
-            # the piece -- announcing one you have sold would be announcing
-            # somebody else's property.
-            face = _my_picture()
-            # This node's Dogecoin address too, when it runs Dogecoin (2026-10-15): anybody can pay it DOGE by @tag.
-            doge_hash = b""
-            try:
-                if getattr(state, "doge", None) is not None and state.doge in state.token_chains:
-                    doge_hash = b58check_decode(state.home_address(state.doge))[1]
-            except Exception:
-                doge_hash = b""
-            payload = build_key_announcement(
-                state.identity.public_bytes, home_hash, "",
-                other_hash160=other_hash, tag=tag, pfp=face,
-                bio=str(state.setting("bio", "") or ""),
-                url=str(state.setting("url", "") or ""), doge_hash160=doge_hash, chains=_node_chain_hashes())
-            # A long name will not fit one OP_RETURN, so it goes as Class B --
-            # a couple of dust outputs rather than none. Better than publishing
-            # half a name, permanently, for the cheaper fee.
-            single_output = announcement_fits_one_output(payload)
-            with state.messaging.rpc() as rpc:
-                # Ask the CHAIN, not the store, whether this key is already
-                # published. The store can be wrong in the one direction that
-                # costs money: a reset dropped the announcement rows, the page
-                # said "None seen yet" and offered to publish again -- for
-                # something already permanent, and sitting below the new
-                # starting block where no rescan could ever find it.
-                existing = find_own_announcements(
-                    rpc, state.messaging.params, state.identity.public_bytes)
-                if existing and not claimed:
-                    # Refuse, and do NOT write the rows back. Restoring them
-                    # would undo a reset the user asked for -- these are the
-                    # very transactions they cleared. Knowing the announcement
-                    # exists is what saves the fee; storing it again is a
-                    # separate thing they did not ask for.
-                    latest = existing[-1]
-                    where = (f"in block {latest[2]:,}" if latest[2]
-                             else "and waiting for a block")
-                    raise ValueError(
-                        f"this key is already published {where}, as {latest[0]}. "
-                        f"{len(existing)} announcement"
-                        f"{'' if len(existing) == 1 else 's'} for this key "
-                        f"{'is' if len(existing) == 1 else 'are'} already on the "
-                        f"chain, so there is nothing to pay for. It is not listed "
-                        f"below because this installation starts at a later block "
-                        f"-- that is the starting point doing its job, not a key "
-                        f"gone missing. Publishing again would cost a second fee "
-                        f"for a record that is already permanent."
-                    )
-                if not Miner(rpc, state.messaging.params).status().funded:
-                    raise ValueError("no spendable coins yet -- see Wallet")
-                sender = MessageSender(rpc, state.messaging.params)
-                prepared = sender.prepare(
-                    funded_address(rpc, prefer=home), payload,
-                    class_c=single_output, change_address=home)
-                if confirmed == "yes":
-                    txid = sender.broadcast(prepared)
+            sender, prepared = _key_announcement(say_tag, claimed)
+            if confirmed == "yes":
+                txid = sender.broadcast(prepared)
         except HTTPException:
             raise          # a rejected form is a 400, not an error page
         except Exception as exc:
@@ -4926,8 +5226,9 @@ def create_app(state: AppState) -> FastAPI:
     def node_wallet_send(request: Request, payload: Any = Body(None)):
         """An offer the way /account/send makes one -- who, how much, the fee -- built and signed by the node's own
         wallet and held under a ticket until /admin/api/send/confirm (password from outside, as there)."""
-        _admin_check(request, write=True)
         said = payload if isinstance(payload, dict) else {}
+        # Signing is the spend. The same local-or-password rule as confirm, before any wallet RPC.
+        _require_local_or_admin_password(request, str(said.get("password", "")), write=True)
         try:
             ctx, which = _node_wallet(str(said.get("chain", "")))
             sats = walletlib.parse_amount(str(said.get("amount", "")))
@@ -4969,8 +5270,8 @@ def create_app(state: AppState) -> FastAPI:
     @app.post("/node/wallet/token/send")
     def node_wallet_token_send(request: Request, payload: Any = Body(None)):
         """/account/token/send for the node: the token comes out of whichever of its addresses holds enough."""
-        _admin_check(request, write=True)
         said = payload if isinstance(payload, dict) else {}
+        _require_local_or_admin_password(request, str(said.get("password", "")), write=True)
         try:
             ctx = _node_token_chain(str(said.get("chain", "")))
             index = state.token_index(ctx)
@@ -4996,8 +5297,8 @@ def create_app(state: AppState) -> FastAPI:
     @app.post("/node/wallet/nft/send")
     def node_wallet_nft_send(request: Request, payload: Any = Body(None)):
         """/account/nft/send for the node: one piece one of its addresses holds."""
-        _admin_check(request, write=True)
         said = payload if isinstance(payload, dict) else {}
+        _require_local_or_admin_password(request, str(said.get("password", "")), write=True)
         try:
             ctx = _node_token_chain(str(said.get("chain", "")))
             index = state.token_index(ctx)
@@ -5145,7 +5446,7 @@ def create_app(state: AppState) -> FastAPI:
     @app.post("/wallet/send", response_class=HTMLResponse)
     def wallet_send(request: Request, which: str = Form(""), destination: str = Form(""),
                     amount: str = Form(""), confirmed: str = Form(""),
-                    csrf_token: str = Form("")):
+                    csrf_token: str = Form(""), password: str = Form("")):
         """Prepare, then broadcast only on a second explicit submission.
 
         The two-step is not decoration. On mainnet these are real coins, and the
@@ -5157,6 +5458,8 @@ def create_app(state: AppState) -> FastAPI:
         txid = None
         try:
             check_csrf(csrf_token)
+            # Funds, signs, and on confirmed=yes broadcasts. A bearer key is not the machine.
+            _require_local_or_admin_password(request, password)
             ctx = _context(which)
             sats = walletlib.parse_amount(amount)
             destination = _tag_address(state, destination,
@@ -5192,7 +5495,8 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.post("/wallet/split")
     def wallet_split(request: Request, csrf_token: str = Form(""),
-                     pieces: str = Form("30"), each: str = Form("10")):
+                     pieces: str = Form("30"), each: str = Form("10"),
+                     password: str = Form("")):
         """Cut the messaging wallet into many small outputs.
 
         Chunks of a long message chain through change outputs only because there
@@ -5201,6 +5505,7 @@ def create_app(state: AppState) -> FastAPI:
         """
         try:
             check_csrf(csrf_token)
+            _require_local_or_admin_password(request, password)
             count = max(2, min(200, int(pieces or 30)))
             amount = walletlib.parse_amount(each or "10")
             with state.messaging.rpc() as rpc:
@@ -5415,7 +5720,9 @@ def create_app(state: AppState) -> FastAPI:
                 "expected": int(mining.get("expected", 0)),
                 # At the rate seen so far; 0 until the first batch is in.
                 "expected_seconds": int(mining["expected"] / rate) if rate else 0,
-                "stopping": bool(mining.get("stop")), "chain": mining.get("chain") or state.messaging.title}
+                "stopping": bool(mining.get("stop")), "chain": mining.get("chain") or state.messaging.title,
+                # A run to an address of the operator's choosing (arcade/testmine.py), not the faucet's one block.
+                "address": (mining.get("address") or "") if mining.get("chain_ctx") else ""}
 
     # --- tokens ---------------------------------------------------------------
     # Shown for one chain at a time: mainnet, the ledger (D-012), or testnet,
@@ -5458,7 +5765,7 @@ def create_app(state: AppState) -> FastAPI:
         """
         wanted = _BROWSER_CHAIN.get()
         if wanted:
-            for chain in state.token_chains:
+            for chain in state.arcade_chains:              # no arcade tokens on LTC, L test, KOT (Params.class_b)
                 if chain.network == wanted:
                     return chain, state.token_index(chain)
         chain = state.token_chain
@@ -5467,7 +5774,7 @@ def create_app(state: AppState) -> FastAPI:
     def _per_browser_chain(request: Request) -> str | None:
         """The chain an account's browser picked, set for this request only (_BrowserChain)."""
         wanted = request.cookies.get(CHAIN_COOKIE, "")
-        if wanted and any(c.network == wanted for c in state.token_chains):
+        if wanted and any(c.network == wanted for c in state.arcade_chains):
             try:
                 mine = _account_view(request)
             except Exception:
@@ -5483,6 +5790,9 @@ def create_app(state: AppState) -> FastAPI:
         return None
 
     app.add_middleware(_BrowserChain, pick=_per_browser_chain)
+    # The face of the web address a request came in by (brand.py `brand_hosts`, 2026-11-03).
+    app.add_middleware(_HostFace, pick=lambda request: brandlib.by_host(request.headers.get("host"),
+                                                                        state.setting("brand_hosts")))
     # Outside every other middleware, so a session renewed anywhere in a request (the door's look, the chain
     # pick, the route) sends the cookie again (issue #13, 2026-10-25).
     app.add_middleware(_SessionRenewal)
@@ -5490,11 +5800,15 @@ def create_app(state: AppState) -> FastAPI:
     @app.get("/create/chain")
     def create_chain(request: Request, to: str = "", back: str = "/create"):
         """Pick the chain this browser creates on: Testnet or Mainnet."""
-        chosen = next((c for c in state.token_chains
-                       if to in (c.network, c.net, c.network if c.is_addon else
-                                 "main" if c.is_mainnet else "test")), None)
+        named = lambda c: to in (c.network, c.net, c.network if c.is_addon else "main" if c.is_mainnet else "test")  # noqa: E731
         where = back if back.startswith("/") and not back.startswith("//") else "/create"
         answer = RedirectResponse(where, status_code=303)
+        # Litecoin, L test and Kotia carry coins only (Params.class_b, 2026-11-05): nothing to create there.
+        coins_only = next((c for c in state.token_chains if named(c) and not getattr(c.params, "class_b", True)), None)
+        if coins_only is not None:
+            state.flash(f"{coins_only.params.label} carries coins only: no tokens, NFTs or inscriptions.", "err")
+            return answer
+        chosen = next((c for c in state.arcade_chains if named(c)), None)
         if chosen is None and state.doge is not None and to in ("doge", "dogecoin"):
             state.flash("Dogecoin is not open yet: its node is still syncing.", "err")
         if chosen is None and getattr(state, "ltc", None) is not None and to in ("ltc", "litecoin"):
@@ -5558,7 +5872,7 @@ def create_app(state: AppState) -> FastAPI:
         chain, index = _token_chain()
         data: dict[str, Any] = {
             "chain": chain, "node": chain.status(),
-            "other_chains": [c for c in state.token_chains if c is not chain],
+            "other_chains": [c for c in state.arcade_chains if c is not chain],
             "index": index.status(node_tip=state.ledger_tips.get(chain.network)),
             "tokens": [], "pending_tokens": [], "holdings": [],
             "funded": [], "owned": set(),
@@ -5649,7 +5963,7 @@ def create_app(state: AppState) -> FastAPI:
         chain, index = _token_chain()
         data: dict[str, Any] = {
             "chain": chain, "node": chain.status(),
-            "other_chains": [c for c in state.token_chains if c is not chain],
+            "other_chains": [c for c in state.arcade_chains if c is not chain],
             "index": index.status(node_tip=state.ledger_tips.get(chain.network)),
             "inscriptions": [], "mine": [], "unfinished": [], "owned": set(),
             "funded": [], "error": error, "plan": plan, "node_error": None,
@@ -5857,7 +6171,7 @@ def create_app(state: AppState) -> FastAPI:
     def collections_page(request: Request, page: int = 1):
         chain, index = _token_chain()
         data: dict[str, Any] = {"chain": chain, "node": chain.status(),
-                                "other_chains": [c for c in state.token_chains
+                                "other_chains": [c for c in state.arcade_chains
                                                  if c is not chain],
                                 "collections": [], "node_error": None, "tags": {},
                                 "page": page, "pages": 1, "total": 0}
@@ -8276,6 +8590,13 @@ def create_app(state: AppState) -> FastAPI:
             return contentlib._missing("no such request")
         return contentlib._json(_send_ref_now(kept))
 
+    @app.get("/r/groups.js")
+    def r_groups_js():
+        """The shim an inscribed page loads: arcade.groups, the signed-in player's group chats (2026-10-31)."""
+        body = (TEMPLATE_DIR / "groups.js").read_text()
+        return Response(body, media_type="application/javascript",
+                        headers={**contentlib.CORS, "Cache-Control": "public, max-age=3600"})
+
     @app.get("/r/contacts.js")
     def r_contacts_js():
         """The contacts shim an inscribed page loads: arcade.contacts.list(), the
@@ -8719,6 +9040,24 @@ def create_app(state: AppState) -> FastAPI:
         sites += [{"url": s["url"], "name": s["name"], "by": g["by"]} for g in tab["groups"] for s in g["sites"]]
         return JSONResponse({"ok": True, "sites": sites}, headers={"Cache-Control": "no-store"})
 
+    @app.get("/globe", response_class=HTMLResponse)
+    def globe_page():
+        """The nodes globe. The same file GitHub Pages serves from docs/."""
+        from .. import globe as globelib
+        path = globelib.page_path()
+        if path is None:
+            return HTMLResponse("the nodes globe is not in this copy", status_code=404)
+        return HTMLResponse(path.read_text(encoding="utf-8"),
+                            headers={"Cache-Control": "no-store"})
+
+    @app.get("/globe.json")
+    def globe_json():
+        """The list the globe polls. City or country, never a host or a mesh id."""
+        from .. import globe as globelib
+        choice = globelib.parse_choice(state.setting(globelib.SETTING))
+        return JSONResponse(globelib.feed_from(_globe_rows(), choice),
+                            headers={"Cache-Control": "no-store"})
+
     @app.get("/docs", response_class=HTMLResponse)
     def docs_index(request: Request):
         """Every document that ships (D-152), less the plans for anybody but
@@ -8877,7 +9216,15 @@ def create_app(state: AppState) -> FastAPI:
             elsewhere = _on_other_chain(request, key, f"/inscriptions/{key}/full")
             if elsewhere is not None:
                 return elsewhere
-            return RedirectResponse("/inscriptions", status_code=303)
+            # The operator has no per-browser chain to switch to, so open the piece on whichever
+            # chain holds it (as _chain_of does for every other lookup) instead of bouncing to NFTs.
+            other, oix = _chain_of(key)
+            if oix is not None and other is not chain:
+                row = oix.inscription(contentlib._key(key))
+                if row is not None:
+                    chain, index = other, oix
+        if row is None:
+            raise HTTPException(status_code=404, detail="no such piece")
         ctype = str(row.get("content_type") or row.get("contenttype") or "")
         data = _fromjson(row.get("json")) or {}
         title = (data.get("name") if isinstance(data, dict) and data.get("name")
@@ -9551,8 +9898,11 @@ def create_app(state: AppState) -> FastAPI:
     @app.post("/tokens/send", response_class=HTMLResponse)
     def tokens_send(request: Request, sender: str = Form(""), property_id: str = Form(""),
                     amount: str = Form(""), recipient: str = Form(""),
-                    confirmed: str = Form(""), csrf_token: str = Form("")):
+                    confirmed: str = Form(""), csrf_token: str = Form(""),
+                    password: str = Form("")):
         check_csrf(csrf_token)
+        # Signs and, once confirmed, broadcasts from the node's wallet.
+        _require_local_or_admin_password(request, password)
         fields = dict(sender=sender, property_id=property_id, amount=amount,
                       recipient=recipient)
 
@@ -10031,6 +10381,52 @@ def create_app(state: AppState) -> FastAPI:
         return HTMLResponse(TEMPLATES.get_template("offline.html").render(),
                             headers={"Cache-Control": "no-cache"})
 
+    def _terms_page(request: Request, **context: Any) -> HTMLResponse:
+        return HTMLResponse(TEMPLATES.get_template("terms.html").render(
+                                theme=request.cookies.get("arcade_theme", ""), **context),
+                            headers={"Cache-Control": "no-store"})
+
+    def _terms_context() -> dict:
+        words = termslib.text(state)
+        return {"blocks": termslib.blocks(words), "version": termslib.version(words)}
+
+    @app.get("/terms", response_class=HTMLResponse)
+    def terms_page(request: Request, back: str = "/"):
+        """The terms, for a visitor to accept or leave and for anybody to read again. With the switch off this node
+        asks nothing of anybody, so it shows no terms either."""
+        if not termslib.on(state):
+            return locked("Not here", "This arcade has no terms of use to show.", status=404)
+        context = _terms_context()
+        return _terms_page(request, back=termslib.safe_back(back),
+                           accepted=request.cookies.get(termslib.COOKIE) == context["version"], **context)
+
+    @app.post("/terms/accept")
+    def terms_accept(request: Request, version: str = Form(""), back: str = Form("/")):
+        """A yes counts for the words the visitor was shown: text changed while they read asks again. Another site
+        cannot say yes for them."""
+        if doorlib.cross_site(request.headers, request.headers.get("host", "")):
+            return JSONResponse({"detail": "that request came from another site"}, status_code=403)
+        where = termslib.safe_back(back)
+        if version != termslib.version(termslib.text(state)):
+            return RedirectResponse("/terms?" + urllib.parse.urlencode({"back": where}), status_code=303)
+        answer = RedirectResponse(where, status_code=303)
+        answer.set_cookie(termslib.COOKIE, version, max_age=termslib.COOKIE_DAYS * 86400, httponly=True,
+                          samesite="lax", secure=_over_https(request))
+        return answer
+
+    @app.get("/terms/left", response_class=HTMLResponse)
+    def terms_left(request: Request):
+        """Leave: a page that says so, since no page may close a tab it did not open. An earlier yes goes too."""
+        answer = _terms_page(request, left=True)
+        answer.delete_cookie(termslib.COOKIE)
+        return answer
+
+    @app.get("/admin/terms/preview", response_class=HTMLResponse)
+    def admin_terms_preview(request: Request):
+        """The saved text as a visitor sees it, switch on or off."""
+        _admin_check(request)
+        return _terms_page(request, preview=True, **_terms_context())
+
     @app.get("/push/key")
     def push_key():
         push = state.push()
@@ -10240,6 +10636,122 @@ def create_app(state: AppState) -> FastAPI:
                "/exchange": 0 if _account_view(request) else _offers_waiting()}
         return JSONResponse({k: int(v or 0) for k, v in out.items()}, headers={"Cache-Control": "no-store"})
 
+    @app.get("/dogefeedx/api/local/notifications")
+    def dogefeedx_local_notifications(request: Request):
+        """Likes, comments, reposts, sales and offers for this arcade account.
+
+        Read from the node's own notification book. Empty when nobody is signed in.
+        Nothing here asks any other server.
+        """
+        account = signed_in(request)
+        if account is None and _account_view(request):
+            return JSONResponse({"signed_in": False, "items": []}, headers={"Cache-Control": "no-store"})
+        try:
+            events = _notif_events(account) if account is not None else _node_notif_events()
+        except Exception:                                 # noqa: BLE001 -- an empty list, not a made-up one
+            events = []
+
+        def bucket(ev) -> str:
+            kind = ev.kind or ""
+            if kind == "liked":
+                return "likes"
+            if kind == "replied to":
+                return "comments"
+            if kind == "shared":
+                return "reposts"
+            if kind == "sold":
+                return "market_sale"
+            if kind == "bought":
+                return "market_purchase"
+            if ev.source == "fill":
+                return "offer_received"
+            return ""
+
+        items = []
+        for ev in list(events)[:100]:
+            which = bucket(ev)
+            if not which:
+                continue
+            items.append({"bucket": which, "kind": ev.kind, "text": ev.text or "",
+                          "unread": bool(ev.unread), "at": int(ev.at or 0)})
+        return JSONResponse({"signed_in": True, "items": items}, headers={"Cache-Control": "no-store"})
+
+    @app.post("/dogefeedx/api/post")
+    def dogefeedx_post(request: Request, payload: Any = Body(None)):
+        """DogeFeedX Home's Post, for the operator: what /feed/post does, answered in JSON. {text, pictures: [data:
+        URLs], csrf_token}. Each picture is inscribed, as a file posted to the Feed is, and the post links it. An
+        account posts from its own browser (wallet.post), so this is the node's wallet only -- the door refuses it on a
+        public arcade, and an account's view is refused here."""
+        if _account_view(request):
+            return JSONResponse({"ok": False, "error": "Post from your own wallet."}, status_code=403)
+        body = payload if isinstance(payload, dict) else {}
+        check_csrf(str(body.get("csrf_token") or ""))
+        try:
+            complaint = _needs_a_name()
+            if complaint:
+                raise ValueError(complaint)
+            said = str(body.get("text") or "").strip()[:10050]
+            pictures = body.get("pictures") or []
+            if not isinstance(pictures, list) or len(pictures) > 4:
+                raise ValueError("At most 4 pictures.")
+            import base64 as _b64
+            for i, url in enumerate(pictures):
+                m = re.fullmatch(r"data:(image/(?:png|jpeg|gif|webp));base64,([A-Za-z0-9+/=]+)", str(url or ""))
+                if not m:
+                    raise ValueError("Pictures are PNG, JPEG, GIF or WebP.")
+                data = _b64.b64decode(m.group(2))
+                if len(data) > 1_500_000:
+                    raise ValueError("A picture is too large.")
+                ext = m.group(1).split("/")[1].replace("jpeg", "jpg")
+                said = (said + f"\n/content/{_inscribe_for_post(data, f'picture{i + 1}.{ext}', m.group(1))}").strip()
+            if not said:
+                raise ValueError("Say something, or attach something.")
+            txid = state.post(said)
+        except HTTPException:
+            raise
+        except Exception as exc:                          # noqa: BLE001 -- said in the window
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        return JSONResponse({"ok": True, "txid": txid if isinstance(txid, str) else ""})
+
+    @app.post("/dogefeedx/api/react")
+    def dogefeedx_react(request: Request, payload: Any = Body(None)):
+        """DogeFeedX's like, reply and share, for the operator: what /feed/{txid}/{doing} does, answered in JSON.
+        {txid, doing: like|unlike|reply|share, text, csrf_token}. An account reacts from its own browser
+        (wallet.react)."""
+        if _account_view(request):
+            return JSONResponse({"ok": False, "error": "React from your own wallet."}, status_code=403)
+        body = payload if isinstance(payload, dict) else {}
+        check_csrf(str(body.get("csrf_token") or ""))
+        kinds = {"like": feedlib.LIKE, "unlike": feedlib.UNLIKE, "reply": feedlib.REPLY, "share": feedlib.SHARE}
+        txid, doing = str(body.get("txid") or "").lower(), str(body.get("doing") or "")
+        try:
+            if not re.fullmatch(r"[0-9a-f]{64}", txid) or doing not in kinds:
+                raise ValueError("Nothing to do to that post.")
+            text = str(body.get("text") or "").strip()[:2000]
+            if doing == "reply" and not text:
+                raise ValueError("Write a reply first.")
+            complaint = _needs_a_name()
+            if complaint:
+                raise ValueError(complaint)
+            out = state.send_feed_act(kinds[doing], txid, text)
+        except Exception as exc:                          # noqa: BLE001 -- said in the window
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        return JSONResponse({"ok": True, "txid": out if isinstance(out, str) else ""})
+
+    @app.get("/dogefeedx/api/local/games")
+    def dogefeedx_local_games(request: Request):
+        """Games inscribed on this arcade. Identity is the player's on-chain account. Empty when there are none."""
+        try:
+            rows = _games_ranked(request, "popular")
+        except Exception:                                 # noqa: BLE001
+            rows = []
+        games = []
+        for row in rows[:60]:
+            name = row.get("name") or ""
+            if name:
+                games.append({"name": name, "txid": row.get("txid") or "", "net": row.get("netlabel") or ""})
+        return JSONResponse({"games": games, "identity": "on-chain"}, headers={"Cache-Control": "no-store"})
+
     @app.get("/home", response_class=HTMLResponse)
     def home_screen(request: Request):
         """The installed app's one page (PWA only): the tabs and the apps as icons, each opened full screen over it
@@ -10263,7 +10775,7 @@ def create_app(state: AppState) -> FastAPI:
             who = _name_of(it["creator"])
             apps.append({
                 "key": gameslib.app_key(it["creator"], g["name"]), "name": str(g["name"])[:60],
-                "page": page, "open": f"/inscriptions/{page}/full",
+                "page": page, "card": it["txid"], "open": f"/inscriptions/{page}/full",
                 "cover": f"/content/{g['cover']}" if g.get("cover") else None,
                 "genre": str(g.get("genre") or "")[:24].lower(), "mp": bool(g.get("multiplayer")),
                 "tdeck": _tdeck_build(it),
@@ -10271,7 +10783,7 @@ def create_app(state: AppState) -> FastAPI:
                 "by": ("@" + who) if who else it["creator"][:12] + "…", "address": it["creator"],
                 "version": str(g.get("version") or "")[:24], "players": str(g.get("players") or "")[:40],
                 "likes": it.get("likes", 0), "comments": it.get("comments", 0),
-                "perms": [p for p in ("wallet", "contacts", "media", "notify") if g.get(p)],
+                "perms": [p for p in ("wallet", "contacts", "groups", "media", "pictures", "notify") if g.get(p)],
                 "timeout": g.get("minimized_timeout"),
             })
         return apps
@@ -10297,6 +10809,308 @@ def create_app(state: AppState) -> FastAPI:
                              for c in state.all_chains]}
         return render(request, "desktop.html", fullscreen=True, apps=_shelf_apps(request), ord_nets=nets,
                       coins=coins, system=system, operator_view=not _account_view(request))
+
+    # ---------- DogeFeedX Terminal API: safe whitelist of read-only commands ----------
+    TERMINAL_COMMANDS = {
+        "help": "Show available commands",
+        "status": "Show node status and version",
+        "balance": "Show wallet balance (requires sign-in)",
+        "peers": "Show connected mesh peers",
+        "sync": "Show chain sync status",
+        "chains": "List all chains this arcade knows",
+        "block": "Look up a block by height or hash (usage: block <chain> <height|hash>)",
+        "tx": "Look up a transaction by txid (usage: tx <chain> <txid>)",
+        "address": "Look up an address (usage: address <chain> <address>)",
+        "inscription": "Look up an inscription by id (usage: inscription <id>)",
+        "collection": "Look up a collection (usage: collection <chain> <slug>)",
+        "clear": "Clear the terminal",
+    }
+
+    # Reviewed before merging (2026-11-03, PR #61): the terminal and the Network window are for an arcade's own
+    # people, not the public -- a signed-in account, or the operator on its own machine. They read the node's Core and
+    # the mesh, so each is limited per caller, and an error is said in words, never with the node's own error text.
+    _dfx_calls: dict[str, list[float]] = {}
+    DFX_PER_MINUTE = 30
+
+    def _dfx_viewer(request: Request):
+        account = signed_in(request)
+        if account is not None:
+            who = f"account:{getattr(account, 'pubkey', '') or id(account)}"
+        else:
+            try:
+                _admin_check(request)
+            except HTTPException:
+                raise HTTPException(403, "sign in first") from None
+            who = "operator"
+        now = time.monotonic()
+        calls = [t for t in _dfx_calls.get(who, []) if t > now - 60]
+        if len(calls) >= DFX_PER_MINUTE:
+            raise HTTPException(429, "too many commands this minute")
+        _dfx_calls[who] = calls + [now]
+        if len(_dfx_calls) > 10_000:
+            _dfx_calls.clear()
+        return account, who
+
+    @app.get("/api/terminal/commands")
+    def terminal_commands():
+        """List available terminal commands for the DogeFeedX in-UI terminal."""
+        return JSONResponse({"commands": TERMINAL_COMMANDS})
+
+    @app.post("/api/terminal/exec")
+    def terminal_exec(request: Request, payload: Any = Body(None)):
+        """Execute a terminal command. Commands are limited to safe, read-only operations.
+        
+        This endpoint is public but restricted to a whitelist of commands that only read data.
+        It does NOT provide arbitrary shell or RPC access. Admin-only actions (like sending,
+        signing, or changing settings) are not available here.
+        """
+        account, who = _dfx_viewer(request)
+        said = payload if isinstance(payload, dict) else {}
+        cmd = str(said.get("command", "")).strip()
+        args = [a.strip() for a in str(said.get("args", "")).split() if a.strip()]
+        
+        if not cmd:
+            return JSONResponse({"error": "no command given", "output": "Type 'help' for available commands"})
+        
+        if cmd not in TERMINAL_COMMANDS:
+            return JSONResponse({"error": f"unknown command: {cmd}", "output": f"Unknown command '{cmd}'. Type 'help' for available commands."})
+        
+        try:
+            if cmd == "help":
+                lines = ["Available commands:", ""]
+                for name, desc in TERMINAL_COMMANDS.items():
+                    lines.append(f"  {name:12} - {desc}")
+                lines.append("")
+                lines.append("Note: This terminal is read-only. Admin actions require the Admin panel.")
+                return JSONResponse({"output": "\n".join(lines)})
+            
+            if cmd == "status":
+                mesh = getattr(state, "mesh", None)
+                version = str(getattr(state, "running_version", "") or "unknown")
+                node_id = str(getattr(mesh, "node_id", "") or "not connected") if mesh else "mesh disabled"
+                links = len(mesh.node.links) if mesh and hasattr(mesh, "node") else 0
+                lines = [
+                    f"Arcade Version: {version}",
+                    f"Node ID: {node_id[:16]}..." if len(node_id) > 16 else f"Node ID: {node_id}",
+                    f"Mesh Links: {links}",
+                    f"Chains: {len(state.all_chains)}",
+                ]
+                return JSONResponse({"output": "\n".join(lines)})
+            
+            if cmd == "balance":
+                if not account:
+                    return JSONResponse({"output": "Not signed in. Sign in to view your balance."})
+                lines = ["Balances:", ""]
+                for chain in _account_chains():
+                    try:
+                        addr = _home_address_of(account, chain)
+                        if addr:
+                            balance = _balance_of(addr, chain)
+                            lines.append(f"  {chain.label}: {format_amount(balance)} {chain.params.coin}")
+                    except Exception:
+                        lines.append(f"  {chain.label}: (unavailable)")
+                return JSONResponse({"output": "\n".join(lines)})
+            
+            if cmd == "peers":
+                if who != "operator":
+                    return JSONResponse({"output": "Only the operator sees this arcade's links (Admin -> Overview)."})
+                mesh = getattr(state, "mesh", None)
+                if not mesh or not hasattr(mesh, "node"):
+                    return JSONResponse({"output": "Mesh not available."})
+                links = list(mesh.node.links)[:20]
+                if not links:
+                    return JSONResponse({"output": "No peers connected."})
+                lines = [f"Connected peers ({len(mesh.node.links)}):", ""]
+                for link_id in links:
+                    lines.append(f"  {link_id[:16]}...")
+                if len(mesh.node.links) > 20:
+                    lines.append(f"  ... and {len(mesh.node.links) - 20} more")
+                return JSONResponse({"output": "\n".join(lines)})
+            
+            if cmd == "sync":
+                lines = ["Chain sync status:", ""]
+                for c in state.all_chains:
+                    try:
+                        sync = state.chain_sync(c) if hasattr(state, "chain_sync") else {}
+                        if sync.get("ready"):
+                            lines.append(f"  {c.label}: synced")
+                        elif sync.get("progress"):
+                            pct = round(100 * float(sync.get("progress", 0)), 1)
+                            lines.append(f"  {c.label}: syncing ({pct}%)")
+                        else:
+                            lines.append(f"  {c.label}: not available")
+                    except Exception:
+                        lines.append(f"  {c.label}: error")
+                return JSONResponse({"output": "\n".join(lines)})
+            
+            if cmd == "chains":
+                lines = ["Available chains:", ""]
+                for c in state.all_chains:
+                    net_type = "mainnet" if c.is_mainnet else "testnet"
+                    lines.append(f"  {c.network:12} - {c.label} ({net_type})")
+                return JSONResponse({"output": "\n".join(lines)})
+            
+            if cmd == "block":
+                if len(args) < 2:
+                    return JSONResponse({"output": "Usage: block <chain> <height|hash>\nExample: block main 500000"})
+                chain_name, block_ref = args[0], args[1]
+                chain = next((c for c in state.all_chains if c.network == chain_name), None)
+                if not chain:
+                    return JSONResponse({"output": f"Unknown chain: {chain_name}. Use 'chains' to see available chains."})
+                try:
+                    with chain.rpc() as rpc:
+                        block_hash = rpc.call("getblockhash", int(block_ref)) if block_ref.isdigit() else block_ref
+                        block = rpc.call("getblock", block_hash)
+                    lines = [
+                        f"Block {block.get('height', '?')}",
+                        f"  Hash: {block.get('hash', '?')[:32]}...",
+                        f"  Time: {block.get('time', '?')}",
+                        f"  Transactions: {len(block.get('tx', []))}",
+                        f"  Size: {block.get('size', '?')} bytes",
+                    ]
+                    return JSONResponse({"output": "\n".join(lines)})
+                except Exception:
+                    return JSONResponse({"output": "No such block on that chain (or its node is not answering)."})
+            
+            if cmd == "tx":
+                if len(args) < 2:
+                    return JSONResponse({"output": "Usage: tx <chain> <txid>\nExample: tx main abc123..."})
+                chain_name, txid = args[0], args[1]
+                chain = next((c for c in state.all_chains if c.network == chain_name), None)
+                if not chain:
+                    return JSONResponse({"output": f"Unknown chain: {chain_name}. Use 'chains' to see available chains."})
+                try:
+                    with chain.rpc() as rpc:
+                        tx = rpc.call("getrawtransaction", txid, True)
+                    lines = [
+                        f"Transaction {txid[:32]}...",
+                        f"  Confirmations: {tx.get('confirmations', 0)}",
+                        f"  Size: {tx.get('size', '?')} bytes",
+                        f"  Inputs: {len(tx.get('vin', []))}",
+                        f"  Outputs: {len(tx.get('vout', []))}",
+                    ]
+                    if tx.get("blockhash"):
+                        lines.append(f"  Block: {tx.get('blockhash')[:32]}...")
+                    return JSONResponse({"output": "\n".join(lines)})
+                except Exception:
+                    return JSONResponse({"output": "No such transaction on that chain (or its node is not answering)."})
+            
+            if cmd == "address":
+                if len(args) < 2:
+                    return JSONResponse({"output": "Usage: address <chain> <address>"})
+                chain_name, addr = args[0], args[1]
+                chain = next((c for c in state.token_chains if c.network == chain_name), None)
+                if not chain:
+                    return JSONResponse({"output": f"Unknown chain or not indexed: {chain_name}"})
+                try:
+                    index = state.token_index(chain)
+                    rows = index.balances([addr])
+                    tag = index.tag_of(addr) or ""
+                    lines = [f"Address: {addr[:20]}..." + (f" (@{tag})" if tag else ""), f"  Chain: {chain.label}"]
+                    lines += [f"  {r.get('name') or ('token #' + str(r.get('property_id')))}: {r.get('display') or r.get('balance')}"
+                              for r in rows[:20]] or ["  No tokens."]
+                    return JSONResponse({"output": "\n".join(lines)})
+                except Exception:
+                    return JSONResponse({"output": "That address could not be looked up."})
+            
+            if cmd == "inscription":
+                if not args:
+                    return JSONResponse({"output": "Usage: inscription <id>\nExample: inscription abc123...i0"})
+                iid = args[0]
+                for chain in state.token_chains:
+                    try:
+                        index = state.ord_index(chain.network)
+                        if index:
+                            row = index.inscription(iid)
+                            if row:
+                                lines = [
+                                    f"Inscription: {iid[:32]}...",
+                                    f"  Chain: {chain.label}",
+                                    f"  Number: {row.get('number', '?')}",
+                                    f"  Type: {row.get('content_type', '?')}",
+                                    f"  Size: {row.get('size', '?')} bytes",
+                                ]
+                                return JSONResponse({"output": "\n".join(lines)})
+                    except Exception:
+                        pass
+                return JSONResponse({"output": f"Inscription not found: {iid}"})
+            
+            if cmd == "collection":
+                if len(args) < 2:
+                    return JSONResponse({"output": "Usage: collection <chain> <slug>\nExample: collection main sub1k"})
+                chain_name, slug = args[0], args[1]
+                # This would call the collection lookup API
+                return JSONResponse({"output": f"Collection lookup for {slug} on {chain_name} - use the Explorer for full details."})
+            
+            if cmd == "clear":
+                return JSONResponse({"output": "", "clear": True})
+            
+            return JSONResponse({"error": "not implemented", "output": f"Command '{cmd}' is not yet implemented."})
+        
+        except Exception:
+            return JSONResponse({"error": "failed", "output": "That command could not be run just now."})
+
+    # ---------- DogeFeedX Network window: for this arcade's own people (see _dfx_viewer) ----------
+    @app.get("/api/network")
+    def api_network_status(request: Request):
+        """Public network status for the DogeFeedX Network window.
+        
+        Returns safe, non-sensitive network information including:
+        - Chain sync status with progress bars
+        - Connected peers count
+        - Node status
+        - Tunnel status (if available)
+        
+        A signed-in account or the operator only (reviewed 2026-11-03): no node id, tunnel name or list of arcades.
+        """
+        _dfx_viewer(request)
+        chains = []
+        for c in state.all_chains:
+            try:
+                sync = state.chain_sync(c) if hasattr(state, "chain_sync") else {}
+                chain_info = {
+                    "network": c.network,
+                    "label": c.label,
+                    "coin": c.params.coin,
+                    "mainnet": bool(c.is_mainnet),
+                    "ready": bool(sync.get("ready")),
+                    "progress": round(100 * float(sync.get("progress") or 0), 1) if not sync.get("ready") else 100.0,
+                    "online": bool(sync.get("online")),
+                }
+                if sync.get("headers"):
+                    chain_info["headers"] = sync.get("headers")
+                if sync.get("blocks"):
+                    chain_info["blocks"] = sync.get("blocks")
+                chains.append(chain_info)
+            except Exception:
+                chains.append({
+                    "network": c.network, "label": c.label, "coin": c.params.coin,
+                    "mainnet": bool(c.is_mainnet), "ready": False, "progress": 0, "online": False
+                })
+        
+        mesh = getattr(state, "mesh", None)
+        mesh_status = {"connected": False, "peers": 0}
+        if mesh is not None and getattr(mesh, "loop", None) is not None:
+            mesh_status["connected"] = True
+            if hasattr(mesh, "node") and hasattr(mesh.node, "links"):
+                mesh_status["peers"] = len(mesh.node.links)
+            stun = getattr(mesh, "stun", None)
+            if stun is not None:
+                mesh_status["stun_servers"] = len(stun.mine())
+        
+        tunnel_on = False
+        try:
+            t = state.setting("tunnel", {})
+            tunnel_on = bool(isinstance(t, dict) and t.get("active"))
+        except Exception:                                  # noqa: BLE001
+            pass
+        return JSONResponse({
+            "chains": chains,
+            "mesh": mesh_status,
+            "tunnel": {"active": tunnel_on},              # whether, never its name
+            "arcades": [],                                # the Arcades panel lists them, to the people allowed
+            "version": str(getattr(state, "running_version", "") or ""),
+        })
 
     @app.post("/account/push/subscribe")
     def push_subscribe(request: Request, payload: Any = Body(None)):
@@ -10420,6 +11234,10 @@ def create_app(state: AppState) -> FastAPI:
     # caller in their address book, proved by the caller's own certificate.
 
     _rings = ringlib.Rings(lambda: getattr(state, "mesh", None))
+    #: Accounts with an arcade page open now, and the rings waiting for that page (2026-10-31: "If I have the arcade
+    #: desktop open in my browser and somebody is trying to get a hold of me ... my arcade start ringing").
+    _ring_tabs: dict[str, float] = {}
+    _ring_waiting: dict[str, list] = {}
     _ring_thread: dict[str, Any] = {}
 
     def _ring_setting(pubkey: str) -> dict:
@@ -10432,7 +11250,8 @@ def create_app(state: AppState) -> FastAPI:
         """A ring for an account on this node: woken only if every rule holds (arcade/ring.py)."""
         push = state.push()
         pubkey = _owners().get(to)
-        if push is None or pubkey is None or not isinstance(said, dict):
+        tab_open = pubkey is not None and time.time() - _ring_tabs.get(pubkey, 0) < ringlib.TAB_FOR
+        if (push is None and not tab_open) or pubkey is None or not isinstance(said, dict):
             return False
         caller, app_id = str(said.get("f") or "")[:64], str(said.get("app") or "")
         if not re.fullmatch(r"[0-9a-f]{64}", app_id) or not caller or caller == to:
@@ -10455,22 +11274,28 @@ def create_app(state: AppState) -> FastAPI:
                 "line": ringlib.clean_line(said.get("line"), ringlib.RING_LINE),
                 "link": str(said.get("link") or "")[:ringlib.RING_LINK]}
         _rings.keep(ring)
-        push.tell(pubkey, "ring:" + ring["id"], json.dumps({"f": caller, "app": app_id, "line": ring["line"]}))
+        if tab_open:                                           # an arcade page is open: it rings there and then
+            _ring_waiting.setdefault(pubkey, []).append(ring)
+        if push is not None:
+            push.tell(pubkey, "ring:" + ring["id"], json.dumps({"f": caller, "app": app_id, "line": ring["line"]}))
         return True
 
     def _ring_loop() -> None:
-        """Hold the ring rooms of this node's accounts that have a phone and an app switched on; wake them."""
-        push = state.push()
-        if push is None or _ring_thread.get("thread") is not None:
+        """Hold the ring rooms of this node's accounts that have a phone, or an arcade page open, and an app switched
+        on; wake them."""
+        if _ring_thread.get("thread") is not None:
             return
 
         def loop():
             while not getattr(state, "shutting_down", False):
                 try:
-                    phones = push.subscribed()
+                    push = state.push()
+                    phones = push.subscribed() if push is not None else set()
                     hold = set()
+                    now = time.time()
                     for address, pubkey in _owners().items():
-                        if pubkey in phones and _ring_setting(pubkey)["apps"]:
+                        reachable = pubkey in phones or now - _ring_tabs.get(pubkey, 0) < ringlib.TAB_FOR
+                        if reachable and _ring_setting(pubkey)["apps"]:
                             hold.add(address)
                     _rings.hold(hold)
                     for to, said, node in _rings.heard_now():
@@ -10562,6 +11387,34 @@ def create_app(state: AppState) -> FastAPI:
                                  "why": "they have no phone to wake for this app, or their arcade is away"})
         threading.Thread(target=_rings.say, args=(to, ring), daemon=True).start()
         return JSONResponse({"ok": True, "rung": True})
+
+    @app.get("/account/ring/live")
+    def ring_live(request: Request):
+        """An open arcade page checks in: this account can be rung here, and anything ringing it now."""
+        account = _signed_in_account(request)
+        now = time.time()
+        _ring_tabs[account.pubkey] = now
+        if len(_ring_tabs) > 10_000:
+            for old in sorted(_ring_tabs, key=_ring_tabs.get)[:5_000]:
+                del _ring_tabs[old]
+        _ring_loop()
+        kept = [r for r in _ring_waiting.get(account.pubkey, []) if now - r["at"] < ringlib.TAB_RING]
+        if kept:
+            _ring_waiting[account.pubkey] = kept
+        else:
+            _ring_waiting.pop(account.pubkey, None)
+        out = []
+        for ring in kept:
+            tag = ""
+            try:
+                tag = state.token_index(_account_chain()).tag_of(ring["from"]) or ""
+            except Exception:                                      # noqa: BLE001
+                pass
+            found = _game_by_txid(ring["app"])
+            name = (found["game"].get("name") if found else _game_of_page(ring["app"]).get("name")) or "an app"
+            out.append({"id": ring["id"], "from": f"@{tag}" if tag else ring["from"][:10] + "\u2026", "app": name,
+                        "line": ring["line"], "url": f"/inscriptions/{ring['app']}/full?ring={ring['id']}"})
+        return JSONResponse({"rings": out}, headers={"Cache-Control": "no-store"})
 
     @app.get("/account/ring/{ring_id}")
     def ring_get(request: Request, ring_id: str):
@@ -10716,20 +11569,45 @@ def create_app(state: AppState) -> FastAPI:
                   else f"{n / COIN:,.8f}".rstrip("0").rstrip("."))
         return f"{amount} {leg['name']}"
 
+    #: How long a page waits for its red counts (2026-11-04: app.dogecoinarcade.com's /feed hung 48-74 s for a signed-in
+    #: account, its counts waiting on the ledger's trade list after a block; the operator: "Why can't I reach
+    #: app.dogecoinarcade.com"). Past that the page is drawn with the last counts known for that account, and the count
+    #: goes on by itself; the next page or /account/badges has it.
+    COUNTS_WAIT = 2.0
+    _counts_last: dict[str, dict] = {}
+    _counts_running: dict[str, threading.Thread] = {}
+    _counts_lock = threading.Lock()
+
     def _account_counts(request: Request) -> dict:
-        """The red counts for an account's tabs, or for the operator's Notifications."""
+        """The red counts for an account's tabs, or for the operator's Notifications: never more than COUNTS_WAIT of a
+        page's time. One count per account at a time; a page that asks while one is going on waits on that one."""
         if not _account_view(request):
-            try:
-                return {"notif_count": sum(1 for e in _node_notif_events() if e.unread)}
-            except Exception:                             # noqa: BLE001 -- never break a page
+            key, work = "node", lambda: {"notif_count": sum(1 for e in _node_notif_events() if e.unread)}
+        else:
+            account = signed_in(request)
+            if account is None:
                 return {}
-        account = signed_in(request)
-        if account is None:
-            return {}
-        try:
-            events = _notif_events(account)
-        except Exception:                                 # noqa: BLE001 -- never break a page
-            return {}
+            key, work = account.pubkey, (lambda: _account_counts_of(account))
+        with _counts_lock:
+            running = _counts_running.get(key)
+            if running is None or not running.is_alive():
+                def count() -> None:
+                    try:
+                        _counts_last[key] = work()
+                    except Exception:                     # noqa: BLE001 -- never break a page
+                        log.debug("counts", exc_info=True)
+                    finally:
+                        with _counts_lock:
+                            if _counts_running.get(key) is threading.current_thread():
+                                _counts_running.pop(key, None)
+                running = threading.Thread(target=count, name="counts", daemon=True)
+                _counts_running[key] = running
+                running.start()
+        running.join(COUNTS_WAIT)
+        return dict(_counts_last.get(key) or {})
+
+    def _account_counts_of(account) -> dict:
+        events = _notif_events(account)
         seen = _notif_seen(account.pubkey)
         mail = sum(1 for e in events if e.source == "message"
                    and e.seq > int(seen.get("message_tab", 0)))
@@ -10830,6 +11708,22 @@ def create_app(state: AppState) -> FastAPI:
         proto = request.headers.get("x-forwarded-proto") or request.url.scheme
         return f"{proto}://{request.headers.get('host', '')}"
 
+    def _install_peer(request: Request) -> str:
+        """The address a new arcade installed from this one meets first (2026-11-02; installer --first-peer):
+        this arcade's public name, else its quick tunnel, else the address the page was opened on if that is https
+        and not this machine. "" when there is none: the installer then uses its own default."""
+        from ..mesh.service import own_name
+        named = own_name(state)
+        svc = getattr(state, "mesh", None)
+        for url in (named, getattr(svc, "tunnel_url", None)):
+            if url and str(url).startswith("wss://"):
+                return "https://" + str(url)[len("wss://"):].split("/", 1)[0]
+        origin = _origin(request)
+        host = origin.split("://", 1)[-1].split(":", 1)[0].lower()
+        if origin.startswith("https://") and host not in ("localhost", "") and not host.startswith("127."):
+            return origin
+        return ""
+
     def _signs_in_here(request: Request, origin: str) -> bool:
         """Whether a sign-in signed for `origin` is a sign-in to THIS arcade (issue #6, SadFrog's side, 2026-10-25).
 
@@ -10878,7 +11772,16 @@ def create_app(state: AppState) -> FastAPI:
 
     def signed_in(request: Request):
         """The account this request belongs to, or None. Touches the seat. On the arcade's own machine with nobody
-        signed in, its operator account (_operator_here)."""
+        signed in, its operator account (_operator_here). A user's API key is that account, and only that account:
+        the key, not a cookie that came with it, says who is calling (arcade/apikeys.py)."""
+        key = apikeylib.CURRENT.get()
+        if key is not None and not key.operator:
+            try:
+                return state.accounts().account(key.owner)
+            except Exception:                              # noqa: BLE001
+                return None
+        if key is not None:
+            return _operator_here(request)
         try:
             found = state.accounts().session(
                 request.cookies.get(SESSION_COOKIE, ""))
@@ -10998,14 +11901,32 @@ def create_app(state: AppState) -> FastAPI:
         arcade)."""
         return _asset_response(request, "/deskubuntu.css")
 
+    @app.get("/deskdogefeedx.css")
+    def deskdogefeedx_css(request: Request):
+        """The Desktop View's DogeFeedX macOS look for the pages in its windows (templates/deskdogefeedx_css.css;
+        Themes on Your arcade)."""
+        return _asset_response(request, "/deskdogefeedx.css")
+
+    def _join_facts(request: Request) -> dict[str, Any]:
+        """What ARCADE Lite's Join panel says, as the page below does."""
+        register = state.accounts()
+        try:
+            arcade = state.operator_tag() or ""
+        except Exception:                                  # noqa: BLE001 -- said without a name
+            arcade = ""
+        return {"seats": register.seats, "free": register.free(), "fruit": _fruit_here(request),
+                "secure": secure_context(request), "why_not": WHY_NOT_SECURE, "arcade": arcade}
+
     @app.get("/join", response_class=HTMLResponse)
     def join_page(request: Request):
         """What a person meets: a name, a password, and a wallet.
 
         `/join/keys` is the same door for somebody who would rather hold
         their own words -- it is the older page and it is still the whole
-        of what this one does underneath.
+        of what this one does underneath. ARCADE Lite draws it in its own window.
         """
+        if modulelib.edition(state.settings()) == "lite":
+            return _lite_home(request)
         register = state.accounts()
         return render(request, "signup.html", chain=_account_chain(), fruit=_fruit_here(request),
                       seats=register.seats, free=register.free(),
@@ -11014,11 +11935,14 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.get("/join/keys", response_class=HTMLResponse)
     def join_with_keys(request: Request):
+        if modulelib.edition(state.settings()) == "lite":
+            return _lite_home(request)
         register = state.accounts()
         return render(request, "join.html",
                       seats=register.seats,
                       free=register.free(),
                       idle_days=register.idle_days,
+                      first_peer=_install_peer(request),
                       repo_url=updatelib.REPO_URL,
                       secure_enough=secure_context(request),
                       why_not=WHY_NOT_SECURE)
@@ -12113,6 +13037,66 @@ def create_app(state: AppState) -> FastAPI:
         return JSONResponse({"tag": found["tag"], "chains": out, "v": coinlistlib.VERSION,
                              "lists": _coin_lists(found["pubkey"])})
 
+    @app.get("/peer/address/{address}/coins")
+    def peer_address_coins(request: Request, address: str):
+        """One bare address's coins, for another arcade in the mesh whose own Core is behind (arcade/peer_address.py,
+        2026-11-05: borrow only from a node in the shared arcade network). Signed by a mesh key announced on chain,
+        or refused; answered only while this Core is at the tip, so a borrower never copies a stale coin set."""
+        from arcade import peer_address as peeraddr
+        from arcade.web.dogefeedx.wallet_assets import valid_address
+        if _peer_data_limited(request):
+            return JSONResponse({"detail": "too many in a row. Wait a few minutes."}, status_code=429)
+        try:
+            address = valid_address(address)
+        except ValueError:
+            return JSONResponse({"detail": "Dogecoin address required"}, status_code=400)
+        try:
+            with state.store() as store:
+                known = [str(r["mesh_key"]) for r in store.mesh_peers(state.messaging.network,
+                                                                      since=int(time.time()) - 3 * 86400)]
+        except Exception:                                   # noqa: BLE001 -- nobody known: nobody served
+            known = []
+        why = peeraddr.check_ask(request.headers, address, known)
+        if why:
+            return JSONResponse({"detail": why}, status_code=403)
+        # The chain the ADDRESS is on (2026-11-06), not the one messaging runs on: a "D" address reads Dogecoin even
+        # where messaging is Pepecoin testnet (peer_address.chain_for). Every chain this node has, synced or not, so
+        # one still catching up is refused below as "not at the tip" rather than read from another chain.
+        chain = peeraddr.chain_for(address, state.all_chains, fallback=state.messaging,
+                                   wanted=str(request.query_params.get("chain") or "")[:20])
+        if chain is None or chain.borrowed:
+            return JSONResponse({"detail": "no Core of its own for that chain here"}, status_code=503)
+        try:
+            with chain.rpc() as rpc:
+                info = rpc.get_blockchain_info()
+        except Exception:                                   # noqa: BLE001
+            info = None
+        if not peeraddr.synced(info):
+            return JSONResponse({"detail": "this Core is not at the tip; ask another arcade", "synced": False},
+                                status_code=503)
+        try:
+            index = state.token_index(chain)
+            with contextlib.closing(index.open()) as db:
+                coins = utxoslib.unspent(db, address)
+                try:
+                    marks = _coin_marks(db, address)
+                except Exception:                           # noqa: BLE001 -- unmarked rather than no answer
+                    marks = {}
+        except Exception:                                   # noqa: BLE001
+            return JSONResponse({"detail": "no index for that chain here"}, status_code=503)
+        return JSONResponse(peeraddr.answer(address, int(info.get("blocks", 0)), coins, marks, network=chain.network))
+
+    def _peer_address_peers():
+        """(hosts, mesh key, ask) for wallet_assets' bare-address borrowing (peer_address.PEERS)."""
+        from arcade.mesh.service import load_or_make_key
+        return _arcade_hosts(), load_or_make_key(Path(state.home) / "mesh.key"), _ask_arcade
+
+    import arcade.peer_address as _peeraddr_hook
+    _peeraddr_hook.PEERS = _peer_address_peers
+    # DogeFeedX's wallet reads (wallet_assets) find the Dogecoin chain through this AppState (2026-11-06).
+    import arcade.web.dogefeedx.wallet_assets as _wa_hook
+    _wa_hook.STATE = state
+
     def _coin_marks(db, address: str) -> dict[tuple[str, int], str]:
         """(txid, vout) -> "ins" (an inscription sits on it) or "ins:?" (a small coin not checked yet, held meanwhile)
         for this address's coins, from what is already known and reading NOTHING new (guard.sort_known): other arcades
@@ -12766,7 +13750,7 @@ def create_app(state: AppState) -> FastAPI:
         if account is None:
             return _account_state(request)
         # One answer per account AND per set of chains asked for (lazy wallets, 2026-10-27).
-        fkey = (account.pubkey, request.query_params.get("chains", ""))
+        fkey = (account.pubkey, request.query_params.get("chains", ""), request.query_params.get("only", ""))
         with _account_flight_lock:
             flight = _account_flight.get(fkey)
             first = flight is None
@@ -12809,6 +13793,14 @@ def create_app(state: AppState) -> FastAPI:
             # BEFORE anybody signs up: the browser derives a key on each
             # from the same words and hands over both addresses at once.
             return JSONResponse({"pubkey": None, "chains": chains})
+        if request.query_params.get("only") == "addresses":
+            # The address this node has on file for each chain, and nothing read from an index: what a sign-in checks
+            # before it registers an address the node does not know (wallet.js tellTheNode). 2026-11-05: an
+            # unlock of an account holding 7,000 coins took 12-18 s, ~4 s of it this page reading balances it never
+            # showed.
+            return JSONResponse({"pubkey": account.pubkey,
+                                 "chains": [{**row, "address": _account_address(account.pubkey, one)}
+                                            for row, one in zip(chains, _account_chains())]})
         chain = _account_chain()
         said: dict[str, Any] = {
             # This node on the mesh: a swap a tab lists names it, and shows on other
@@ -14741,6 +15733,249 @@ def create_app(state: AppState) -> FastAPI:
                           "ctype": (i.get("ctype") or guard.ctype_of(str(i["id"]))) if i.get("id") else None}
                          for vout, on in sorted(held.items()) for i in on]
         return JSONResponse({"chain": one.network, "address": address, "txs": out},
+                            headers={"Cache-Control": "no-store"})
+
+    # The Wallet's Doginals in order, each with its collection (2026-11-05, the operator: "they should be ordered by inscription
+    # number earliest first", "if they are a part of a collection, they should have the collection metadata with them";
+    # "Our explorer has all of the collections ... We should use it as well"): the known collections (Explore's, from
+    # the collections' own sites) and the collections that describe themselves on the chain (collection_registry).
+    _registry_rarity: dict[str, tuple[float, dict]] = {}
+
+    def _wallet_collection(net: str, iid: str, full: bool = False) -> dict | None:
+        """The collection holding `iid`: {name, item, position, slug | root, source}; `full` adds the collection's own
+        details (supply, holders, created, description) and the item's traits with how many pieces share each."""
+        found = None
+        reg = None
+        try:
+            reg = state.collection_registry()
+            got = reg.item(net, iid)
+        except Exception:                                          # noqa: BLE001
+            got = None
+        if got is not None:
+            found = {"name": got.get("name") or "", "item": f"{got.get('name') or ''} #{got['number']}".strip(),
+                     "position": got["number"], "root": got["root"], "source": "chain"}
+            if full:
+                root = (reg.root(got["root"]) or {}) if hasattr(reg, "root") else {}
+                found["description"] = root.get("description") or ""
+                found["supply"] = root.get("supply") or None
+                found["traits"] = _traits_with_rarity(reg, got["root"], got.get("traits") or {})
+        store = state.known_collections() if hasattr(state, "known_collections") else None
+        known = None
+        if store is not None:
+            try:
+                known = store.in_collection(net, iid)
+            except Exception:                                      # noqa: BLE001
+                known = None
+        if known is not None:
+            item = known["name"] or (known["collection"] + (f" #{known['position']}" if known["position"] else ""))
+            if found is None:
+                found = {"name": known["collection"], "item": item, "position": known["position"],
+                         "slug": known["slug"], "source": known["source"]}
+            else:
+                found.setdefault("slug", known["slug"])
+            if full:
+                try:
+                    k = store.collection(net, known["slug"]) or {}
+                except Exception:                                  # noqa: BLE001
+                    k = {}
+                found.setdefault("supply", None)
+                found["supply"] = found["supply"] or k.get("supply")
+                found["holders"] = k.get("owners")
+                found["created"] = k.get("created")
+        return found
+
+    def _wallet_collections(net: str, ids: list[str]) -> dict[str, dict]:
+        """`_wallet_collection` for many at once, one query per 500 ids in each store (#91 item 4): {id: {name, item,
+        position, slug | root, source}}. The chain's own collections first, as there."""
+        out: dict[str, dict] = {}
+        try:
+            reg = state.collection_registry()
+            if hasattr(reg, "items_of"):
+                onchain = reg.items_of(net, ids)
+            else:
+                onchain = {i: g for i in ids for g in [reg.item(net, i)] if g is not None}
+        except Exception:                                          # noqa: BLE001
+            onchain = {}
+        for iid, got in onchain.items():
+            out[iid] = {"name": got.get("name") or "", "item": f"{got.get('name') or ''} #{got['number']}".strip(),
+                        "position": got["number"], "root": got["root"], "source": "chain"}
+        store = state.known_collections() if hasattr(state, "known_collections") else None
+        known = {}
+        if store is not None:
+            try:
+                known = store.in_collections(net, ids) if hasattr(store, "in_collections") else {
+                    i: k for i in ids for k in [store.in_collection(net, i)] if k is not None}
+            except Exception:                                      # noqa: BLE001
+                known = {}
+        for iid, k in known.items():
+            if iid in out:
+                out[iid].setdefault("slug", k["slug"])
+                continue
+            out[iid] = {"name": k["collection"],
+                        "item": k["name"] or (k["collection"] + (f" #{k['position']}" if k["position"] else "")),
+                        "position": k["position"], "slug": k["slug"], "source": k["source"]}
+        return out
+
+    def _traits_with_rarity(reg, root: str, traits: dict) -> list[dict]:
+        """[{trait, value, share}]: `share` the fraction of the collection's pieces with that value (kept 10 minutes)."""
+        now = time.time()
+        kept = _registry_rarity.get(root)
+        if kept is None or now - kept[0] > 600:
+            counts: dict = {}
+            total = 0
+            try:
+                for it in reg.items(root, limit=10**7):
+                    total += 1
+                    for k, v in (it.get("traits") or {}).items():
+                        counts[(str(k), str(v))] = counts.get((str(k), str(v)), 0) + 1
+            except Exception:                                      # noqa: BLE001
+                counts, total = {}, 0
+            kept = _registry_rarity[root] = (now, {"total": total, "counts": counts})
+        total, counts = kept[1]["total"], kept[1]["counts"]
+        return [{"trait": str(k), "value": str(v),
+                 "share": (counts.get((str(k), str(v)), 0) / total) if total else None}
+                for k, v in traits.items()]
+
+    @app.post("/account/doginal-meta")
+    def account_doginal_meta(request: Request, payload: Any = Body(None)):
+        """Each inscription's number, block, content type and size, and its collection, for up to NUMBERS_MAX ids at once
+        (the Wallet's Doginals, sorted by number). The numbers come from the most complete copy of the chain's ord index
+        (DoginalIndex.lookup "numbers"); an id no copy holds yet is left out and asked again later."""
+        from .. import ord_rules
+        from ..doginal_index import NUMBERS_MAX
+        from ..doginals import INSCRIPTION_ID
+        _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        net = str(said.get("chain") or "doge")
+        index = state.ord_index(net)
+        if index is None:
+            return JSONResponse({"detail": "this arcade does not read that chain's inscriptions"}, status_code=404)
+        ids = said.get("ids")
+        if not isinstance(ids, list) or not 0 < len(ids) <= NUMBERS_MAX or not all(
+                isinstance(i, str) and INSCRIPTION_ID.match(i.strip().lower()) for i in ids):
+            return JSONResponse({"detail": f"1 to {NUMBERS_MAX} inscription ids"}, status_code=400)
+        ids = list(dict.fromkeys(i.strip().lower() for i in ids))
+        try:
+            got = index.lookup({"what": "numbers", "ids": ids})
+        except Exception as exc:                                   # noqa: BLE001 -- no copy could answer just now
+            return JSONResponse({"detail": f"the {net} index could not say just now: {exc}"}, status_code=503)
+        numbers = got.get("numbers") if isinstance(got.get("numbers"), dict) else {}
+        token_p = ord_rules.token_protocol(net)
+        out = {}
+        colls = _wallet_collections(net, ids)
+        for iid in ids:
+            row = dict(numbers.get(iid) or {})
+            # A DRC-20 / PRC-20 operation (mint, transfer, deploy) is not an NFT: the Wallet's grid leaves it out (the operator
+            # 2026-11-05); its balance is the token index's, on the Tokens tab. `token` is only said by an index that
+            # gives `protocol` (an older walker gives none: shown as text, as before).
+            if row.get("protocol"):
+                row["token"] = str(row["protocol"]).lower() == token_p
+            coll = colls.get(iid)
+            if coll:
+                row["collection"] = coll
+            if row:
+                out[iid] = row
+        return JSONResponse({"chain": net, "meta": out, "walked_to": got.get("walked_to")},
+                            headers={"Cache-Control": "no-store"})
+
+    _dg_pages: dict = {}
+
+    def _doginal_pages():
+        """The Wallet's Doginal lists (arcade/doginal_pages.py), made once; their numbers kept in doginal-numbers.sqlite."""
+        from .. import doginal_pages as pageslib
+        from .. import doginals as doginalslib
+        if "pages" not in _dg_pages:
+            home = getattr(state, "home", None)
+            if home is None:
+                import tempfile
+                home = tempfile.mkdtemp(prefix="arcade-dgpages-")
+            _dg_pages["pages"] = pageslib.Pages(pageslib.Numbers(Path(home) / "doginal-numbers.sqlite"),
+                                                unknown=doginalslib.Unknown)
+        return _dg_pages["pages"]
+
+    @app.get("/account/doginals/page")
+    def account_doginals_page(request: Request, chain: str = "doge", address: str = "", page: int = 0, size: int = 30,
+                              kind: str = "all", coll: str = "", order: str = "old", go: str = "", fresh: int = 0):
+        """One page of the Wallet's Doginals (2026-11-06, the operator: "build it", #91's "load a big wallet's Doginals one page
+        at a time"): the page's items in inscription number order with their collections, the counts the bar shows, and
+        how far this arcade has got building the address's list (`done`; the Wallet asks again until it is). `fresh`:
+        built again now (the Wallet has just sent one). `go`: the page holding #number or id."""
+        from .. import doginal_pages as pageslib
+        from .. import ord_rules
+        account = _signed_in_account(request)
+        one = next((c for c in state.token_chains if c.network == str(chain or "doge")), None)
+        if one is None:
+            return JSONResponse({"detail": "no such chain here"}, status_code=404)
+        address = _own_address_asked(account, one, address)
+        guard = fundinglib.guard_for(address) if address else None
+        if guard is None:
+            return JSONResponse({"detail": "this node does not check inscriptions on that chain"}, status_code=404)
+        net = one.network
+
+        def numbers(ids: list[str]) -> dict:
+            # On the build's own thread, so it may wait for the chain's reader to open. An arcade that keeps no index
+            # of its own reads the linked arcades' copies through it; one that walks reads a longer copy first
+            # (DoginalIndex.lookup; 2026-11-06: "We should be able to read the shared index from any arcade, even
+            # if we don't have the index on our own arcade", "always be able to read from the longest copy").
+            index = state.ord_index(net, wait=60)
+            if index is None:
+                raise ValueError("this arcade does not read that chain's inscriptions")
+            got = index.lookup({"what": "numbers", "ids": ids})
+            return got.get("numbers") if isinstance(got.get("numbers"), dict) else {}
+
+        def reach():
+            try:
+                return guard.index_reach() if hasattr(guard, "index_reach") else None
+            except Exception:                                      # noqa: BLE001
+                return None
+        source = pageslib.Source(coins=lambda: _own_coins(account, one, address), guard=guard, numbers=numbers,
+                                 collections=lambda ids: _wallet_collections(net, ids),
+                                 token_protocol=ord_rules.token_protocol(net), reach=reach)
+        try:
+            doc = _doginal_pages().get((net, address, account.pubkey), source, fresh=bool(fresh))
+        except Exception as exc:                                   # noqa: BLE001 -- a node still catching up
+            return JSONResponse({"detail": f"this node cannot read your coins yet: {exc}"}, status_code=503)
+        return JSONResponse({"chain": net, "address": address,
+                             **pageslib.view(doc, kind=kind, coll=coll, order=order, page=page, size=size, go=go)},
+                            headers={"Cache-Control": "no-store"})
+
+    @app.get("/account/doginal-card")
+    def account_doginal_card(request: Request, chain: str = "doge", id: str = ""):
+        """Everything the Wallet's card shows of one inscription: the index's details (number, block, type, size, the
+        coin it sits on, who holds it), when its block was made, its collection with traits, and its listing if it is
+        listed for a coin here."""
+        from .. import doginals as doginalslib
+        _signed_in_account(request)
+        iid = (id or "").strip().lower()
+        if not doginalslib.INSCRIPTION_ID.match(iid):
+            return JSONResponse({"detail": "an inscription id: <txid>i<n>"}, status_code=400)
+        index = state.ord_index(chain)
+        if index is None:
+            return JSONResponse({"detail": "this arcade does not read that chain's inscriptions"}, status_code=404)
+        try:
+            got = index.lookup({"what": "number", "id": iid})
+        except Exception as exc:                                   # noqa: BLE001
+            return JSONResponse({"detail": f"the {chain} index could not say just now: {exc}"}, status_code=503)
+        ins = (got.get("number") or {}).get("inscription") if isinstance(got.get("number"), dict) else None
+        if not ins:
+            return JSONResponse({"detail": "no copy of the index holds that inscription yet"}, status_code=404)
+        one = next((c for c in state.all_chains if c.network == chain), None)
+        made = None
+        if one is not None and ins.get("height") is not None:
+            try:
+                with one.rpc() as rpc:
+                    made = int(rpc.call("getblockheader", rpc.call("getblockhash", int(ins["height"])))["time"])
+            except Exception:                                      # noqa: BLE001 -- the date is left out
+                made = None
+        listing = None
+        if one is not None:
+            try:
+                listing = next((r for r in _doginals_live(one) if r.get("inscription") == iid), None)
+            except Exception:                                      # noqa: BLE001
+                listing = None
+        return JSONResponse({"chain": chain, "inscription": ins, "made": made,
+                             "collection": _wallet_collection(chain, iid, full=True),
+                             "content": doginalslib.content_url(iid), "listing": listing},
                             headers={"Cache-Control": "no-store"})
 
     @app.get("/account/token20")
@@ -24161,6 +25396,8 @@ def create_app(state: AppState) -> FastAPI:
         account = signed_in(request)
         if account is None:
             return _to_join(request)
+        if modulelib.edition(state.settings()) == "lite":
+            return _lite_home(request)                     # ARCADE Lite draws it in its own window
         mine = state.vault().by_pubkey(account.pubkey) or {}
         return render(request, "my_backup.html", chain=_account_chain(),
                       my_name=mine.get("tag", ""),
@@ -24187,7 +25424,109 @@ def create_app(state: AppState) -> FastAPI:
         account = signed_in(request)
         if account is None:
             return _to_join(request)
-        return render(request, "my_wallet.html", chain=_account_chain(), hidden=_wallets_hidden(account.pubkey))
+        return render(request, "my_wallet.html", chain=_account_chain(), hidden=_wallets_hidden(account.pubkey),
+                      dd_nets=_digidollar_nets())
+
+    def _digidollar_nets() -> list[str]:
+        """The DigiByte chains whose Wallet shows DigiDollar as a coin of its own (2026-11-05: "add the digi
+        dollar to the main app ... it should be its own wallet coin option", "just like any other coin or chain is added
+        or borrowed ... not dependent on the installation of a module"): every DigiByte chain this arcade gives its
+        accounts, run here or borrowed (arcade/digidollar.py)."""
+        return [one.network for one in _account_chains() if one.network in digidollib.NETS]
+
+    def _dd_chain(network: str):
+        chain = next((c for c in _account_chains() if c.network == network and c.network in digidollib.NETS), None)
+        if chain is None:
+            raise HTTPException(400, "DigiDollar is on DigiByte, and this arcade has no DigiByte wallet for you")
+        return chain
+
+    def _dd_owner(account, chain, pubkey_hex: str) -> tuple[str, bytes]:
+        """(the account's DigiByte address, its key): the key the browser gave, checked to be that address's."""
+        address = _account_address(account.pubkey, chain)
+        if not address:
+            raise HTTPException(400, f"this account has no {chain.label} address yet: open the Wallet once")
+        try:
+            pub = bytes.fromhex(str(pubkey_hex or ""))
+            ok = len(pub) == 33 and hash160(pub) == b58check_decode(address)[1]
+        except Exception:                                   # noqa: BLE001
+            ok = False
+        if not ok:
+            raise HTTPException(400, f"that is not this account's {chain.label} key")
+        return address, pub
+
+    _dd_seeding: set[str] = set()
+
+    def _dd_seed(chain, dd_address: str, upto: int) -> None:
+        """The DigiDollar coins an address got before it was watched, read once from this arcade's own Core's coin set
+        (minutes on a big chain), in the background. A borrowed Core has none to read: watched from then on only."""
+        if getattr(chain, "borrowed", False) or dd_address in _dd_seeding:
+            return
+        _dd_seeding.add(dd_address)
+
+        def run():
+            try:
+                digidollib.seed_from_core(state.token_index(chain), chain.rpc(), chain.network, dd_address, upto)
+            except Exception as exc:                        # noqa: BLE001 -- asked again on the next visit
+                log.info("digidollar %s: could not read the coin set: %s", chain.network, exc)
+            finally:
+                _dd_seeding.discard(dd_address)
+        threading.Thread(target=run, daemon=True, name="digidollar seed").start()
+
+    @app.get("/account/digidollar")
+    def account_digidollar(request: Request, chain: str = "", pubkey: str = ""):
+        """This account's DigiDollars on a DigiByte chain: its DigiDollar address, what it holds, and since when the
+        index has followed it (arcade/digidollar.py). The first ask starts following it."""
+        account = _signed_in_account(request)
+        ch = _dd_chain(chain)
+        _, pub = _dd_owner(account, ch, pubkey)
+        dd = digidollib.address(ch.network, pub)
+        index = state.token_index(ch)
+        tip = int(index.indexed_height() or 0)
+        with contextlib.closing(index.open()) as db:
+            digidollib.watch(db, dd, tip)
+            row = digidollib.watched_row(db, dd) or {"since": tip, "seeded": False}
+            held = digidollib.coins(db, dd)
+        if not row["seeded"]:
+            _dd_seed(ch, dd, row["since"])
+        return JSONResponse({"chain": ch.network, "address": dd, "cents": sum(c["cents"] for c in held),
+                             "coins": held, "since": row["since"],
+                             "whole": bool(row["seeded"]),
+                             "borrowed": bool(getattr(ch, "borrowed", False))}, headers={"Cache-Control": "no-store"})
+
+    @app.post("/account/digidollar/send")
+    def account_digidollar_send(request: Request, payload: Any = Body(None)):
+        """Offer a DigiDollar send (arcade/digidollar.py prepare_send): nothing is broadcast here. The browser reads it
+        from its own bytes and signs it, and /account/sign broadcasts it, as any send."""
+        account = _signed_in_account(request)
+        said = payload if isinstance(payload, dict) else {}
+        ch = _dd_chain(str(said.get("chain") or ""))
+        address, pub = _dd_owner(account, ch, str(said.get("pubkey") or ""))
+        dd = digidollib.address(ch.network, pub)
+        try:
+            text = str(said.get("amount") or "").strip().lstrip("$")
+            dollars = decimal.Decimal(text)
+            if dollars <= 0 or dollars != dollars.quantize(decimal.Decimal("0.01")):
+                raise ValueError("an amount of dollars and cents, more than zero")
+            cents = int(dollars * 100)
+            index = state.token_index(ch)
+            with contextlib.closing(index.open()) as db:
+                held = digidollib.coins(db, dd)
+                listed = utxoslib.unspent(db, address)
+            guard = fundinglib.guard_for(address)           # coins carrying an inscription stay put
+            if guard is not None:
+                listed = guard.spendable(listed)
+            spend = fundinglib.spend_for(address, ch.params)
+            prepared = digidollib.prepare_send(ch.network, pub, held, listed, spend["change_script"],
+                                               str(said.get("to") or ""), cents)
+            rpc = ch.rpc()
+            unsigned = digidollib.offer(prepared, ch.params, lambda m, p: rpc.call(m, *p), address, pub)
+        except (ValueError, decimal.InvalidOperation, ArithmeticError) as exc:
+            msg = str(exc) if not isinstance(exc, decimal.InvalidOperation) else "type an amount of dollars, like 12.50"
+            return JSONResponse({"detail": msg}, status_code=400)
+        except Exception as exc:                            # noqa: BLE001 -- a module-style refusal, said
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        offer = _offers.add(account.pubkey, ch.network, unsigned, unsigned.what)
+        return {"offer": offer.id, "chain": ch.network, **unsigned.as_json()}
 
     def _wallets_hidden(pubkey: str) -> list[str]:
         """The chains an account keeps out of its Wallet tab (2026-10-18: "enable or disable any of the chain
@@ -25140,6 +26479,52 @@ def create_app(state: AppState) -> FastAPI:
         return contentlib._json({"property_id": property_id, "name": prop["name"],
                                  "divisible": bool(prop["divisible"]), "asks": asks})
 
+    # --- the market for the console (arcade/lite/commands.py): what the Exchange's public pages show ---------------
+
+    def _console_tokens() -> list[dict]:
+        """The tokens this arcade's token index knows, as the Tokens tab lists them."""
+        _chain, index = _token_chain()
+        return [{"id": p["property_id"], "name": p["name"], "divisible": p["divisible"],
+                 "supply": p["total_display"], "holders": p["holder_count"]} for p in index.properties()]
+
+    def _console_book(property_id: int) -> dict:
+        """A token's resting sell orders for this chain's coin, as /r/book answers them, amounts in words."""
+        chain, index = _token_chain()
+        prop = index.property(property_id)
+        if prop is None:
+            raise ValueError("no such token")
+        book, taking = index.book(property_id), index.pending_takes()
+        return {"token": prop["name"], "coin": chain.params.coin, "asks": [
+            {"order": o["txid"], "seller": _name_of(o["address"]) or o["address"],
+             "tokens": format_amount(int(o["tokens"]), prop["divisible"]), "coins": format_amount(int(o["coins"]), True),
+             "pending": bool(o.get("pending")), "taking": int(taking.get(o["txid"], 0))} for o in book.get("asks", [])]}
+
+    def _console_pair(base: int, quote: int, count: int) -> dict:
+        """BASE/QUOTE's book and its last trades, as the pair page shows them."""
+        _chain, index = _token_chain()
+        base_prop, quote_prop = index.property(base), index.property(quote)
+        if base_prop is None or quote_prop is None or base == quote:
+            raise ValueError("a pair is two different tokens this node knows")
+        book = index.pair_book(base, quote)
+        scale = (COIN if base_prop["divisible"] else 1) / (COIN if quote_prop["divisible"] else 1)
+
+        def amounts(row: dict) -> dict:
+            return {"base": format_amount(row["base"], base_prop["divisible"]),
+                    "quote": format_amount(row["quote"], quote_prop["divisible"])}
+        return {"pair": f"{base_prop['name']}/{quote_prop['name']}",
+                "asks": [{"order": r["txid"], **amounts(r), "each": float(r["price"]) * scale} for r in book["asks"]],
+                "bids": [{"order": r["txid"], **amounts(r), "each": float(r["price"]) * scale} for r in book["bids"]],
+                "trades": [{"when": t["when"], "side": t["side"], "txid": t["txid"], **amounts(t)}
+                           for t in index.pair_trades(base, quote, limit=count)]}
+
+    def _console_doginals(which: str) -> list[dict]:
+        """Doginals listed for DOGE (or Pepinals for PEP mainnet: main) while their coin is unspent."""
+        chain = _doge_asked({"chain": which})
+        if chain is None or not state.chain_ready(chain):
+            raise ValueError("that chain is not open on this arcade yet")
+        return [{"listing": r["id"], "inscription": r["inscription"], "price": r["price_text"],
+                 "seller": r["seller_tag"] or r["seller"], "expires": r["expires"]} for r in _doginals_live(chain)]
+
     @app.get("/r/mintpad/{creator}/{name}")
     def r_mintpad(creator: str, name: str):
         """What a collection's mintpad has left, and one open listing chosen at
@@ -25457,7 +26842,7 @@ def create_app(state: AppState) -> FastAPI:
         acts += [dict(a, height=a.get("height") or 0) for a in (waiting.acts or [])
                  if a.get("target") in targets and a["txid"] not in known]
         said = launchlist.tally(acts)
-        me = _tag_of_whoever_is_asking(request).get("address") or ""
+        me = (_tag_of_whoever_is_asking(request).get("address") or "") if request is not None else ""
         for item in items:
             got = said.get(item["txid"], {"likes": set(), "dislikes": set(), "comments": []})
             item["likes"], item["dislikes"] = len(got["likes"]), len(got["dislikes"])
@@ -25607,7 +26992,8 @@ def create_app(state: AppState) -> FastAPI:
             running.wait()
         _cardwatch_loop()
 
-    if not getattr(state, "no_background", False) and "PYTEST_CURRENT_TEST" not in os.environ:
+    if not getattr(state, "no_background", False) and "PYTEST_CURRENT_TEST" not in os.environ \
+            and modulelib.job_on(state.settings(), "card-watch"):
         threading.Thread(target=_cardwatch_when_running, name="card-watch", daemon=True).start()
 
     def _game_by_txid(txid: str) -> dict | None:
@@ -25687,7 +27073,7 @@ def create_app(state: AppState) -> FastAPI:
         for a in acts:
             if int(a["kind"]) in (feedlib.TIP, feedlib.TIP_TOKEN):
                 tips[a["target"]] = tips.get(a["target"], 0) + 1
-        me = _tag_of_whoever_is_asking(request).get("address") or ""
+        me = (_tag_of_whoever_is_asking(request).get("address") or "") if request is not None else ""
         for item in items:
             got = said.get(item["txid"], {"likes": set(), "dislikes": set(), "comments": []})
             item["likes"], item["dislikes"] = len(got["likes"]), len(got["dislikes"])
@@ -25842,7 +27228,9 @@ def create_app(state: AppState) -> FastAPI:
                 said = {"game": True, "card": card["txid"], "name": card["game"]["name"],
                         "wallet": bool(card["game"].get("wallet")),
                         "media": bool(card["game"].get("media")),
+                        "pictures": bool(card["game"].get("pictures")),
                         "contacts": bool(card["game"].get("contacts")),
+                        "groups": bool(card["game"].get("groups")),
                         "opens": _game_opens(ix, creator, card["txid"], card["game"]),
                         "publisher": f"@{tag}" if tag else "", "address": creator}
             else:
@@ -26113,75 +27501,33 @@ def create_app(state: AppState) -> FastAPI:
     _rescan_queue: dict[tuple[str, str], float] = {}
     _rescan_queue_running = threading.Event()
 
-    # --- an imported wallet's whole past, from the Core's own wallet (2026-10-21) -------------------------
-    # Dogecoin and Pepecoin Core 1.14 have no scantxoutset, and the block read-back only goes down to the index's
-    # floor (on Dogecoin a week of blocks): coins an imported wallet got before it were never found. On these chains
-    # the address is imported WATCH-ONLY into this node's Core (never a key) with a rescan of the whole chain, while the
-    # chain's reads are borrowed from a linked arcade that shares it (core_catchup.hold): a 1.14 Core answers nothing
-    # until its rescan is done. Never started with nobody to borrow from. PEP TEST stays on the read-back unless
-    # switched on (2026-10-21): the @ashvale Bank's wallet is on that Core, and a rescan makes it wait.
+    # --- an imported wallet's whole past (2026-11-03: the Core rescan and the two-Core rule are gone) -------
+    # Every import's past is found by the shared walk (2026-10-25, below), on every chain. The Core rescan that came
+    # before it (2026-10-21: the address imported watch-only into this node's Core, the whole chain rescanned, reads
+    # borrowed meanwhile) needed a second Core to borrow from, hence "at least two nodes on the network"; the walk
+    # reads with one (once, canaries in every job) or with many (every block twice). A wallet a Core rescan already
+    # read (core_rescanned:<net>:<address> set) stays ready. core_catchup stays: a hold left from before clears itself.
     from .. import core_catchup as catchuplib
     catchuplib.store = (lambda: state.setting("core_rescan_holds", None) or {},
                         lambda holds: state.set_setting("core_rescan_holds", holds or None))
-    CORE_RESCAN_ON = ("doge", "main")
     #: Chains no wallet may be imported on (2026-10-21: "No imports for pep test").
     NO_IMPORTS = ("test",)
-    def _import_cores(chain) -> int:
-        """How many Cores of `chain` there are to read an imported wallet from: this arcade's own (not borrowed), and
-        each linked arcade sharing its Core of it (coreshare tips)."""
-        own = 0 if getattr(chain, "borrowed", False) else 1
-        mesh = getattr(state, "mesh", None)
-        share = getattr(mesh, "coreshare", None) if mesh is not None else None
-        try:
-            others = len(share.tips(chain.network)) if share is not None else 0
-        except Exception:                                  # noqa: BLE001
-            others = 0
-        return own + others
-
     def _import_closed(chain) -> str:
         """Why no wallet may be imported on `chain` now ("" when one may)."""
         if chain.network in NO_IMPORTS:
             return f"Wallets cannot be imported on {chain.title}."
-        n = _import_cores(chain)
-        if n < IMPORT_CORES_MIN:
-            word = chain.params.label if hasattr(chain.params, "label") else chain.title
-            return (f"Importing a wallet on {chain.title} needs at least {IMPORT_CORES_MIN} {word} nodes on the "
-                    f"arcades' network; there {'is' if n == 1 else 'are'} {n} now.")
         return ""
-    #: A chain whose Core rescan failed: network -> (failures in a row, not before this time). A Core is never made to
-    #: rescan its whole chain again at once: 10 minutes, then 20, then it stops until the arcade restarts.
-    _core_retry: dict[str, tuple[int, float]] = {}
-    CORE_RETRY_SECONDS, CORE_RETRY_MAX = 600.0, 3
-    CORE_BUSY_SECONDS = 180.0
-    #: Blocks a Core rescans a second, until one is measured here (Dogecoin 1.14 on a spinning disk, cautious).
-    CORE_RESCAN_RATE_GUESS = 600.0
-
-    def _core_rescan_on(chain) -> bool:
-        if chain.borrowed:
-            return False
-        said = state.setting(f"import_core_rescan:{chain.network}", None)
-        return bool(said) if said is not None else chain.network in CORE_RESCAN_ON
-
-    def _core_rescan_rate(chain) -> float:
+    def _index_started(chain) -> bool:
+        """Whether this arcade's index of the chain holds a block: the walk reads blocks 0 to its top, so before it
+        holds one there is nothing to read (2026-11-04: Flopcoin's floor two days ahead; the operator's import walked 0..0)."""
         try:
-            return max(50.0, float(state.setting(f"core_rescan_rate:{chain.network}", None) or CORE_RESCAN_RATE_GUESS))
-        except (TypeError, ValueError):
-            return CORE_RESCAN_RATE_GUESS
+            return bool(state.token_index(chain).indexed_height())
+        except Exception:                                  # noqa: BLE001
+            return False
 
     def _can_read_back(chain) -> bool:
-        """Whether an import's read-back can start now: the chain readable, and for a Core rescan somebody to borrow
-        its reads from meanwhile, and no failed rescan still waiting out its back-off."""
-        if not _readable(chain):
-            # A Core held at a rescan reads as offline itself (its queue full), yet its reads are borrowed: the batch
-            # is tried, finds it busy, and waits (utxos.CoreBusy), rather than the page saying nobody can be read.
-            if not (_core_rescan_on(chain) and catchuplib.held(chain.network) and catchuplib.can_borrow(chain)):
-                return False
-        if not _core_rescan_on(chain):
-            return True
-        fails, until = _core_retry.get(chain.network, (0, 0.0))
-        if fails >= CORE_RETRY_MAX or time.time() < until:
-            return False
-        return catchuplib.can_borrow(chain)
+        """Whether an import's read-back (the shared walk) can start now: the chain readable and its index started."""
+        return _readable(chain) and _index_started(chain)
 
     def _chain_busy(chain) -> dict | None:
         """Whether an import on `chain` must wait (2026-10-21: "the client side needs to know they can't import
@@ -26190,8 +27536,7 @@ def create_app(state: AppState) -> FastAPI:
         running = _chain_rescan(chain.network)
         if running is not None:
             eta = _wait_for(running["address"])
-            nxt = eta + (_run_left({"network": chain.network, "end": state.token_index(chain).indexed_height() or 0,
-                                    "core_next": True}) if _core_rescan_on(chain) else 0)
+            nxt = eta
             return {"eta": int(nxt), "says": "A rescan is running on this coin right now. You can still import: your "
                                              "wallet joins the next rescan, which starts as soon as this one is done "
                                              f"(check back in {importslib.say_wait(nxt)})."}
@@ -26200,123 +27545,6 @@ def create_app(state: AppState) -> FastAPI:
                                          "import: your wallet joins the next rescan, which starts as soon as this one "
                                          "is done. Check back later."}
         return None
-
-    def _sweep_imports() -> None:
-        """At start (and a minute after, once the chains answer): every imported wallet on a chain that rescans in the
-        Core and has not had its whole past read yet -- one imported before 2026-10-21, a batch cut short by a
-        restart -- goes on the queue, and the next batch takes them all."""
-        # A chain whose Core is busy at a rescan is not counted ready at first (_account_chains): tried again each
-        # minute, for an hour, until every chain an import may wait on has been swept (2026-10-21: @apple's Dogecoin
-        # import sat off the queue after a restart while its Core rescanned).
-        swept: set[str] = set()
-        for _ in range(60):
-            time.sleep(60)
-            _sweep_once(swept)
-            if all(chain.network in swept for chain in (state.doge, state.ledger)
-                   if chain is not None and _core_rescan_on(chain)):
-                return
-
-    def _sweep_once(swept: set) -> None:
-        try:
-            for chain in _account_chains():
-                if not _core_rescan_on(chain) or chain.network in swept:
-                    continue
-                swept.add(chain.network)
-                prefix = f"extra_address:{chain.network}:"
-                for name, value in list(state.settings().items()):
-                    if not name.startswith(prefix):
-                        continue
-                    for entry in importslib.entries(value):
-                        try:
-                            if not _rescan_done(chain, entry["a"]):
-                                _rescan_queue.setdefault((chain.network, entry["a"]), time.time())
-                        except Exception:              # noqa: BLE001 -- that chain's index not ready: next start
-                            pass
-            _rescan_queue_wake()
-        except Exception:                              # noqa: BLE001
-            log.warning("the imported-wallet sweep stopped", exc_info=True)
-
-    if getattr(state, "home", None) is not None and not os.environ.get("ARCADE_NO_IMPORT_SWEEP"):
-        threading.Thread(target=_sweep_imports, daemon=True, name="import sweep").start()
-
-    def _core_batch_start(chain) -> None:
-        """One Core rescan for every import waiting on `chain` (taken off the queue together), on a thread; the
-        reads borrowed meanwhile. When it is done, the next batch -- every wallet imported during it -- starts at
-        once (the queue runner), back to back."""
-        index = state.token_index(chain)
-        batch = sorted(a for (net, a) in list(_rescan_queue) if net == chain.network)
-        for a in batch:
-            _rescan_queue.pop((chain.network, a), None)
-        batch = [a for a in batch if _still_imported(chain.network, a) and not _rescan_done(chain, a)]
-        if not batch:
-            return
-        tip = int(index.indexed_height() or 0)
-        run = {"network": chain.network, "start": 0, "end": tip, "progress": {}, "began": time.time(),
-               "imported": True, "core": True, "batch": len(batch)}
-        for a in batch:
-            _backfilling.add(a)
-            _backfill_runs[a] = run
-
-        def go() -> None:
-            try:
-                catchuplib.hold(chain, "rescanning for wallet imports")
-                try:
-                    sent_key = f"core_rescan_sent:{chain.network}"
-                    try:
-                        rpc = chain.local_rpc()
-                    except Exception as exc:               # noqa: BLE001 -- not answering: still at a rescan
-                        # Remembered as sent now, as seed_from_core_wallet does for a busy Core: no second rescan
-                        # once it answers, and the page's countdown starts from here.
-                        sent = state.setting(sent_key, None)
-                        if not (isinstance(sent, dict) and set(batch) <= set(sent.get("addresses") or ())):
-                            state.set_setting(sent_key, {"at": time.time(), "addresses": sorted(batch)})
-                        raise utxoslib.CoreBusy(str(exc)) from None
-                    try:
-                        filed = utxoslib.seed_from_core_wallet(
-                            index, rpc, chain.params, batch, tip, sent=state.setting(sent_key, None),
-                            remember=lambda said: state.set_setting(sent_key, said))
-                    finally:
-                        rpc.close()
-                finally:
-                    catchuplib.finished(chain.network)
-                took = time.time() - run["began"]
-                if filed is None:                      # no wallet in this Core: each address read back instead
-                    for a in batch:
-                        _rescan_queue[(chain.network, a)] = time.time()
-                        state.set_setting(f"core_rescanned:{chain.network}:{a}", 0)
-                else:
-                    if took > 60 and tip:
-                        state.set_setting(f"core_rescan_rate:{chain.network}", round(tip / took, 1))
-                    for a in batch:
-                        state.set_setting(f"core_rescanned:{chain.network}:{a}", int(time.time()))
-                        state.set_setting(f"backfilled:{chain.network}:{a}", filed.get(a, 0))
-                    log.info("imported wallets on %s: one rescan for %d, %.0f min", chain.network, len(batch),
-                             took / 60)
-                state.bump_generation()
-            except utxoslib.CoreBusy as exc:
-                # The Core is busy (most often still at a rescan sent before an arcade restart): not a failure;
-                # asked again in a few minutes, the reads borrowed meanwhile, and that rescan is not sent twice.
-                fails = _core_retry.get(chain.network, (0, 0.0))[0]
-                _core_retry[chain.network] = (fails, time.time() + CORE_BUSY_SECONDS)
-                log.info("rescan for imported wallets on %s waits: the Core is busy (%s)", chain.network, exc)
-                for a in batch:
-                    _rescan_queue[(chain.network, a)] = time.time()
-            except Exception as exc:                   # noqa: BLE001 -- queued again, after a back-off
-                fails = _core_retry.get(chain.network, (0, 0.0))[0] + 1
-                _core_retry[chain.network] = (fails, time.time() + CORE_RETRY_SECONDS * fails)
-                log.warning("rescan for imported wallets on %s stopped (%d in a row): %s; %s", chain.network, fails, exc,
-                            "tried again later" if fails < CORE_RETRY_MAX else "not tried again until a restart")
-                for a in batch:
-                    _rescan_queue[(chain.network, a)] = time.time()
-            else:
-                _core_retry.pop(chain.network, None)
-            finally:
-                for a in batch:
-                    _backfilling.discard(a)
-                    _backfill_runs.pop(a, None)
-                _rescan_queue_wake()
-
-        threading.Thread(target=go, daemon=True, name=f"import rescan {chain.network}").start()
 
     def _imported(account, chain) -> list[dict]:
         return importslib.entries(state.setting(importslib.setting_key(chain.network, account.pubkey), []))
@@ -26357,29 +27585,19 @@ def create_app(state: AppState) -> FastAPI:
 
     def _rescan_done(chain, address: str) -> bool:
         """Whether this node already has the address's whole past: read back before, or watched from the floor."""
-        if _core_rescan_on(chain):
-            # The whole past, from the Core (a week's read-back from before 2026-10-21 is not enough here); a Core
-            # with no wallet (0) falls back to the read-back below.
-            said = state.setting(f"core_rescanned:{chain.network}:{address}", None)
-            if said is None:
-                return False
-            if said:
-                return True
+        if state.setting(f"core_rescanned:{chain.network}:{address}", None):
+            return True                                   # read whole by a Core rescan, before the walk (2026-10-21)
         if state.setting(f"backfilled:{chain.network}:{address}", None) is not None:
             return True
         with contextlib.closing(state.token_index(chain).open()) as db:
             since = utxoslib.since(db, address)
-        return since is not None and since <= _rescan_floor(chain)
+        # A watch begun while the index held no block says 0 (utxos.watch at indexed_height() or 0): nothing was read
+        # from the floor for it, so it is not "watched from the floor" (2026-11-04, the operator's Flopcoin import: ready at
+        # once with nothing, the floor two days ahead).
+        return since is not None and 0 < since <= _rescan_floor(chain)
 
     def _run_left(run: dict) -> float:
-        """Seconds a read-back still needs: the blocks it has left at the measured pace. A Core rescan says nothing
-        while it runs: the whole chain at the last measured rate, counting down (at least a minute while it runs)."""
-        if run.get("core") or run.get("core_next"):
-            chain = next((c for c in _account_chains() if c.network == run.get("network")), None)
-            total = int(run.get("end") or 0) / (_core_rescan_rate(chain) if chain is not None else CORE_RESCAN_RATE_GUESS)
-            if not run.get("core"):
-                return total
-            return max(60.0, total - (time.time() - float(run.get("began") or time.time())))
+        """Seconds a read-back still needs: the blocks it has left at the measured pace."""
         progress = run.get("progress") or {}
         chain = next((c for c in _account_chains() if c.network == run.get("network")), None)
         per = float(progress.get("per_block") or (utxoslib.read_rate(chain.params) if chain is not None
@@ -26416,27 +27634,6 @@ def create_app(state: AppState) -> FastAPI:
         except Exception:                                  # noqa: BLE001
             return False
 
-    def _core_rescan_said(chain, says: dict) -> dict:
-        """The notice of a whole-chain rescan on this arcade's Core, with the Core's own word on how far it is when its
-        log can be read (core_log; 2026-10-22: "include rescan % ... from RPC" -- the RPC of a 1.14 Core says
-        nothing of it): the share done, the block, and the countdown from its pace now, over the arcade's guess."""
-        from .. import core_log
-        then = says.pop("then", False)
-        try:
-            said = core_log.rescan_progress(chain.params)
-        except Exception:                                  # noqa: BLE001 -- the guess stands
-            said = None
-        if said is None:
-            return says
-        pct = round(said["progress"] * 100, 1)
-        eta = said["eta"]
-        when = f"about {importslib.say_wait(eta)} left" if eta is not None else "working out how long is left"
-        return {**says, "pct": pct, "block": said["block"], "eta": eta,
-                "says": (f"This arcade's node is rescanning the whole chain for imported wallets: {pct:.1f}% done "
-                         f"(block {said['block']:,}), {when}. Meanwhile the arcade reads the chain from another "
-                         f"arcade, so sends work as usual."
-                         + (" After it, one more rescan reads this wallet's coins." if then else ""))}
-
     def _rescan_says(chain, address: str) -> dict:
         """Where an imported address's read-back stands, with what to tell the person:
         "ready", "rescan" (reading back now or next in line), "none" (no node to read the chain), "stopped" (never
@@ -26450,66 +27647,40 @@ def create_app(state: AppState) -> FastAPI:
             if run.get("walk"):
                 p = run.get("progress") or {}
                 n = len(p.get("readers") or [])
-                return {"state": "rescan", "eta": None, "walk": True, "jobs": p.get("jobs"), "done": p.get("done", 0),
-                        "says": (f"{n} arcades are walking the chain for this wallet's coins, every block read twice "
-                                 f"({p.get('done', 0)} of {p.get('jobs')} parts done); its balance shows when they "
-                                 "finish. You can close this page." if n else
+                left = p.get("eta")
+                when = f", about {importslib.say_wait(left).removeprefix('about ')} left" if left else ""
+                twice = "every block read twice" if p.get("need", 2) > 1 else "every block read once"
+                return {"state": "rescan", "eta": left, "walk": True, "jobs": p.get("jobs"), "done": p.get("done", 0),
+                        "says": (f"{n} readers are walking the chain for this wallet's coins, {twice} "
+                                 f"({p.get('done', 0)} of {p.get('jobs')} parts done{when}); its balance shows when "
+                                 "they finish. You can close this page." if n else
                                  "The arcades are getting ready to walk the chain for this wallet's coins; its balance "
                                  "shows when they finish. You can close this page.")}
-            if run.get("core"):
-                total = _run_left({**run, "core": None, "core_next": True})
-                late = time.time() - float(run.get("began") or time.time()) > total
-                return _core_rescan_said(chain, {"state": "rescan", "eta": int(eta), "core": True,
-                        "says": ("This arcade's node is rescanning the whole chain for this wallet's coins, and it is "
-                                 "taking longer than expected; it is still running. Check back later."
-                                 if late else
-                                 f"This arcade's node is rescanning the whole chain for this wallet's coins (meanwhile "
-                                 f"the arcade reads the chain from another arcade); check back in "
-                                 f"{importslib.say_wait(eta)}.")})
             return {"state": "rescan", "eta": int(eta),
                     "says": f"The arcade is reading back this wallet's coins; check back in "
                             f"{importslib.say_wait(eta)}."}
         if (chain.network, address) in _rescan_queue:
-            fails, until = _core_retry.get(chain.network, (0, 0.0)) if _core_rescan_on(chain) else (0, 0.0)
-            sent = state.setting(f"core_rescan_sent:{chain.network}", None)
-            if _core_rescan_on(chain) and not fails and catchuplib.held(chain.network):
-                if not isinstance(sent, dict):
-                    # Begun before the arcade last restarted, with nothing kept of when or for whom: taken as this
-                    # wallet's, a whole rescan's length from now (the batch, once tried, keeps the real record).
-                    sent = {"at": time.time(), "addresses": [address]}
-                # The Core is at a whole-chain rescan (one an arcade restart cut the connection to goes on all the
-                # same), and waited for: said as what it is, with its countdown (2026-10-21: "the arcades node
-                # is re-scanning and give a estimate time until finished"), never as "no node to borrow".
-                total = _run_left({"network": chain.network, "end": state.token_index(chain).indexed_height() or 0,
-                                   "core_next": True})
-                left = float(sent.get("at") or time.time()) + total - time.time()
-                mine = address in (sent.get("addresses") or ())
-                then = "" if mine else " After it, one more rescan reads this wallet's coins."
-                if left <= 0:
-                    return _core_rescan_said(chain, {"state": "rescan", "eta": None, "core": True, "then": not mine,
-                            "says": "This arcade's node is rescanning the whole chain for imported wallets, and it is "
-                                    "taking longer than expected; it is still running, and the arcade reads the chain "
-                                    f"from another arcade meanwhile.{then} Check back later."})
-                eta = left + (0 if mine else total)
-                return _core_rescan_said(chain, {"state": "rescan", "eta": int(eta), "core": True, "then": not mine,
-                        "says": f"This arcade's node is rescanning the whole chain for imported wallets (meanwhile the "
-                                f"arcade reads the chain from another arcade, so sends work as usual).{then} Check back "
-                                f"in about {importslib.say_wait(eta)}."})
-            if fails:
-                when = ("after the arcade restarts" if fails >= CORE_RETRY_MAX
-                        else f"in {importslib.say_wait(max(0.0, until - time.time()))}")
-                return {"state": "rescan", "eta": None if fails >= CORE_RETRY_MAX else int(until - time.time()),
-                        "says": f"This arcade's node could not finish rescanning for this wallet; it tries again {when}."}
+            if _readable(chain) and not _index_started(chain):
+                return {"state": "rescan", "eta": None,
+                        "says": (f"This arcade's index of {chain.title} has not started yet (it starts at block "
+                                 f"{_rescan_floor(chain):,}). The read-back of this wallet's coins is queued and starts "
+                                 "by itself then; its balance shows when it is done. You can close this page.")}
             if not _can_read_back(chain):
                 return {"state": "none",
                         "says": (f"There is no node to borrow right now: this arcade cannot read {chain.title} "
                                  "by itself, and no other arcade is sharing it. The read-back of this wallet's "
                                  "coins is queued and starts by itself as soon as one is available; its balance "
                                  "shows then. You can close this page.")}
-            running = _chain_rescan(chain.network)
-            eta = (_wait_for(running["address"]) if running else 0.0) + _run_left(
-                {"network": chain.network, "start": _rescan_floor(chain),
-                 "end": state.token_index(chain).indexed_height() or 0, "core_next": _core_rescan_on(chain)})
+            # Every import is found by the shared walk: its time is the walk's, at the pace the last walks of this
+            # chain read (2026-11-05: the old per-block Core pace said "21 days" for a Flopcoin walk of ~15 minutes).
+            running = _walk_running.get(chain.network)
+            ahead = (running.get("progress") or {}).get("eta") if running else None
+            own = _walk_eta(chain)
+            if own is None:
+                return {"state": "rescan", "eta": None,
+                        "says": "This wallet's coins are read by the next walk of the chain, right after the one "
+                                "running now; its balance shows when it is done. You can close this page."}
+            eta = own + float(ahead or 0)
             return {"state": "rescan", "eta": int(eta),
                     "says": f"The arcade is reading back this wallet's coins; check back in "
                             f"{importslib.say_wait(eta)}."}
@@ -26541,8 +27712,11 @@ def create_app(state: AppState) -> FastAPI:
         picked = _walk_chain_by(chain)
         if picked is None or not _readable(picked) or picked.borrowed or state.setting("walk_lend", True) is False:
             return JSONResponse({"chain": chain, "files": False, "rpc": False})
+        mesh = getattr(state, "mesh", None)
+        # `node`: this arcade's mesh id, so a walker that also borrows its Core over the mesh counts it once (2026-11-05).
         return JSONResponse({"chain": chain, **_walk_reader.can(picked),
-                             "tip": state.token_index(picked).indexed_height() or 0})
+                             "tip": state.token_index(picked).indexed_height() or 0,
+                             "node": getattr(mesh, "node_id", "") if mesh is not None else ""})
 
     @app.post("/coins/walk/job")
     def coins_walk_job(request: Request, payload: Any = Body(None)):
@@ -26572,15 +27746,38 @@ def create_app(state: AppState) -> FastAPI:
             return JSONResponse({"detail": "no such job here"}, status_code=404)
         return JSONResponse(got)
 
+    _walk_store = walkstorelib.WalkStore(Path(state.home) / "walks.sqlite")
+
+    def _mesh_node_of_hosts() -> dict[str, str]:
+        """{host: mesh node id} from the meshes' own announcements (wss://host -> its key), so an arcade read through
+        its web address is not read a second time through its shared Core."""
+        out: dict[str, str] = {}
+        try:
+            with state.store() as store:
+                for row in store.mesh_peers(state.messaging.network, since=int(time.time()) - 3 * 86400):
+                    host = str(row["host"] or "")
+                    if host.startswith("wss://") and row["mesh_key"]:
+                        out.setdefault(host[len("wss://"):].split("/", 1)[0].split(":", 1)[0].lower(),
+                                       str(row["mesh_key"]).lower())
+        except Exception:                                   # noqa: BLE001
+            pass
+        return out
+
     def _walk_readers(chain) -> list[str]:
-        """Who reads a walk on `chain`: this arcade (when it can) and the arcades that read their node's files for
-        others; arcades reading over RPC only when fewer than two read files. Arcades caught wrong rest an hour."""
-        files, rpc_only, borrowed = [], [], []
+        """Who reads a walk on `chain`: this arcade (when it can), the arcades that read for others at their web address
+        (their node's files, else RPC), and every Core another arcade shares over the mesh ("core:<node id>", read here
+        a batch of raw blocks at a time, each proved; 2026-11-05: "Use cores shared over the mesh as extra
+        readers" -- the walk was meant to use every arcade with a node). One arcade is one reader, however it is reached.
+        Arcades caught wrong rest an hour. At most `walk_readers_max`: file readers first."""
+        files, rpc_only, mesh, borrowed = [], [], [], []
         if _readable(chain):
-            if chain.borrowed:                              # every block over the mesh: only when nobody else can
+            if chain.borrowed:                              # every block over the mesh: the mesh's Cores read instead
                 borrowed.append("self")
             else:
                 (files if _walk_reader.can(chain)["files"] else rpc_only).append("self")
+        node = getattr(getattr(state, "mesh", None), "node_id", "") or ""
+        reading = {node.lower()} if node else set()
+        by_host = _mesh_node_of_hosts()
         for host in _arcade_hosts():
             if time.time() - _walk_resting.get(host, 0.0) < WALK_REST:
                 continue
@@ -26594,10 +27791,25 @@ def create_app(state: AppState) -> FastAPI:
                 files.append(host)
             elif said.get("rpc"):
                 rpc_only.append(host)
-        most = int(state.setting("walk_readers_max", WALK_READERS_MAX) or WALK_READERS_MAX)
-        readers = files[:most]
-        if len(readers) < 2:
-            readers += rpc_only[:2 - len(readers)]
+            else:
+                continue
+            who = str(said.get("node") or by_host.get(host) or "").lower()
+            if who:
+                reading.add(who)
+        if coinwalklib.files_ok(chain.params):
+            try:
+                from ..mesh import coreshare as _cs
+                lent = _cs.lenders(chain.network)
+            except Exception:                               # noqa: BLE001 -- no mesh
+                lent = []
+            for peer, _lanes in lent:
+                name = "core:" + str(peer).lower()
+                if str(peer).lower() in reading or time.time() - _walk_resting.get(name, 0.0) < WALK_REST:
+                    continue
+                reading.add(str(peer).lower())
+                mesh.append(name)
+        most = max(1, int(state.setting("walk_readers_max", WALK_READERS_MAX) or WALK_READERS_MAX))
+        readers = (files + rpc_only + mesh)[:most]
         if not readers:
             readers = borrowed
         return readers
@@ -26625,6 +27837,10 @@ def create_app(state: AppState) -> FastAPI:
     def _walk_job(chain, reader: str, top: int, bottom: int, addresses: list[str], progress: dict) -> list[list]:
         if reader == "self":
             return _walk_reader.read(chain, top, bottom, addresses, progress)
+        if reader.startswith("core:"):                      # a Core shared over the mesh, read from here
+            from ..mesh import coreshare as _cs
+            return _walk_reader.read_over(_cs.lent_rpc(reader[len("core:"):], chain.params), chain.params, top, bottom,
+                                          addresses, progress)
         r = _post_arcade(f"https://{reader}/coins/walk/job", timeout=20, headers={"User-Agent": "arcade-node"},
                          json={"chain": chain.network, "top": top, "bottom": bottom, "addresses": addresses})
         said = r.json() if r.status_code == 200 else {}
@@ -26643,119 +27859,287 @@ def create_app(state: AppState) -> FastAPI:
                 raise RuntimeError(f"{reader}: {got.get('error') or 'the job is gone'}")
         raise TimeoutError(f"{reader} took longer than {WALK_JOB_SECONDS:.0f} s")
 
-    def _shared_walk(chain, addresses: list[str], lo: int, hi: int, progress: dict | None = None) -> dict:
+    def _shared_walk(chain, addresses: list[str], lo: int, hi: int, progress: dict | None = None,
+                     walk: dict | None = None) -> dict:
         """Walk `lo`..`hi` for `addresses`, shared and double-read; file what the chain says is real and mark what
-        was verified as covered. {"readers", "filed", "verified": [[lo, hi]], "redone": [...], "failed": [...]}."""
+        was verified as covered. {"readers", "filed", "verified": [[lo, hi]], "redone": [...], "failed": [...]}.
+
+        Kept on disk (arcade/walkstore.py, 2026-11-05): the range is cut into fixed chunks, each read by two different
+        readers (one when only one can read), and every read is written down as it comes back. `walk` (a record from
+        WalkStore.unfinished) picks a walk cut short up where it was: only the reads it still needs are asked for. A
+        reader takes the next chunk nobody has, so a fast one reads more; when none is left it reads a second copy of
+        one still waiting on a slow reader."""
         progress = progress if progress is not None else {}
-        addresses = list(dict.fromkeys(addresses))
         readers = _walk_readers(chain) or (["self"] if _readable(chain) else [])
         if not readers:
             raise RuntimeError(f"nobody can read {chain.title} right now")
-        jobs = coinlistlib.segments(lo, hi, readers)
-        parts = [{"segment": j["segment"], "reader": j["reader"], "top": j["top"], "bottom": j["bottom"],
-                  "state": "reading", "progress": {}} for j in jobs]
-        progress.update({"readers": readers, "jobs": len(jobs), "done": 0, "parts": parts, "lo": lo, "hi": hi,
-                         "wallets": len(addresses), "began": time.time()})
-        results: dict[int, dict] = {}
-        lock = threading.Lock()
-
-        def run(i: int, job: dict) -> None:
-            canaries = _walk_canaries(chain, job["top"], job["bottom"], set(addresses))
-            asked = addresses + [c[2] for c in canaries]
-            mine = parts[i]["progress"]
-            parts[i]["canaries"] = len(canaries)
-            took = time.time()
-            try:
-                found = _walk_job(chain, job["reader"], job["top"], job["bottom"], asked, mine)
-                missing = coinlistlib.canaries_missing(found, canaries)
-                out = {"ok": not missing, "found": found, "missing": missing}
-            except Exception as exc:                        # noqa: BLE001 -- the segment goes to somebody else
-                out = {"ok": False, "error": str(exc)[:200], "found": []}
-            took = max(0.001, time.time() - took)
-            with lock:
-                results[i] = {**job, **out, "canaries": len(canaries)}
-                progress["done"] = progress.get("done", 0) + 1
-                parts[i].update({"state": "done" if out["ok"] else "failed", "missed": len(out.get("missing") or []),
-                                 "error": out.get("error", ""), "seconds": round(took, 1),
-                                 "matches": len([m for m in out["found"] if m[4] in set(addresses)])})
-                seen = _walk_seen.setdefault(job["reader"], {})
-                seen.update({"at": time.time(), "how": mine.get("how") or seen.get("how", ""),
-                             "blocks_per_s": round((job["top"] - job["bottom"] + 1) / took, 1)})
-
-        threads = [threading.Thread(target=run, args=(i, j), daemon=True, name=f"walk {chain.network} {j['reader']}")
-                   for i, j in enumerate(jobs)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+        if walk is None:
+            walk = _walk_store.start(chain.network, lo, hi, list(addresses))
+        wid, lo, hi = int(walk["id"]), int(walk["lo"]), int(walk["hi"])
+        addresses = list(walk["addresses"])
         wanted = set(addresses)
+        need = 2 if len(readers) > 1 else 1
+        pieces = walkstorelib.chunks(lo, hi, int(walk["chunk"]))
+        index_of = {top: i for i, (top, _) in enumerate(pieces)}
+        reads: dict[int, dict[str, dict]] = {top: {} for top, _ in pieces}
+        parts: list[dict] = []
+        for r in _walk_store.reads(wid):
+            if r["top"] in reads:
+                reads[r["top"]][r["reader"]] = r
+                parts.append({"segment": index_of[r["top"]], "reader": r["reader"], "top": r["top"],
+                              "bottom": r["bottom"], "state": "done" if r["ok"] else "failed", "progress": {},
+                              "seconds": round(r["seconds"], 1), "error": r["error"], "earlier": True})
+        inflight: dict[int, set] = {top: set() for top, _ in pieces}
+        lock = threading.Lock()
+        finished = threading.Event()
+        verdict: dict[int, list] = {}                       # chunk -> the coins it was settled on
+        judging, late = [False], []                          # reads that came back while (or after) chunks were judged
+
+        def judge_late(reader: str, top: int, found: list) -> None:
+            if reader != "self" and top in verdict and coinlistlib.agree(found, verdict[top]) != (set(), set()):
+                _walk_resting[reader] = time.time()
+
+        def good(top: int) -> set:
+            return {k for k, v in reads[top].items() if v["ok"]}
+
+        def settled(top: int) -> bool:
+            return len(good(top)) >= need
+
+        def done_reads() -> int:
+            return sum(min(need, len(good(top))) for top, _ in pieces)
+
+        size = {top: top - bottom + 1 for top, bottom in pieces}
+
+        def blocks_read() -> int:
+            return sum(size[top] * min(need, len(good(top))) for top, _ in pieces)
+
+        started_with, began = blocks_read(), time.time()
+
+        def pick(reader: str) -> tuple[int, int] | None:
+            with lock:
+                best = None
+                for top, bottom in pieces:
+                    if settled(top) or reader in reads[top] or reader in inflight[top]:
+                        continue
+                    load = len(good(top)) + len(inflight[top])
+                    key = (load >= need, load, -top)        # nobody on it first, then highest first
+                    if best is None or key < best[0]:
+                        best = (key, top, bottom)
+                if best is None:
+                    return None
+                inflight[best[1]].add(reader)
+                return best[1], best[2]
+
+        def say() -> None:
+            """Reads done, and the time left at the pace this run has read so far (all readers together)."""
+            left = sum(size[top] for top, _ in pieces) * need - blocks_read()
+            pace = (blocks_read() - started_with) / max(1.0, time.time() - began)
+            progress.update({"done": done_reads(), "blocks_left": left, "eta": int(left / pace) if pace > 0 else None})
+
+        def work(reader: str) -> None:
+            fails = 0
+            while not finished.is_set():
+                got = pick(reader)
+                if got is None:
+                    return
+                top, bottom = got
+                try:
+                    canaries = _walk_canaries(chain, top, bottom, wanted)
+                except Exception as exc:                    # noqa: BLE001 -- the index busy: this chunk, later
+                    with lock:
+                        inflight[top].discard(reader)
+                    log.info("shared walk %s: no canaries for %d..%d just now: %s", chain.network, bottom, top, exc)
+                    finished.wait(2.0)
+                    continue
+                asked = addresses + [c[2] for c in canaries]
+                mine: dict = {}
+                part = {"segment": index_of[top], "reader": reader, "top": top, "bottom": bottom, "state": "reading",
+                        "progress": mine, "canaries": len(canaries)}
+                with lock:
+                    parts.append(part)
+                took = time.time()
+                try:
+                    found = _walk_job(chain, reader, top, bottom, asked, mine)
+                    missing = coinlistlib.canaries_missing(found, canaries)
+                    ok, error = not missing, ("canary missing" if missing else "")
+                except Exception as exc:                    # noqa: BLE001 -- the chunk goes to somebody else
+                    found, missing, ok, error = [], [], False, str(exc)[:200]
+                took = max(0.001, time.time() - took)
+                ours = [m for m in found if m[4] in wanted]
+                try:
+                    _walk_store.put_read(wid, top, bottom, reader, ok, ours, len(missing), error, took)
+                except Exception as exc:                    # noqa: BLE001 -- kept in memory all the same
+                    log.warning("shared walk %s: a read could not be kept: %s", chain.network, exc)
+                with lock:
+                    inflight[top].discard(reader)
+                    reads[top][reader] = {"ok": ok, "found": ours, "missing": len(missing), "error": error,
+                                          "reader": reader, "top": top, "bottom": bottom, "seconds": took}
+                    part.update({"state": "done" if ok else "failed", "seconds": round(took, 1), "error": error,
+                                 "missed": len(missing), "matches": len(ours)})
+                    if missing and reader != "self":        # shown wrong: rests at once
+                        _walk_resting[reader] = time.time()
+                    if ok and judging[0]:
+                        if top in verdict:
+                            judge_late(reader, top, ours)
+                        else:
+                            late.append((reader, top, ours))
+                    seen = _walk_seen.setdefault(reader, {})
+                    seen.update({"at": time.time(), "how": mine.get("how") or seen.get("how", ""),
+                                 "blocks_per_s": round((top - bottom + 1) / took, 1)})
+                    say()
+                    if all(settled(t) for t, _ in pieces):
+                        finished.set()
+                if not ok:
+                    fails += 1
+                    if fails >= WALK_FAILS_MAX:             # this walk goes on without it
+                        return
+
+        progress.update({"readers": readers, "jobs": len(pieces) * need, "done": done_reads(), "parts": parts,
+                         "lo": lo, "hi": hi, "wallets": len(addresses), "began": float(walk["began"]), "walk": wid,
+                         "chunks": len(pieces), "need": need})
+        if not all(settled(t) for t, _ in pieces):
+            threads: list[threading.Thread] = []
+
+            def begin(r: str) -> None:
+                t = threading.Thread(target=work, args=(r,), daemon=True, name=f"walk {chain.network} {r[:20]}")
+                threads.append(t)
+                t.start()
+            for r in readers:
+                begin(r)
+            looked = time.time()
+            while not finished.is_set() and any(t.is_alive() for t in threads):
+                finished.wait(1.0)
+                # Readers that came since it began (2026-11-05: a walk resumed right after a restart, before the
+                # mesh's links were up, had two readers and never the three Flopcoin Cores that joined a minute later).
+                if time.time() - looked >= WALK_READERS_EVERY and not finished.is_set():
+                    looked = time.time()
+                    try:
+                        more = [r for r in _walk_readers(chain) if r not in readers]
+                    except Exception:                       # noqa: BLE001
+                        more = []
+                    for r in more:
+                        readers.append(r)
+                        begin(r)
+                with lock:
+                    if len(readers) > 1:
+                        need = 2                            # two readers now: every chunk is read twice
+                    progress.update({"readers": list(readers), "need": need,
+                                     "jobs": len(pieces) * need})
+                    say()
         verified, redone, failed, keep = [], [], [], []
-        by_segment: dict[int, list] = {}
-        for r in results.values():
-            by_segment.setdefault(r["segment"], []).append(r)
-        for seg, rs in sorted(by_segment.items()):
-            good = [r for r in rs if r["ok"]]
-            top, bottom = rs[0]["top"], rs[0]["bottom"]
-            ours = lambda r: [m for m in r["found"] if m[4] in wanted]   # noqa: E731
-            if len(good) >= 2 and good[0]["reader"] != good[1]["reader"] and \
-                    coinlistlib.agree(ours(good[0]), ours(good[1])) == (set(), set()):
-                keep += ours(good[0])
+        # A reader that missed a canary was shown wrong, whoever else read that chunk: it rests (WALK_REST).
+        for top, _ in pieces:
+            for r in reads[top].values():
+                if r["reader"] != "self" and r.get("missing"):
+                    _walk_resting[r["reader"]] = time.time()
+        with lock:
+            judging[0] = True
+            snapshot = {top: list(reads[top].values()) for top, _ in pieces}
+        for top, bottom in pieces:
+            rs = snapshot[top]
+            ok_rs = [r for r in rs if r["ok"]]
+            # Two different readers agreeing settle it; every other good read is held to them too, so a third that
+            # disagrees sends the chunk to be read again here (and whoever was wrong rests).
+            if len(ok_rs) >= 2 and all(coinlistlib.agree(ok_rs[0]["found"], r["found"]) == (set(), set())
+                                       for r in ok_rs[1:]):
+                keep += ok_rs[0]["found"]
                 verified.append((bottom, top))
+                verdict[top] = ok_rs[0]["found"]
                 continue
-            if len(rs) == 1 and good:                       # a walk with one reader: read once, canaries passed
-                keep += ours(good[0])
+            if need == 1 and ok_rs:                         # a walk with one reader: read once, canaries passed
+                keep += ok_rs[0]["found"]
                 verified.append((bottom, top))
+                verdict[top] = ok_rs[0]["found"]
                 continue
-            try:                                            # this arcade reads the segment itself, then knows who was wrong
+            try:                                            # this arcade reads the chunk itself, then knows who was wrong
                 canaries = _walk_canaries(chain, top, bottom, wanted)
                 again = _walk_reader.read(chain, top, bottom, addresses + [c[2] for c in canaries], {})
                 if coinlistlib.canaries_missing(again, canaries):
                     raise RuntimeError("this arcade's own re-read missed a canary")
                 right = [m for m in again if m[4] in wanted]
                 for r in rs:                                # whoever failed, or found other coins than this read, rests
-                    if r["reader"] != "self" and (not r["ok"] or coinlistlib.agree(ours(r), right) != (set(), set())):
+                    if r["reader"] != "self" and (not r["ok"] or coinlistlib.agree(r["found"], right) != (set(), set())):
                         _walk_resting[r["reader"]] = time.time()
                 keep += right
                 verified.append((bottom, top))
-                redone.append({"segment": seg, "readers": [r["reader"] for r in rs],
+                verdict[top] = right
+                redone.append({"segment": index_of[top], "readers": [r["reader"] for r in rs],
                                "why": [r.get("error") or ("canary missing" if r.get("missing") else "disagreed")
-                                       for r in rs]})
-            except Exception as exc:                        # noqa: BLE001 -- that segment stays a gap
+                                       for r in rs] or ["nobody read it"]})
+            except Exception as exc:                        # noqa: BLE001 -- that chunk stays a gap
                 for r in rs:
                     if r["reader"] != "self" and not r["ok"]:
                         _walk_resting[r["reader"]] = time.time()
-                failed.append({"segment": seg, "top": top, "bottom": bottom, "error": str(exc)[:200]})
+                failed.append({"segment": index_of[top], "top": top, "bottom": bottom, "error": str(exc)[:200]})
+        with lock:
+            for reader, top, found in late:
+                judge_late(reader, top, found)
+            late.clear()
+        seen_coin, kept = set(), []
+        for m in keep:
+            if (m[0], int(m[1])) not in seen_coin:
+                seen_coin.add((m[0], int(m[1])))
+                kept.append(m)
         filed = 0
         by_address: dict[str, list] = {}
-        for m in keep:
+        for m in kept:
             by_address.setdefault(m[4], []).append({"txid": m[0], "vout": m[1]})
         for address, coins in by_address.items():
             filed += _file_checked_coins(state, chain, address, coins)
         index = state.token_index(chain)
+        whole = coinlistlib.covers(verified, lo, hi)
         if verified:
             with contextlib.closing(index.open()) as db:
+                now_tip = int(index.indexed_height() or 0)
                 for address in addresses:
                     coinlistlib.mark_covered(db, address, verified, "shared walk: " + ",".join(readers)[:200])
-        log.info("shared walk %s %d..%d for %d addresses: readers %s, %d coins filed, %d segments re-read, %d failed",
+                    # Watched since it was imported, before the walk began: the blocks the index took in since `hi`
+                    # are known for it too (a watch begun on an empty index says 0, which covers nothing by itself).
+                    row = db.conn.execute("SELECT since FROM watched WHERE address = ?", (address,)).fetchone()
+                    if whole and row is not None and now_tip > hi:
+                        coinlistlib.mark_covered(db, address, [(hi + 1, now_tip)], "watched through the walk")
+        log.info("shared walk %s %d..%d for %d addresses: readers %s, %d coins filed, %d chunks re-read, %d failed",
                  chain.network, lo, hi, len(addresses), ",".join(readers), filed, len(redone), len(failed))
         got = {"readers": readers, "filed": filed, "verified": [list(v) for v in coinlistlib.union(verified)],
-               "redone": redone, "failed": failed}
+               "redone": redone, "failed": failed, "walk": wid}
+        if whole:
+            _walk_store.finish(wid, "whole")
+        # else: left unfinished, its good reads kept: the next start asks only for the chunks still missing
+        try:
+            _walk_store.forget_old()
+        except Exception:                                   # noqa: BLE001
+            pass
         _walk_history.insert(0, {"chain": chain.network, "began": progress.get("began"), "ended": time.time(),
                                  "wallets": len(addresses), "lo": lo, "hi": hi, "readers": len(readers),
-                                 "found": len(keep), "filed": filed, "redone": len(redone), "failed": len(failed),
+                                 "found": len(kept), "filed": filed, "redone": len(redone), "failed": len(failed),
                                  "whole": coinlistlib.covers(got["verified"], lo, hi)})
         del _walk_history[WALK_HISTORY:]
         return got
 
     state.shared_walk = _shared_walk
     state.walk_resting = _walk_resting
+    state.walk_store = _walk_store
+
+    def _walk_eta(chain) -> float | None:
+        """Seconds a whole walk of `chain` takes at the pace the last ones read, or None when none has finished yet."""
+        pace = _walk_store.pace(chain.network)
+        if not pace:
+            return None
+        tip = int(state.token_index(chain).indexed_height() or 0)
+        return (tip + 1) * 2 / pace
 
     def _walk_start(chain, address: str) -> None:
-        """Queue `address` for its chain's next shared walk (several imports share one), shown like a read-back."""
+        """Queue `address` for its chain's next shared walk (several imports share one), shown like a read-back. Never
+        while the chain's index holds no block: the walk's top would be 0 (queued instead, _rescan_queue_runner). A
+        walk cut short (a restart) is finished first, from where it was."""
+        if not _index_started(chain):
+            _rescan_queue.setdefault((chain.network, address), time.time())
+            _rescan_queue_wake()
+            return
         run = {"network": chain.network, "start": 0, "end": state.token_index(chain).indexed_height() or 0,
                "progress": {}, "began": time.time(), "imported": True, "walk": True}
         _backfilling.add(address)
-        _backfill_runs[address] = run
+        _backfill_runs.setdefault(address, run)
         _walk_pending.setdefault(chain.network, set()).add(address)
         if chain.network in _walk_running:
             return
@@ -26763,36 +28147,67 @@ def create_app(state: AppState) -> FastAPI:
 
         def go() -> None:
             try:
-                while _walk_pending.get(chain.network):
-                    batch = sorted(_walk_pending.pop(chain.network))
-                    tip = state.token_index(chain).indexed_height() or 0
-                    shared = {"network": chain.network, "start": 0, "end": tip, "progress": {},
+                while True:
+                    cut_short = next(iter(_walk_store.unfinished(chain.network)), None)
+                    if cut_short is not None:
+                        batch = list(cut_short["addresses"])
+                        pending = _walk_pending.get(chain.network) or set()
+                        pending.difference_update(batch)
+                        lo, tip = int(cut_short["lo"]), int(cut_short["hi"])
+                    elif _walk_pending.get(chain.network):
+                        batch = sorted(_walk_pending.pop(chain.network))
+                        lo, tip = 0, int(state.token_index(chain).indexed_height() or 0)
+                    else:
+                        break
+                    shared = {"network": chain.network, "start": lo, "end": tip, "progress": {},
                               "began": time.time(), "imported": True, "walk": True}
+                    _walk_running[chain.network] = shared
                     for a in batch:
+                        _backfilling.add(a)
                         _backfill_runs[a] = shared
+                    stop = False
                     try:
-                        got = _shared_walk(chain, batch, 0, tip, shared["progress"])
-                        whole = coinlistlib.covers(got["verified"], 0, tip)
+                        got = _shared_walk(chain, batch, lo, tip, shared["progress"], walk=cut_short)
+                        whole = coinlistlib.covers(got["verified"], lo, tip)
                         for a in batch:
                             if whole:
                                 state.set_setting(f"backfilled:{chain.network}:{a}", got["filed"])
                                 state.set_setting(f"core_rescanned:{chain.network}:{a}", 0)
                             else:
                                 _rescan_queue[(chain.network, a)] = time.time()
-                    except Exception as exc:                # noqa: BLE001 -- queued again
+                        stop = not whole                    # chunks nobody could read: tried again later, not now
+                    except Exception as exc:                # noqa: BLE001 -- kept on disk; tried again later
                         log.warning("shared walk on %s stopped: %s; queued", chain.network, exc)
                         for a in batch:
                             _rescan_queue[(chain.network, a)] = time.time()
+                        stop = True                         # a walk left unfinished is picked up next time
                     finally:
                         for a in batch:
                             _backfilling.discard(a)
                             _backfill_runs.pop(a, None)
                     state.bump_generation()
+                    if stop:
+                        break
             finally:
                 _walk_running.pop(chain.network, None)
                 _rescan_queue_wake()
 
         threading.Thread(target=go, daemon=True, name=f"shared walk {chain.network}").start()
+
+    def _walks_resume() -> None:
+        """After a restart: every walk cut short goes on from where it was, without waiting for a Wallet page."""
+        for cut in _walk_store.unfinished():
+            chain = _walk_chain_by(cut["network"])
+            if chain is None or not cut["addresses"]:
+                continue
+            try:
+                _walk_start(chain, cut["addresses"][0])
+            except Exception as exc:                        # noqa: BLE001 -- the next page asks again
+                log.warning("shared walk on %s not resumed: %s", cut["network"], exc)
+
+    _resume = threading.Timer(WALK_RESUME_AFTER, _walks_resume)
+    _resume.daemon = True
+    _resume.start()
 
     # --- Admin -> Wallet imports (2026-10-25: "add another admin panel specifically just for Wallet imports") --
     def _imports_of(network: str) -> list[dict]:
@@ -26833,7 +28248,8 @@ def create_app(state: AppState) -> FastAPI:
         if run is not None:
             p = (next((r for r in _backfill_runs.values() if r.get("walk") and r.get("network") == net), run)
                  .get("progress") or {})
-            live = {k: p.get(k) for k in ("readers", "jobs", "done", "parts", "lo", "hi", "wallets", "began")}
+            live = {k: p.get(k) for k in ("readers", "jobs", "done", "parts", "lo", "hi", "wallets", "began",
+                                          "eta", "need", "chunks", "blocks_left", "walk")}
         waiting = sorted(_walk_pending.get(net) or ()) + sorted(a for (n, a) in _rescan_queue if n == net)
         tags = {w["address"]: w["tag"] for w in wallets}
         readers = []
@@ -26851,7 +28267,7 @@ def create_app(state: AppState) -> FastAPI:
             "walk": live, "waiting": [{"address": a, "tag": tags.get(a, "")} for a in dict.fromkeys(waiting)],
             "readers": readers, "history": [h for h in _walk_history if h["chain"] == net][:WALK_HISTORY],
             "reconcile": {"last": state.setting("coinlists_reconcile_last", None), "running": _reconciling.is_set()},
-            "settings": {"walk": _walk_on(picked), "lend": state.setting("walk_lend", True) is not False,
+            "settings": {"lend": state.setting("walk_lend", True) is not False,
                          "readers_max": int(state.setting("walk_readers_max", WALK_READERS_MAX) or WALK_READERS_MAX)},
             "files": {"readable": bool(mine.get("files")),
                       "dir": str(coinwalklib.blocks_dir(picked, state.setting(f"blocks_dir:{net}", None)) or ""),
@@ -26917,9 +28333,7 @@ def create_app(state: AppState) -> FastAPI:
             return JSONResponse({"queued": address})
         if do == "set":
             for k, v in said.items():
-                if k.startswith("walk_") and _walk_chain_by(k[5:]) is not None:
-                    state.set_setting(f"import_walk:{k[5:]}", bool(v))
-                elif k == "lend":
+                if k == "lend":
                     state.set_setting("walk_lend", bool(v))
                 elif k == "readers_max":
                     state.set_setting("walk_readers_max", max(2, min(32, int(v))))
@@ -26930,52 +28344,6 @@ def create_app(state: AppState) -> FastAPI:
                     state.set_setting(f"blocks_dir:{k[11:]}", path or None)
             return JSONResponse({"saved": True})
         return JSONResponse({"detail": "reconcile, walk or set"}, status_code=400)
-
-    def _walk_on(chain) -> bool:
-        said = state.setting(f"import_walk:{chain.network}", None)
-        return bool(said) if said is not None else True
-
-    def _rescan_start(chain, address: str) -> None:
-        """Read back the coins `address` already held, on a thread: the Core's coin set where it has one
-        (`scantxoutset`), else the blocks from the floor to where watching began. Another arcade is NOT asked for an
-        imported address: the arcades answer by @tag only, and a public "what does this address hold here" would
-        tell anybody which addresses this arcade's accounts imported."""
-        key = f"backfilled:{chain.network}:{address}"
-        index = state.token_index(chain)
-        with contextlib.closing(index.open()) as db:
-            since = utxoslib.since(db, address)
-        end = since if since is not None else (index.indexed_height() or 0)
-        start = _rescan_floor(chain)
-        if end < start:
-            state.set_setting(key, 0)
-            return
-        run = {"network": chain.network, "start": start, "end": end, "progress": {}, "began": time.time(),
-               "imported": True}
-        _backfilling.add(address)
-        _backfill_runs[address] = run
-
-        def go() -> None:
-            try:
-                with chain.rpc() as rpc:
-                    filed = None
-                    if not chain.borrowed:
-                        filed = utxoslib.seed_from_core(index, rpc, chain.params, {address},
-                                                        index.indexed_height() or 0)
-                    if filed is None:
-                        filed = utxoslib.backfill(index, rpc, chain.params, address, start, end,
-                                                  progress=run["progress"])
-                state.set_setting(key, filed)
-                state.bump_generation()
-                log.info("imported wallet %s on %s: read back, %d coins", address, chain.network, filed)
-            except Exception as exc:                       # noqa: BLE001 -- the chain went away: queued again
-                log.warning("read-back of imported %s stopped: %s; queued", address, exc)
-                _rescan_queue[(chain.network, address)] = time.time()
-            finally:
-                _backfilling.discard(address)
-                _backfill_runs.pop(address, None)
-                _rescan_queue_wake()
-
-        threading.Thread(target=go, daemon=True, name=f"import read-back {address}").start()
 
     def _still_imported(network: str, address: str) -> bool:
         """Whether any account still lists `address` among its imports on that chain."""
@@ -26990,16 +28358,19 @@ def create_app(state: AppState) -> FastAPI:
             while _rescan_queue:
                 for (network, address) in sorted(_rescan_queue, key=_rescan_queue.get):
                     chain = next((c for c in _account_chains() if c.network == network), None)
-                    if chain is None or not _still_imported(network, address):
+                    if not _still_imported(network, address) or (
+                            chain is None and not any(c is not None and c.network == network
+                                                      for c in (state.ledger, *state.addons))):
                         _rescan_queue.pop((network, address), None)
+                        continue
+                    if chain is None:                          # the chain is there, only not ready this minute
+                        _queue_says(network, address, "waits: the chain is not ready now")
                         continue
                     if address in _backfill_runs or _rescan_done(chain, address):
                         _rescan_queue.pop((network, address), None)
                         continue
                     if not _can_read_back(chain):
-                        _queue_says(network, address, f"waits: the chain cannot be read back now (readable "
-                                    f"{_readable(chain)}, held {catchuplib.held(network)!r}, sharer "
-                                    f"{catchuplib.can_borrow(chain)}, retry {_core_retry.get(network)})")
+                        _queue_says(network, address, "waits: the chain cannot be read now")
                         continue
                     with _imports_lock:
                         running = _chain_rescan(network)
@@ -27027,19 +28398,9 @@ def create_app(state: AppState) -> FastAPI:
             threading.Thread(target=_rescan_queue_runner, daemon=True, name="import read-back queue").start()
 
     def _begin_next(chain, address: str) -> None:
-        """Start what reads `address`'s past next: the chain's next Core batch (with every other import waiting),
-        or the address's own read-back."""
-        if _walk_on(chain):                                 # the shared walk (2026-10-25): no Core rescan
-            _rescan_queue.pop((chain.network, address), None)
-            _walk_start(chain, address)
-            return
-        core = _core_rescan_on(chain) and state.setting(f"core_rescanned:{chain.network}:{address}", None) is None
-        if core:
-            _rescan_queue.setdefault((chain.network, address), time.time())
-            _core_batch_start(chain)
-        else:
-            _rescan_queue.pop((chain.network, address), None)
-            _rescan_start(chain, address)
+        """Start the shared walk that reads `address`'s past (2026-10-25; the only read-back since 2026-11-03)."""
+        _rescan_queue.pop((chain.network, address), None)
+        _walk_start(chain, address)
 
     def _rescan_begin(chain, address: str) -> dict:
         """Start the read-back of an imported address now, or queue it; and say where it stands."""
@@ -27054,13 +28415,23 @@ def create_app(state: AppState) -> FastAPI:
                     _rescan_queue_wake()
         return _rescan_says(chain, address)
 
-    def _imported_view(account, chain) -> list[dict]:
-        """This account's imported addresses on one chain, each with its balance and where its read-back stands."""
+    def _imported_view(account, chain, balances_for: set | None = None) -> list[dict]:
+        """This account's imported addresses on one chain, each with its balance and where its read-back stands.
+
+        `balances_for` (lazy wallets, 2026-11-05: "we shouldn't be downloading all of the wallet balances all at
+        once only when each wallet is open"): the (network, address) pairs whose coins are read; any other comes back
+        with its read-back state and `"lazy": true`, balances None. None reads every one, as before."""
         out = []
         gone = _flights.spent_by(account.pubkey, chain.network)
         index = state.token_index(chain)
         for entry in _imported(account, chain):
             address = entry["a"]
+            if balances_for is not None and (chain.network, address) not in balances_for:
+                out.append({"address": address, "kind": entry["k"], "since": None, "lazy": True,
+                            "spendable": None, "inscribed": None, "inscribed_n": None,
+                            "unchecked": None, "unchecked_n": None,
+                            "registered": entry["t"], **_rescan_says(chain, address)})
+                continue
             with contextlib.closing(index.open()) as db:
                 coins = utxoslib.unspent(db, address)
                 since = utxoslib.since(db, address)
@@ -27086,8 +28457,11 @@ def create_app(state: AppState) -> FastAPI:
         return out
 
     @app.get("/account/imported")
-    def account_imported(request: Request):
-        return _account_imported(request)
+    def account_imported(request: Request, record: int = 0, lazy: int = 0, chain: str = "", address: str = ""):
+        """`?lazy=1`: coins read only for the wallet open on the page (`chain` + `address`, or none); `?record=1`: no
+        wallets at all (a sign-in)."""
+        opened = {(chain, address.strip())} if lazy and chain and address.strip() else set()
+        return _account_imported(request, record_only=bool(record), balances_for=opened if lazy else None)
 
     @app.get("/account/imported/busy")
     def account_imported_busy(request: Request, chain: str = ""):
@@ -27101,20 +28475,32 @@ def create_app(state: AppState) -> FastAPI:
         return JSONResponse({"chain": picked.network, "busy": said is not None, **(said or {})},
                             headers={"Cache-Control": "no-store"})
 
-    def _account_imported(request: Request):
+    def _account_imported(request: Request, record_only: bool = False, balances_for: set | None = None):
         """This account's sealed record of imported wallets, for its browser to open; the main wallet's sealed
         blob beside it (the same one /signin hands anybody), so the browser can check a password against it before
-        it seals anything; each chain's imported addresses and where they stand; the main wallet's names."""
+        it seals anything; each chain's imported addresses and where they stand; the main wallet's names.
+
+        `record_only` (`?record=1`, what a sign-in asks): the record and the vault without each chain's addresses,
+        balances and rescans. Those read every coin of every imported address (2026-11-05: ~4 s a time for an
+        account holding 7,000 coins, asked twice per unlock) and opening the record needs none of them."""
         account = _signed_in_account(request)
         record = state.imported_wallets()
         have = record.get(account.pubkey) or {"blob": "", "updated": 0, "version": 0, "signed": False}
         vault = state.vault().by_pubkey(account.pubkey)
+        if record_only:
+            return JSONResponse({"blob": have["blob"], "updated": have["updated"], "record_only": True,
+                                 "version": int(have.get("version") or 0), "signed": bool(have.get("signed")),
+                                 "siblings": [{"digest": one["digest"], "version": one["version"], "blob": one["blob"]}
+                                              for one in record.siblings(account.pubkey)],
+                                 "tag": str((vault or {}).get("tag") or ""), "host": _proof_host(),
+                                 "vault": json.loads(vault["blob"]) if vault else None},
+                                headers={"Cache-Control": "no-store"})
         chains: dict[str, Any] = {}
         names: dict[str, str] = {}
         for chain in _account_chains():
             names[chain.network] = str(state.setting(importslib.name_key(chain.network, account.pubkey), "") or "")
             try:
-                chains[chain.network] = _imported_view(account, chain)
+                chains[chain.network] = _imported_view(account, chain, balances_for)
             except Exception:                              # noqa: BLE001 -- a chain with no index yet
                 chains[chain.network] = []
         busy = {}
@@ -27219,8 +28605,8 @@ def create_app(state: AppState) -> FastAPI:
         except ValueError as exc:
             return JSONResponse({"detail": str(exc)}, status_code=400)
         sync = bool(said.get("sync"))
-        # A new import needs two Cores of the chain on the network; a wallet already in the record, brought to this
-        # arcade, is registered here all the same (its import was made where it could be).
+        # No import on a chain in NO_IMPORTS; a wallet already in the record, brought to this arcade, is registered
+        # here all the same (its import was made where it could be).
         closed = _import_closed(chain) if not sync or chain.network in NO_IMPORTS else ""
         if closed:
             return JSONResponse({"detail": closed}, status_code=400)
@@ -27261,8 +28647,6 @@ def create_app(state: AppState) -> FastAPI:
             if got is not None:
                 filed, host = got
                 state.set_setting(f"backfilled:{chain.network}:{address}", filed)
-                if _core_rescan_on(chain):
-                    state.set_setting(f"core_rescanned:{chain.network}:{address}", int(time.time()))
                 _backfill_runs.pop(address, None)
                 _rescan_queue.pop((chain.network, address), None)
                 state.bump_generation()
@@ -27314,8 +28698,6 @@ def create_app(state: AppState) -> FastAPI:
             if got is not None:
                 filed, host = got
                 state.set_setting(f"backfilled:{chain.network}:{address}", filed)
-                if _core_rescan_on(chain):
-                    state.set_setting(f"core_rescanned:{chain.network}:{address}", int(time.time()))
                 state.bump_generation()
                 return JSONResponse({"address": address, "chain": chain.network, "state": "ready", "from": host,
                                      "says": f"Ready: brought over from {host}, every coin checked here."})
@@ -28087,7 +29469,13 @@ def create_app(state: AppState) -> FastAPI:
     # header and, when the browser says where it came from, this very origin.
 
     def _admin_check(request: Request, write: bool = False) -> dict:
-        """Who is using the panel, or an HTTPException saying what is missing."""
+        """Who is using the panel, or an HTTPException saying what is missing. An operator's API key is the operator
+        at the machine; it needs neither the admin page's header nor its password (arcade/apikeys.py)."""
+        key = apikeylib.CURRENT.get()
+        if key is not None and key.operator:
+            # The operator, but never "at the machine" (2026-11-05 review): a key is used from elsewhere, so what only
+            # the node's own machine may do (confirm sends from the node wallet) still needs the machine.
+            return {"local": False, "key": key.id}
         local = not (state.public or _from_outside(request))
         if write:
             if request.headers.get(ADMIN_HEADER) != "1":
@@ -28119,6 +29507,20 @@ def create_app(state: AppState) -> FastAPI:
         except accountslib.AccountError:
             return False
 
+    def _require_local_or_admin_password(request: Request, password: str = "", *,
+                                         write: bool = False, who: dict | None = None) -> dict:
+        """The machine, or the admin password. The same rule as /admin/api/send/confirm.
+
+        An operator API key is not the machine (`_admin_check` returns local False).
+        The password is hashed only when the caller is not local, so a person at
+        the machine pays nothing extra. Raises 403 before any wallet RPC.
+        """
+        if who is None:
+            who = _admin_check(request, write=write)
+        if not who.get("local") and not _admin_password_ok(str(password or ""), request):
+            raise HTTPException(403, "the admin password, to send the node's coins")
+        return who
+
     @app.get("/admin", response_class=HTMLResponse)
     def admin_page(request: Request):
         try:
@@ -28129,8 +29531,64 @@ def create_app(state: AppState) -> FastAPI:
             return render(request, "admin_login.html", reason=str(exc.detail),
                           signed_in=signed_in(request) is not None, need_account=True)
         return render(request, "admin.html", local=who["local"], update_status=state.update_status, when=_when,
+                      window_tab="admin",
                       update_every=watcherlib.BlockWatcher.UPDATE_EVERY, release_key=releaselib.PUBLIC_KEY,
-                      trade_cut=swaplib.cut_bps(state.setting("trade_cut", TRADE_CUT)) / 100)
+                      trade_cut=swaplib.cut_bps(state.setting("trade_cut", TRADE_CUT)) / 100, names=_arcade_names())
+
+    def _arcade_names() -> dict:
+        """The arcade's two names for Admin -> This node (2026-11-04, "Who runs this node", Plan B): its node's own
+        (the place), its owner's (the person), which one it answers to, and what owns it: "account", "password"
+        (a username and password with no wallet) or "" (nobody yet: the node runs itself)."""
+        return {"node": state.node_tag(), "owner": state.owner_tag(), "answers": state.arcade_name(),
+                "owner_kind": state.owner_kind(), "statement": _owner_statement()}
+
+    def _owner_statement() -> dict:
+        """The owner's signed word that it owns this node (arcade/owner.py), as Admin -> This node shows it: whether
+        one is kept, when it ends, whether it is due again, whether linked arcades hear it, and what the owner's wallet
+        signs for (this node's mesh id, the messaging chain's network, the owner's address)."""
+        kept = ownerlib.shaped(state.setting("owner_statement"))
+        return {"signed": bool(kept and kept["x"] > time.time()), "expires": kept["x"] if kept else 0,
+                "due": ownerlib.due(kept), "say": bool(state.setting("owner_say")),
+                "node": str(getattr(getattr(state, "mesh", None), "node_id", "") or ""),
+                "network": state.messaging.network, "version": state.messaging.params.pubkeyhash_version,
+                "address": state.owner_address()}
+
+    @app.get("/admin/api/your-nodes")
+    def admin_your_nodes(request: Request):
+        """The other nodes this node's owner owns, for Admin -> Your nodes: every arcade heard over the mesh, itself or
+        passed on by a linked one, whose owner's statement names the same address and checks out (mesh/operators.py
+        owned_by, arcade/owner.py). Empty without an owner account or a mesh."""
+        _admin_check(request)
+        from ..mesh.operators import owned_by
+        address, mesh = state.owner_address(), getattr(state, "mesh", None)
+        operators = getattr(mesh, "operators", None)
+        rows: list = []
+        if address and operators is not None:
+            try:
+                links = set(dict(mesh.node.links))
+            except Exception:                              # noqa: BLE001 -- none linked now
+                links = set()
+            rows = owned_by(dict(operators.peers), links, address, state.messaging.network, ownerlib.check,
+                            mesh.node_id or "")
+        return JSONResponse({"rows": rows, "owner": state.owner_tag(), "me": state.operator_tag()})
+
+    @app.post("/admin/api/owner")
+    def admin_owner(request: Request, payload: Any = Body(None)):
+        """Keep the owner's signed statement that it owns this node, checked first, and whether linked arcades hear it
+        (mesh/service.py operator_about). The statement must name this node and the owner account's own address."""
+        _admin_check(request, write=True)
+        said = payload if isinstance(payload, dict) else {}
+        if "statement" in said:
+            want = state.owner_address()
+            node = _owner_statement()["node"]
+            got = ownerlib.check(said["statement"], state.messaging.network, node)
+            if not want or not node or got != want:
+                return JSONResponse({"detail": "that is not this node's owner saying it owns this node"},
+                                    status_code=400)
+            state.set_setting("owner_statement", ownerlib.shaped(said["statement"]))
+        if "say" in said:
+            state.set_setting("owner_say", bool(said["say"]))
+        return JSONResponse(_owner_statement())
 
     @app.get("/admin/login", response_class=HTMLResponse)
     def admin_login_page(request: Request):
@@ -28311,14 +29769,20 @@ def create_app(state: AppState) -> FastAPI:
                         "trade_cut": state.setting("trade_cut")},
             "node": {"version": state.running_version,
                      "public_hosts": list(state.public_hosts)},
+            "terms": {"on": termslib.on(state), "text": termslib.text(state),
+                      "version": termslib.version(termslib.text(state)),
+                      "own": bool(state.setting(termslib.TEXT_SETTING, ""))},
             "xchain": _admin_xchain(),
             "swap_big": {k: v / COIN for k, v in _swap_big_lines().items()},
             "delegate_cap": {k: v / COIN for k, v in _delegate_caps().items()},
             "inscribe_fee": _admin_inscribe_fee(),
             "flags": _admin_flags(),
             "chains": _admin_chains(),
-            "brand": {"current": brandlib.current().key, "locked": brandlib.FROM_ENV,
-                      "choices": [[b.key, b.name] for b in brandlib.BRANDS.values()]},
+            "brand": {"current": brandlib.own().key, "locked": brandlib.FROM_ENV,
+                      "choices": [[b.key, b.name] for b in brandlib.BRANDS.values()],
+                      # A face per web address (brand.py): {host: face}, and the names it may be given for.
+                      "hosts": brandlib.hosts(state.setting("brand_hosts")),
+                      "public_hosts": list(state.public_hosts)},
         }, headers={"Cache-Control": "no-store"})
 
     # --- names another arcade holds under another key (issue #15, 2026-10-25) ------------------------------------
@@ -28912,12 +30376,27 @@ def create_app(state: AppState) -> FastAPI:
     def _known_piece(net: str, answer: dict) -> dict:
         """The viewer's "In collection: Name #k" (2026-10-26): the known collection holding the inscription shown."""
         x = (answer.get("number") or {}).get("inscription") if isinstance(answer.get("number"), dict) else None
+        if not isinstance(x, dict) or not x.get("id"):
+            return {}
         store = state.known_collections() if hasattr(state, "known_collections") else None
-        if not isinstance(x, dict) or not x.get("id") or store is None:
-            return {}
-        found = store.in_collection(net, str(x["id"]))
+        found = None
+        if store is not None:
+            try:
+                found = store.in_collection(net, str(x["id"]))
+            except Exception:                                      # noqa: BLE001
+                found = None
         if found is None:
-            return {}
+            # A collection that describes itself on the chain (collection_registry), as the Wallet reads it too
+            # (2026-11-06, #91 item 1: Anti Doginal Dogs had a name in the Wallet and none here).
+            try:
+                got = state.collection_registry().item(net, str(x["id"]))
+            except Exception:                                      # noqa: BLE001
+                got = None
+            if got is None:
+                return {}
+            return {"collection": {"kind": "registry", "txid": got["root"], "root": got["root"],
+                                   "collection": got.get("name") or "", "position": got["number"],
+                                   "name": f"{got.get('name') or ''} #{got['number']}".strip(), "source": "chain"}}
         return {"collection": {"slug": found["slug"], "collection": found["collection"], "position": found["position"],
                                "name": found["name"] or (found["collection"] + (f" #{found['position']}"
                                                                                 if found["position"] else "")),
@@ -29057,8 +30536,46 @@ def create_app(state: AppState) -> FastAPI:
     #: The collection search's choices (2026-10-26, SadFrog: "more in depth with sorting and filters and lazy loading
     #: one at a time on demand").
     COLLECTION_SORTS = ("size", "name", "holders", "newest", "agreed")
-    COLLECTION_SOURCES = ("all", "registry", "known")
+    COLLECTION_SOURCES = ("all", "registry", "known", "builtin")
     COLLECTIONS_PAGE, COLLECTIONS_MOST = 30, 60
+
+    # --- Sub 1K: every chain's first thousand inscriptions, built in (2026-11-01) ----------------------------------
+    #
+    # SadFrog: "make a hardcoded collection for all relevant chains that is sub 1k - this should what auto shows on each
+    # chains explore page". Nothing is fetched from outside: its pieces are inscriptions #0 to #999 as this arcade's
+    # index (or a walking linked arcade's) numbers them, asked one number at a time -- a question every arcade answers
+    # -- and kept here once found (a number that low is long settled).
+    SUB1K, SUB1K_SLUG, SUB1K_PAGE = 1000, "sub1k", 48
+    _sub1k_seen: dict[tuple[str, int], dict] = {}
+
+    def _sub1k_row(net: str) -> dict:
+        cover = _sub1k_seen.get((net, 0))
+        return {"kind": "builtin", "slug": SUB1K_SLUG, "name": "Sub 1K", "source": "built in",
+                "description": f"The first {SUB1K:,} inscriptions on {ordchainslib.chain_name(net)}, #0 to "
+                               f"#{SUB1K - 1}, as this arcade's index numbers them.",
+                "supply": SUB1K, "count": SUB1K, "imported": True, "cover": cover["id"] if cover else None,
+                "agreed": None, "owners": None, "height": None, "created": None, "first": 0, "last": SUB1K - 1}
+
+    def _sub1k_pieces(net: str, start: int) -> list[dict]:
+        """Inscriptions #start.. of the Sub 1K page, those the index knows (a lookup each, side by side)."""
+        from concurrent.futures import ThreadPoolExecutor
+        index = state.ord_index(net)
+        numbers = range(start, min(start + SUB1K_PAGE, SUB1K))
+        wanted = [n for n in numbers if (net, n) not in _sub1k_seen]
+        if index is not None and wanted:
+            def one(n: int) -> None:
+                try:
+                    said = index.lookup({"what": "number", "number": n})
+                except Exception:                              # noqa: BLE001 -- not answered: asked at the next page
+                    return
+                x = (said.get("number") or {}).get("inscription") if isinstance(said.get("number"), dict) else None
+                if isinstance(x, dict) and x.get("id") and x.get("number") == n:
+                    _sub1k_seen[(net, n)] = {"id": str(x["id"]), "content_type": x.get("content_type") or ""}
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                list(pool.map(one, wanted))
+        return [{"id": got["id"], "name": None, "number": n, "inscription_number": n,
+                 "content_type": got["content_type"]}
+                for n in numbers if (got := _sub1k_seen.get((net, n)))]
 
     def _collection_key(sort: str):
         def name(c):
@@ -29124,6 +30641,10 @@ def create_app(state: AppState) -> FastAPI:
             return JSONResponse({"detail": bad}, status_code=400)
         low = said.lower()
         found: list[dict] = []
+        pinned: list[dict] = []
+        if source in ("all", "builtin") and net in ordchainslib.EXPLORE_ORDER \
+                and (not low or low in "sub 1k" or low in SUB1K_SLUG):
+            pinned = [_sub1k_row(net)]
         if source in ("all", "registry"):
             keep = ("txid", "number", "name", "chain", "supply", "description", "cover", "count", "traits")
             found += [{**{k: r.get(k) for k in keep}, "kind": "registry", "source": "registry", "imported": True,
@@ -29141,6 +30662,8 @@ def create_app(state: AppState) -> FastAPI:
                  and (hi < 0 or (c.get("supply") is not None and c["supply"] <= hi))
                  and (not least or (c.get("agreed") or 0) >= least)]
         found.sort(key=_collection_key(sort))
+        pinned = [c for c in pinned if (lo < 0 or c["supply"] >= lo) and (hi < 0 or c["supply"] <= hi) and not least]
+        found = pinned + found                            # Sub 1K first, whatever the sort
         return JSONResponse({"collections": found[at:at + size], "total": len(found), "offset": at, "limit": size},
                             headers={"Cache-Control": "no-store"})
 
@@ -29164,6 +30687,20 @@ def create_app(state: AppState) -> FastAPI:
         demand): the answer says "loading", with how many pieces have come so far, until it is held."""
         if _explore_limited(request):
             return JSONResponse({"detail": "Too many questions in a minute: wait a moment."}, status_code=429)
+        if slug == SUB1K_SLUG:
+            if net not in ordchainslib.EXPLORE_ORDER or not re.match(r"^[0-9]{1,7}$", (offset or "0").strip()):
+                return JSONResponse({"detail": "a chain and an offset"}, status_code=400)
+            if state.ord_index(net) is None:
+                return JSONResponse({"detail": "this arcade does not read that chain"}, status_code=404)
+            start = int(offset)
+            items = _sub1k_pieces(net, start) if start < SUB1K else []
+            said = {"collection": _sub1k_row(net), "loading": False, "items": items,
+                    "next": min(start + SUB1K_PAGE, SUB1K)}
+            if start < SUB1K and not items:
+                said["unanswered"] = (f"Inscriptions #{start} to #{min(start + SUB1K_PAGE, SUB1K) - 1} are not "
+                                      f"indexed here yet, and no linked arcade walking "
+                                      f"{ordchainslib.chain_name(net)} answered.")
+            return JSONResponse(said, headers={"Cache-Control": "no-store"})
         if slug:
             store = state.known_collections() if hasattr(state, "known_collections") else None
             if net not in knownlib.CHAINS or not knownlib.SLUG.match(slug) \
@@ -29420,9 +30957,22 @@ def create_app(state: AppState) -> FastAPI:
                 text = str(said["faucet_daily"]).strip()
                 state.set_setting("faucet_daily",
                                   None if text in ("", "none") else walletlib.parse_amount(text))
-            for flag in ("auto_update", "auto_sell", "auto_fill", "node_trades"):
+            for flag in ("auto_update", "auto_sell", "auto_fill", "node_trades", termslib.GATE_SETTING,
+                         "serve_index_copies", "fetch_index_copies"):
                 if flag in said:
                     state.set_setting(flag, bool(said[flag]))
+            if termslib.TEXT_SETTING in said:
+                # Empty, or the template word for word, keeps nothing: the node then follows the template.
+                words = termslib.clean(said[termslib.TEXT_SETTING])
+                if len(words) > termslib.TEXT_MAX:
+                    raise ValueError(f"the terms are limited to {termslib.TEXT_MAX:,} characters")
+                state.set_setting(termslib.TEXT_SETTING,
+                                  None if words == termslib.clean(termslib.DEFAULT) else words or None)
+            if "arcade_name" in said:
+                # Whose @name the arcade answers to (state.arcade_name): its own, or its owner account's.
+                if said["arcade_name"] not in ("node", "owner"):
+                    raise ValueError("the arcade answers to its own name or its owner's")
+                state.set_setting(state.ARCADE_NAME, said["arcade_name"])
             if "update_channel" in said:
                 # main live or main test (arcade/update.py CHANNELS), read by the updater at its next check
                 if said["update_channel"] not in updatelib.CHANNELS:
@@ -29537,14 +31087,27 @@ def create_app(state: AppState) -> FastAPI:
                     except InvalidOperation:
                         raise ValueError(f"{text} is not an amount") from None
                     state.set_setting(f"inscribe_fee:{network}", 0 if none else walletlib.parse_amount(text))
-            if "brand" in said and said["brand"] != brandlib.current().key:
+            if "brand" in said and said["brand"] != brandlib.own().key:
                 # The face, at once and kept (brand.py). A face fixed by the service stays fixed.
                 if brandlib.FROM_ENV:
                     raise ValueError("this node's face is set by --brand / ARCADE_BRAND in its "
                                      "service; change it there")
                 chosen = brandlib.use(str(said["brand"]))
                 state.set_setting("brand", chosen.key)
-                TEMPLATES.env.globals["brand"] = chosen
+            if "brand_hosts" in said:
+                # A face per web address (brand.py, 2026-11-03): {host: face}, each host one of this node's
+                # public names. Allowed with a face fixed by the service too: that one stays the node's own.
+                wanted = said["brand_hosts"] if isinstance(said["brand_hosts"], dict) else None
+                if wanted is None:
+                    raise ValueError("brand_hosts is {web address: face}")
+                kept = brandlib.hosts(wanted)
+                for host, key in wanted.items():
+                    name = str(host).strip().lower().rsplit(":", 1)[0]
+                    if name and name not in kept:
+                        raise ValueError(f"no such face: {key!r} (one of {sorted(brandlib.BRANDS)})")
+                    if name and name not in state.public_hosts:
+                        raise ValueError(f"{name} is not one of this node's public names; add it under public_hosts first")
+                state.set_setting("brand_hosts", kept)
             if "flags_broadcast" in said:     # content flags to every arcade (arcade/flags.py)
                 state.set_setting("flags:broadcast", bool(said["flags_broadcast"]))
             if "flags_follow" in said:        # whose content flags this arcade uses
@@ -29587,6 +31150,19 @@ def create_app(state: AppState) -> FastAPI:
                 chains.append(state.addon(net) or ChainContext(network=net, role="ledger", label=params.label))
         return chains
 
+    def _coverage_rows(mesh) -> list[dict]:
+        cov = getattr(mesh, "coverage", None)
+        try:
+            rows = cov.status() if cov is not None else []
+        except Exception:                                  # noqa: BLE001 -- never takes the panel down
+            return []
+        labels = {c.network: c.label for c in getattr(state, "all_chains", ())}
+        for r in rows:
+            kind, _, net = r["key"].partition(":")
+            r["what"] = {"c": "Core", "o": "Ord index", "t": "Token index", "m": "Media relay",
+                         "g": "Game room"}.get(kind, kind) + (f": {labels.get(net, net)}" if net and kind != "g" else "")
+        return [r for r in rows if not r["key"].startswith("g:")] + [r for r in rows if r["key"].startswith("g:")]
+
     def _admin_chains() -> dict:
         """Admin -> Chains (arcade/cores.py): which Cores run here, which are borrowed through the
         mesh, which are shared, and how this arcade's indexes compare with other arcades'."""
@@ -29602,8 +31178,17 @@ def create_app(state: AppState) -> FastAPI:
                 row["chosen"] = coreslib.mode(state.settings(), row["net"], coreslib.OFF)
         index = check.status() if check else {}
         from .. import core_catchup
+        tokens = {c.network: c for c in state.token_chains}
         for row in rows:
             row["index"] = index.get(row["net"], {})
+            # Index copies (ledger_snapshot.py, 2026-11-02): one made for others, one being fetched, or where this
+            # index came from and how far its confirmation from this arcade's own node has got.
+            row["copy"] = None
+            if row["net"] in tokens and hasattr(state, "ledger_snapshots"):
+                try:
+                    row["copy"] = state.ledger_snapshots(tokens[row["net"]]).status()
+                except Exception:                          # noqa: BLE001 -- never takes the panel down
+                    row["copy"] = None
             # A Core here that is behind (syncing, re-indexing, rescanning): read from a sharer until it catches up,
             # or used as it is when none shares the chain, said in one line (arcade/core_catchup.py, 2026-10-21).
             own = state.messaging if row["net"] == state.messaging.network else (
@@ -29641,7 +31226,13 @@ def create_app(state: AppState) -> FastAPI:
                          if net not in NETWORKS and s.get("sharers"))
         return {"rows": rows, "mesh": mesh is not None, "unknown": unknown,
                 "restart": bool(os.environ.get("INVOCATION_ID") or os.environ.get("ARCADE_SUPERVISOR_PID")),
-                "mining": _mining_json()}
+                "mining": _mining_json(),
+                # Index copies (ledger_snapshot.py, 2026-11-02): serve them to arcades far behind, and fetch
+                # one when this index is. Both on unless turned off (a phone turns serving off).
+                "copies": {"serve": state.setting("serve_index_copies", True) is not False,
+                           "fetch": state.setting("fetch_index_copies", True) is not False},
+                # What this arcade needs and how many linked arcades hold each (mesh/coverage.py, 2026-11-02).
+                "coverage": _coverage_rows(mesh)}
 
     def _admin_faucet_row(net: str) -> dict | None:
         """A test chain's faucet for Admin -> Chains (2026-10-18): its daily top-off, how it is stocked,
@@ -29725,6 +31316,42 @@ def create_app(state: AppState) -> FastAPI:
             return JSONResponse({"detail": str(exc)}, status_code=400)
         return JSONResponse({"ok": True, "job": job})
 
+    @app.post("/admin/api/cores/copy")
+    def admin_cores_copy(request: Request, payload: Any = Body(None)):
+        """A node install's two buttons (2026-11-04, the mockup with the steps in the row): "own" -- sync on its
+        own instead of taking a copy; "cancel" -- stop the node this arcade installed, delete its chain data (never
+        its wallet) and borrow the chain again."""
+        from .. import core_install
+        _admin_check(request, write=True)
+        said = payload if isinstance(payload, dict) else {}
+        net, action = str(said.get("net") or ""), str(said.get("action") or "")
+        params = NETWORKS.get(net)
+        if params is None or not params.addon or not state.setting(f"core_installed:{net}"):
+            return JSONResponse({"detail": "this arcade did not install a node for that chain"}, status_code=400)
+        boot = getattr(getattr(state, "mesh", None), "coreboot", None)
+        if action == "own":
+            if boot is not None:
+                boot.own(net)
+            else:
+                state.set_setting(f"core_copy_own:{net}", True)
+            core_install.note(state, net, f"{params.label}: syncing on its own, no copy (as chosen)")
+            return JSONResponse({"ok": True})
+        if action == "cancel":
+            try:
+                core_install.cancel(state, net, params)
+            except Exception as exc:                       # noqa: BLE001 -- said on the page
+                return JSONResponse({"detail": str(exc)}, status_code=400)
+            return JSONResponse({"ok": True})
+        return JSONResponse({"detail": "the action is own or cancel"}, status_code=400)
+
+    @app.get("/admin/api/cores/events")
+    def admin_cores_events(request: Request, since: float = 0.0):
+        """Node installs' notifications since `since` (Admin shows each new one, on any tab, and keeps the list)."""
+        from .. import core_install
+        _admin_check(request)
+        return JSONResponse({"events": core_install.events(state, since), "now": time.time()},
+                            headers={"Cache-Control": "no-store"})
+
     @app.post("/admin/api/cores")
     def admin_cores(request: Request, payload: Any = Body(None)):
         """Which Cores run here, are borrowed, or are off (applies at the next start), and which are
@@ -29776,6 +31403,18 @@ def create_app(state: AppState) -> FastAPI:
 
     def _mining_status() -> dict:
         m = _cpu_mining
+        run = state.mining if isinstance(state.mining, dict) and state.mining.get("chain_ctx") else None
+        if run and not (m and m["thread"].is_alive()):
+            # A chain its own node mines, by algorithm (arcade/testmine.py: DigiByte testnet, 2026-11-04), in this
+            # panel's shape: a "worker" is an algorithm.
+            found = [{"hash": f["hash"], "algo": f["algo"], "at": f["at"], "result": "accepted",
+                      "confirmations": _block_fate(run["chain_ctx"], f["hash"])["confirmations"]}
+                     for f in list(run["found"])[-5:]]
+            return {"running": True, "net": run["net"], "address": run["address"], "workers": len(run["algos"]),
+                    "algos": run["algos"], "tries": run["tries"], "rate": round(run["rate"]), "height": 0, "bits": "",
+                    "note": "; ".join(f"{a}: {e}" for a, e in run.get("errors", {}).items()), "found": found,
+                    "blocks": len(run["found"]), "seconds": int(time.time() - run["started"]),
+                    "until": run.get("until"), "faucet": False, "share_to": None, "stopping": bool(run["stop"])}
         if not m:
             return {"running": False}
         p = m["progress"]
@@ -29805,14 +31444,15 @@ def create_app(state: AppState) -> FastAPI:
         sharer is paid a tenth of each block in its coinbase. {"pay": "faucet"} pays this chain's faucet, the
         node's own Core wallet (2026-10-18: one set of mining controls, with the faucet buttons' end time and
         payee folded in)."""
-        from .. import blockminer
+        from .. import blockminer, testmine
         _admin_check(request, write=True)
         said = payload if isinstance(payload, dict) else {}
         if said.get("stop"):
             if _cpu_mining:
                 _cpu_mining["stop"] = True
+            testmine.stop(state)
             return JSONResponse({"ok": True, **_mining_status()})
-        if _cpu_mining and _cpu_mining["thread"].is_alive():
+        if (_cpu_mining and _cpu_mining["thread"].is_alive()) or state.mining is not None:
             return JSONResponse({"detail": "already mining; stop it first"}, status_code=409)
         chain = next((c for c in state.all_chains if c.network == str(said.get("net", ""))), None)
         if not _minable(chain):
@@ -29834,6 +31474,9 @@ def create_app(state: AppState) -> FastAPI:
         if not 0 <= blocks <= 100:
             return JSONResponse({"detail": "mine up to 100 blocks, or leave it blank"}, status_code=400)
         to_faucet = said.get("pay") == "faucet"
+        if getattr(chain.params, "mine_algos", ()) and (chain.borrowed or to_faucet):
+            return JSONResponse({"detail": f"{chain.label} is mined by its own node here, to an address: not "
+                                           f"borrowed, and not to the faucet"}, status_code=400)
         if to_faucet and chain.borrowed:
             return JSONResponse({"detail": "a borrowed chain has no faucet wallet here"}, status_code=400)
         try:
@@ -29845,6 +31488,14 @@ def create_app(state: AppState) -> FastAPI:
             blockminer.output_script(address, chain.params)
         except Exception as exc:                           # noqa: BLE001
             return JSONResponse({"detail": f"that address: {exc}"}, status_code=400)
+        if getattr(chain.params, "mine_algos", ()):
+            # A multi-algorithm chain (DigiByte testnet, 2026-11-04): its own node mines each algorithm side by side,
+            # where a CPU wins far more blocks than this panel's scrypt in Python (arcade/testmine.py).
+            try:
+                testmine.start(state, chain, address, blocks, until)
+            except Exception as exc:                       # noqa: BLE001 -- said in the panel
+                return JSONResponse({"detail": str(exc)}, status_code=400)
+            return JSONResponse({"ok": True, **_mining_status()})
         # Half the CPUs unless asked: the arcade's own pages run on the rest.
         workers = max(1, min(int(said.get("workers") or max(1, (os.cpu_count() or 2) // 2)), os.cpu_count() or 1))
         progress = blockminer.Progress()
@@ -29871,6 +31522,41 @@ def create_app(state: AppState) -> FastAPI:
                            stop=False, thread=threading.Thread(target=run, name="arcade-cpu-miner", daemon=True))
         _cpu_mining["thread"].start()
         return JSONResponse({"ok": True, **_mining_status()})
+
+    @app.get("/admin/api/mining")
+    def admin_mining(request: Request):
+        """Admin -> Mining (the Mining module, 2026-11-04): every chain here and how it can be mined -- by its node, by
+        this CPU, by ASICs on this network -- what this machine is mining now, and the stratum server's state."""
+        from .. import mining as mininglib
+        _admin_check(request)
+        service = getattr(state, "stratum", None)
+        def paid(row: dict) -> dict:                       # where its blocks pay by default: the operator's own
+            chain = next((c for c in state.all_chains if c.network == row["net"]), None)
+            try:
+                return {**row, "address": state.payout_address(chain) if chain is not None else ""}
+            except Exception:                              # noqa: BLE001 -- no address here yet
+                return {**row, "address": ""}
+        return JSONResponse({"chains": [paid(r) for r in mininglib.table(state)], "cpu": _mining_status(),
+                             "stratum": service.status() if service is not None else {"running": False}})
+
+    @app.post("/admin/api/stratum")
+    def admin_stratum(request: Request, payload: Any = Body(None)):
+        """Start, change or stop the stratum server for this network's ASICs: {on, net, algo, address, port,
+        difficulty, anyone}. The choice is kept, and the server comes back with the arcade."""
+        from .. import stratum as stratumlib
+        _admin_check(request, write=True)
+        said = payload if isinstance(payload, dict) else {}
+        if getattr(state, "stratum", None) is None:
+            state.stratum = stratumlib.Service(state)
+        changes = {k: said.get(k) for k in ("on", "net", "algo", "address", "port", "difficulty", "anyone")
+                   if k in said}
+        if "port" in changes and not (1024 <= int(changes["port"] or 0) <= 65535):
+            return JSONResponse({"detail": "a port from 1024 to 65535"}, status_code=400)
+        got = state.stratum.configure(**changes)
+        if changes.get("on") and not got.get("running"):
+            return JSONResponse({"detail": got.get("error") or "the stratum server did not start", **got},
+                                status_code=400)
+        return JSONResponse(got)
 
     @app.post("/admin/api/restart")
     def admin_restart(request: Request):
@@ -29921,7 +31607,43 @@ def create_app(state: AppState) -> FastAPI:
         stun = getattr(mesh, "stun", None)
         out["stun_mine"] = [f"{h}:{p}" for h, p in stun.mine()] if stun is not None else []
         out["stun_known"] = len(stun.known()) if stun is not None else 0
+        udp = getattr(mesh, "udp", None)
+        out["udp"] = udp.status() if udp is not None else []
+        introducer = getattr(mesh, "introducer", None)
+        out["udp_only"] = introducer.status() if introducer is not None else []
+        turn = getattr(mesh, "turn", None)
+        out["media"] = turn.status() if turn is not None else None
         return JSONResponse(out)
+
+    @app.get("/admin/api/mesh/punch")
+    def admin_mesh_punch_results(request: Request):
+        """The punch probe's last results (mesh/punch.py), the ones other nodes asked for too, and the linked nodes
+        a probe can be run with."""
+        _admin_check(request)
+        mesh = getattr(state, "mesh", None)
+        share = getattr(mesh, "punch", None)
+        if share is None or getattr(mesh, "loop", None) is None:
+            return JSONResponse({"ok": False, "detail": "this node is not on the mesh"})
+        return JSONResponse({"ok": True, "linked": sorted(mesh.node.links), "results": share.results},
+                            headers={"Cache-Control": "no-store"})
+
+    @app.post("/admin/api/mesh/punch")
+    def admin_mesh_punch(request: Request, payload: Any = Body(None)):
+        """Run the punch probe with a linked node: {"peer": its mesh id, or the start of it}. Takes about 15 s."""
+        _admin_check(request, write=True)
+        mesh = getattr(state, "mesh", None)
+        share = getattr(mesh, "punch", None)
+        if share is None or getattr(mesh, "loop", None) is None:
+            return JSONResponse({"detail": "this node is not on the mesh"}, status_code=400)
+        want = str((payload or {}).get("peer") or "").lower() if isinstance(payload, dict) else ""
+        match = [p for p in mesh.node.links if want and p.startswith(want)]
+        if len(match) != 1:
+            return JSONResponse({"detail": "name one linked node (its mesh id or the start of it)",
+                                 "linked": sorted(mesh.node.links)}, status_code=400)
+        try:
+            return JSONResponse(mesh._call(share.run(match[0]), timeout=60.0))
+        except Exception as exc:                           # noqa: BLE001
+            return JSONResponse({"detail": f"the probe failed: {exc}"}, status_code=500)
 
     def _welcome() -> tuple:
         """(book, signing key, share) of the welcome (arcade/welcome.py), or Nones while the mesh is off."""
@@ -29938,6 +31660,155 @@ def create_app(state: AppState) -> FastAPI:
         except Exception:                                  # noqa: BLE001 -- kept here; the next link-up passes it on
             log.info("welcome: could not pass a record on now", exc_info=True)
 
+    # --- the new operator's setup wizard (_setup_wizard.html, 2026-11-02) ------------------------------------
+    #: The names index counts as current within this many blocks of the node: a name is checked against it.
+    SETUP_INDEX_CURRENT = 6
+
+    def _setup_state() -> dict:
+        """Everything the setup wizard shows, in its four steps: the node, PEP test, the @name, and the name going out.
+        `need` is whether it shows at all: this arcade's operator has no @name on the chain yet."""
+        from . import welcoming
+        from .. import core_catchup
+        from ..messaging.sender import fundable_output
+        chain = state.messaging
+        tag = ""
+        try:
+            tag = state.operator_tag() or ""
+        except Exception:                                  # noqa: BLE001 -- said as none
+            tag = ""
+        # operator_is_node: the arcade answers to its node's own name (state.arcade_name), so the node's key claims it.
+        out: dict[str, Any] = {"need": not tag, "tag": tag, "net": chain.network, "label": chain.label,
+                               "operator_is_node": state.arcade_name() == "node"}
+        # 1. The node, and whether the chain is borrowed meanwhile.
+        try:
+            sync = state.chain_sync(chain)
+        except Exception:                                  # noqa: BLE001
+            sync = {"ready": False, "progress": 0.0, "online": False}
+        try:
+            catchup = core_catchup.say(chain, mesh_on=getattr(state, "mesh", None) is not None)
+        except Exception:                                  # noqa: BLE001
+            catchup = None
+        out["node"] = {**{k: sync.get(k) for k in ("ready", "progress", "blocks", "headers", "online")},
+                       "borrowed": bool(getattr(chain, "borrowed", False)), "catchup": catchup}
+        # The names index: what a name is checked against before it is claimed.
+        index = state.token_index(chain)
+        indexed = int(index.indexed_height() or 0)
+        tip = state.ledger_tips.get(chain.network) or int(sync.get("headers") or 0) or None
+        copy = None
+        try:
+            copy = state.ledger_snapshots(chain).status()
+        except Exception:                                  # noqa: BLE001
+            copy = None
+        out["index"] = {"indexed": indexed, "tip": tip,
+                        "current": bool(tip) and indexed >= int(tip) - SETUP_INDEX_CURRENT,
+                        "copy": copy}
+        # 2. PEP test: the address to send to, what the chain says it holds, and what this node's wallet can spend.
+        address = welcoming.my_address(state)
+        coins = {"address": address, "on_chain": 0, "spendable": 0, "mined": 0, "arrived_at": None}
+        if address:
+            try:
+                coins["on_chain"] = welcoming.address_coins(state, address)
+                with index.open() as db:
+                    row = db.conn.execute("SELECT MIN(height) FROM utxo WHERE address=?", (address,)).fetchone()
+                coins["arrived_at"] = int(row[0]) if row and row[0] else None
+            except Exception:                              # noqa: BLE001
+                pass
+            try:
+                with chain.rpc() as rpc:
+                    for u in rpc.call("listunspent", 0, 9_999_999, [address]):
+                        value = int(round(float(u.get("amount") or 0) * 100_000_000))
+                        coins["spendable" if fundable_output(u, chain.params) else "mined"] += value
+            except Exception as exc:                       # noqa: BLE001 -- a node warming up: said so
+                coins["wallet_error"] = str(exc)[:160]
+        out["coins"] = coins
+        try:
+            book, key, _ = _welcome()
+            out["welcome"] = (welcoming.view(state, book, key) or {}).get("mine")
+        except Exception:                                  # noqa: BLE001
+            out["welcome"] = None
+        # 3 and 4. A claim on its way: one this node really broadcast, waiting for its block.
+        out["claiming"] = None
+        for item in reversed(state.pending_tokens):
+            what = str(item.get("what") or "")
+            if item.get("network") == chain.network and what.startswith("claim @"):
+                out["claiming"] = {"tag": what[len("claim @"):], "txid": item.get("txid") or "",
+                                   "at": int(item.get("at") or 0)}
+                break
+        # Why the Claim button is off, in order (empty: it is on).
+        why = ""
+        if out["claiming"]:
+            why = "claimed"
+        elif not out["operator_is_node"]:
+            why = "operator account"
+        elif not out["index"]["current"]:
+            why = "index"
+        elif coins["spendable"] <= 0:
+            if coins["mined"] > 0:
+                why = "mined"
+            elif coins["on_chain"] > 0 and coins["arrived_at"] and int(sync.get("blocks") or 0) < coins["arrived_at"]:
+                why = "node behind coins"
+            else:
+                why = "no coins"
+        out["blocked"] = why
+        return out
+
+    @app.get("/admin/api/setup")
+    def admin_setup(request: Request):
+        """The new operator's setup wizard (2026-11-02): shown while this arcade's operator has no @name."""
+        _admin_check(request)
+        return JSONResponse(_setup_state(), headers={"Cache-Control": "no-store"})
+
+    @app.get("/admin/api/setup/name")
+    def admin_setup_name(request: Request, tag: str = ""):
+        """Is this @name one that can be claimed, and is it free (against the names index)?"""
+        _admin_check(request)
+        index = state.token_index(state.messaging)
+        try:
+            wanted = taglib.validate((tag or "").strip().lstrip("@"))
+        except taglib.TagError as exc:
+            return JSONResponse({"valid": False, "why": str(exc)})
+        holder = index.address_of(wanted)
+        mine = holder is not None and holder == state.derived_address
+        return JSONResponse({"valid": True, "tag": wanted, "taken": bool(holder) and not mine, "mine": mine},
+                            headers={"Cache-Control": "no-store"})
+
+    @app.post("/admin/api/setup/claim")
+    def setup_claim(request: Request, payload: Any = Body(None)):
+        """The wizard's one button (2026-11-02: "claim and publish should be the same thing"): claim the @name
+        for the node's own address and publish its key with it. {tag} -> {tag, claimed, published}: the real txids,
+        or a 400 with the reason -- never "on its way" for something that did not go."""
+        _admin_check(request, write=True)
+        said = payload if isinstance(payload, dict) else {}
+        now = _setup_state()
+        if now["blocked"] == "claimed":
+            raise HTTPException(400, f"@{now['claiming']['tag']} is already on its way, waiting for its block")
+        if now["blocked"]:
+            reasons = {"operator account": "this arcade's operator is an account: claim the name from its Your arcade",
+                       "index": "the names index is still catching up, so the name cannot be checked yet",
+                       "mined": "only mined coins are here, and a name cannot be paid for with those yet",
+                       "node behind coins": "your node has not reached the block your PEP test arrived in yet",
+                       "no coins": "this arcade has no PEP test yet"}
+            raise HTTPException(400, reasons.get(now["blocked"], now["blocked"]))
+        try:
+            if not str(said.get("tag") or "").strip().lstrip("@"):
+                raise taglib.TagError("type the name first")
+            wanted, claimed = _claim_node_tag(str(said.get("tag") or ""))
+        except HTTPException:
+            raise
+        except (taglib.TagError, tokenlib.TokenError, ValueError) as exc:
+            raise HTTPException(400, str(exc)) from None
+        except Exception as exc:                           # noqa: BLE001 -- said, not a 500
+            raise HTTPException(400, f"{exc.__class__.__name__}: {exc}") from None
+        # The key goes with the name. If it cannot go now, the claim is still out: said, with its txid.
+        published, publish_error = "", ""
+        try:
+            sender, prepared = _key_announcement(wanted, claimed)
+            published = sender.broadcast(prepared)
+        except Exception as exc:                           # noqa: BLE001
+            publish_error = str(exc)[:300]
+        return JSONResponse({"tag": wanted, "claimed": claimed, "published": published,
+                             "publish_error": publish_error})
+
     @app.get("/admin/api/welcome")
     def admin_welcome(request: Request):
         """Admin -> Overview's Welcome panel and the first-run sheet (2026-10-27, arcade/welcome.py): this arcade's
@@ -29945,7 +31816,10 @@ def create_app(state: AppState) -> FastAPI:
         _admin_check(request)
         from . import welcoming
         book, key, _ = _welcome()
-        return JSONResponse(welcoming.view(state, book, key), headers={"Cache-Control": "no-store"})
+        # "mining": whether Mine a block can be offered (the Mining module, off in Lite until switched on).
+        return JSONResponse({**welcoming.view(state, book, key),
+                             "mining": "mining" in modulelib.enabled(state.settings())},
+                            headers={"Cache-Control": "no-store"})
 
     @app.post("/admin/api/welcome/send")
     def admin_welcome_send(request: Request, payload: Any = Body(None)):
@@ -29989,7 +31863,8 @@ def create_app(state: AppState) -> FastAPI:
         Where each piece comes from, and what can be known:
           * @name and host: this arcade's from state.operator_tag() and public_hosts; another's from what it said on
             its link (mesh/operators.py "me", checked for a tag's shape there) -- display only, never trusted for
-            anything. An arcade that never said one (older, or not linked since this one started) shows its mesh id.
+            anything. An arcade that says none gets the @name of the one address that announced its mesh key on the
+            chain (`_chain_tags`, `tag_from: "chain"`); with none of those, it shows its mesh id.
           * Cores: this arcade's own, each chain it runs here (not borrowed), `shared` when the mesh offers it now
             (coreshare.status "sharing"; its Share box in Coins -> Chains is `switch`). Another arcade's only as far
             as it shares them (coreshare.offers, linked arcades): a Core it runs and does not share is not told.
@@ -30033,6 +31908,7 @@ def create_app(state: AppState) -> FastAPI:
         except Exception:                                  # noqa: BLE001
             sharing = {}
         offers = dict(getattr(coreshare, "offers", {}) or {}) if coreshare is not None else {}
+        via = _seen_through(mesh, links) if up else {}
 
         def coin(net: str) -> dict:
             params = NETWORKS.get(net)
@@ -30083,26 +31959,117 @@ def create_app(state: AppState) -> FastAPI:
                  "lora": bool(getattr(getattr(state, "lora", None), "running", False)),
                  "ords": ords.get(me or "this arcade", []), "link": {"state": "me"}}]
         order = {n: i for i, n in enumerate(NETWORKS)}      # the chains in the order the arcade lists them
+        listed = running["ids"] + running["quiet"]
+        on_chain = _chain_tags([p for p in listed
+                                if not (said.get(p) or {}).get("tag") and not (via.get(p) or {}).get("tag")])
         others = []
-        for peer in running["ids"]:
+        for peer in listed:
             heard = said.get(peer) or {}
-            if peer in links:
+            if peer in running["quiet"]:
+                # Only its announcement on the chain: maybe stopped, maybe reached by nobody (not counted running).
+                link = {"state": "quiet"}
+            elif peer in links:
                 ms = rtts.get(peer)
                 link = {"state": "slow" if ms is not None and ms > 1000 else "linked", "ms": ms}
+            elif peer in via:
+                # Not linked here, but a linked arcade is linked to it (2026-11-02): "seen through @x".
+                by = via[peer]
+                link = {"state": "via", "by": by["by_tag"], "by_node": by["by"][:12]}
             else:
                 link = {"state": "none"}
-            others.append({"me": False, "node": peer[:12], "tag": heard.get("tag") or "",
-                           "host": (heard.get("hosts") or [""])[0], "lora": bool(heard.get("lora")),
+            seen = via.get(peer) or {}
+            others.append({"me": False, "node": peer[:12],
+                           "tag": heard.get("tag") or seen.get("tag") or on_chain.get(peer) or "",
+                           **({"tag_from": "chain"} if peer in on_chain else {}),
+                           "host": (heard.get("hosts") or [seen.get("host") or ""])[0],
+                           "lora": bool(heard.get("lora")),
                            "cores": [{**coin(n), "shared": True}
                                      for n in sorted(offers.get(peer) or {}, key=lambda n: (order.get(n, 99), n))
                                      if peer in links],
                            "ords": ords.get(peer, []), "link": link})
-        # Linked first, fastest first; then the rest by name.
-        others.sort(key=lambda r: (r["link"]["state"] == "none",
+        # Linked first, fastest first; then those seen through a linked arcade; then the rest; each by name.
+        rank = {"via": 1, "none": 2, "quiet": 3}
+        others.sort(key=lambda r: (rank.get(r["link"]["state"], 0),
                                    r["link"].get("ms") if r["link"].get("ms") is not None else 9e9,
                                    r["tag"] or "~" + r["node"]))
         return {"ok": up, "running": running["running"], "linked": running["linked"],
                 "total": 1 + running["running"], "rows": rows + others}
+
+    def _globe_rows() -> list[dict]:
+        """Arcades the globe may count. Tags and chain codes only: a peer id or a
+        host is never put on the row, so the public feed cannot repeat one."""
+        rows = []
+        chains = []
+        try:
+            for chain in state.all_chains:
+                if getattr(chain, "borrowed", False):
+                    continue
+                net = str(getattr(chain, "network", "") or "")
+                if net:
+                    chains.append(net)
+        except Exception:                              # noqa: BLE001 -- the globe still answers
+            chains = []
+        try:
+            mine = state.operator_tag()
+        except Exception:                              # noqa: BLE001
+            mine = ""
+        rows.append({"tag": mine, "linked": True, "self": True, "chains": chains})
+        mesh = getattr(state, "mesh", None)
+        up = mesh is not None and getattr(mesh, "loop", None) is not None
+        links: set[str] = set()
+        said: dict = {}
+        offers: dict = {}
+        me = ""
+        if up:
+            me = str(getattr(mesh, "node_id", "") or "")
+            node = getattr(mesh, "node", None)
+            raw_links = getattr(node, "links", None) if node is not None else None
+            if isinstance(raw_links, dict):
+                links = set(raw_links)
+            operators = getattr(mesh, "operators", None)
+            heard = getattr(operators, "peers", None) if operators is not None else None
+            if isinstance(heard, dict):
+                said = heard
+            coreshare = getattr(mesh, "coreshare", None)
+            raw_offers = getattr(coreshare, "offers", None) if coreshare is not None else None
+            if isinstance(raw_offers, dict):
+                offers = raw_offers
+        ids = set(said) | links
+        try:
+            ids |= set(_arcades_running(with_ids=True).get("ids") or [])
+        except Exception:                              # noqa: BLE001 -- linked and heard still count
+            pass
+        ids.discard(me)
+        ids.discard("")
+        ids.discard(None)
+        for peer in ids:
+            if not isinstance(peer, str):
+                continue
+            heard = said.get(peer) if isinstance(said.get(peer), dict) else {}
+            offer = offers.get(peer)
+            peer_chains = list(offer) if isinstance(offer, dict) else []
+            rows.append({"tag": heard.get("tag") or "",
+                         "linked": peer in links, "self": False,
+                         "chains": peer_chains if peer in links else []})
+        return rows
+
+    @app.get("/admin/api/globe")
+    def admin_globe(request: Request):
+        """Overview → Nodes globe: the choice, who can be ticked, and the feed."""
+        _admin_check(request)
+        from .. import globe as globelib
+        choice = globelib.parse_choice(state.setting(globelib.SETTING))
+        return JSONResponse(globelib.admin_view(_globe_rows(), choice),
+                            headers={"Cache-Control": "no-store"})
+
+    @app.post("/admin/api/globe")
+    def admin_globe_save(request: Request, payload: Any = Body(None)):
+        """Save which list the globe reads. The page polls, so it updates itself."""
+        _admin_check(request, write=True)
+        from .. import globe as globelib
+        choice = globelib.parse_choice(payload if isinstance(payload, dict) else {})
+        state.set_setting(globelib.SETTING, choice)
+        return JSONResponse({"ok": True, **globelib.admin_view(_globe_rows(), choice)})
 
     @app.get("/admin/api/cards")
     def admin_cards(request: Request):
@@ -30177,59 +32144,67 @@ def create_app(state: AppState) -> FastAPI:
     def admin_send(request: Request, payload: Any = Body(None)):
         """Prepare a send from the node's own wallet: the fee is shown before
         anything goes (the same two steps as the wallet page)."""
-        _admin_check(request, write=True)
+        who = _admin_check(request, write=True)
         said = payload if isinstance(payload, dict) else {}
+        # A remote admin session already opened the panel with the password, and confirm
+        # asks again before anything is broadcast. An operator API key has not, and
+        # prepare signs, so the key gives the same password here. The session's prepare
+        # is unchanged.
+        if who.get("key"):
+            _require_local_or_admin_password(request, str(said.get("password", "")), who=who)
         try:
-            which = str(said.get("which", ""))
-            ctx = _keyed_context(which) if which.startswith("key:") else _context(which)
-            sats = walletlib.parse_amount(str(said.get("amount", "")))
-            to = _tag_address(state, str(said.get("to", "")), mainnet=ctx)
-            if which.startswith("key:"):
-                prepared = keywalletlib.prepare(state, ctx, to, sats)
-            else:
-                with ctx.rpc() as rpc:
-                    prepared = walletlib.prepare_send(rpc, to, sats)
+            return JSONResponse(_node_prepare(str(said.get("which", "")), str(said.get("to", "")),
+                                              str(said.get("amount", ""))))
         except Exception as exc:                        # noqa: BLE001
             return JSONResponse({"detail": str(exc)}, status_code=400)
+
+    def _node_prepare(which: str, to: str, amount: str) -> dict:
+        """A send from the node's own wallet, built and held for ten minutes under a ticket, with its fee: the first
+        of the two steps, for Admin and for the console (arcade/lite/commands.py `send`)."""
+        ctx = _keyed_context(which) if which.startswith("key:") else _context(which)
+        sats = walletlib.parse_amount(str(amount))
+        to = _tag_address(state, str(to), mainnet=ctx)
+        if which.startswith("key:"):
+            prepared = keywalletlib.prepare(state, ctx, to, sats)
+        else:
+            with ctx.rpc() as rpc:
+                prepared = walletlib.prepare_send(rpc, to, sats)
         ticket = secrets.token_urlsafe(16)
         now = time.time()
         for key in [k for k, v in _admin_prepared.items() if now - v[0] > 600]:
             _admin_prepared.pop(key, None)
-        _admin_prepared[ticket] = (now, str(said.get("which")), prepared)
-        return JSONResponse({"ticket": ticket, "to": to,
-                             "amount": f"{sats / 1e8:.8f}".rstrip("0").rstrip("."),
-                             "fee": f"{prepared.fee_sats / 1e8:.8f}".rstrip("0").rstrip("."),
-                             "network": ctx.label})
+        _admin_prepared[ticket] = (now, which, prepared)
+        return {"ticket": ticket, "to": to, "amount": f"{sats / 1e8:.8f}".rstrip("0").rstrip("."),
+                "fee": f"{prepared.fee_sats / 1e8:.8f}".rstrip("0").rstrip("."), "network": ctx.label}
 
     @app.post("/admin/api/send/confirm")
     def admin_send_confirm(request: Request, payload: Any = Body(None)):
         """Broadcast a prepared send. From outside, the password again, every time."""
-        who = _admin_check(request, write=True)
         said = payload if isinstance(payload, dict) else {}
-        if not who["local"] and not _admin_password_ok(str(said.get("password", "")),
-                                                       request):
-            return JSONResponse({"detail": "the admin password, to send the node's coins"},
-                                status_code=403)
-        held = _admin_prepared.pop(str(said.get("ticket", "")), None)
-        if held is None or time.time() - held[0] > 600:
-            return JSONResponse({"detail": "that send has expired -- prepare it again"},
-                                status_code=400)
+        _require_local_or_admin_password(request, str(said.get("password", "")), write=True)
         try:
-            if held[1].startswith("tok:"):
-                # A token or NFT send from the node's Wallet page (/node/wallet/token|nft/send).
-                ctx = _node_wallet(held[1].split(":", 1)[1])[0]
-                with ctx.rpc() as rpc:
-                    txid = tokenlib.TokenSender(rpc, ctx.params).broadcast(held[2])
-                state.pending_tokens.append({"txid": txid, "what": getattr(held[2], "what", "send"),
-                                             "at": time.time(), "network": ctx.network})
-            elif held[1].startswith("key:"):
-                txid = keywalletlib.broadcast(_keyed_context(held[1]), held[2])
-            else:
-                with _context(held[1]).rpc() as rpc:
-                    txid = walletlib.broadcast(rpc, held[2])
+            return JSONResponse({"txid": _node_broadcast(str(said.get("ticket", "")))})
         except Exception as exc:                        # noqa: BLE001
             return JSONResponse({"detail": str(exc)}, status_code=400)
-        return JSONResponse({"txid": txid})
+
+    def _node_broadcast(ticket: str) -> str:
+        """The second step: broadcast what a ticket holds, once. The caller has checked who is asking."""
+        held = _admin_prepared.pop(ticket, None)
+        if held is None or time.time() - held[0] > 600:
+            raise ValueError("that send has expired -- prepare it again")
+        if held[1].startswith("tok:"):
+            # A token or NFT send from the node's Wallet page (/node/wallet/token|nft/send).
+            ctx = _node_wallet(held[1].split(":", 1)[1])[0]
+            with ctx.rpc() as rpc:
+                txid = tokenlib.TokenSender(rpc, ctx.params).broadcast(held[2])
+            state.pending_tokens.append({"txid": txid, "what": getattr(held[2], "what", "send"),
+                                         "at": time.time(), "network": ctx.network})
+        elif held[1].startswith("key:"):
+            txid = keywalletlib.broadcast(_keyed_context(held[1]), held[2])
+        else:
+            with _context(held[1]).rpc() as rpc:
+                txid = walletlib.broadcast(rpc, held[2])
+        return txid
 
     def _keyed_context(which: str):
         """The chain a `key:<net>` wallet card names (keywallet.py): P main or an add-on chain, never P test."""
@@ -30243,13 +32218,51 @@ def create_app(state: AppState) -> FastAPI:
     def admin_receive(request: Request, payload: Any = Body(None)):
         _admin_check(request, write=True)
         try:
-            which = str((payload or {}).get("which", ""))
-            if which.startswith("key:"):
-                return JSONResponse({"address": state.key_address(_keyed_context(which))})
-            with _context(which).rpc() as rpc:
-                return JSONResponse({"address": walletlib.receive_address(rpc, "admin")})
+            return JSONResponse({"address": _node_receive(str((payload or {}).get("which", "")))})
         except Exception as exc:                        # noqa: BLE001
             return JSONResponse({"detail": str(exc)}, status_code=400)
+
+    def _node_receive(which: str) -> str:
+        """An address the node's wallet `which` is paid at: a new one from a Core wallet, the key's own otherwise."""
+        if which.startswith("key:"):
+            return state.key_address(_keyed_context(which))
+        with _context(which).rpc() as rpc:
+            return walletlib.receive_address(rpc, "admin")
+
+    def _node_history(which: str, count: int) -> list[dict]:
+        """A Core wallet's last `count` transactions, newest first."""
+        if which.startswith("key:"):
+            raise ValueError(f"{which} is a key wallet: it keeps no history here; listunspent shows its coins")
+        with _context(which).rpc() as rpc:
+            return walletlib.recent(rpc, count)
+
+    def _node_unspent(which: str) -> list[dict]:
+        """The coins the node's wallet `which` can spend."""
+        if which.startswith("key:"):
+            return keywalletlib.coins(state, _keyed_context(which))
+        with _context(which).rpc() as rpc:
+            return list(rpc.call("listunspent") or [])
+
+    #: What the console asks of the node (arcade/lite/commands.py): its wallet in Admin's own steps, its messages.
+    node_tools = types.SimpleNamespace(wallets=lambda: _admin_wallets(), prepare=_node_prepare,
+                                       broadcast=_node_broadcast, receive=_node_receive, history=_node_history,
+                                       unspent=_node_unspent, peer=_console_peer, message=_console_message,
+                                       feed=_console_feed, feed_post=_console_feed_post, feed_act=_console_feed_act)
+    #: ...and what it may ask on behalf of anyone at all: reads of what the public pages show.
+    def _console_apps(sort: str, count: int) -> list[dict]:
+        """The App Store's cards, as its tab ranks them for anybody (no viewer's own likes), for listapps."""
+        items = _games_ranked(None, sort)[:count]
+        tags = _tags_for([i["creator"] for i in items])
+        return [{"name": i["name"], "by": "@" + tags[i["creator"]] if tags.get(i["creator"]) else i["creator"],
+                 "description": str(i["game"].get("description") or "")[:200], "version": i["game"].get("version"),
+                 "chain": i["net"], "card": i["txid"], "opens": i["game"].get("opens") or i["txid"],
+                 "likes": i["likes"], "comments": i["comments"]} for i in items]
+
+    public_tools = types.SimpleNamespace(
+        feed=lambda sort, author, count: [{k: v for k, v in post.items() if k != "mine"}
+                                          for post in _console_feed(sort, author, count)],
+        tokens=_console_tokens, book=_console_book, pair=_console_pair, doginals=_console_doginals,
+        apps=_console_apps)
 
     # --- the Cloudflare tunnel wizard (2026-09-25; arcade/tunnel.py) -----
 
@@ -30361,6 +32374,9 @@ def create_app(state: AppState) -> FastAPI:
         if state.accounts().account(pubkey) is None:
             return JSONResponse({"detail": "no account with that key has a seat here"},
                                 status_code=400)
+        # As /auth/operator does (2026-11-05 review): an arcade changes hands, not names.
+        if (state.operator or "").lower() != pubkey:
+            state.set_setting(state.ARCADE_NAME, "node")
         state.claim_operator(pubkey)
         state.admin_sessions().close_all()
         return JSONResponse({"ok": True})
@@ -30434,6 +32450,10 @@ def create_app(state: AppState) -> FastAPI:
                     status_code=403)
             creds.conn.execute("UPDATE credential SET pubkey=? WHERE pubkey=?",
                                (account.pubkey.lower(), held))
+        if held != account.pubkey.lower():
+            # 2026-11-04 ("Who runs this node", Plan B): an arcade changes hands, not names. It keeps answering to its
+            # own name; the new owner can choose theirs in Admin -> This node.
+            state.set_setting(state.ARCADE_NAME, "node")
         state.claim_operator(account.pubkey)
         return JSONResponse({"operator": account.pubkey})
 
@@ -30470,16 +32490,26 @@ def create_app(state: AppState) -> FastAPI:
     # any node can be the place somebody installs from with no new option to
     # point at one.
 
-    def _packed_source():
-        """This instance's own source, packed if it has not been."""
-        said = bootstraplib.source(state.home)
+    packing = threading.Lock()
+
+    def _packed_source(wait: bool = True):
+        """This instance's own source, packed if it has not been. One pack at a time: started at startup, and a
+        download asking meanwhile waits for that one rather than packing a second beside it. With `wait` False (the
+        page), "packing" while one runs: the page answers at once and says to come back in a minute."""
         revision = state.running_version or "unknown"
-        if said is None or said.get("revision") != revision:
-            try:
-                said = bootstraplib.source_archive(
-                    state.home, state.checkout, revision)
-            except bootstraplib.BootstrapError:
-                return None
+        said = bootstraplib.source(state.home)
+        if said is not None and said.get("revision") == revision:
+            return said
+        if not wait and packing.locked():
+            return "packing"
+        with packing:
+            said = bootstraplib.source(state.home)
+            if said is None or said.get("revision") != revision:
+                try:
+                    said = bootstraplib.source_archive(
+                        state.home, state.checkout, revision)
+                except bootstraplib.BootstrapError:
+                    return None
         return said
 
     def _served_bootstrap(network: str):
@@ -30495,7 +32525,7 @@ def create_app(state: AppState) -> FastAPI:
         index = state.ledger_index_path(context)
         tip = state.ledger_tips.get(network) or state.tips.get(network)
         return bootstraplib.current(state.home, network, index,
-                                    context.params.index_start, tip)
+                                    context.params.index_start, tip, background=True)
 
     # --- identity by key: who runs which arcade (arcade/instance.py) -------------
 
@@ -30551,8 +32581,10 @@ def create_app(state: AppState) -> FastAPI:
                 snapshot = None
             if snapshot is not None:
                 copies.append({"chain": context, "snap": snapshot})
-        return render(request, "clone.html", source=_packed_source(),
-                      copies=copies, here=_origin(request),
+        source = _packed_source(wait=False)
+        return render(request, "clone.html", source=None if source == "packing" else source,
+                      packing=source == "packing",
+                      copies=copies, here=_origin(request), first_peer=_install_peer(request),
                       seats=state.accounts().seats)
 
     @app.get("/source.tar.gz")
@@ -30593,6 +32625,10 @@ def create_app(state: AppState) -> FastAPI:
         else:
             raise HTTPException(404, "no such bootstrap")
         snapshot = _served_bootstrap(network)
+        if snapshot is None and bootstraplib.building(state.home, network):
+            # The first copy is being made in the background (bootstrap.current): ask again in a while.
+            return JSONResponse({"detail": f"the {network} index copy is being made; try again in a few minutes"},
+                                status_code=503, headers={"Retry-After": "120", "Cache-Control": "no-store"})
         if snapshot is None:
             raise HTTPException(
                 404, f"there is no {network} index here to copy yet")
@@ -30708,7 +32744,9 @@ def create_app(state: AppState) -> FastAPI:
 
     TEMPLATES.env.globals["ord_tabs"] = _ord_tabs
     TEMPLATES.env.globals["ord_tab_names"] = lambda: tuple(ORD_TABS)
-    TEMPLATES.env.globals["ord_wallet"] = ordchainslib.wallet_table
+    # With each chain's address version, for signing a listing in the Wallet (wallet.opened takes {network, version}).
+    TEMPLATES.env.globals["ord_wallet"] = lambda: {n: {**v, "version": NETWORKS[n].pubkeyhash_version if n in NETWORKS
+                                                         else None} for n, v in ordchainslib.wallet_table().items()}
 
     def _coins_each(price: Any, divisible: bool) -> float:
         """The book's price ratio as coins per whole token.
@@ -30752,9 +32790,15 @@ def create_app(state: AppState) -> FastAPI:
         except Exception:
             pending = ([], set())
         books = index.coin_books(limit=1, pending=pending)
+        # Each token's own trades, sorted out once (2026-11-05: token_prices went through every one of up to 5,000 trades
+        # for every token, most of a warm Tokens tab's 2.7 s).
+        by_token: dict[int, list] = {}
+        for t in trades:
+            for pid_of in {leg.property_id for leg in (t["give"], t["take"]) if leg.kind == inscriptionlib.LEG_TOKEN}:
+                by_token.setdefault(pid_of, []).append(t)
         out = []
         for pid, prop in wanted.items():
-            points = chartlib.token_prices(trades, pid, prop["divisible"])
+            points = chartlib.token_prices(by_token.get(pid, ()), pid, prop["divisible"])
             book = books.get(pid) or {"asks": [], "bids": []}
             if not points and not (book["asks"] or book["bids"]):
                 continue
@@ -34347,7 +36391,7 @@ def create_app(state: AppState) -> FastAPI:
         # only the Offers tab, whose count the other tabs fetch after they show.
         offers_tab, pads_tab = tab == "offers", tab == "mintpads"
         data: dict[str, Any] = {"tab": tab, "chain": chain, "node": {},
-                                "other_chains": [c for c in state.token_chains
+                                "other_chains": [c for c in state.arcade_chains
                                                  if c is not chain],
                                 "shops": [], "node_error": None, "owned": set(),
                                 "offers_in": [], "offers_out": [], "tags": {},
@@ -34751,6 +36795,428 @@ def create_app(state: AppState) -> FastAPI:
     llmweb.register(app, state, signed_in=signed_in, account_address=_account_address, account_chain=_account_chain,
                     admin_check=_admin_check, name_of=_name_of,
                     pay_choices=lambda request: _pair_choices(request, "nobody", everything=True), render=render)
+    # DogeFeedX, read from this arcade alone (2026-11-03: "strip out the Dogefeed.app calls ... Everything needs
+    # to work through arcade"; Home: "The arcade's own feed"). Each window keeps its layout; what it shows comes from
+    # this node's feed, its ord index, its known collections and its Doginal market. No outside server is asked.
+    import types as _types
+    from datetime import datetime as _dt, timezone as _tz
+    _DFX_NET = "doge"
+    _IID = re.compile(r"\b([0-9a-f]{64}i[0-9]{1,6})\b")
+
+    def _dfx_iso(t) -> str:
+        try:
+            return _dt.fromtimestamp(int(t or 0), _tz.utc).isoformat().replace("+00:00", "Z")
+        except Exception:                                  # noqa: BLE001
+            return ""
+
+    def _dfx_author(address: str) -> dict:
+        tag = _name_of(address) or ""
+        face = _face_for(address) if address else ""
+        return {"id": address, "handle": tag or address[:10], "displayName": ("@" + tag) if tag else address[:10],
+                "avatarUrl": f"/content/{face}" if face else "", "verifiedPfp": bool(face), "address": address}
+
+    def _dfx_post(item) -> dict:
+        text = item.text or ""
+        return {"id": item.txid, "text": text, "body": text, "createdAt": _dfx_iso(item.block_time),
+                "height": item.height, "author": _dfx_author(item.author),
+                "mediaUrls": [f"/content/{m}" for m in dict.fromkeys(_IID.findall(text))][:4],
+                "counts": {"likes": item.likes, "branches": len(item.replies), "shares": item.shares, "tips": item.tips},
+                "quote": None, "replies": [_dfx_post(r) for r in (item.replies or [])]}
+
+    def _dfx_posts(author: str = "", before=None, limit: int = 20, sort: str = "popular"):
+        chain = _account_chain()
+        rows, cursor, waiting = _feed_page(chain.network, author=author, before=before, limit=limit, sort=sort)
+        return [_dfx_post(i) for i in _shown(rows, chain.network, waiting) if not i.deleted], cursor
+
+    def _dfx_feed(tab: str = "for-you", limit: int = 20, cursor: str = "") -> dict:
+        items, nxt = _dfx_posts(before=cursor or None, limit=limit,
+                                sort="new" if tab in ("latest", "following") else "popular")
+        seen, holders = set(), []
+        for it in items:
+            a = it["author"]
+            if a["verifiedPfp"] and a["id"] not in seen:
+                seen.add(a["id"])
+                holders.append({"handle": a["handle"], "display_name": a["displayName"], "pfp_rarity": None,
+                                "inscription_id": a["avatarUrl"].rsplit("/", 1)[-1], "avatar_url": a["avatarUrl"]})
+        return {"items": items, "nextCursor": nxt, "doginal_holders": holders}
+
+    def _dfx_find_post(txid: str) -> dict:
+        items, _ = _dfx_posts(limit=200, sort="new")
+        stack = list(items)
+        while stack:
+            it = stack.pop()
+            if it["id"] == txid:
+                return {"post": it, "ancestors": [], "replies": it["replies"]}
+            stack.extend(it["replies"])
+        return {"post": None, "ancestors": [], "replies": []}
+
+    def _dfx_user_posts(handle: str, tab: str = "posts", limit: int = 20, cursor: str = "") -> dict:
+        address, _pending = _address_of_tag(handle.lstrip("@").lower())
+        if not address:
+            return {"handle": handle, "author": None, "card": {}, "items": [], "nextCursor": None}
+        items, nxt = _dfx_posts(author=address, before=cursor or None, limit=limit, sort="new")
+        author = _dfx_author(address)
+        try:
+            said = _profile_of(address)
+        except Exception:                                  # noqa: BLE001
+            said = {}
+        author.update(bio=said.get("bio") or "", url=said.get("url") or "",
+                      dogeNames=_dfx_doge_names(said.get("doge") or ""))
+        return {"handle": handle, "author": author, "card": {}, "items": items, "nextCursor": nxt}
+
+    def _dfx_people(items) -> list[dict]:
+        by: dict = {}
+        for it in items:
+            a = it["author"]
+            row = by.setdefault(a["id"], {"handle": a["handle"], "name": a["displayName"], "avatar": a["avatarUrl"],
+                                          "verified": a["verifiedPfp"], "posts": 0, "likes": 0, "tips": 0})
+            row["posts"] += 1
+            row["likes"] += it["counts"]["likes"]
+            row["tips"] += it["counts"]["tips"]
+        return list(by.values())
+
+    def _dfx_sidebar() -> dict:
+        items, _ = _dfx_posts(limit=100, sort="new")
+        tags: dict = {}
+        for it in items:
+            for t in re.findall(r"#([A-Za-z0-9_]{2,32})", it["text"]):
+                tags[t.lower()] = tags.get(t.lower(), 0) + 1
+        trending = [{"rank": i + 1, "tag": t, "count": str(n)} for i, (t, n) in
+                    enumerate(sorted(tags.items(), key=lambda kv: -kv[1])[:10])]
+        people = sorted(_dfx_people(items), key=lambda r: -r["posts"])
+        earners = [{"rank": i + 1, "handle": r["handle"], "name": r["name"], "amount": f"{r['tips']} tips",
+                    "avatar": r["avatar"], "verified": r["verified"]}
+                   for i, r in enumerate(sorted(people, key=lambda r: (-r["tips"], -r["likes"]))[:10])]
+        return {"trending": trending, "suggestions": people[:6], "earners": earners}
+
+    def _dfx_leaderboard(range_: str = "7d") -> dict:
+        items, _ = _dfx_posts(limit=200, sort="new")
+        span = {"1d": 86400, "7d": 7 * 86400, "30d": 30 * 86400}.get(range_)
+        if span:
+            since = time.time() - span
+            items = [i for i in items if not i["createdAt"] or
+                     _dt.fromisoformat(i["createdAt"].replace("Z", "+00:00")).timestamp() >= since]
+        rows = sorted(_dfx_people(items), key=lambda r: (-r["tips"], -r["likes"], -r["posts"]))[:50]
+        return {"range": range_, "earners": [{"rank": i + 1, "handle": r["handle"], "name": r["name"],
+                                              "amount": f"{r['tips']} tips · {r['likes']} likes",
+                                              "avatar": r["avatar"], "verified": r["verified"]}
+                                             for i, r in enumerate(rows)]}
+
+    def _dfx_known():
+        return state.known_collections() if hasattr(state, "known_collections") else None
+
+    def _dfx_registry():
+        try:
+            return state.collection_registry()
+        except Exception:                                  # noqa: BLE001 -- no registry: the listing's alone
+            return None
+
+    def _dfx_listings(net: str) -> list[dict]:
+        """Open asks on this arcade's own Doginal market (doginal_market.Book), for one chain."""
+        try:
+            return state.doginal_book.open_listings(net, 500)
+        except Exception:                                  # noqa: BLE001 -- shown without floors
+            return []
+
+    def _dfx_in_collection(iid: str) -> dict | None:
+        """Which of the arcade's collections holds `iid`: {slug, collection}. The registry's first (collections that
+        described themselves in an inscription), then the imported listing's."""
+        reg = _dfx_registry()
+        for chain in ("doge", "pep"):
+            hit = reg.item(chain, iid) if reg is not None else None
+            if hit:
+                return {"slug": hit["root"], "collection": hit.get("name") or "", "number": hit.get("number")}
+        known = _dfx_known()
+        hit = known.in_collection(_DFX_NET, iid) if known is not None else None
+        return {"slug": hit["slug"], "collection": hit.get("collection") or "", "number": None} if hit else None
+
+    def _dfx_collection_rows() -> list[dict]:
+        """Every collection this arcade holds, in DogeFeed's collection shape: the registry's (Doginal Frogs, Doginal
+        Dogs ... each described by an inscription, with its items in this arcade's database) and the imported
+        listing's. Floors are the lowest open ask on this arcade's own Doginal market."""
+        from .. import doginals as doginalslib
+        out: list[dict] = []
+        reg = _dfx_registry()
+        roots = reg.active() if reg is not None else []
+        for c in roots:
+            net, cover = c.get("chain") or _DFX_NET, c.get("cover") or ""
+            asks = _dfx_listings(net)
+            mine = {i["id"] for i in reg.items(c["txid"], ids={a["inscription"] for a in asks})} if asks else set()
+            prices = [int(a["price"]) for a in asks if a["inscription"] in mine and int(a.get("price") or 0) > 0]
+            out.append({"id": c["txid"], "slug": c["txid"], "name": c.get("name") or "Collection",
+                        "description": c.get("description") or "", "item_count": c.get("count") or c.get("supply") or 0,
+                        "holder_count": 0, "cover_id": cover, "created_at": c.get("number"),
+                        "sample_item_ids": [cover] if cover else [],
+                        "image": doginalslib.content_url(cover) if cover else "", "href": f"/exchange/ord/{c['txid']}",
+                        "floor": f"{min(prices) / 1e8:g} DOGE" if prices else None, "listed": len(prices), "sales": 0,
+                        "verified": True, "chain": net})
+        known = _dfx_known()
+        if known is not None:
+            floors: dict = {}
+            for row in _dfx_listings(_DFX_NET):
+                hit = known.in_collection(_DFX_NET, str(row.get("inscription") or ""))
+                price = int(row.get("price") or 0)
+                if hit and price and (hit["slug"] not in floors or price < floors[hit["slug"]]):
+                    floors[hit["slug"]] = price
+            for c in known.catalog(_DFX_NET):
+                if not c.get("imported"):
+                    continue
+                slug, cover = c.get("slug") or "", c.get("cover") or ""
+                floor = floors.get(slug)
+                out.append({"id": slug, "slug": slug, "name": c.get("name") or slug, "description": "",
+                            "item_count": c.get("count") or c.get("supply") or 0, "holder_count": c.get("owners") or 0,
+                            "cover_id": cover, "created_at": c.get("created"), "sample_item_ids": [cover] if cover else [],
+                            "image": doginalslib.content_url(cover) if cover else "", "href": f"/exchange/ord/{slug}",
+                            "floor": f"{floor / 1e8:g} DOGE" if floor else None, "listed": 0, "sales": 0,
+                            "verified": True, "chain": _DFX_NET})
+        return out
+
+    def _dfx_collections(offset: int = 0, limit: int = 50, q: str = "", sort: str = "name") -> dict:
+        rows = _dfx_collection_rows()
+        if q:
+            rows = [c for c in rows if q.lower() in (c["name"] or "").lower() or q.lower() in c["slug"]]
+        if sort == "holders":
+            rows.sort(key=lambda c: (-(c["holder_count"] or 0), -(c["item_count"] or 0)))
+        elif sort == "recent":
+            rows.sort(key=lambda c: -(c["created_at"] or 0))
+        else:
+            rows.sort(key=lambda c: (c["name"] or c["slug"]).lower())
+        return {"collections": rows[offset:offset + limit], "total": len(rows), "offset": offset, "limit": limit,
+                "has_more": len(rows) > offset + limit}
+
+    def _dfx_collection_items(slug: str, offset: int = 0, limit: int = 50) -> dict:
+        reg = _dfx_registry()
+        root = reg.root(slug) if reg is not None and re.fullmatch(r"[0-9a-f]{64}", slug) else None
+        if root is not None and root.get("status") == "active":
+            items = reg.items(slug, offset, limit + 1)
+            rows = [{"id": i["id"], "number": i.get("number"), "name": f"{root.get('name') or ''} #{i.get('number')}",
+                     "content_type": "", "owner": "", "genesis_height": None} for i in items[:limit]]
+        else:
+            known = _dfx_known()
+            items = known.items(_DFX_NET, slug, offset, limit + 1) if known else []
+            rows = [{"id": i["id"], "number": i.get("number"), "name": i.get("name") or "", "content_type": "",
+                     "owner": "", "genesis_height": None} for i in items[:limit]]
+        return {"items": rows, "collection_id": slug, "offset": offset, "limit": limit, "has_more": len(items) > limit}
+
+    def _dfx_market() -> dict:
+        got = _dfx_collections(limit=200, sort="holders")
+        return {"stats": {"collections": str(got["total"])}, "collections": got["collections"]}
+
+    def _dfx_index():
+        return state.ord_index(_DFX_NET)
+
+    def _dfx_ask(question: dict) -> dict:
+        index = _dfx_index()
+        if index is None:
+            return {}
+        try:
+            return index.lookup(question) or {}
+        except Exception:                                  # noqa: BLE001 -- not answered just now
+            return {}
+
+    def _dfx_inscription(iid: str) -> dict:
+        row = (_dfx_ask({"what": "number", "id": iid}).get("number") or {}).get("inscription") or {}
+        hit = _dfx_in_collection(iid)
+        return {"inscription": {"id": iid, "number": row.get("number"), "content_type": row.get("content_type") or row.get("ctype") or "",
+                                "content_size": row.get("size"), "owner": row.get("owner") or "",
+                                "genesis_height": row.get("height"), "collection": (hit or {}).get("collection") or "",
+                                "image_url": f"/content/{iid}"}}
+
+    def _dfx_num(v) -> float:
+        try:
+            return float(str(v).replace(",", ""))
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _dfx_token_row(t: dict) -> dict:
+        mx, minted = _dfx_num(t.get("supply")), _dfx_num(t.get("minted"))
+        pct = t.get("minted_pct")
+        return {"ticker": t.get("tick") or "", "deploy_inscription": t.get("deploy") or "",
+                "max_supply": t.get("supply") or 0, "minted": t.get("minted") or 0,
+                "mint_progress": float(pct) if isinstance(pct, (int, float)) else (round(100 * minted / mx, 1) if mx else 0),
+                "holder_count": t.get("holders") or 0, "transfer_count": 0, "deploy_time": t.get("height"),
+                "decimals": t.get("decimals") or 18, "mint_limit": t.get("limit"), "deployer": t.get("deployer") or "",
+                "number": t.get("number")}
+
+    def _dfx_tokens(offset: int = 0, limit: int = 50, q: str = "", sort: str = "holders") -> dict:
+        ticks = (_dfx_ask({"what": "ticks", "prefix": q or ""}).get("ticks") or {}).get("first") or []
+        rows = [_dfx_token_row({"tick": t.get("tick"), "number": t.get("number"), "supply": t.get("supply"),
+                                "minted": t.get("minted"), "minted_pct": t.get("minted_pct")}) for t in ticks]
+        if sort == "progress":
+            rows.sort(key=lambda t: -t["mint_progress"])
+        elif sort == "holders":
+            rows.sort(key=lambda t: -(t["holder_count"] or 0))
+        else:
+            rows.sort(key=lambda t: t["ticker"].lower())
+        return {"tokens": rows[offset:offset + limit], "total": len(rows), "offset": offset, "limit": limit,
+                "has_more": len(rows) > offset + limit}
+
+    def _dfx_token(tick: str) -> dict:
+        t = _dfx_ask({"what": "token", "tick": tick}).get("token")
+        return {"token": _dfx_token_row(t)} if t else {"token": None}
+
+    def _dfx_name(name: str) -> dict:
+        said = _dfx_ask({"what": "name", "name": name}).get("name") or {}
+        win = next((r.get("winner") for r in (said.get("readings") or {}).values() if r.get("winner")), None)
+        if not win:
+            return {"found": False, "name": name}
+        where = _dfx_ask({"what": "where", "id": win["inscription"]}).get("where") or {}
+        n = {"id": win["inscription"], "number": win.get("number"), "owner": where.get("owner") or ""}
+        return {"found": True, "name_info": {"name": name, "inscription_id": n.get("id") or "",
+                                             "inscription_number": n.get("number"), "owner": n.get("owner") or "",
+                                             "registered_at": None, "genesis_height": n.get("height"), "url": "",
+                                             "suffix": "." + name.rsplit(".", 1)[-1] if "." in name else ""}}
+
+    def _dfx_search(q: str, kind: str = "all") -> dict:
+        ql = q.lower()
+        items, _ = _dfx_posts(limit=200, sort="new")
+        posts = [i for i in items if ql in i["text"].lower()][:20] if kind in ("all", "posts") else []
+        users = [p for p in _dfx_people(items) if ql in (p["handle"] or "").lower()][:20] if kind in ("all", "users") else []
+        address, _pending = _address_of_tag(ql.lstrip("@"))
+        if address and not any(u["handle"] == ql.lstrip("@") for u in users) and kind in ("all", "users"):
+            a = _dfx_author(address)
+            users.insert(0, {"handle": a["handle"], "name": a["displayName"], "avatar": a["avatarUrl"],
+                             "verified": a["verifiedPfp"]})
+        return {"users": [{"handle": u["handle"], "displayName": u["name"], "avatarUrl": u["avatar"],
+                           "verifiedPfp": u["verified"]} for u in users], "posts": posts,
+                "collections": _dfx_collections(limit=10, q=q)["collections"]}
+
+    def _dfx_memes(q: str = "", offset: int = 0) -> dict:
+        """Pictures on the chain, by number, from this arcade's ord index; `offset` is the number to go on after."""
+        typed = _dfx_ask({"what": "typed", "ctype": "image/", "after": offset or None}).get("typed") or {}
+        rows = typed.get("rows") or []
+        memes = []
+        for r in rows:
+            iid = r.get("id") if isinstance(r, dict) else str(r)
+            if iid:
+                memes.append({"id": iid, "name": f"#{r.get('number')}" if isinstance(r, dict) and r.get("number") is not None else iid[:10],
+                              "image": f"/content/{iid}", "format": "", "category": "doginal", "tags": [], "uses": 0,
+                              "sourceName": "this arcade"})
+        return {"memes": memes, "offset": offset, "next": typed.get("next"), "more": typed.get("next") is not None}
+
+    def _dfx_launchpad() -> dict:
+        try:
+            _chain, index = _token_chain()
+            rows = index.launches(limit=60)
+        except Exception:                                  # noqa: BLE001
+            rows = []
+        return {"launches": [{"slug": r.get("txid", ""), "name": r.get("name") or r.get("collection") or "Launch",
+                              "image": f"/content/{r['cover']}" if r.get("cover") else "",
+                              "detail": r.get("detail") or "", "progress": "", "pct": "",
+                              "href": f"/mintpad/{r.get('txid', '')}"} for r in rows]}
+
+    def _dfx_games(request) -> dict:
+        """The apps on this arcade (the Apps page's list, most played first), as DogeFeedX's Arcade tiles."""
+        try:
+            rows = _games_ranked(request, "popular")
+        except Exception:                                  # noqa: BLE001
+            rows = []
+        return {"games": [{"slug": r.get("txid") or "", "href": f"/games/{r.get('txid') or ''}",
+                           "name": r.get("name") or "", "detail": r.get("netlabel") or "Play"}
+                          for r in rows[:60] if r.get("name")]}
+
+    _dfx_doge_seen: dict = {}
+
+    def _dfx_doge_names(doge: str) -> list[str]:
+        """The Dogecoin ord names (much.doge, billy.dogefeed ...) a Dogecoin address holds, as this arcade's indexes
+        read them: a handle described on Doge, beside the arcade @handle (2026-11-03: "the primary at handle
+        should still be the existing arcade @handles with the option of describing your handle on Doge"). Five
+        minutes per address."""
+        if not doge:
+            return []
+        hit = _dfx_doge_seen.get(doge)
+        if hit and hit[0] > time.time():
+            return hit[1]
+        try:
+            from .dogefeedx.wallet_assets import index_owned
+            names = [str(n.get("name") or "") for n in (index_owned(doge).get("names") or []) if n.get("name")]
+        except Exception:                                  # noqa: BLE001 -- none shown, asked again later
+            names = []
+        _dfx_doge_seen[doge] = (time.time() + 300, names[:6])
+        if len(_dfx_doge_seen) > 500:
+            _dfx_doge_seen.pop(next(iter(_dfx_doge_seen)))
+        return names[:6]
+
+    def _dfx_me(request) -> dict:
+        """Who is asking, as the chain has them: the @tag, the address, and what they published (bio, url, picture)."""
+        who = _tag_of_whoever_is_asking(request) or {}
+        address = str(who.get("address") or "")
+        try:
+            said = _profile_of(address) if address else {}
+        except Exception:                                  # noqa: BLE001
+            said = {}
+        if not _account_view(request):                     # the operator's own words, as /profile/about keeps them
+            said = dict(said, bio=said.get("bio") or str(state.setting("bio", "") or ""),
+                        url=said.get("url") or str(state.setting("url", "") or ""))
+        return {"signed_in": bool(address), "operator": not _account_view(request), "tag": who.get("tag") or "",
+                "address": address, "bio": said.get("bio") or "", "url": said.get("url") or "",
+                "pfp": said.get("pfp") or "", "doge": said.get("doge") or "",
+                "doge_names": _dfx_doge_names(said.get("doge") or "")}
+
+    def _dfx_wallets(request) -> dict:
+        """The Dogecoin addresses the asker's DogeFeedX windows read (Profile's switcher, Files, Wallet, NFTs): the
+        operator's are this node's watch list; an account's is its own address and only that (the node's watch list is
+        the operator's, never an account's); a visitor has none."""
+        if not _account_view(request):
+            from .dogefeedx.wallet_assets import node_watch_addresses
+            return {"operator": True, "addresses": list(node_watch_addresses())}
+        account = signed_in(request)
+        if account is None:
+            return {"operator": False, "addresses": [], "signed_in": False}
+        mine = _account_doge_address(account.pubkey)
+        return {"operator": False, "addresses": [mine] if mine else [], "signed_in": True}
+
+    dfx_local = _types.SimpleNamespace(
+        chain=_account_chain, games=_dfx_games, me=_dfx_me, wallets=_dfx_wallets,
+        feed=_dfx_feed, post=_dfx_find_post, user_posts=_dfx_user_posts, sidebar=_dfx_sidebar,
+        leaderboard=_dfx_leaderboard, market=_dfx_market, collections=_dfx_collections,
+        collection_items=_dfx_collection_items, inscription=_dfx_inscription, tokens=_dfx_tokens, token=_dfx_token,
+        name=_dfx_name, search=_dfx_search, memes=_dfx_memes, launchpad=_dfx_launchpad,
+        in_collection=_dfx_in_collection)
+    # DogeFeedX apps: Explorer and Terminal apps with Mac OS X Aqua styling and DogeFeed branding.
+    from . import dogefeedx
+    dogefeedx.register_routes(app, render, local=dfx_local)
+    # DogeFeedX Network app: node status, sync progress, and mesh peers.
+    from .dogefeedx import network as dogefeedx_network
+    dogefeedx_network.register(app, state, admin_check=_admin_check)
+    # Node modules installed from packages (arcade/modhost.py): confined, reading chains through this node's Cores, and
+    # handing what spends to the account's own wallet as an offer, as every account send is.
+    from .. import modhost
+
+    def _module_chain(network: str):
+        chain = next((c for c in state.all_chains if c.network == network), None)
+        if chain is None:
+            raise ValueError(f"this arcade has no {network} chain")
+
+        def call(method: str, params: list):
+            with chain.rpc() as rpc:
+                return rpc.call(method, *params)
+        return chain.params, call
+
+    if getattr(state, "module_host", None) is None:
+        state.module_host = modhost.Host(state.home, _module_chain)
+
+    def _module_offer(pubkey: str):
+        def make(network: str, unsigned) -> dict:
+            offer = _offers.add(pubkey, network, unsigned, unsigned.what)
+            return {"offer": offer.id, "chain": network, **unsigned.as_json()}
+        return make
+
+    # ARCADE Lite (docs/arcade-lite/CHARTER.md): its Core-style window at /lite, for visitors, users and the operator.
+    from ..lite import web as liteweb
+    _lite_home = liteweb.register(app, state, admin_check=_admin_check, signed_in=signed_in,
+                                  account_address=_account_address, name_of=_name_of, node_tools=node_tools,
+                                  public_tools=public_tools, wallet_name=_account_name,
+                                  account_view=_account_view, join_facts=_join_facts, offer_for=_module_offer,
+                                  admin_password_ok=_admin_password_ok)
+    # API keys (arcade/apikeys.py): their routes, kept by the gate below like every other.
+    from . import apikeys_web
+    apikeys_web.register(app, state, admin_check=_admin_check, signed_in=signed_in, run_line=_lite_home.run_line)
+    # Last: every route is in, and each one whose module is switched off here is taken out (arcade/modules.py).
+    from . import modules_web
+    modules_web.register(app, state, admin_check=_admin_check, signed_in=signed_in)
+    # And outermost: a keyed call is checked before the door sees it.
+    apikeys_web.guard(app, state)
     return app
 
 
@@ -35501,10 +37967,6 @@ def _file_checked_coins(state, chain, address: str, coins) -> int:
     return filed
 
 
-#: Cores of a chain the arcades' network must have for a wallet to be imported on it (2026-10-22: "importing a
-#: wallet to LTC right now should not be possible since there is only one LTC node. So that option should be grayed
-#: out on all arcades"): this arcade's own, and the linked arcades sharing theirs.
-IMPORT_CORES_MIN = 2
 #: Coins another arcade says an imported address holds, checked here at most (a sanity bound, not a wallet's size).
 CHECKED_COINS_MAX = 100_000
 #: Coins read in one batch while checking them.
@@ -35518,6 +37980,12 @@ RECONCILE_PACE = 2.0
 WALK_READERS_MAX = 8
 WALK_JOB_SECONDS = 4 * 3600.0
 WALK_POLL = 5.0
+#: Failed reads in one walk before a reader is left out of the rest of it.
+WALK_FAILS_MAX = 3
+#: Seconds after start before walks cut short by the restart go on.
+WALK_RESUME_AFTER = 180.0
+#: How often a running walk looks for readers that came since it began.
+WALK_READERS_EVERY = 60.0
 WALK_REST = 3600.0
 #: Walks the admin's Wallet imports tab lists.
 WALK_HISTORY = 30

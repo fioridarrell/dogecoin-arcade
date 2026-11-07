@@ -180,7 +180,8 @@ export async function address(pubkey, version) {
 //: Kotia (2026-10-23, tbuuol's side) too: an account's KOT key is its Pepecoin mainnet key.
 //: Wojakcoin (2026-10-25) the same way: an account's WJK key is its Pepecoin mainnet key.
 //: DigiByte (2026-10-25) the same way: an account's DGB key is its Pepecoin mainnet key.
-export const COIN_TYPE = {main: 3, test: 1, regtest: 1, doge: 3, ltc: 3, bel: 3, lky: 3, kot: 3, wjk: 3, dgb: 3};
+//: Flopcoin (2026-11-03) the same way: an account's FLOP key is its Pepecoin mainnet key.
+export const COIN_TYPE = {main: 3, test: 1, regtest: 1, doge: 3, ltc: 3, bel: 3, lky: 3, kot: 3, wjk: 3, dgb: 3, flop: 3};
 
 //: Litecoin's private-key text prefix (WIF, 0xB0: keys starting with "T"), for importing elsewhere.
 export const LTC_WIF = 0xb0;
@@ -191,8 +192,10 @@ export const LTC_WIF = 0xb0;
 //: Bellscoin 0x99 and Luckycoin 0xAF (2026-10-22, from their chainparams.cpp SECRET_KEY, checked the same way).
 //: Kotia 0xAD (2026-10-23, chainparams.cpp SECRET_KEY 173, checked with its Core's signmessagewithprivkey).
 //: Wojakcoin 0xC9 (2026-10-25, chainparams.cpp SECRET_KEY 201, checked with its Core's signmessagewithprivkey).
+//: Flopcoin 0x9E (2026-11-03, chainparams.cpp SECRET_KEY 158): Dogecoin's and Pepecoin mainnet's byte, so one key text
+//: imports on all three.
 export const WIF = {main: 0x9e, doge: 0x9e, ltc: LTC_WIF, test: 0xf1, regtest: 0xf1, ltctest: 0xef,
-                    bel: 0x99, lky: 0xaf, kot: 0xad, wjk: 0xc9, dgb: 0x80};
+                    bel: 0x99, lky: 0xaf, kot: 0xad, wjk: 0xc9, dgb: 0x80, dgbtest: 0xfe, flop: 0x9e};
 
 //: Litecoin's other address kinds, for saying who a send pays (2026-10-20, tbuuol: L test pays P2SH and
 //: native SegWit). The script-hash version (config.py `scripthash_version`) and the bech32 prefix.
@@ -211,7 +214,8 @@ const WIF_CHAIN = {main: "Pepecoin main or Dogecoin", doge: "Pepecoin main or Do
                    ltc: "Litecoin mainnet", test: "a Pepecoin or Dogecoin test chain",
                    regtest: "a Pepecoin or Dogecoin test chain", ltctest: "Litecoin testnet",
                    bel: "Bellscoin mainnet", lky: "Luckycoin mainnet", kot: "Kotia mainnet",
-                   wjk: "Wojakcoin mainnet", dgb: "DigiByte mainnet"};
+                   wjk: "Wojakcoin mainnet", dgb: "DigiByte mainnet", dgbtest: "DigiByte testnet",
+                   flop: "Flopcoin mainnet"};
 
 /** A private key out of Wallet Import Format text, for `network` (plan item 18, importing a wallet): base58check,
  *  the version byte this chain's (WIF above), 32 bytes of key, and a trailing 0x01 when its public key is
@@ -367,10 +371,11 @@ async function signMessage(priv, message, magic) {
  * browser from fixed templates; check node/seller ids equal this arcade's own; pin the signing magic per chain. B. as
  * a fallback, show the exact text and require a click for anything unusual." Before, the page signed whatever
  * /realtime/hello, /account/llm/grant and /account/llm/topup said, with the magic they said, so a hostile arcade
- * could have had a player's key sign any words at all. Now there are three shapes of words, built here field by
+ * could have had a player's key sign any words at all. Now there are a few shapes of words, built here field by
  * field, each field checked; the magic is fixed here per chain and never read from a server; and `signWords`
  * signs nothing else (signMessage is no longer exported). The server rebuilds the same words from its own data:
- * arcade/mesh/service.py cert_message, arcade/llm.py grant_words / topup_words.
+ * arcade/mesh/service.py cert_message, arcade/llm.py grant_words / topup_words. 2026-11-04: a fourth, an owner's
+ * statement that it owns a node (arcade/owner.py words), signed only for this arcade's own node (wallet ownerSign).
  */
 export const ARCADE_MAGIC = "Pepecoin Signed Message:\n";
 // Pinned per use, the same on every chain: a realtime certificate (mesh network "arcade-<chain>") is checked by the
@@ -421,7 +426,18 @@ export function topupWords(network, txid, seller, address) {
   return `arcade-llm-topup\n${network}\n${txid}\n${seller}\n${address}`;
 }
 
-/** `message` read back as one of the three shapes ({kind, magic, address, ...its fields}), or null for anything
+/** The longest an owner's statement may run: arcade/owner.py MOST_DAYS, plus an hour. */
+export const OWNER_MOST = 400 * 86400 + 3600;
+
+/** What an owner's key signs to say it owns mesh node `node` until `expires` (arcade/owner.py words, 2026-11-04). */
+export function ownerWords(network, node, address, expires, now = Date.now() / 1000) {
+  if (!NET.test(network)) wordsRefused("that is not a chain");
+  if (!NODE_ID.test(node)) wordsRefused("that is not a node id");
+  if (!ADDR.test(address)) wordsRefused("that is not an address");
+  return `arcade-owner\n${network}\n${node}\n${address}\n${untilOk(expires, OWNER_MOST, now)}`;
+}
+
+/** `message` read back as one of the four shapes ({kind, magic, address, ...its fields}), or null for anything
  *  else. Each is built again from what was read, so only words the builders above would make come through. */
 export function arcadeWords(message, now = Date.now() / 1000) {
   const text = String(message);
@@ -437,6 +453,11 @@ export function arcadeWords(message, now = Date.now() / 1000) {
       if (grantWords(seller, address, Number(expires), now) !== text) return null;
       return {kind: "grant", magic: LLM_MAGIC, seller, address, expires: Number(expires)};
     }
+    if ((m = /^arcade-owner\n([^\n]*)\n([^\n]*)\n([^\n]*)\n([0-9]{1,12})$/.exec(text))) {
+      const [, network, node, address, expires] = m;
+      if (ownerWords(network, node, address, Number(expires), now) !== text) return null;
+      return {kind: "owner", magic: ARCADE_MAGIC, network, node, address, expires: Number(expires)};
+    }
     if ((m = /^arcade-llm-topup\n([^\n]*)\n([^\n]*)\n([^\n]*)\n([^\n]*)$/.exec(text))) {
       const [, network, txid, seller, address] = m;
       if (topupWords(network, txid, seller, address) !== text) return null;
@@ -446,7 +467,7 @@ export function arcadeWords(message, now = Date.now() / 1000) {
   return null;
 }
 
-/** Sign `words` with `mine` ({key, address}: a key this page derived): only words of the three shapes, naming
+/** Sign `words` with `mine` ({key, address}: a key this page derived): only words of the four shapes, naming
  *  mine.address, with the magic pinned above for their chain -- Core's `signmessage` base64. */
 export async function signWords(mine, words, now = Date.now() / 1000, {owner = null} = {}) {
   const read = arcadeWords(words, now);
@@ -881,8 +902,32 @@ export async function verifyOffer(offer, keys) {
   // P2SH-nested segwit (BIP49): OP_HASH160 <hash160 of the P2WPKH program> OP_EQUAL
   const mineNested = new Uint8Array([0xa9, 0x14, ...await hash160(mineSegwit), 0x87]);
   const own = keys.address || await address(keys.pubkey, keys.version);
-  const hashes = [];
+  const hashes = [], signers = [];
+  // A Taproot input commits to every input's value and script (BIP-341), so each one is known or nothing is signed:
+  // a Taproot coin's comes with it, and an ordinary coin of this address is this key's P2PKH.
+  const tapped = named.some((coin) => coin.taproot);
+  const spentAll = tapped ? named.map((coin) => ({value: BigInt(String(coin.value || 0)),
+    script: coin.taproot ? unhex(String(coin.spent || "")) : mine})) : null;
+  if (tapped && (from !== 0 || named.some((coin) => !coin.taproot && coin.address !== own))) {
+    throw new Error("that transaction spends Taproot coins beside coins that are not this key's. Nothing was signed.");
+  }
   for (let n = from; n < to; n++) {
+    if (named[n].taproot) {
+      // A DigiDollar or its vault (2026-11-04): the coin is checked to be this key's from its own script.
+      if (!await taprootMine(spentAll[n].script, named[n].taproot, keys.pubkey)) {
+        throw new Error(`input ${n} is a Taproot coin that this key does not hold. Nothing was signed.`);
+      }
+      const leaf = named[n].taproot.leaf ? unhex(String(named[n].taproot.leaf)) : null;
+      const derived = hex(await sighashTaproot(tx, n, spentAll, leaf));
+      if (derived !== asked[n - from]) {
+        throw new Error("those signatures were asked for over different bytes than this transaction -- what this "
+          + `browser worked out for input ${n} is not what the offer carries. Nothing was signed.`);
+      }
+      hashes.push(derived);
+      signers.push(leaf ? "leaf" : "key");
+      continue;
+    }
+    signers.push(null);
     // A refereed prize pool's coin, closed by its creator (2026-09-29): signed
     // over the pool's script, and only if this key is the one that closes it.
     const redeem = named[n].redeem ? unhex(String(named[n].redeem)) : null;
@@ -945,6 +990,11 @@ export async function verifyOffer(offer, keys) {
   const ltc = LTC_KINDS[keys.network || offer.chain] || null;
   let paid = 0n, change = 0n;
   const pays = [];
+  // DigiDollars (2026-11-05): on DigiByte, a zero-value Taproot output holds the dollars the "DD" record gives it, in
+  // order, and is said as a payment of dollars to its DigiDollar address, or as the signer's own.
+  const ddVersion = DD_VERSIONS[keys.network || offer.chain];
+  const ddAmounts = ddVersion ? ddRecordAmounts(tx.outputs) : null;
+  let ddAt = 0, ddOwn = null;
   for (const out of tx.outputs) {
     paid += out.value;
     const script = out.script;
@@ -960,6 +1010,18 @@ export async function verifyOffer(offer, keys) {
       // can be read off this key's own address, else say it is a segwit output.
       const hrp = ltc ? ltc.hrp : /^[a-z]+1/.test(own) ? own.slice(0, own.lastIndexOf("1")) : "";
       pays.push({to: hrp ? segwitEncode(hrp, 0, script.slice(2, 22)) : "a segwit address",
+                 value: Number(out.value), mine: false});
+    } else if (ddAmounts && out.value === 0n && script.length === 34 && script[0] === 0x51 && script[1] === 0x20
+               && ddAt < ddAmounts.length) {
+      if (!ddOwn) ddOwn = (await tweaked(keys.pubkey.slice(1))).key;
+      const key = script.slice(2, 34), cents = ddAmounts[ddAt++];
+      pays.push({to: await ddAddress(keys.network || offer.chain, key), dd: cents, value: 0, mine: SAME(key, ddOwn)});
+    } else if (script.length === 34 && script[0] === 0x51 && script[1] === 0x20) {
+      // A Taproot (v1) output (2026-11-05 review: a DigiDollar vault read as "34 bytes written to the chain"): said as
+      // a payment, with its address where this key's hrp is known, else its key's first characters.
+      const hrp = ltc ? ltc.hrp : /^[a-z]+1/.test(own) ? own.slice(0, own.lastIndexOf("1")) : "";
+      pays.push({to: hrp ? segwitEncode(hrp, 1, script.slice(2, 34))
+                         : `a Taproot output (a vault or someone's Taproot address, key ${hex(script.slice(2, 10))}…)`,
                  value: Number(out.value), mine: false});
     } else if (ltc && script.length === 23 && script[0] === 0xa9 && script[1] === 0x14
                && script[22] === 0x87) {
@@ -1003,7 +1065,7 @@ export async function verifyOffer(offer, keys) {
   ].join(", ") + `; ${coinsOf(fee)} in fees`
     // The change said once, as change (2026-10-27, the operator: the payment read as four destinations, the change twice).
     + (change > 0n ? `; ${coinsOf(change)} back to you as change` : "");
-  return {tx, hashes, pays, fee: Number(fee), change: Number(change),
+  return {tx, hashes, signers, pays, fee: Number(fee), change: Number(change),
           what: offer.what || "", signs: {from, of: tx.inputs.length},
           coinsOf, says};
 }
@@ -1263,6 +1325,150 @@ export async function signInput(priv, sighash, sighashType = 1) {
   out.set(der);
   out[der.length] = sighashType;
   return out;
+}
+
+/* --- DigiDollar addresses and records (2026-11-05, send and receive) ------
+ *
+ * A DigiDollar address is base58check of a two-byte version and a Taproot output key (DigiByte Core base58.cpp
+ * CDigiDollarAddress: "DD" mainnet, "TD" testnet). A DigiDollar transaction's dollars are in its OP_RETURN "DD"
+ * record, after its type: a mint's first number, a send's every number, a redeem's change, each for the next
+ * zero-value Taproot output in order (validation.cpp).
+ */
+const DD_VERSIONS = {dgb: [0x52, 0x85], dgbtest: [0xb1, 0x29]};
+
+/** The DigiDollar address of a Taproot output key on `network`. */
+export async function ddAddress(network, key) {
+  const v = DD_VERSIONS[network];
+  if (!v || key.length !== 32) throw new Error("that is not a DigiDollar address here");
+  const body = new Uint8Array([...v, ...key]);
+  return base58(join([body, (await hash256(body)).slice(0, 4)]));
+}
+
+/** The pushes of a script, as byte arrays (OP_0 and OP_1..OP_16 as their numbers' bytes), or null if it is not
+ * pushes alone. */
+function scriptPushes(script) {
+  const out = [];
+  let at = 0;
+  while (at < script.length) {
+    const op = script[at];
+    if (op === 0) { out.push(new Uint8Array(0)); at += 1; continue; }
+    if (op >= 0x51 && op <= 0x60) { out.push(new Uint8Array([op - 0x50])); at += 1; continue; }
+    let n, from;
+    if (op > 0 && op < 0x4c) { n = op; from = at + 1; }
+    else if (op === 0x4c && at + 1 < script.length) { n = script[at + 1]; from = at + 2; }
+    else if (op === 0x4d && at + 2 < script.length) { n = script[at + 1] | (script[at + 2] << 8); from = at + 3; }
+    else return null;
+    if (from + n > script.length) return null;
+    out.push(script.slice(from, from + n)); at = from + n;
+  }
+  return out;
+}
+
+/** A script number's value (little-endian, the top bit of the last byte its sign). */
+function readScriptNum(bytes) {
+  if (bytes.length > 8) throw new Error("a DigiDollar record's number is too long");
+  let n = 0n;
+  for (let i = bytes.length - 1; i >= 0; i--) n = (n << 8n) | BigInt(i === bytes.length - 1 ? bytes[i] & 0x7f : bytes[i]);
+  return bytes.length && bytes[bytes.length - 1] & 0x80 ? -n : n;
+}
+
+/** The cents a DigiDollar transaction's record gives its zero-value Taproot outputs, in order, or null. */
+function ddRecordAmounts(outputs) {
+  for (const out of outputs) {
+    if (!out.script.length || out.script[0] !== 0x6a) continue;
+    const items = scriptPushes(out.script.slice(1));
+    if (!items || items.length < 2 || items[0].length !== 2 || items[0][0] !== 0x44 || items[0][1] !== 0x44) continue;
+    // Only the numbers are read: a mint's record ends in its owner's 32-byte key, which is not one.
+    const kind = Number(readScriptNum(items[1])), rest = items.slice(2);
+    if (kind === 2) return rest.map((b) => Number(readScriptNum(b)));
+    return (kind === 1 || kind === 3) && rest.length ? [Number(readScriptNum(rest[0]))] : [];
+  }
+  return null;
+}
+
+/* --- Taproot (2026-11-04, a DigiDollar redeem) -------------------------
+ *
+ * A coin of this key's that is a Taproot output, signed with Schnorr (BIP-340) under SIGHASH_DEFAULT: the key path of
+ * this key tweaked with no script tree (a DigiDollar), or a script path whose leaf ends in this key and OP_CHECKSIG (a
+ * DigiDollar vault). `arcade/taproot.py` is the node's half; these are checked against it in
+ * tests/test_lite_schnorr_browser.py, and the signatures against a real DigiByte Core in test_digidollar_regtest.py.
+ */
+const POINT = secp.ProjectivePoint;
+const modN = (a) => ((a % N) + N) % N;
+const big = (bytes) => BigInt("0x" + (hex(bytes) || "0"));
+const bytes32 = (n) => unhex(n.toString(16).padStart(64, "0"));
+
+async function tagged(tag, data) {
+  const t = await sha256(enc.encode(tag));
+  return sha256(join([t, t, data]));
+}
+
+/** (the output key, its y's parity) of a Taproot output with this x-only internal key and script tree (BIP-341). */
+async function tweaked(internal, root = new Uint8Array(0)) {
+  const t = big(await tagged("TapTweak", join([internal, root])));
+  if (t >= N) throw new Error("tweak out of range");
+  const q = POINT.fromHex("02" + hex(internal)).add(POINT.BASE.mul(t)).aff();
+  return {key: bytes32(q.x), parity: Number(q.y & 1n)};
+}
+
+const leafHash = (script) => tagged("TapLeaf", join([new Uint8Array([0xc0]), sizeOf(script.length), script]));
+
+function lessThan(a, b) {
+  for (let n = 0; n < 32; n++) if (a[n] !== b[n]) return a[n] < b[n];
+  return false;
+}
+
+/** Whether the Taproot coin `spent` is this key's to sign as `tap` says: {key: true}, or {leaf, control}. */
+export async function taprootMine(spent, tap, pubkey) {
+  if (spent.length !== 34 || spent[0] !== 0x51 || spent[1] !== 0x20) return false;
+  const own = pubkey.slice(1, 33);
+  if (!tap.leaf) return SAME(spent.slice(2), (await tweaked(own)).key);
+  const leaf = unhex(String(tap.leaf)), control = unhex(String(tap.control || ""));
+  const tail = join([new Uint8Array([0x20]), own, new Uint8Array([0xac])]);
+  if (leaf.length < tail.length || !SAME(leaf.slice(leaf.length - tail.length), tail)) return false;
+  if (control.length < 33 || (control.length - 33) % 32 || (control[0] & 0xfe) !== 0xc0) return false;
+  let node = await leafHash(leaf);
+  for (let at = 33; at < control.length; at += 32) {
+    const other = control.slice(at, at + 32);
+    node = await tagged("TapBranch", lessThan(other, node) ? join([other, node]) : join([node, other]));
+  }
+  const q = await tweaked(control.slice(1, 33), node);
+  return SAME(q.key, spent.slice(2)) && q.parity === (control[0] & 1);
+}
+
+/** The digest input `index` signs under SIGHASH_DEFAULT (BIP-341): `spent` is every input's {value, script}. */
+export async function sighashTaproot(tx, index, spent, leaf = null) {
+  const each = (f) => sha256(join(tx.inputs.map(f)));
+  const parts = [new Uint8Array([0, 0]), writeLE(tx.version, 4), writeLE(tx.locktime, 4),
+    await each((input) => join([unhex(input.txid).reverse(), writeLE(input.vout, 4)])),
+    await sha256(join(spent.map((s) => writeLE(s.value, 8)))),
+    await sha256(join(spent.map((s) => join([sizeOf(s.script.length), s.script])))),
+    await each((input) => writeLE(input.sequence === undefined ? 0xffffffffn : BigInt(input.sequence), 4)),
+    await sha256(join(tx.outputs.map((out) => join([writeLE(out.value, 8), sizeOf(out.script.length), out.script])))),
+    new Uint8Array([leaf ? 2 : 0]), writeLE(index, 4)];
+  if (leaf) parts.push(await leafHash(leaf), new Uint8Array([0, 0xff, 0xff, 0xff, 0xff]));
+  return tagged("TapSighash", join(parts));
+}
+
+/** A BIP-340 signature by `priv` over `message`, or by its key-path output's key when `keyPath` (TapTweak, no tree):
+ *  64 bytes, no sighash byte (SIGHASH_DEFAULT). `aux` is fresh randomness but for a test vector. */
+export async function signSchnorr(priv, message, keyPath = false, aux = null) {
+  let d = big(priv);
+  let point = POINT.BASE.mul(d).aff();
+  if (point.y & 1n) d = N - d;
+  if (keyPath) {
+    d = modN(d + big(await tagged("TapTweak", bytes32(point.x))));
+    point = POINT.BASE.mul(d).aff();
+    if (point.y & 1n) d = N - d;
+  }
+  const px = bytes32(point.x);
+  const t = bytes32(d ^ big(await tagged("BIP0340/aux", aux || crypto.getRandomValues(new Uint8Array(32)))));
+  const k0 = modN(big(await tagged("BIP0340/nonce", join([t, px, message]))));
+  if (k0 === 0n) throw new Error("no nonce for that message; nothing was signed");
+  const r = POINT.BASE.mul(k0).aff();
+  const k = r.y & 1n ? N - k0 : k0;
+  const e = modN(big(await tagged("BIP0340/challenge", join([bytes32(r.x), px, message]))));
+  return join([bytes32(r.x), bytes32(modN(k + e * d))]);
 }
 
 /* --- pre-signed offers (2026-09-27) --------------------------------

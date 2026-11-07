@@ -10,30 +10,112 @@
 <p class="msg" id="said" hidden></p>
 
 <nav class="admintabs" role="tablist">
-  <button type="button" role="tab" data-tab="overview">Overview</button>
+  {#- "Status", not "Overview": in Lite, Admin is a tab of a window that has an Overview of its own (2026-11-04). #}
+  <button type="button" role="tab" data-tab="overview">Status</button>
   <button type="button" role="tab" data-tab="coins">Coins &amp; chains</button>
-  <button type="button" role="tab" data-tab="trading">Trading</button>
+  {%- if modules_on is not defined or 'exchange' in modules_on %}
+  <button type="button" role="tab" data-tab="trading">Trading</button>{% endif %}
   <button type="button" role="tab" data-tab="safety">Safety</button>
   <button type="button" role="tab" data-tab="network">Network</button>
-  <button type="button" role="tab" data-tab="ords">Ords</button>
+  {%- if modules_on is not defined or 'ords' in modules_on %}
+  <button type="button" role="tab" data-tab="ords">Ords</button>{% endif %}
   <button type="button" role="tab" data-tab="dns">DNS</button>
   <button type="button" role="tab" data-tab="imports">Wallet imports</button>
-  <button type="button" role="tab" data-tab="llm">LLM</button>
-  <button type="button" role="tab" data-tab="meshtastic">Meshtastic</button>
-  <button type="button" role="tab" data-tab="affiliates">Affiliates</button>
+  {%- if modules_on is not defined or 'llm' in modules_on %}
+  <button type="button" role="tab" data-tab="llm">LLM</button>{% endif %}
+  {%- if modules_on is not defined or 'lora' in modules_on %}
+  <button type="button" role="tab" data-tab="meshtastic">Meshtastic</button>{% endif %}
+  {%- if modules_on is not defined or 'mining' in modules_on %}
+  <button type="button" role="tab" data-tab="mining">Mining</button>{% endif %}
+  {%- if modules_on is not defined or 'affiliates' in modules_on %}
+  <button type="button" role="tab" data-tab="affiliates">Affiliates</button>{% endif %}
   <button type="button" role="tab" data-tab="people">People &amp; brand</button>
+  <button type="button" role="tab" data-tab="modules">Edition &amp; modules</button>
 </nav>
 
-<div class="admintab" data-tab="overview" aria-label="Overview">
+<div class="admintab" data-tab="modules" aria-label="Edition & modules">
+{% include "_modules_panel.html" %}
+</div>
+
+<div class="admintab" data-tab="overview" aria-label="Status">
 <div class="cards" id="cards"></div>
 <section class="panel" id="needs">
   <h2>Needs you</h2>
   <div id="needlist" class="muted">Looking&hellip;</div>
 </section>
+{% include "_edition_ask.html" %}
+{% include "_setup_wizard.html" %}
 {% include "_welcome_panel.html" %}
 {% include "_arcades_panel.html" %}
+{% include "_globe_panel.html" %}
 <section class="panel" id="nodeswitch">
   <h2>This node</h2>
+  {#- 2026-11-04, "Who runs this node" (Plan B): the place and the person are two names that never swap. #}
+  <p style="margin:0 0 6px" id="arcadenames">This arcade is
+    <strong>{{ "@" ~ names.node if names.node else "not named yet" }}</strong>
+    {%- if names.owner_kind == "account" %}, owned by <strong>{{ "@" ~ names.owner if names.owner else "an account with no name yet" }}</strong>
+    {%- elif names.owner_kind == "password" %}, run with this machine's password{% endif %}.
+    {%- if not names.owner_kind %} Nobody owns it yet: <a href="/join" target="_top">sign in or make an account</a> at
+    this machine, then make that account its owner.{% endif %}</p>
+  {% if names.owner_kind == "account" and names.owner %}
+  <div class="row" style="gap:14px;flex-wrap:wrap;margin:0 0 4px" role="radiogroup" aria-label="The arcade answers to">
+    <span class="muted">It answers to</span>
+    <label><input type="radio" name="arcade_name" value="node" {{ "checked" if names.answers == "node" }}>
+      its own name{{ ", @" ~ names.node if names.node }}</label>
+    <label><input type="radio" name="arcade_name" value="owner" {{ "checked" if names.answers == "owner" }}>
+      your name, @{{ names.owner }}</label>
+    <span class="muted" id="arcadename-said"></span>
+  </div>
+  <p class="muted" style="margin:0 0 8px;font-size:.84rem">Linked arcades see the name chosen here. Nothing moves on
+    chain: the node's coins stay with its own name, and yours stay in your wallet.</p>
+  <script>
+  document.querySelectorAll('input[name="arcade_name"]').forEach(function (r) {
+    r.addEventListener('change', function () {
+      var said = document.getElementById('arcadename-said');
+      fetch('/admin/api/settings', {method: 'POST', credentials: 'same-origin', body: JSON.stringify({arcade_name: r.value}),
+        headers: {'Content-Type': 'application/json', 'X-Arcade-Admin': '1'}})
+        .then(function (res) { said.textContent = res.ok ? 'Saved.' : 'Not saved (' + res.status + ').'; });
+    });
+  });
+  </script>
+  {% endif %}
+  {% if names.owner_kind == "account" %}
+  {#- The owner's signed word that it owns this node (arcade/owner.py): what lets its other nodes list it. #}
+  {% set st = names.statement %}
+  <div class="row" style="gap:10px;flex-wrap:wrap;align-items:center;margin:0 0 8px" id="ownerproof"
+       data-node="{{ st.node }}" data-network="{{ st.network }}" data-version="{{ st.version }}"
+       data-address="{{ st.address }}">
+    <span>{% if st.signed %}You signed that you own this node, until
+      <span class="mono" data-when="{{ st.expires }}"></span>.{% else %}Sign that you own this node, so your other
+      nodes can list it with yours.{% endif %}</span>
+    {% if st.due and st.node %}<button type="button" class="small" id="owner-sign">{{ "Sign again" if st.signed else "Sign with my wallet" }}</button>{% endif %}
+    <label><input type="checkbox" id="owner-say" {{ "checked" if st.say }}> Tell linked arcades I own it</label>
+    <span class="muted" id="owner-said"></span>
+  </div>
+  <script type="module">
+  const box = document.getElementById("ownerproof"), said = document.getElementById("owner-said");
+  box.querySelectorAll("[data-when]").forEach((e) => { e.textContent = new Date(1000 * e.dataset.when).toLocaleDateString(); });
+  const keep = (body) => fetch("/admin/api/owner", {method: "POST", credentials: "same-origin", body: JSON.stringify(body),
+    headers: {"Content-Type": "application/json", "X-Arcade-Admin": "1"}})
+    .then(async (r) => { const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.detail || r.status); return j; });
+  document.getElementById("owner-say").addEventListener("change", (e) => {
+    keep({say: e.target.checked}).then(() => { said.textContent = "Saved."; }, (err) => { said.textContent = String(err.message); });
+  });
+  const sign = document.getElementById("owner-sign");
+  if (sign) sign.addEventListener("click", async () => {
+    said.textContent = "";
+    try {
+      const w = await import("/wallet.js");
+      const d = box.dataset, keys = await w.opened({network: d.network, version: Number(d.version)});
+      const mine = keys && keys.on && keys.on[d.network];
+      if (!mine) throw new Error("Unlock your wallet first: sign in here as this node's owner.");
+      if (mine.address !== d.address) throw new Error("The wallet open in this tab is not this node's owner.");
+      await keep({statement: await w.ownerSign(mine, d.network, d.node), say: document.getElementById("owner-say").checked});
+      location.reload();
+    } catch (err) { said.textContent = String(err.message || err); }
+  });
+  </script>
+  {% endif %}
   <p class="muted" style="margin:0 0 6px;font-size:.84rem">
   {% if update_status %}Updates last checked {{ when(update_status.at) }}: <strong>{{ update_status.what }}</strong>
     {%- if update_status.installed %}, running <code class="mono">{{ update_status.installed[:7] }}</code>{% endif %}
@@ -55,17 +137,53 @@
     up rather than going back.</p>
   <button type="button" class="small saveswitches">Save switches</button>
 </section>
+{% if names.owner_kind == "account" %}
+{#- 2026-11-04, "Who runs this node" (Plan B): the owner's other nodes, by their signed statements (arcade/owner.py). #}
+<section class="panel" id="yournodes">
+  <h2>Your nodes</h2>
+  <p class="muted" style="margin-top:0;font-size:.84rem">Every node that says {{ "@" ~ names.owner if names.owner else "your key" }}
+    owns it, heard over the mesh and checked here from the owner's signature. A node that doesn't say so, or that the
+    mesh doesn't reach now, isn't listed.</p>
+  <div class="tablewrap"><table class="admintable">
+    <thead><tr><th>Arcade</th><th>Heard</th><th>Open</th></tr></thead>
+    <tbody id="yourrows"><tr><td colspan="3" class="muted">Looking&hellip;</td></tr></tbody>
+  </table></div>
+  <script>
+  fetch('/admin/api/your-nodes', {credentials: 'same-origin', cache: 'no-store'}).then(function (r) { return r.json(); })
+    .then(function (got) {
+      var body = document.getElementById('yourrows'); body.replaceChildren();
+      var rows = [{tag: got.me, here: true}].concat(got.rows || []);
+      rows.forEach(function (n) {
+        var tr = body.insertRow(), name = tr.insertCell(), heard = tr.insertCell(), open = tr.insertCell();
+        var b = document.createElement('b'); b.textContent = n.tag ? '@' + n.tag : String(n.id || '').slice(0, 12);
+        name.append(b);
+        if (n.here) { name.append(' this one'); heard.textContent = 'now'; return; }
+        heard.textContent = n.linked ? 'linked now' : 'seen through @' + n.by_tag;
+        if (n.host) { var a = document.createElement('a'); a.href = 'https://' + n.host + '/admin'; a.textContent = n.host;
+          a.rel = 'noopener'; open.append(a); } else open.textContent = 'no public name';
+      });
+      if (!(got.rows || []).length) {
+        var tr = body.insertRow(), td = tr.insertCell(); td.colSpan = 3; td.className = 'muted';
+        td.textContent = 'No other node says you own it yet. Sign on each of them in Admin -> This node.';
+      }
+    }).catch(function () {});
+  </script>
+</section>
+{% endif %}
 
 </div>
 
 <div class="admintab" data-tab="coins" aria-label="Coins & chains">
 <section class="panel">
-  <h2>The node's coins</h2>
+  <h2>{{ "@" ~ names.node if names.node else "This node" }}'s till</h2>
+  <p class="muted" style="margin-top:0">What this node earns and spends by itself: its fees, its share as a sharer,
+    the coins it mines. Its key is on this machine{{ "; your own coins stay in your wallet" if names.owner_kind == "account" }}.</p>
   <div id="wallets"></div>
   <h3 style="margin-bottom:6px">Send</h3>
   <form class="sendform" id="sendform" onsubmit="return false">
     <select id="sendwhich"></select>
-    <input id="sendto" placeholder="@name or address" autocomplete="off" spellcheck="false">
+    <input id="sendto" placeholder="@name or address" autocomplete="off" spellcheck="false"
+      {%- if names.owner %} value="@{{ names.owner }}" title="To your own wallet, unless you change it"{% endif %}>
     <input id="sendamount" placeholder="amount" inputmode="decimal" autocomplete="off">
     <button type="submit" class="small">Prepare</button>
   </form>
@@ -103,24 +221,15 @@
     so they should all hold the same tokens, inscriptions, names and trades. Linked arcades compare
     fingerprints of their indexes every minute; a difference is tracked down to the block it starts at.</p>
   <div id="indexrows" class="muted" style="font-size:.86rem">Not linked to another arcade yet.</div>
-  <h3 style="margin:14px 0 6px">Mine test coins</h3>
-  <p class="muted" style="margin-top:0;font-size:.84rem">This machine's CPU mines blocks on a test-coin chain, with
-    work from its Core: the one here, or the one it borrows. On a borrowed chain a tenth of every block goes to the
-    arcade that shares the Core, in the block itself. A testnet lets anyone mine its next block at the lowest
-    difficulty when none has been found for a while, which is when a CPU wins.</p>
-  <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
-    <select id="minenet" aria-label="Chain to mine"></select>
-    <input autocomplete="off" id="mineaddr" style="flex:1;min-width:220px" placeholder="address the reward goes to" aria-label="Reward address">
-    <input autocomplete="off" id="mineworkers" style="width:70px" inputmode="numeric" aria-label="CPU workers" title="CPU workers">
-    <label class="muted" style="display:flex;gap:4px;align-items:center;font-size:.86rem">for
-      <input autocomplete="off" id="minehours" style="width:64px" inputmode="decimal" placeholder="&infin;"
-             aria-label="Hours to mine, blank until stopped" title="Hours, up to 72; blank mines until stopped"> hours</label>
-    <label class="muted" style="display:flex;gap:4px;align-items:center;font-size:.86rem" id="minefaucetl">
-      <input type="checkbox" id="minefaucet" style="width:auto"> pay this chain&rsquo;s faucet</label>
-    <button type="button" class="small" id="minego">Mine</button>
-    <button type="button" class="small ghost" id="minestop" hidden>Stop</button>
-  </div>
-  <div id="minesaid" class="muted" style="font-size:.86rem;margin-top:6px"></div>
+  <p class="muted" style="margin:10px 0 4px;font-size:.84rem">An arcade far behind can take a copy of the index from
+    linked arcades that hold it, used only when most of them agree with it, then checked block by block against its
+    own node in the background.</p>
+  <label class="switch"><input type="checkbox" id="serve_index_copies"> Serve index copies to linked arcades</label>
+  <label class="switch"><input type="checkbox" id="fetch_index_copies"> Fetch a copy when this index is far behind</label>
+  <h3 style="margin:14px 0 6px">What this arcade borrows</h3>
+  <p class="muted" style="margin-top:0;font-size:.84rem">Every Core, index, media relay and game room this arcade uses
+    and does not hold itself, and how many linked arcades hold it. It links to more holders on its own until three do.</p>
+  <div id="coverrows" class="muted" style="font-size:.86rem">Nothing borrowed.</div>
   <h3 style="margin:14px 0 6px">Litecoin nodes on this machine</h3>
   <p class="muted" style="margin:4px 0 0">Litecoin node: <span id="ltcline">checking&hellip;</span></p>
   <p class="muted" style="margin:4px 0 0">Litecoin testnet node: <span id="ltctestline">checking&hellip;</span></p>
@@ -148,6 +257,142 @@
 
 </div>
 
+{%- if modules_on is not defined or 'mining' in modules_on %}
+<div class="admintab" data-tab="mining" aria-label="Mining">
+<section class="panel">
+  <h2>Mining</h2>
+  <p class="muted" style="margin-top:0;font-size:.84rem">The Mining module (Edition &amp; modules switches it): this
+    machine's CPU on the chains it can mine, and ASICs on your own network over stratum. A chain of real coins is never
+    mined on a CPU; a merge-mined chain (Dogecoin, Pepecoin and the others mined beside Litecoin) is not mined here yet.</p>
+  <h3 style="margin:14px 0 6px">How each chain is mined here</h3>
+  <div style="overflow-x:auto"><table style="width:100%;font-size:.86rem">
+    <thead><tr><th style="text-align:left">Chain</th><th style="text-align:left">This machine</th>
+      <th style="text-align:left">ASICs</th></tr></thead>
+    <tbody id="miningrows"><tr><td colspan="3" class="muted">Reading&hellip;</td></tr></tbody></table></div>
+  <h3 style="margin:14px 0 6px">Mine on this machine</h3>
+  <p class="muted" style="margin-top:0;font-size:.84rem">This machine's CPU mines blocks on a test-coin chain, with
+    work from its Core: the one here, or the one it borrows. A chain of several algorithms (DigiByte testnet) is mined
+    by its own node here, each algorithm beside the others, which wins far more of its blocks. On a borrowed chain a tenth of every block goes to the
+    arcade that shares the Core, in the block itself. A testnet lets anyone mine its next block at the lowest
+    difficulty when none has been found for a while, which is when a CPU wins.</p>
+  <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
+    <select id="minenet" aria-label="Chain to mine"></select>
+    <input autocomplete="off" id="mineaddr" style="flex:1;min-width:220px" placeholder="address the reward goes to" aria-label="Reward address">
+    <input autocomplete="off" id="mineworkers" style="width:70px" inputmode="numeric" aria-label="CPU workers" title="CPU workers">
+    <label class="muted" style="display:flex;gap:4px;align-items:center;font-size:.86rem">for
+      <input autocomplete="off" id="minehours" style="width:64px" inputmode="decimal" placeholder="&infin;"
+             aria-label="Hours to mine, blank until stopped" title="Hours, up to 72; blank mines until stopped"> hours</label>
+    <label class="muted" style="display:flex;gap:4px;align-items:center;font-size:.86rem" id="minefaucetl">
+      <input type="checkbox" id="minefaucet" style="width:auto"> pay this chain&rsquo;s faucet</label>
+    <button type="button" class="small" id="minego">Mine</button>
+    <button type="button" class="small ghost" id="minestop" hidden>Stop</button>
+  </div>
+  <div id="minesaid" class="muted" style="font-size:.86rem;margin-top:6px"></div>
+  <h3 style="margin:18px 0 6px">ASICs on your network</h3>
+  <p class="muted" style="margin-top:0;font-size:.84rem">A stratum server on this machine, with work from a chain's
+    node here: point a scrypt or SHA-256 ASIC at the address it gives, any worker name and password. Solo mining: a
+    block it finds pays the address below whole. Only machines on your own network may connect, unless you tick the
+    box. It comes back by itself when the arcade restarts.</p>
+  <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
+    <select id="stratumnet" aria-label="Chain for ASICs"></select>
+    <select id="stratumalgo" aria-label="Algorithm"></select>
+    <input autocomplete="off" id="stratumaddr" style="flex:1;min-width:220px" placeholder="address the blocks pay" aria-label="Payout address">
+    <input autocomplete="off" id="stratumport" style="width:80px" inputmode="numeric" placeholder="3333" aria-label="Port" title="Port">
+    <label class="muted" style="display:flex;gap:4px;align-items:center;font-size:.86rem">
+      <input type="checkbox" id="stratumanyone" style="width:auto"> from outside this network too</label>
+    <button type="button" class="small" id="stratumgo">Start</button>
+    <button type="button" class="small ghost" id="stratumstop" hidden>Stop</button>
+  </div>
+  <div id="stratumsaid" class="muted" style="font-size:.86rem;margin-top:6px"></div>
+  <div style="overflow-x:auto"><table style="width:100%;font-size:.84rem;margin-top:6px">
+    <tbody id="stratumminers"></tbody></table></div>
+</section>
+<script>
+(function () {
+  // Admin -> Mining (the Mining module, 2026-11-04): /admin/api/mining for the table and the stratum server.
+  var $ = function (id) { return document.getElementById(id); }, data = null, drawn = false;
+  function post(path, body) {
+    return fetch(path, {method: 'POST', credentials: 'same-origin',
+      headers: {'Content-Type': 'application/json', 'X-Arcade-Admin': '1'}, body: JSON.stringify(body || {})})
+      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) {
+        if (!r.ok) throw new Error(j.detail || ('refused (' + r.status + ')')); return j; }); });
+  }
+  function cell(text, muted) { var td = document.createElement('td'); td.textContent = text; if (muted) td.className = 'muted'; return td; }
+  function way(w, kind) {
+    if (w.why) return [w.why, true];
+    if (kind === 'asic') return ['stratum: ' + w.algos.join(' or '), false];
+    return [(w.by === 'node' ? 'its node mines it' + (w.algos.length ? ': ' + w.algos.join(', ') : '')
+                             : 'CPU: ' + w.algos.join(', ')), false];
+  }
+  function asicChains() { return (data.chains || []).filter(function (c) { return c.asic && c.asic.algos; }); }
+  function algos() {
+    var c = asicChains().find(function (x) { return x.net === $('stratumnet').value; });
+    var sel = $('stratumalgo'), keep = sel.value; sel.innerHTML = '';
+    ((c && c.asic.algos) || []).forEach(function (a) { var o = document.createElement('option'); o.value = o.textContent = a; sel.appendChild(o); });
+    if (keep) sel.value = keep;
+    if (c && !$('stratumaddr').value) $('stratumaddr').value = c.address || '';
+  }
+  function draw(d) {
+    data = d;
+    var rows = $('miningrows'); rows.innerHTML = '';
+    (d.chains || []).forEach(function (c) {
+      var tr = document.createElement('tr'), cpu = way(c.cpu, 'cpu'), asic = way(c.asic, 'asic');
+      tr.append(cell(c.label + (c.here ? '' : ' (borrowed)')), cell(cpu[0], cpu[1]), cell(asic[0], asic[1]));
+      rows.appendChild(tr);
+    });
+    var st = d.stratum || {}, conf = st.conf || {};
+    if (!drawn) {
+      drawn = true;
+      var sel = $('stratumnet');
+      asicChains().forEach(function (c) { var o = document.createElement('option'); o.value = c.net; o.textContent = c.label; sel.appendChild(o); });
+      if (conf.net) sel.value = conf.net;
+      sel.onchange = function () { $('stratumaddr').value = ''; algos(); };
+      algos();
+      if (conf.algo) $('stratumalgo').value = conf.algo;
+      if (conf.address) $('stratumaddr').value = conf.address;
+      $('stratumport').value = conf.port || 3333;
+      $('stratumanyone').checked = !!conf.anyone;
+    }
+    $('stratumgo').hidden = !!st.running; $('stratumstop').hidden = !st.running;
+    ['stratumnet', 'stratumalgo', 'stratumaddr', 'stratumport', 'stratumanyone'].forEach(function (id) { $(id).disabled = !!st.running; });
+    if (!asicChains().length) { $('stratumsaid').textContent = 'No chain here an ASIC can mine: a chain whose node runs here, not merge-mined, in scrypt or SHA-256.'; return; }
+    var bits = [];
+    if (st.running) {
+      bits.push('Listening at ' + st.url + ' for ' + st.chain + ' (' + st.algo + '), block ' + (st.height || 0).toLocaleString()
+                + ', ' + (st.miners || []).length + ' miner' + ((st.miners || []).length === 1 ? '' : 's')
+                + ', about ' + (st.hashrate || 0).toLocaleString() + ' hashes a second');
+      if ((st.blocks || []).length) bits.push(st.blocks.length + ' block' + (st.blocks.length > 1 ? 's' : '') + ' found: '
+        + st.blocks.map(function (b) { return b.height.toLocaleString() + ' ' + b.result; }).join(', '));
+    } else bits.push(st.on ? 'Not running.' : 'Off.');
+    if (st.error) bits.push(st.error);
+    $('stratumsaid').textContent = bits.join(' \u00b7 ');
+    var tb = $('stratumminers'); tb.innerHTML = '';
+    (st.miners || []).forEach(function (m) {
+      var tr = document.createElement('tr');
+      tr.append(cell(m.worker || '(no name)'), cell(m.peer, true), cell('difficulty ' + Number(m.difficulty).toPrecision(4)),
+                cell(m.shares + ' shares, ' + m.rejected + ' refused'), cell((m.hashrate || 0).toLocaleString() + ' H/s'));
+      tb.appendChild(tr);
+    });
+  }
+  function load() {
+    return fetch('/admin/api/mining', {credentials: 'same-origin', cache: 'no-store'})
+      .then(function (r) { return r.json(); }).then(draw).catch(function () {});
+  }
+  $('stratumgo').onclick = function () {
+    $('stratumsaid').textContent = 'Starting\u2026';
+    post('/admin/api/stratum', {on: true, net: $('stratumnet').value, algo: $('stratumalgo').value,
+                                address: $('stratumaddr').value.trim(), port: parseInt($('stratumport').value, 10) || 3333,
+                                anyone: $('stratumanyone').checked})
+      .then(load).catch(function (e) { $('stratumsaid').textContent = e.message; });
+  };
+  $('stratumstop').onclick = function () { post('/admin/api/stratum', {on: false}).then(load).catch(function (e) { $('stratumsaid').textContent = e.message; }); };
+  document.querySelectorAll('.admintabs button[data-tab="mining"]').forEach(function (b) { b.addEventListener('click', load); });
+  setInterval(function () { if (document.querySelector('.admintab[data-tab="mining"].on') && !document.hidden) load(); }, 5000);
+  load();
+})();
+</script>
+</div>
+{% endif %}
 <div class="admintab" data-tab="trading" aria-label="Trading">
 <section class="panel" id="tradeswitches">
   <h2>Trading switches</h2>
@@ -274,6 +519,29 @@
     whether to use them.</p>
   <p class="muted" id="pushline"></p>
   <button type="button" class="small saveswitches">Save switches</button>
+</section>
+
+<section class="panel" id="terms">
+  <h2>Terms of use</h2>
+  <p class="muted" style="margin-top:0">For a node open to the public on a domain. With this on, a visitor opening a
+    page here must accept these terms or leave, and changing the text asks everybody again. It only asks people who
+    come from outside: this machine, your own network and this panel are never stopped, and neither are other arcades
+    or apps talking to this node.</p>
+  <label class="switch"><input type="checkbox" id="terms_gate"> Visitors must accept the terms to use this site</label>
+  <p class="muted" id="termswhere"></p>
+  <p class="msg info"><strong>This text is a template, not legal advice.</strong> It may not be enough
+    for where you or your visitors are, or for what your node offers, and no text removes every responsibility. Have
+    a lawyer read it, and add what only you can: your name or contact address for reports about content, and the
+    place whose law applies.</p>
+  <textarea id="terms_text" rows="16" autocomplete="off" maxlength="64000" style="width:100%;font:inherit"
+            aria-label="Terms of use text"></textarea>
+  <p class="muted" style="font-size:.84rem">A line starting with <code># </code> is a heading; a blank line starts a
+    new paragraph. <span id="termsversion"></span></p>
+  <div class="row" style="gap:8px;flex-wrap:wrap">
+    <button type="button" class="small" id="termssave">Save terms</button>
+    <button type="button" class="small ghost" id="termspreview">Preview what a visitor sees</button>
+    <button type="button" class="small ghost" id="termsreset">Back to the template</button>
+  </div>
 </section>
 
 <section class="panel" id="gamecards">
@@ -593,6 +861,8 @@
     $('wim-coins').innerHTML = (d.chains || []).map(function (c) {
       return '<button type="button" data-net="' + esc(c.network) + '"' + (c.network === d.chain ? ' class="on"' : '') + '>' + esc(c.title) + '</button>'; }).join('');
     var s = d.stats || {}, w = d.walk;
+    // A walk's readers (2026-11-05): this arcade, another at its web address, or a Core shared over the mesh.
+    function readerName(r) { return r === 'self' ? 'this arcade' : r.indexOf('core:') === 0 ? 'Core shared over the mesh by ' + r.slice(5, 17) + '…' : r; }
     $('wim-stats').innerHTML = '<div class="stat"><span>Imported wallets here</span><b>' + n(s.wallets) + '</b><span>across ' + n(s.accounts) + ' accounts</span></div>'
       + '<div class="stat"><span>Known for certain</span><b>' + n(s.certain) + '</b><span>whole past covered</span></div>'
       + '<div class="stat"><span>Waiting for a walk</span><b>' + n(s.waiting) + '</b><span>join the next walk</span></div>'
@@ -602,7 +872,10 @@
       var segs = {};
       (w.parts || []).forEach(function (p) { (segs[p.segment] = segs[p.segment] || []).push(p); });
       $('wim-walk').innerHTML = '<p class="muted" style="margin-top:-6px;font-size:.86rem">Blocks ' + n(w.hi) + ' down to ' + n(w.lo) + ' for ' + n(w.wallets)
-        + ' wallet' + (w.wallets === 1 ? '' : 's') + ' · started ' + when(w.began) + ' · ' + (w.readers || []).length + ' arcade' + ((w.readers || []).length === 1 ? '' : 's') + ', each block read by two</p>'
+        + ' wallet' + (w.wallets === 1 ? '' : 's') + ' · started ' + when(w.began) + ' · ' + (w.readers || []).length + ' reader' + ((w.readers || []).length === 1 ? '' : 's')
+        + (w.need === 1 ? ', each block read once' : ', each block read by two') + (w.chunks ? ' · ' + n(w.chunks) + ' chunks' : '')
+        + (w.eta ? ' · about ' + (w.eta >= 5400 ? Math.round(w.eta / 3600) + ' h' : Math.max(1, Math.round(w.eta / 60)) + ' min') + ' left' : '') + '</p>'
+        + '<p class="muted" style="font-size:.84rem">' + (w.readers || []).map(function (r) { return esc(readerName(r)); }).join(' · ') + '</p>'
         + Object.keys(segs).map(function (k) {
           var ps = segs[k], top = ps[0].top, bottom = ps[0].bottom;
           var cells = ps.map(function (p) {
@@ -610,7 +883,7 @@
             var pct = p.state === 'reading' ? at : 100, cls = p.state === 'done' ? 'ok' : p.state === 'failed' ? 'bad' : '';
             var tagp = p.state === 'done' ? '<span class="pill ok">✓ ' + (p.canaries || 0) + ' canar' + (p.canaries === 1 ? 'y' : 'ies') + '</span>'
               : p.state === 'failed' ? '<span class="pill bad">✗ ' + esc(p.missed ? 'missed a canary' : (p.error || 'failed')) + '</span>' : '';
-            return '<div class="reader"><span>' + esc(p.reader === 'self' ? 'this arcade' : p.reader) + (p.progress && p.progress.how ? ' · ' + esc(p.progress.how) : '') + ' ' + tagp + '</span>'
+            return '<div class="reader"><span>' + esc(readerName(p.reader)) + (p.progress && p.progress.how ? ' · ' + esc(p.progress.how) : '') + ' ' + tagp + '</span>'
               + '<div class="wbar"><i class="' + cls + '" style="width:' + pct.toFixed(0) + '%"></i></div></div>';
           }).join('');
           var done = ps.every(function (p) { return p.state !== 'reading'; });
@@ -643,9 +916,8 @@
         + '</td><td>' + n(rec.accounts) + '</td><td>' + n(rec.hosts) + '</td><td>' + n(rec.filed) + '</td><td>' + n(rec.covered) + ' addresses</td></tr></table>'
       : '<p class="muted">The first pass runs by itself a few minutes after this release starts.</p>';
     var st = d.settings || {}, f = d.files || {};
-    $('wim-settings').innerHTML = '<div class="toggle"><div><b>Shared walk for imports on ' + esc(d.title) + '</b><br><span class="muted" style="font-size:.84rem">Find an imported wallet\'s coins by walking the blocks with the other arcades (instead of a Core rescan).</span></div>'
-      + '<input autocomplete="off" type="checkbox" id="wim-walkon"' + (st.walk ? ' checked' : '') + '></div>'
-      + '<div class="toggle"><div><b>Read for other arcades\' walks</b><br><span class="muted" style="font-size:.84rem">Lend this machine\'s disk and cores to walks other arcades start.</span></div>'
+    // Every import is found by the shared walk (2026-11-03: the Core rescan, and its switch here, are gone).
+    $('wim-settings').innerHTML = '<div class="toggle"><div><b>Read for other arcades\' walks</b><br><span class="muted" style="font-size:.84rem">Lend this machine\'s disk and cores to walks other arcades start.</span></div>'
       + '<input autocomplete="off" type="checkbox" id="wim-lend"' + (st.lend ? ' checked' : '') + '></div>'
       + '<div class="toggle"><div><b>Most arcades in one walk</b><br><span class="muted" style="font-size:.84rem">More arcades finish sooner; every block is read by two whatever the number.</span></div>'
       + '<input autocomplete="off" type="number" id="wim-most" min="2" max="32" value="' + esc(st.readers_max) + '" style="width:70px"></div>'
@@ -686,7 +958,6 @@
   });
   document.addEventListener('change', function (e) {
     var body = null;
-    if (e.target.id === 'wim-walkon') { body = {do: 'set'}; body['walk_' + net] = e.target.checked; }
     if (e.target.id === 'wim-lend') body = {do: 'set', lend: e.target.checked};
     if (e.target.id === 'wim-most') body = {do: 'set', readers_max: Number(e.target.value) || 8};
     if (body) post(body).then(function () { said('Saved.'); }, function (err) { said(err.message, true); });
@@ -1791,6 +2062,12 @@ if (location.hash === "#meshtastic") start();
   <div id="facechoices" style="display:flex;gap:14px;flex-wrap:wrap;margin:6px 0 10px"></div>
   <p class="muted" id="facesaid" hidden></p>
   <button type="button" class="small" id="saveface">Use this face</button>
+  <h3 style="margin:18px 0 4px">Face per web address</h3>
+  <p class="muted" style="margin-top:0">A node published under more than one name can wear a different face on each:
+    a visitor to that address sees its name, colours and icons. The node keeps its own face everywhere else.</p>
+  <div id="facehosts" style="display:grid;grid-template-columns:auto auto;gap:8px 14px;align-items:center;justify-content:start;margin:6px 0 10px"></div>
+  <p class="muted" id="facehostsnone" hidden>This node has no public names (public_hosts in settings.json).</p>
+  <button type="button" class="small" id="savefacehosts" hidden>Save faces per address</button>
   <p class="muted" style="margin:14px 0 0">Which chains run here, are borrowed or are off: <a href="#coins">Coins &amp; chains</a>.</p>
 </section>
 
@@ -1930,6 +2207,47 @@ section.panel h2{margin-top:0}
   .affrow.fixed{grid-template-columns:1fr;justify-items:start}
   .affsite{grid-template-columns:1fr}
 }
+.nodebadge{display:inline-block;min-width:18px;padding:0 6px;margin-left:6px;border-radius:999px;background:var(--accent);color:var(--accent-fg);font-size:11px;line-height:18px;text-align:center}
+.nodebadge[hidden]{display:none}
+.nacts .ncancel{color:var(--bad)}
+td.nodecell > .npill.work,td.nodecell > .npill.bad{margin-left:8px}
+.npill{display:inline-block;padding:1px 10px;border-radius:999px;font-size:12px;border:1px solid var(--line);margin:6px 0 2px}
+.npill.work{background:color-mix(in srgb,var(--accent) 14%,var(--panel));border-color:color-mix(in srgb,var(--accent) 45%,var(--line));color:var(--fg)}
+.npill.ok{background:color-mix(in srgb,var(--ok) 12%,var(--panel));border-color:color-mix(in srgb,var(--ok) 40%,var(--line));color:var(--ok);margin-right:4px}
+.npill.bad{background:color-mix(in srgb,var(--bad) 10%,var(--panel));border-color:color-mix(in srgb,var(--bad) 40%,var(--line));color:var(--bad)}
+.nsteps{display:flex;margin:18px 0 10px;color:var(--fg);max-width:800px}
+.nst{flex:1 1 0;min-width:0;text-align:center;font-size:12px;color:var(--muted);position:relative;overflow-wrap:anywhere}
+.nst .ndot{width:24px;height:24px;border-radius:50%;margin:0 auto 6px;border:2px solid var(--line);background:var(--panel);font-size:12px;line-height:20px;font-weight:700;position:relative;z-index:2}
+.nst.done .ndot{background:var(--ok);border-color:var(--ok);color:#fff}
+.nst.cur .ndot{border-color:var(--accent);color:var(--accent);box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 22%,transparent)}
+.nst.failed .ndot{border-color:var(--bad);background:var(--bad);color:#fff}
+.nst.skip{opacity:.55}
+.nst.done,.nst.cur{color:var(--fg)}.nst.cur .nlab{font-weight:700}
+.nst .nsub{color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}.nst.cur .nsub{color:var(--fg);font-weight:600}
+/* the line to the next step is that step's progress bar */
+.nst:not(:last-child)::before{content:"";position:absolute;top:9px;left:calc(50% + 14px);right:calc(-50% + 14px);height:6px;border-radius:999px;background:color-mix(in srgb,var(--line) 70%,var(--panel));z-index:1}
+.nst:not(:last-child)::after{content:"";position:absolute;top:9px;left:calc(50% + 14px);height:6px;border-radius:999px;z-index:1;width:calc((100% - 28px) * var(--p, 0));background:var(--ok);transition:width .6s}
+.nst.fill::after{background:repeating-linear-gradient(45deg,var(--accent) 0 8px,color-mix(in srgb,var(--accent) 65%,#fff) 8px 16px)}
+.nst .npct{position:absolute;top:-15px;left:calc(50% + 14px);right:calc(-50% + 14px);font-size:11px;font-weight:700;color:var(--accent)}
+.nnow{max-width:800px;box-sizing:border-box;white-space:normal;background:color-mix(in srgb,var(--accent) 7%,var(--panel));border:1px solid color-mix(in srgb,var(--accent) 35%,var(--line));border-radius:10px;padding:10px 12px;color:var(--fg)}
+.nnow.bad{background:color-mix(in srgb,var(--bad) 6%,var(--panel));border-color:color-mix(in srgb,var(--bad) 35%,var(--line))}
+.nnow .nrow{display:flex;justify-content:space-between;gap:10px;align-items:baseline}
+.nbar{height:10px;background:color-mix(in srgb,var(--line) 70%,var(--panel));border-radius:999px;overflow:hidden;margin:8px 0 5px}
+.nbar>i{display:block;height:100%;background:var(--accent);border-radius:999px;transition:width .6s}
+.ncap{font-size:12px;color:var(--muted);margin-top:5px}
+.nacts{display:flex;gap:8px;margin-top:9px;flex-wrap:wrap}
+#nbell{position:relative;font-size:18px;background:none;border:0;cursor:pointer;margin-left:auto;padding:2px 8px}
+#nbell .nodebadge{position:absolute;top:-4px;right:-6px;margin:0}
+#ntoasts{position:fixed;right:18px;bottom:18px;z-index:9999;display:flex;flex-direction:column;gap:10px;width:min(360px,calc(100vw - 36px))}
+.ntoast{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:10px;padding:10px 12px;box-shadow:0 6px 18px rgba(0,0,0,.14);font-size:13px}
+.ntoast.ok{border-left-color:var(--ok)}.ntoast.bad{border-left-color:var(--bad)}
+.ntoast .nx{padding:0 4px;box-shadow:none;width:auto;min-height:0;line-height:1}
+.ntoast b{display:block;font-size:13px;margin-bottom:2px}.ntoast .nx{float:right;background:none;border:0;color:var(--muted);cursor:pointer;font-size:14px}
+#npanel{position:absolute;right:0;top:44px;z-index:9998;width:min(380px,calc(100vw - 36px));max-height:420px;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 6px 18px rgba(0,0,0,.14);font-size:13px;text-align:left}
+#npanel h3{margin:0;padding:10px 12px;font-size:14px;border-bottom:1px solid var(--line)}
+#npanel .ne{padding:7px 12px;border-bottom:1px dashed var(--line)}#npanel .ne b{color:var(--muted);font-weight:600;margin-right:6px}
+#npanel .ne.bad{color:var(--bad)}#npanel .ne.ok b{color:var(--ok)}
+.adminhead{position:relative}
 </style>
 
 <script>
@@ -2061,6 +2379,7 @@ section.panel h2{margin-top:0}
     $('faucetdaily').value = d.faucet.daily ? coins(d.faucet.daily) : '';
     ['auto_update', 'auto_sell', 'auto_fill', 'node_trades'].forEach(function (k) { $(k).checked = !!d.selling[k]; });
     $('update_channel').value = d.selling.update_channel || 'live';
+    drawTerms(d.terms, d.node.public_hosts);
     // One line per real-coin chain the swaps know (2026-10-18: LTC too), drawn from the setting itself.
     if (d.swap_big) {
       var lines = $('swapbiglines'); lines.textContent = '';
@@ -2099,7 +2418,7 @@ section.panel h2{margin-top:0}
         var lab = document.createElement('label'); lab.style.margin = '0';
         var inp = document.createElement('input'); inp.autocomplete = 'off'; inp.inputMode = 'decimal';
         inp.className = 'delegatecap'; inp.dataset.net = net; inp.style.width = '120px'; inp.value = d.delegate_cap[net];
-        lab.append(inp, ' ' + ({main: 'PEP', doge: 'DOGE', ltc: 'LTC', bel: 'BEL', lky: 'LKY', kot: 'KOT', wjk: 'WJK', dgb: 'DGB'}[net] || net));
+        lab.append(inp, ' ' + ({main: 'PEP', doge: 'DOGE', ltc: 'LTC', bel: 'BEL', lky: 'LKY', kot: 'KOT', wjk: 'WJK', dgb: 'DGB', flop: 'FLOP'}[net] || net));
         caps.appendChild(lab);
       });
     }
@@ -2205,16 +2524,101 @@ section.panel h2{margin-top:0}
   // block chain node on the computer. The storage cost should also be displayed for chains"): /admin/api/cores/install.
   var NODES = null;
   function gb(b) { return b >= 1e9 ? (b / 1e9).toFixed(b >= 1e11 ? 0 : 1) + ' GB' : Math.max(1, Math.round(b / 1e6)) + ' MB'; }
+  var NODES_T = null;
   function loadNodes() {
+    clearTimeout(NODES_T);
     fetch('/admin/api/cores/install', {credentials: 'same-origin', cache: 'no-store'}).then(function (r) { return r.json(); })
-      .then(function (d) { NODES = d; document.querySelectorAll('td.nodecell').forEach(function (td) { fillNode(td); }); })
-      .catch(function () {});
+      .then(function (d) {
+        NODES = d; document.querySelectorAll('td.nodecell').forEach(function (td) { fillNode(td); });
+        // Kept up to date by itself (2026-11-04: "there is no indication of what is happening"): every 3 s while
+        // an install or a copy is going on, else every 20 s while this tab is open.
+        var rows = (d && d.rows) || {}, active = 0;
+        Object.keys(rows).forEach(function (n) { if (rows[n].active) active++; });
+        var tab = document.querySelector('.admintabs button[data-tab="coins"]');
+        if (tab) {
+          var bd = tab.querySelector('.nodebadge');
+          if (!bd) { bd = document.createElement('span'); bd.className = 'nodebadge'; tab.appendChild(bd); }
+          bd.textContent = active ? String(active) : ''; bd.hidden = !active;
+          bd.title = active ? active + ' node install' + (active === 1 ? '' : 's') + ' going on' : '';
+        }
+        var open = document.querySelector('.admintab[data-tab="coins"].on');
+        NODES_T = setTimeout(loadNodes, active ? 3000 : (open ? 20000 : 60000));
+      })
+      .catch(function () { NODES_T = setTimeout(loadNodes, 20000); });
   }
   function nodeCell(r) {
     var td = document.createElement('td'); td.className = 'nodecell muted'; td.dataset.net = r.net; td.dataset.now = r.now;
     td.colSpan = 5;
     fillNode(td);
     return td;
+  }
+  function ago(secs) {
+    if (secs == null) return '';
+    if (secs < 90) return 'about a minute left';
+    if (secs < 5400) return 'about ' + Math.round(secs / 60) + ' min left';
+    if (secs < 172800) return 'about ' + Math.round(secs / 3600) + ' h left';
+    return 'about ' + Math.round(secs / 86400) + ' days left';
+  }
+  function bar(frac) {
+    var b = document.createElement('div'); b.className = 'nbar';
+    var i = document.createElement('i'); i.style.width = Math.max(0, Math.min(100, 100 * frac)).toFixed(1) + '%';
+    b.appendChild(i); return b;
+  }
+  // An install's seven steps in the chain's row (core_install.steps; 2026-11-04 chose the mockup where the line
+  // through the steps is the progress bar): the line after a step fills as the next one goes, and under the steps a
+  // box says what is going on now, how long it has left, what comes next, and the two ways out.
+  function stepper(x) {
+    var w = document.createElement('div'); w.className = 'nsteps';
+    x.steps.forEach(function (s, i) {
+      var d = document.createElement('div'); d.className = 'nst ' + (s.state === 'now' ? 'cur' : s.state);
+      var nxt = x.steps[i + 1];
+      if (nxt) {
+        d.style.setProperty('--p', String(nxt.state === 'done' || nxt.state === 'skip' ? 1 : (nxt.p || 0)));
+        if (nxt.state === 'now') d.classList.add('fill');
+        if (nxt.state === 'now' && nxt.p != null) d.appendChild(text('span', Math.floor(100 * nxt.p) + '%', 'npct'));
+      }
+      d.appendChild(text('div', s.state === 'done' ? '✓' : s.state === 'failed' ? '!' : s.state === 'skip' ? '–' : String(i + 1), 'ndot'));
+      d.appendChild(text('div', s.label, 'nlab')); d.appendChild(text('div', s.num || ' ', 'nsub'));
+      w.appendChild(d);
+    });
+    return w;
+  }
+  function nowBox(net, x) {
+    var j = x.job || {}, c = x.copy || {}, node = c.node || {}, who = c.from || 'the linked arcade';
+    var now = (x.steps || []).filter(function (s) { return s.state === 'now' || s.state === 'failed'; })[0];
+    if (!now) return null;
+    var box = document.createElement('div'); box.className = 'nnow' + (now.state === 'failed' || c.phase === 'failed' ? ' bad' : '');
+    var title = '', next = '';
+    var copying = x.steps.some(function (s) { return s.key === 'data' && s.label === 'Copy data'; });
+    if (now.state === 'failed') { title = 'The install failed'; next = j.step || ''; }
+    else if (now.key === 'download') { title = 'Downloading the official release: ' + (now.num || ''); next = 'Next: its SHA-256 is checked against the pinned one, then the node starts.'; }
+    else if (now.key === 'check') { title = 'Checking the download and unpacking it'; next = 'Next: the node starts and the arcade reloads to read it.'; }
+    else if (now.key === 'start') { title = c.phase === 'starting' || !node.headers ? 'The node is starting' : 'Starting the node'; next = 'Next: a linked arcade with a copy of the chain’s data is looked for.'; }
+    else if (now.key === 'find') { title = c.step ? c.step.charAt(0).toUpperCase() + c.step.slice(1) : 'Looking for a copy of the chain’s data'; next = 'Next: this node learns the chain’s headers, so the copy can be checked against the real chain.'; }
+    else if (now.key === 'headers') { title = 'Learning the chain’s headers: ' + now.num; next = copying ? 'So the copy from ' + who + ' can be checked against the real chain. Next: the copy comes over the mesh, every piece checked.' : 'Next: the node reads the blocks themselves.'; }
+    else if (now.key === 'data' && copying) { title = 'Copying the chain’s data from ' + who + ': ' + now.num; next = 'Every piece is checked as it arrives' + (c.rate ? ', ' + (c.rate / 1e6).toFixed(1) + ' MB/s' : '') + '. Next: this node stops for a moment, the copy is swapped in and checked with no peers (its newest block, its coin set, the last 288 blocks). Its coin set is ' + who + '’s word.'; }
+    else if (now.key === 'data') { title = (c.phase === 'failed' ? 'The copy was refused, so the node is syncing the chain itself: ' : 'The node is syncing the chain itself: ') + 'block ' + now.num; next = c.phase === 'failed' ? c.step : c.phase === 'own' ? 'Nothing to do: it reads the chain block by block, as you chose.' : 'Nothing to do: it reads the chain block by block; a copy is taken if a linked arcade offers one.'; }
+    else if (now.key === 'ready') { title = copying && c.phase === 'checking' ? 'Checking the copy with no peers' : 'Syncing the last blocks: ' + (now.num || ''); next = c.phase === 'checking' ? 'Next: the node starts as usual and syncs the last blocks itself. A wallet in it catches up once.' : 'Nothing to do: the chain is ready when its blocks reach its headers.'; }
+    var head = document.createElement('div'); head.className = 'nrow';
+    head.appendChild(text('b', title));
+    var times = now.eta ? ago(now.eta).replace(' left', '') + ' for this step' : '';
+    head.appendChild(text('span', times, 'muted small')); box.appendChild(head);
+    if (next) box.appendChild(text('div', next, 'ncap'));
+    var acts = document.createElement('div'); acts.className = 'nacts';
+    function act(label, action, cls, ask) {
+      var b = document.createElement('button'); b.type = 'button'; b.className = 'small ' + (cls || ''); b.textContent = label;
+      b.onclick = function () {
+        if (ask && !confirm(ask)) return;
+        b.disabled = true;
+        call('/admin/api/cores/copy', {net: net, action: action}).then(function () { loadNodes(); })
+          .catch(function (e) { b.disabled = false; say(e.message, 'err'); });
+      };
+      acts.appendChild(b);
+    }
+    if (x.installed && copying && ['find', 'headers', 'data'].indexOf(now.key) >= 0) act('Sync on its own instead', 'own', 'ghost');
+    if (x.installed && !c.service) act('Cancel install', 'cancel', 'ghost ncancel', 'Cancel the ' + net.toUpperCase() + ' install?\n\nIts node stops, its chain data and any copy are deleted, and the chain is borrowed again. Its wallet file is kept.');
+    if (acts.childNodes.length) box.appendChild(acts);
+    return box;
   }
   function fillNode(td) {
     td.textContent = '';
@@ -2225,15 +2629,34 @@ section.panel h2{margin-top:0}
                  : 'storage not reported by any linked arcade yet');
     if (x.ord && x.ord.bytes) bits.push('its full ord index about ' + gb(x.ord.bytes));
     var line = document.createElement('span'); line.textContent = 'Node here: ' + bits.join(' · '); td.appendChild(line);
-    var j = x.job;
-    if (j && j.state === 'working') {
-      td.appendChild(text('div', j.step + (j.total ? ' ' + Math.round(100 * (j.done || 0) / j.total) + '%' : '')));
-      setTimeout(loadNodes, 2000);
-      return;
+    var c = x.copy || {};
+    if (x.steps && x.steps.length) {
+      var all = x.steps.every(function (s) { return s.state === 'done' || s.state === 'skip'; });
+      if (all) {
+        var r = document.createElement('div'); r.className = 'small';
+        r.appendChild(text('span', 'Ready', 'npill ok'));
+        var node = c.node || {};
+        r.appendChild(text('span', ' ' + (node.blocks ? node.blocks.toLocaleString() + ' blocks' : 'synced')
+          + (c.phase === 'done' && c.from ? ' · chain data copied from ' + c.from + ' (its coin set trusted)' : '')));
+        td.appendChild(r);
+      } else {
+        var pill = x.steps.filter(function (s) { return s.state === 'now' || s.state === 'failed'; })[0];
+        if (pill) td.appendChild(text('div', pill.state === 'failed' ? 'Install failed at: ' + pill.label
+          : c.phase === 'failed' ? 'Copy refused · syncing on its own'
+          : 'Installing · ' + (x.pct || 0) + '% · step ' + (x.steps.indexOf(pill) + 1) + ' of ' + x.steps.length + ': ' + pill.label,
+          'npill ' + (pill.state === 'failed' || c.phase === 'failed' ? 'bad' : 'work')));
+        td.appendChild(stepper(x));
+        var box = nowBox(td.dataset.net, x); if (box) td.appendChild(box);
+      }
     }
-    if (j && j.state === 'failed') td.appendChild(text('div', 'install failed: ' + j.step, 'idx-bad'));
-    if (j && j.state === 'done') td.appendChild(text('div', j.step));
-    if (td.dataset.now === 'here' || x.installed) { if (x.installed) td.appendChild(text('div', 'installed by this arcade')); return; }
+    if (c.phase === 'failed' && !(x.steps && x.steps.length))
+      td.appendChild(text('div', 'Chain data: ' + c.step, 'idx-bad'));
+    if (c.making) td.appendChild(text('div', 'Making a copy of this chain’s data for a linked arcade: ' + c.making));
+    if (c.holds) td.appendChild(text('div', 'Holds a copy of this chain’s data for linked arcades (block '
+                                     + c.holds.h.toLocaleString() + ', ' + gb(c.holds.bytes) + ')'));
+    var j = x.job;
+    if (x.steps && x.steps.length && !x.installed) return;           // the install is going on (or failed): said above
+    if (td.dataset.now === 'here' || x.installed) { if (x.installed) td.appendChild(text('div', 'installed by this arcade', 'small')); return; }
     if (!x.available) { td.appendChild(text('div', x.why || 'cannot be installed here')); return; }
     var free = NODES.free || 0, need = st ? st.bytes : 0;
     var b = document.createElement('button'); b.type = 'button'; b.className = 'small'; b.textContent = 'Install a node';
@@ -2242,8 +2665,9 @@ section.panel h2{margin-top:0}
     b.onclick = function () {
       if (!confirm('Install ' + td.dataset.net.toUpperCase() + ' Core ' + x.version + ' on this machine?\n\nDownload: ' + gb(x.download)
                    + '\nStorage once synced: ' + (need ? 'about ' + gb(need) : 'not known yet') + '\nFree on this disk: ' + gb(free)
-                   + '\n\nIt downloads the official release, checks its SHA-256, starts the node and syncs the whole chain '
-                   + '(hours to days). The arcade reloads to read it.')) return;
+                   + '\n\nIt downloads the official release, checks its SHA-256 and starts the node. If a linked arcade has '
+                   + 'this chain, its data is copied from there and checked (that arcade\'s coin set is trusted); otherwise '
+                   + 'the node syncs the whole chain itself (hours to days). The arcade reloads to read it.')) return;
       b.disabled = true;
       call('/admin/api/cores/install', {net: td.dataset.net}).then(function () { loadNodes(); })
         .catch(function (e) { b.disabled = false; say(e.message, 'err'); });
@@ -2335,6 +2759,21 @@ section.panel h2{margin-top:0}
     var ix = $('indexrows'); ix.textContent = '';
     (c.rows || []).forEach(function (r) {
       var i = r.index || {};
+      // Where this index came from (2026-11-02): a copy from linked arcades, and its confirmation from this
+      // arcade's own node; or a copy being fetched, or one made here for others.
+      var cp = r.copy || {};
+      if (cp.copy) {
+        var k = cp.copy, how = k.state === 'confirmed' ? 'confirmed from this arcade\u2019s own node'
+          : k.state === 'rebuilt' ? 'did not match this arcade\u2019s own node (' + (k.differs || 'differs')
+              + '): replaced by the index built here'
+          : 'confirming from this arcade\u2019s own node' + (k.confirmed_to ? ', at block '
+              + Number(k.confirmed_to).toLocaleString() + ' of ' + Number(k.height).toLocaleString() : '');
+        ix.appendChild(text('div', r.title + ': index copied from ' + k.agreed + ' of ' + k.voters
+          + ' linked arcades at block ' + Number(k.height).toLocaleString() + ' \u2014 ' + how,
+          k.state === 'rebuilt' ? 'idx-bad' : ''));
+      }
+      if (cp.fetch) ix.appendChild(text('div', r.title + ': ' + (cp.said || 'fetching a copy of the index')));
+      else if (cp.said && !cp.copy) ix.appendChild(text('div', r.title + ': ' + cp.said, 'muted'));
       if (!i.compared) return;
       var line = document.createElement('div');
       var ok = i.agree === i.compared;
@@ -2345,7 +2784,8 @@ section.panel h2{margin-top:0}
       (i.differ || []).forEach(function (x) {
         var why = x.error ? 'could not compare: ' + x.error
           : x.differs_at ? 'reads block ' + Number(x.differs_at).toLocaleString() + ' differently'
-          : x.state === 'differs' ? 'same blocks, different balances' : 'differs';
+          : x.state === 'differs' ? 'same blocks, different balances'
+          : x.names === 'differs' ? 'same blocks, different @names' : 'differs';
         ix.appendChild(text('div', '\u2014 arcade ' + x.peer + ' ' + why, 'idx-bad'));
         if (x.differs_at) {
           ix.appendChild(text('div', 'This arcade:\n' + ((x.ours || []).join('') || '(nothing)') +
@@ -2354,6 +2794,23 @@ section.panel h2{margin-top:0}
       });
     });
     if (!ix.childNodes.length) ix.textContent = c.mesh ? 'Not linked to another arcade yet.' : 'The mesh is off on this arcade.';
+    var cv = $('coverrows');
+    if (cv) {
+      cv.textContent = '';
+      (c.coverage || []).forEach(function (r) {
+        var ok = r.linked >= r.goal, none = r.linked === 0 && !r.relayed;
+        cv.appendChild(text('div', r.what + ': ' + r.linked + ' of ' + r.goal + ' linked'
+          + (r.relayed ? ' \u00b7 ' + r.relayed + ' through other arcades' : '')
+          + (r.known > r.linked ? ' \u00b7 ' + (r.known - r.linked) + ' more known, linking' : (none ? ' \u00b7 none known yet (arcades on older versions do not say what they hold)' : '')),
+          none ? 'idx-bad' : (ok ? '' : 'muted')));
+      });
+      if (!cv.childNodes.length) cv.textContent = c.mesh ? 'Nothing borrowed: this arcade holds all it uses.' : 'The mesh is off on this arcade.';
+    }
+    var copies = c.copies || {};
+    ['serve', 'fetch'].forEach(function (k) {
+      var box = $(k + '_index_copies');
+      if (box && document.activeElement !== box) box.checked = copies[k] !== false;
+    });
   }
   // A test chain's faucet (2026-10-18, SadFrog's side): what every account is topped back up to once a
   // day, and how this node keeps the coins for it. Chains with real coins have none.
@@ -2387,8 +2844,9 @@ section.panel h2{margin-top:0}
   function mineControls(r, f, mining) {
     var box = document.createElement('div'); box.className = 'minebox'; box.style.marginTop = '6px';
     if (mining.mining && mining.net === r.net) {
-      box.appendChild(text('div', 'Mining a block to this faucet now' + (mining.rate ? ', ' +
-        Number(mining.rate).toLocaleString() + ' hashes/s' : '') + '. Stop it on the Wallet page.', 'muted'));
+      var rate = mining.rate ? ', ' + Number(mining.rate).toLocaleString() + ' hashes/s' : '';
+      box.appendChild(text('div', mining.address ? 'Mining to ' + mining.address + ' now' + rate + '. Stop it under Mining.'
+        : 'Mining a block to this faucet now' + rate + '. Stop it on the Wallet page.', 'muted'));
     } else if (f.last) {
       box.appendChild(text('div', lastMined(f.last), 'muted'));
     }
@@ -2431,8 +2889,9 @@ section.panel h2{margin-top:0}
     }).catch(function (e) { say(e.message, 'err'); });
   };
 
-  // Mine test coins (arcade/blockminer.py, 2026-10-18)
-  var mine = null;
+  // Mine on this machine (arcade/blockminer.py, 2026-10-18; Admin -> Mining since 2026-11-04, so only where the
+  // Mining module is on and its controls are on the page).
+  var mine = null, mineHere = !!$('minenet');
   function drawMine(m) {
     mine = m;
     var sel = $('minenet');
@@ -2467,7 +2926,10 @@ section.panel h2{margin-top:0}
     $('mineaddr').disabled = !!m.running || $('minefaucet').checked;
     if (!(m.chains || []).length) { $('minesaid').textContent = 'No test-coin chain here that can be mined this way.'; return; }
     var bits = [];
-    if (m.running) bits.push('Mining ' + m.net + (m.faucet ? ' to its faucet' : '') + ' at ' + (m.rate || 0).toLocaleString()
+    if (m.running && m.algos) bits.push('Mining ' + m.net + ' by its node (' + m.algos.join(', ') + ') to ' + m.address + ' at '
+                                        + (m.rate || 0).toLocaleString() + ' hashes a second'
+                                        + (m.until ? ', until ' + new Date(m.until * 1000).toLocaleString() : ''));
+    else if (m.running) bits.push('Mining ' + m.net + (m.faucet ? ' to its faucet' : '') + ' at ' + (m.rate || 0).toLocaleString()
                              + ' hashes a second, block ' + (m.height || 0).toLocaleString() + ', '
                              + (m.tries || 0).toLocaleString() + ' tried'
                              + (m.until ? ', until ' + new Date(m.until * 1000).toLocaleString() : ''));
@@ -2490,7 +2952,7 @@ section.panel h2{margin-top:0}
     return fetch('/admin/api/mine', {credentials: 'same-origin', cache: 'no-store'})
       .then(function (r) { return r.json(); }).then(drawMine).catch(function () {});
   }
-  $('minego').onclick = function () {
+  if (mineHere) $('minego').onclick = function () {
     var hours = $('minehours').value.trim();
     if (hours && !(Number(hours) > 0 && Number(hours) <= 72)) { say('Mine for up to 72 hours, or leave it blank.', 'err'); return; }
     var body = {net: $('minenet').value, workers: parseInt($('mineworkers').value, 10) || 0, hours: Number(hours || 0)};
@@ -2498,11 +2960,13 @@ section.panel h2{margin-top:0}
     call('/admin/api/mine', body)
       .then(loadMine).catch(function (e) { say(e.message, 'err'); });
   };
-  $('minestop').onclick = function () {
+  if (mineHere) $('minestop').onclick = function () {
     call('/admin/api/mine', {stop: true}).then(loadMine).catch(function (e) { say(e.message, 'err'); });
   };
-  loadMine();
-  setInterval(function () { if (!document.hidden && mine && mine.running) loadMine(); }, 3000);
+  if (mineHere) {
+    loadMine();
+    setInterval(function () { if (!document.hidden && mine && mine.running) loadMine(); }, 3000);
+  }
 
   // --- the card watch (arcade/cardwatch.py, 2026-10-18) ---
   function loadCards() {
@@ -2560,6 +3024,20 @@ section.panel h2{margin-top:0}
       i.checked = c[0] === b.current; i.disabled = b.locked;
       l.appendChild(i); l.appendChild(document.createTextNode(' ' + c[1])); box.appendChild(l);
     });
+    var hb = $('facehosts'), names = b.public_hosts || [], own = b.hosts || {};
+    hb.textContent = '';
+    names.forEach(function (host) {
+      var l = document.createElement('label'); l.textContent = host; l.htmlFor = 'face-' + host; l.style.margin = '0';
+      var sel = document.createElement('select'); sel.id = 'face-' + host; sel.dataset.host = host;
+      var o = document.createElement('option'); o.value = ''; o.textContent = 'This node’s own face'; sel.appendChild(o);
+      b.choices.forEach(function (c) {
+        var oc = document.createElement('option'); oc.value = c[0]; oc.textContent = c[1]; sel.appendChild(oc);
+      });
+      sel.value = own[host] || '';
+      hb.appendChild(l); hb.appendChild(sel);
+    });
+    $('facehostsnone').hidden = names.length > 0;
+    $('savefacehosts').hidden = names.length === 0;
     $('saveface').hidden = b.locked;
     $('facesaid').hidden = !b.locked;
     $('facesaid').textContent = b.locked ? 'Set by --brand / ARCADE_BRAND in this node\u2019s service; change it there.' : '';
@@ -2569,6 +3047,15 @@ section.panel h2{margin-top:0}
     if (!on) return;
     call('/admin/api/settings', {brand: on.value})
       .then(function () { location.reload(); }).catch(function (e) { say(e.message, 'err'); });
+  };
+  $('savefacehosts').onclick = function () {
+    var faces = {};
+    document.querySelectorAll('#facehosts select').forEach(function (sel) {
+      if (sel.value) faces[sel.dataset.host] = sel.value;
+    });
+    call('/admin/api/settings', {brand_hosts: faces})
+      .then(function () { say('Saved. Each address shows its face on its next page.', 'ok'); })
+      .catch(function (e) { say(e.message, 'err'); });
   };
   function drawLtc(s, id) {
     var line = $(id || 'ltcline');
@@ -3584,11 +4071,16 @@ section.panel h2{margin-top:0}
       arcCard(); window.arcadesPanel.draw(arcSaid);
       if (hidden.length) lines.push(['gamecards', hidden.length + ' game card' + (hidden.length > 1 ? 's' : '') + ' hidden, waiting for you to look']);
       if (mesh.ok && !mesh.linked) lines.push(['mesh', 'This node is not linked to any other arcade']);
+      // The owner's one-time asks (2026-11-04, "Who runs this node"): sign for this node, or give it an owner account.
+      {% if names.owner_kind == "account" and names.statement.due and names.statement.node %}lines.push(['overview', 'Sign that you own this node, so your other nodes list it (This node)']);
+      {% elif names.owner_kind == "password" %}lines.push(['/join/keys', 'This node runs with a machine password: make your account its owner, to see it with your other nodes']);
+      {% elif not names.owner_kind %}lines.push(['/join', 'Nobody owns this node yet: sign in or make an account, then make it the owner']);{% endif %}
       (mesh.chains || []).forEach(function (c) { if (c.syncing) lines.push(['coins', c.label + ' is still syncing (' + c.progress + '%)']); });
       drawMesh(mesh);
       box.replaceChildren();
       if (!lines.length) { box.textContent = 'Nothing. Everything here is running.'; return; }
-      lines.forEach(function (l) { var d = document.createElement('div'), a = document.createElement('a'); a.href = '#' + l[0]; a.textContent = l[1]; d.append('\u2022 ', a); box.append(d); });
+      // A line whose target is a page ("/join"), not an Admin tab, opens it in the whole window: in Lite, Admin is a tab.
+      lines.forEach(function (l) { var d = document.createElement('div'), a = document.createElement('a'); a.href = l[0].charAt(0) === '/' ? l[0] : '#' + l[0]; if (l[0].charAt(0) === '/') a.target = '_top'; a.textContent = l[1]; d.append('\u2022 ', a); box.append(d); });
     });
   }
   // --- Overview -> Arcades (2026-10-21, approving the mockup): /admin/api/arcades, this arcade first.
@@ -3616,6 +4108,44 @@ section.panel h2{margin-top:0}
     rows.forEach(function (r) { var d = document.createElement('div'), b = document.createElement('b'); b.textContent = r[0] + ': '; d.append(b, r[1]); box.append(d); });
   }
   loadNeeds(); setInterval(function () { if (!document.hidden) loadNeeds(); }, 30000);
+  // The text is left alone while the operator is editing it: draw() runs again after every save anywhere on this page.
+  var termsEdited = false;
+  function drawTerms(t, hosts) {
+    $('terms_gate').checked = !!t.on;
+    if (!termsEdited) $('terms_text').value = t.text;
+    $('termsversion').textContent = 'Saved version: ' + t.version + (t.own ? ' (your own text).' : ' (the template).');
+    $('termswhere').textContent = (hosts || []).length
+      ? 'Your public names: ' + hosts.join(', ') + '. Anything else reaching this node through a tunnel or proxy is asked too.'
+      : 'No public name is set on the DNS tab, so only visitors arriving through a tunnel or proxy, or from a public address, are asked.';
+  }
+  $('terms_text').addEventListener('input', function () { termsEdited = true; });
+  ['serve_index_copies', 'fetch_index_copies'].forEach(function (key) {
+    var box = $(key);
+    if (!box) return;
+    box.addEventListener('change', function () {
+      var body = {}; body[key] = box.checked;
+      call('/admin/api/settings', body)
+        .then(function () { say(key === 'serve_index_copies'
+          ? (box.checked ? 'This arcade serves index copies.' : 'This arcade serves no index copies.')
+          : (box.checked ? 'This arcade fetches a copy when far behind.' : 'This arcade always reads its own node.')); })
+        .catch(function (e) { box.checked = !box.checked; say(e.message, 'err'); });
+    });
+  });
+  function saveTerms(words) {
+    var body = {terms_gate: $('terms_gate').checked};
+    if (words !== undefined) body.terms_text = words;
+    return call('/admin/api/settings', body).then(function () { termsEdited = false; load(); });
+  }
+  $('termssave').onclick = function () {
+    saveTerms($('terms_text').value)
+      .then(function () { say($('terms_gate').checked ? 'Terms saved: visitors are asked.' : 'Terms saved: the switch is off, so nobody is asked.'); })
+      .catch(function (e) { say(e.message, 'err'); });
+  };
+  $('termspreview').onclick = function () { location.href = '/admin/terms/preview'; };
+  $('termsreset').onclick = function () {
+    if (!confirm('Replace your text with the template?')) return;
+    saveTerms('').then(function () { say('Back to the template.'); }).catch(function (e) { say(e.message, 'err'); });
+  };
   function saveSwitches() {
     call('/admin/api/settings', {trade_cut: $('tradecut').value, auto_update: $('auto_update').checked, update_channel: $('update_channel').value, auto_sell: $('auto_sell').checked,
       auto_fill: $('auto_fill').checked, node_trades: $('node_trades').checked,
@@ -3774,6 +4304,54 @@ section.panel h2{margin-top:0}
     };
   });
   tunLoad();
+})();
+</script>
+
+<script>
+// Node installs' notifications on every Admin tab (2026-11-04, chose "steps in the row" with "notifications
+// that follow you around Admin"): a note for each new one, and the bell keeps the list (/admin/api/cores/events).
+(function () {
+  var head = document.querySelector('.adminhead'); if (!head) return;
+  var bell = document.createElement('button'); bell.type = 'button'; bell.id = 'nbell'; bell.title = 'Node install notifications';
+  bell.textContent = '🔔'; var count = document.createElement('span'); count.className = 'nodebadge'; count.hidden = true;
+  bell.appendChild(count); head.appendChild(bell);
+  var toasts = document.createElement('div'); toasts.id = 'ntoasts'; document.body.appendChild(toasts);
+  var all = [], last = 0, panel = null;
+  var SEEN = 'arcade.nodeEvents.seen', READ = 'arcade.nodeEvents.read';
+  function num(k, d) { var v = parseFloat(localStorage.getItem(k)); return isNaN(v) ? d : v; }
+  function el(tag, txt, cls) { var e = document.createElement(tag); if (txt != null) e.textContent = txt; if (cls) e.className = cls; return e; }
+  function hhmm(t) { return new Date(t * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}); }
+  function badge() { var n = all.filter(function (e) { return e.at > num(READ, 0); }).length; count.textContent = n ? String(n) : ''; count.hidden = !n; }
+  function toast(e) {
+    var t = el('div', null, 'ntoast ' + (e.level || ''));
+    var x = el('button', '✕', 'nx'); x.type = 'button'; x.onclick = function () { t.remove(); }; t.appendChild(x);
+    t.appendChild(el('b', hhmm(e.at) + ' · ' + (e.net || '').toUpperCase())); t.appendChild(el('span', e.text));
+    toasts.appendChild(t); while (toasts.children.length > 4) toasts.firstChild.remove();
+    setTimeout(function () { t.remove(); }, e.level === 'bad' ? 30000 : 12000);
+  }
+  function drawPanel() {
+    if (!panel) return; panel.textContent = ''; panel.appendChild(el('h3', 'Node installs'));
+    if (!all.length) panel.appendChild(el('div', 'Nothing yet: installing a node from Coins & chains says each step here.', 'ne muted'));
+    all.slice().reverse().forEach(function (e) { var d = el('div', null, 'ne ' + (e.level || '')); d.appendChild(el('b', hhmm(e.at) + ' ' + (e.net || '').toUpperCase())); d.appendChild(document.createTextNode(e.text)); panel.appendChild(d); });
+  }
+  bell.onclick = function () {
+    if (panel) { panel.remove(); panel = null; return; }
+    panel = el('div'); panel.id = 'npanel'; head.appendChild(panel); drawPanel();
+    if (all.length) localStorage.setItem(READ, String(all[all.length - 1].at)); badge();
+  };
+  function poll() {
+    if (document.hidden) { setTimeout(poll, 8000); return; }
+    fetch('/admin/api/cores/events?since=' + last, {credentials: 'same-origin', cache: 'no-store'})
+      .then(function (r) { return r.ok ? r.json() : {events: []}; })
+      .then(function (d) {
+        var fresh = (d.events || []).filter(function (e) { return e.at > last; });
+        var seen = num(SEEN, Date.now() / 1000 - 120);
+        fresh.forEach(function (e) { all.push(e); if (e.at > seen) toast(e); });
+        if (fresh.length) { last = fresh[fresh.length - 1].at; localStorage.setItem(SEEN, String(Math.max(seen, last))); drawPanel(); }
+        badge();
+      }).catch(function () {}).then(function () { setTimeout(poll, 8000); });
+  }
+  poll();
 })();
 </script>
 {% endblock %}

@@ -94,7 +94,7 @@ def main(argv: list[str] | None = None) -> int:
         "--mesh-port", type=int, default=8421,
         help="port the mesh listens on for other nodes (0: do not listen, only dial out)")
     parser.add_argument(
-        "--mesh-peer", action="append", default=[], metavar="IP:PORT",
+        "--mesh-peer", action="append", default=[], metavar="IP:PORT|URL",
         help="another node to link to directly, e.g. one on this network "
              "(the chain cannot carry private addresses); may be repeated")
     parser.add_argument(
@@ -126,6 +126,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--mesh-public-port", type=int, default=None, metavar="PORT",
         help="the port the router forwards to --mesh-port, if it is a different number")
+    parser.add_argument(
+        "--edition", choices=["full", "lite"], default=None,
+        help="full or lite (ARCADE Lite: the crypto cores only), for an arcade that has not chosen yet; once chosen, "
+             "Admin -> Edition & modules changes it. A new arcade started without it asks in Admin")
     parser.add_argument(
         "--log-level", default=os.environ.get("ARCADE_LOG_LEVEL", "info"),
         choices=["debug", "info", "warning", "error"],
@@ -171,7 +175,10 @@ def main(argv: list[str] | None = None) -> int:
     # Which Cores run here and which are borrowed from arcades that share theirs (arcade/cores.py).
     from .. import cores as coreslib
     chosen = coreslib.read_settings(home)
-    ledger_borrowed = coreslib.mode(chosen, "main") == coreslib.BORROW
+    # Borrowed by default on every chain (2026-10-30: "Borrow a node should be on by default for all chain"):
+    # the add-on chains already borrow when this machine has no node of theirs (_addon_context); Pepecoin main does
+    # too now, when no choice was made and no main node's config or cookie is anywhere a node is looked for.
+    ledger_borrowed = coreslib.mode(chosen, "main", _ledger_default(args)) == coreslib.BORROW
 
     state = AppState(
         home=home,
@@ -198,6 +205,20 @@ def main(argv: list[str] | None = None) -> int:
         **_addon_fields({p.name: _addon_context(args, p, coreslib.mode(chosen, p.name, ""))
                          for p in ADDON_PARAMS}),
     )
+
+    # The edition, chosen once (arcade/modules.py): --edition, or the first-run question on a home this run is the first
+    # to use. Before anything else writes settings.json, which is how a later start knows it is not the first.
+    from .. import modules as modulelib
+    fresh = not (home / state.SETTINGS_FILE).exists() and not state.store_path.exists()
+    chosen = modulelib.first_choice(state.settings(), fresh, args.edition)
+    if chosen:
+        state.set_setting(modulelib.EDITION_SETTING, chosen)
+    face = brandlib.first_face(state.settings(), fresh and not args.brand)
+    if face:                                       # a new arcade wears the neutral face (brand.CORE) until one is picked
+        state.set_setting("brand", face)
+    settings = state.settings()
+    print(f"  edition {'ARCADE Lite' if modulelib.edition(settings) == 'lite' else 'full'}"
+          + (" (not chosen yet: Admin asks)" if modulelib.asking(settings) else ""))
 
     # Bots authenticate to /rpc/main and /rpc/test with this file's contents.
     print(f"  RPC cookie {state.write_rpc_cookie()}")
@@ -281,7 +302,8 @@ def main(argv: list[str] | None = None) -> int:
     # of it; each chain switched on or off in Admin -> Ords.
     try:
         from ..doginal_index import Runner
-        Runner(state.ord_working).start()              # the kept and helped chains open in the background
+        if modulelib.job_on(settings, "ord-index"):
+            Runner(state.ord_working).start()          # the kept and helped chains open in the background
     except Exception as exc:
         print(f"  the ord indexes did not start: {exc}")
     # The Cores this arcade installed itself (Admin -> Coins & chains -> Install a node, arcade/core_install.py): started
@@ -296,7 +318,8 @@ def main(argv: list[str] | None = None) -> int:
     # that chain's ord walk.
     try:
         from ..sites_index import Runner as SitesRunner
-        SitesRunner(state.sites_working).start()
+        if modulelib.job_on(settings, "sites-search"):
+            SitesRunner(state.sites_working).start()
     except Exception as exc:
         print(f"  the sites search did not start: {exc}")
 
@@ -314,13 +337,10 @@ def main(argv: list[str] | None = None) -> int:
         try:
             from ..mesh.service import for_state
 
-            def host_port(text: str) -> tuple[str, int]:
-                host, _, port = text.rpartition(":")
-                return host.strip("[]"), int(port)
             state.mesh = for_state(
                 state, listen_port=args.mesh_port or None,
-                peers=[host_port(p) for p in args.mesh_peer],
-                announce_at=host_port(args.mesh_announce) if args.mesh_announce else None,
+                peers=mesh_peers(args.mesh_peer, home),
+                announce_at=peer_address(args.mesh_announce) if args.mesh_announce else None,
                 public_port=args.mesh_public_port, max_inbound=args.mesh_inbound,
                 tunnel=(shutil.which("cloudflared") or next((p for p in (os.path.expanduser("~/.local/bin/cloudflared"),)
                                                              if os.path.exists(p)), None))
@@ -337,9 +357,23 @@ def main(argv: list[str] | None = None) -> int:
     try:
         from .lora import LoraService
         state.lora = LoraService(state)
-        threading.Thread(target=state.lora.apply, name="arcade-lora-start", daemon=True).start()
+        if modulelib.job_on(settings, "lora"):
+            threading.Thread(target=state.lora.apply, name="arcade-lora-start", daemon=True).start()
     except Exception as exc:                      # noqa: BLE001 -- the arcade runs without it
         print(f"  LoRa gateway not started: {exc}")
+
+    # Mining (the Mining module, 2026-11-04): the stratum server for this network's ASICs, as Admin -> Mining left it,
+    # and a mining run a restart cut short (an update, a reload), picked up once its node answers. Here, by the worker
+    # holding the run lock, so one server holds the port.
+    try:
+        from .. import stratum as stratumlib, testmine
+        state.stratum = stratumlib.Service(state)
+        if modulelib.job_on(settings, "stratum"):
+            threading.Thread(target=state.stratum.apply, name="arcade-stratum-start", daemon=True).start()
+        if modulelib.job_on(settings, "mining-resume"):
+            threading.Thread(target=testmine.resume, args=(state,), name="arcade-mining-resume", daemon=True).start()
+    except Exception as exc:                      # noqa: BLE001 -- the arcade runs without it
+        print(f"  mining not started: {exc}")
 
     if state.public:
         # Said at startup, every time. An operator who does not know which
@@ -367,6 +401,56 @@ def main(argv: list[str] | None = None) -> int:
 
 #: Every add-on chain, from the chains' own Params.
 ADDON_PARAMS = tuple(p for p in NETWORKS.values() if p.addon)
+
+
+#: The arcade the installer was told to meet first (installer/install.py FIRST_PEER_FILE): one wss:// address.
+FIRST_PEER_FILE = "first-peer"
+
+
+def peer_address(text: str) -> tuple[str, int]:
+    """One --mesh-peer: IP:PORT, [v6]:PORT, or an arcade's address (https://name, wss://name/mesh), which the mesh
+    dials as a WebSocket on its own name (node.py is_ws; web/app.py /mesh passes it to the mesh)."""
+    text = str(text).strip()
+    if "://" in text:
+        scheme, _, rest = text.partition("://")
+        host = rest.split("/", 1)[0]
+        if scheme.lower() not in ("https", "wss") or not host:
+            raise ValueError(f"not an arcade's address: {text}")
+        return f"wss://{host}/mesh", 443
+    host, _, port = text.rpartition(":")
+    return host.strip("[]"), int(port)
+
+
+def mesh_peers(given: list[str], home: Path) -> list[tuple[str, int]]:
+    """The peers this node dials from the start: --mesh-peer, and the first peer the installer recorded (the operator
+    2026-11-02: a new arcade connects "before their arcade is published", so its Pepecoin testnet syncs from the
+    others at once; nothing on chain is needed to dial out). One that cannot be read is left out, with a word."""
+    out: list[tuple[str, int]] = []
+    texts = list(given)
+    try:
+        texts += [l for l in (home / FIRST_PEER_FILE).read_text().split() if l]
+    except OSError:
+        pass
+    for text in texts:
+        try:
+            addr = peer_address(text)
+        except ValueError as exc:
+            print(f"  mesh: skipping peer {text!r}: {exc}")
+            continue
+        if addr not in out:
+            out.append(addr)
+    return out
+
+
+def _ledger_default(args, discover=None) -> str:
+    """Pepecoin main's Core when the operator has not chosen (Admin -> Chains): here when this machine has a main
+    node -- named on the command line, or a config or cookie wherever discovery looks -- else borrowed."""
+    from .. import cores as coreslib
+    if args.ledger_conf or args.ledger_datadir:
+        return coreslib.HERE
+    if discover is None:
+        from ..discovery import discover
+    return coreslib.HERE if any(c.credentials for c in discover(args.ledger_network)) else coreslib.BORROW
 
 
 def _addon_context(args, params, mode: str = "") -> "ChainContext | None":

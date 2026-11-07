@@ -22,7 +22,10 @@ the same port, the old worker still its child).
 """
 from __future__ import annotations
 
-import fcntl
+try:
+    import fcntl
+except ImportError:      # Windows (2026-11-06): arcade/winlock.py instead; Linux and macOS unchanged
+    fcntl = None
 import hashlib
 import os
 import signal
@@ -84,6 +87,9 @@ class RunLock:
         self._f.close()
 
     def take(self, wait: bool = True) -> bool:
+        if fcntl is None:
+            from arcade import winlock
+            return winlock.lock(self._f, wait)
         try:
             fcntl.flock(self._f, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
             return True
@@ -125,7 +131,8 @@ class Supervisor:
     def _spawn(self) -> tuple[int, int]:
         r, w = os.pipe()
         os.set_inheritable(w, True)
-        cmd = [sys.executable, "-m", "arcade.web", *self.argv, "--worker-fd", str(self.fd), "--ready-fd", str(w)]
+        from ..pyrun import module_cmd                    # this arcade's code, not a copy in the cwd (2026-11-04)
+        cmd = module_cmd("arcade.web", *self.argv, "--worker-fd", str(self.fd), "--ready-fd", str(w))
         env = {**os.environ, "ARCADE_SUPERVISOR_PID": str(os.getpid())}
         pid = os.posix_spawn(sys.executable, cmd, env)
         os.close(w)
@@ -175,8 +182,9 @@ class Supervisor:
             # The supervisor itself changed: become the new one first (same process, port and child).
             _say("its own code changed: running the new supervisor in its place")
             old = self.worker[0] if self.worker else ""
-            os.execv(sys.executable, [sys.executable, "-m", "arcade.web.supervisor", "--resume", str(self.fd),
-                                      str(old), "--hup", "--", *self.argv])
+            from ..pyrun import module_cmd
+            os.execv(sys.executable, module_cmd("arcade.web.supervisor", "--resume", str(self.fd),
+                                                str(old), "--hup", "--", *self.argv))
         old = self.worker
         pid, r = self._spawn()
         _say(f"reloading: worker {pid} is getting ready beside {old[0] if old else 'none'}")

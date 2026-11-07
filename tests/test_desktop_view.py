@@ -64,9 +64,10 @@ def test_themes_on_your_arcade_turn_the_desktop_on_and_pick_its_look():
     ubuntu style one to add to the category"."""
     me = (TEMPLATES / "me.html").read_text()
     assert me.index('id="theme-pref"') < me.index('id="desk-theme-pref"'), "beside Light or dark"
-    for want in ('data-desk-set=""', 'data-desk-set="w98"', 'data-desk-set="ubuntu"'):
+    for want in ('data-desk-set=""', 'data-desk-set="w98"', 'data-desk-set="ubuntu"', 'data-desk-set="dogefeedx"'):
         assert want in me
     assert "Math.max(screen.width, window.innerWidth) <= 640) return;" in me, "not on a phone"
+    assert "classList.contains('indesk')" in me, "a desktop window is a computer, even when the window is narrow"
     base = (TEMPLATES / "base.html").read_text()
     assert 'id="deskview"' not in base, "no switch in the website's header any more"
     # Pages opened in a tab of their own go to the desktop while a desktop look is on: never Admin, sign-in, a phone,
@@ -74,21 +75,44 @@ def test_themes_on_your_arcade_turn_the_desktop_on_and_pick_its_look():
     redirect = base[base.index("THE DESKTOP VIEW (desktop.html"):]
     redirect = redirect[:redirect.index("if (!installed || window.top !== window")]
     for need in ("!installed", "window.top === window", "window.innerWidth > 640", "admin|join|restore|signin",
-                 "/^(1|w98|ubuntu)$/.test(localStorage.getItem('arcade.deskview') || '{{ desk_default }}')"):
+                 "/^(1|w98|ubuntu|dogefeedx)$/.test(localStorage.getItem('arcade.deskview') || '{{ desk_default }}')"):
         assert need in redirect
-    assert "look.href = skin === 'ubuntu' ? '/deskubuntu.css' : '/desk98.css';" in base
+    assert "look.href = skin === 'ubuntu' ? '/deskubuntu.css' : skin === 'dogefeedx' ? '/deskdogefeedx.css' : '/desk98.css';" in base
 
 
 def test_the_ubuntu_look_has_its_own_shell_and_its_own_window_style(client):
     app, _state = client
     desk = (TEMPLATES / "desktop.html").read_text()
-    for need in ("v = '{{ desk_default }}' === 'w98' ? 'w98' : 'ubuntu'", "function paintDock()",
+    for need in ("'{{ desk_default }}' === 'w98' ? 'w98' :", "function paintDock()",
                  "function toggleApps(", "$('dk-sys').addEventListener('click'", "[data-skin=\"ubuntu\"] .dk-dock",
-                 "setSkin('w98')", "setSkin('ubuntu')"):
+                 "setSkin('w98')", "setSkin('ubuntu')", "function openCascade(", "function themeChoices(",
+                 "title: 'Switch Theme'"):
         assert need in desk, need
     css = app.get("/deskubuntu.css")
     assert css.status_code == 200 and css.headers["content-type"].startswith("text/css") and "#e95420" in css.text
     assert door.public_path("/deskubuntu.css")
+
+
+def test_the_dogefeedx_look_has_macos_style_and_five_app_windows(client):
+    """2026-11-02: DogeFeedX theme with macOS-style dock and five app windows."""
+    app, _state = client
+    desk = (TEMPLATES / "desktop.html").read_text()
+    for need in ("DFX = SKIN === 'dogefeedx'", "MAC_LIKE = UB || DFX",
+                 "setSkin('dogefeedx')", "[data-skin=\"dogefeedx\"]",
+                 "byKey.dfxprofile", "byKey.dfxmarket", "byKey.dfxterminal",
+                 "byKey.dfxnetwork", "byKey.dfxexplorer",
+                 "function openDfxProfile()", "function openDfxMarket()",
+                 "function openDfxTerminal()", "function openDfxNetwork()", "function openDfxExplorer()",
+                 "function magnifyDock(", "function dockCount(", "dfx-badge", "flex-wrap: nowrap",
+                 "dfxhome", "dfxfiles", "dfxnotifications", "dfxmessages", "dfxinscribe",
+                 "dfxlaunchpad", "dfxnfts", "dfxarcade", "dfxbookmarks", "dfxmemes",
+                 "dfxleaderboard", "dfxsettings"):
+        assert need in desk, need
+    css = app.get("/deskdogefeedx.css")
+    assert css.status_code == 200 and css.headers["content-type"].startswith("text/css")
+    assert "#d9a520" in desk, "DogeFeed gold color (the desktop's own colours; the window CSS uses its paler golds)"
+    assert "#fff6dd" in css.text, "the windows' pale gold"
+    assert door.public_path("/deskdogefeedx.css")
 
 
 def test_icons_move_and_windows_move_size_and_minimize():
@@ -111,7 +135,7 @@ def test_admin_is_on_the_desktop_and_every_page_in_a_window_wears_the_old_look(c
     assert css.status_code == 200 and css.headers["content-type"].startswith("text/css")
     assert "html.indesk" in css.text and door.public_path("/desk98.css")
     base = (TEMPLATES / "base.html").read_text()
-    assert "'/deskubuntu.css' : '/desk98.css'" in base and base.index("look.href") > base.index("if (desk) {")
+    assert "'/deskubuntu.css' : skin === 'dogefeedx' ? '/deskdogefeedx.css' : '/desk98.css'" in base and base.index("look.href") > base.index("if (desk) {")
 
 
 def test_a_coin_shortcut_opens_the_wallet_on_that_coin_and_any_icon_can_go():
@@ -142,3 +166,25 @@ def test_picking_the_other_desktop_from_inside_one_loads_it():
     page, so the look stayed the old one until a reload (found filming the promo, 2026-10-29)."""
     me = (pathlib.Path(__file__).resolve().parent.parent / "arcade/web/templates/me.html").read_text()
     assert "if (want) shell.location.reload();" in me
+
+
+def test_the_app_store_is_the_home_screens_store_in_a_window():
+    """2026-10-30, the operator: "You know how the App Store works in the PWA that's how the App Store should work in the
+    desktop modes": search, kinds, cards, + Add with the sheet of what the app asks for (the card's own switches), and
+    an added app goes to Start -> Programs and the desktop. Driven in a real browser in both looks while it was built."""
+    desk = (TEMPLATES / "desktop.html").read_text()
+    assert "if (it.kind === 'store') { openStore(); return; }" in desk, "the App Store icon opens the store, not /apps"
+    for need in ("function openStore()", "class=\"w98-field st-q\"", "ST_GAMES", "data-add=", "data-open=",
+                 "arcadeAppPermSet(p, permIds(a), !!grants[p])", "setProgram(a.key, true);", "putOnDesk(a.key);",
+                 "anybody can publish a copy"):
+        assert need in desk, need
+    home = (TEMPLATES / "home.html").read_text()
+    for perm in ("wallet: ['Wallet access'", "contacts: ['Contacts'", "media: ['Camera & microphone'", "notify: ['Notifications'"):
+        assert perm in home and perm in desk, f"the desktop asks for {perm} as the home screen does"
+
+
+def test_game_access_lists_every_permission_an_app_can_hold():
+    """2026-11-01: Group chats and Notifications were missing, so the list was not the whole of what an app may do."""
+    access = (TEMPLATES / "my_access.html").read_text()
+    for need in ("arcade.wallet.allow:", "arcade.media.allow:", "arcade.contacts.allow:", "arcade.groups.allow:", "/account/ring/apps"):
+        assert need in access, need

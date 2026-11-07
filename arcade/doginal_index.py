@@ -43,18 +43,23 @@ log = logging.getLogger("arcade.doginal_index")
 #: 2026-10-20: "The block height on each chain varies so find the official block height for each chains ord index"),
 #: read from each indexer's src/chain.rs `first_inscription_height`. Every arcade cuts the same chunks from these,
 #: so they never change without a new protocol word.
-STARTS = {"doge": 4_600_000, "main": 186_920, "test": 34_237, "ltc": 2_424_429, "ltctest": 2_669_127,
-          "bel": 22_470, "lky": 88_554, "wjk": 1, "dgb": 0}
+#: Litecoin and Litecoin testnet are not here (2026-11-05, tbuuol: "Die 3 Chains LTC tLTC und KOT sollten keinerlei
+#: Token Protokolle benutzen"): no ord index, no guard, no ords or -20 tokens on them, as on Kotia. ord-litecoin's
+#: readings (ord_rules.ORD_LITE, TAPROOT below) stay as code, read by no index.
+STARTS = {"doge": 4_600_000, "main": 186_920, "test": 34_237,
+          "bel": 22_470, "lky": 88_554, "wjk": 1, "dgb": 0,
+          "flop": 18_295}
 SOURCES = {
     "doge": "ord-dogecoin (apezord) and wonky-ord: 4,600,000",
     "main": "ord-pepecoin (mvdnbrk) and pepecoin-ord-indexer: 186,920",
     "test": "pepecoin-ord-indexer (reallyshadydev): 34,237",
-    "ltc": "ord-litecoin (ynohtna92): 2,424,429",
-    "ltctest": "ord-litecoin (ynohtna92): 2,669,127",
     "bel": "Nintondo/ord (Bellscoin): 22,470",
     "lky": "the first Doginals-style envelope on Luckycoin (no official indexer height found; scanned): 88,554",
     "wjk": "ord-wojakcoin chain.rs first_inscription_height: 1 (Doginals envelopes; SegWit is not active)",
     "dgb": "wonky-ord-digibyte (reallyshadydev) chain.rs first_inscription_height: 0 (Doginals envelopes in the first input)",
+    # No official indexer: the first Doginals-style envelope found by scanning the chain from block 0 (2026-11-03, the
+    # ThinkPad's Flopcoin Core v2.0.0.0 with txindex: 3af74671...6d0fbbe input 0, "ord", 161 parts of 240 bytes, image/jpeg).
+    "flop": "the first Doginals-style envelope on Flopcoin (no official indexer; scanned from block 0): 18,295",
 }
 #: Chains whose ords are mostly Taproot (ord's witness envelope) as well as the Doginals kind.
 TAPROOT = frozenset({"ltc", "ltctest", "bel"})     # Bellscoin: Nintondo/ord reads Taproot envelopes too
@@ -476,8 +481,14 @@ def _pct(part: Any, whole: Any) -> float | None:
 #: Questions the explorer asks (2026-10-21) that a walking arcade from before does not know.
 #: The most coins one "names_on" question reads.
 NAMES_ON_MAX = 3000
+#: The Wallet's Doginals in inscription order (2026-11-05, the operator: "they should be ordered by inscription number earliest
+#: first"): the numbers of this many ids asked at once ({"what": "numbers"}).
+NUMBERS_MAX = 500
+#: How long ago another arcade's index may have said hello and still be asked a question this arcade's own walk is
+#: behind on (DoginalIndex.lookup): a day.
+LOOKUP_HEARD_WITHIN = 86_400.0
 NEWER_QUESTIONS = ("number", "ticks", "holders", "note", "ticklist", "mesh", "mesh_directory", "typed", "names_on",
-                   "sites_search")
+                   "sites_search", "numbers")
 
 
 def _first_page_of(token: dict | None) -> dict | None:
@@ -623,6 +634,13 @@ class Store:
             except FileNotFoundError:
                 pass
 
+    @property
+    def real(self) -> Path:
+        """The index file itself, where its path is a link to it (2026-11-05: node 2's Bells index lives on a hard disk
+        of its own, linked from the arcade's folder on a small SSD). SQLite keeps its -wal and -shm beside this file,
+        and a file built to take its place is built beside it too: the same disk, so it is swapped in by a rename."""
+        return Path(os.path.realpath(self.path))
+
     def swap(self, other: Path) -> None:
         """Put another index file in this one's place (a snapshot fetched from peers), and read from it from now on:
         the writer reopens at once, every thread's reader on its next read."""
@@ -630,12 +648,13 @@ class Store:
         self.forget_seen()
         with self._lock:
             self._db.close()
+            real = self.real
             for tail in ("-wal", "-shm"):
                 try:
-                    os.remove(str(self.path) + tail)
+                    os.remove(str(real) + tail)
                 except FileNotFoundError:
                     pass
-            os.replace(other, self.path)
+            os.replace(other, real)
             self._gen += 1
             self._open()
 
@@ -652,7 +671,7 @@ class Store:
         does this, never a page); nothing else changes, and nothing is walked again."""
         self.forget_seen()
         import os
-        new = self.path.with_name(self.path.name + ".upgrade")
+        new = self.real.with_name(self.real.name + ".upgrade")
         for tail in ("", "-wal", "-shm", "-journal"):
             try:
                 os.remove(str(new) + tail)
@@ -1080,8 +1099,9 @@ class Walker:
     def _seen_path(self) -> Path:
         return Path(str(self.store.path) + ".seen")
 
-    def _read_seen(self, n: int) -> tuple[_Seen, int] | None:
-        """(the filter as kept, the height to add rows from), or None when there is none usable."""
+    def _read_seen(self, n: int | None = None) -> tuple[_Seen, int] | None:
+        """(the filter as kept, the height to add rows from), or None when there is none usable. `n`, when given: the
+        coins there are now, more than it was made for and it is not used."""
         import struct
         try:
             with open(self._seen_path(), "rb") as f:
@@ -1089,7 +1109,7 @@ class Walker:
                 if len(head) != 40 or head[:8] != self.SEEN_MAGIC:
                     return None
                 m, capacity, added, since = struct.unpack("<QQQQ", head[8:])
-                if capacity < n or m % 8 or m < (1 << 20):
+                if (n is not None and capacity < n) or m % 8 or m < (1 << 20):
                     return None                          # made for fewer coins than there are now: made again
                 seen = _Seen.__new__(_Seen)
                 seen.capacity, seen.m, seen.added = capacity, m, added
@@ -1122,20 +1142,19 @@ class Walker:
 
     def _load(self) -> None:
         """The filter of coins inscriptions sit on, from `at` (made for twice as many, so it rarely needs making
-        again): the one kept on disk and the rows placed since, or -- none kept, or too small now -- made from all
-        of `at`, then kept."""
-        n = int(self.store.q("SELECT COUNT(*) FROM at")[0][0])
-        kept = self._read_seen(n)
+        again): the one kept on disk and the rows placed since, or -- none kept, or full with them -- made from all
+        of `at`, then kept. The kept one is checked by its own count (every coin ever added to it, never fewer than
+        the rows of `at`), not by counting `at` (2026-11-04, Bellscoin's index moved to a hard disk: COUNT(*) read
+        the coin index a page at a time in random order, hours, and the walk stood still at every start)."""
+        kept = self._read_seen()
         if kept is not None and not kept[0].full():
             seen, since = kept
-            db = sqlite3.connect(self.store.path, timeout=60)
-            try:
-                for tx, vout in db.execute("SELECT tx, vout FROM at WHERE height >= ?", (since,)):
-                    seen.add(bytes(tx) + vout.to_bytes(4, "little"))
-            finally:
-                db.close()
-            self.tracked = seen
-            return
+            for tx, vout in self._placed_since(since):
+                seen.add(bytes(tx) + vout.to_bytes(4, "little"))
+            if not seen.full():
+                self.tracked = seen
+                return
+        n = int(self.store.q("SELECT COUNT(*) FROM at")[0][0])
         seen = _Seen(2 * n + 100_000)
         # Read a row at a time on a connection of its own: a list of 22 million rows was itself gigabytes.
         db = sqlite3.connect(self.store.path, timeout=60)
@@ -1146,6 +1165,25 @@ class Walker:
             db.close()
         self.tracked = seen
         self.save_seen()
+
+    def _placed_since(self, since: int):
+        """The coins of every `at` row placed or moved from block `since` on: read by key from the rows those blocks'
+        undo records name, when the records reach back that far (the last UNDO_BLOCKS); else from all of `at`, which
+        has no index on height (2026-11-04, Bellscoin's index on a hard disk: that scan took hours at every start)."""
+        nxt = self.next_height()
+        heights = self.store.q("SELECT COUNT(*) FROM undo WHERE height >= ? AND height < ?", (since, nxt))[0][0]
+        if heights == max(0, nxt - since):
+            rids = set()
+            for (doc,) in self.store.q("SELECT doc FROM undo WHERE height >= ? AND height < ?", (since, nxt)):
+                rids.update(key[0] for table, key, _old in _unpack(doc)["rows"] if table == "at")
+            for rid in sorted(rids):
+                yield from self.store.q("SELECT tx, vout FROM at WHERE rid=?", (rid,))
+            return
+        db = sqlite3.connect(self.store.path, timeout=60)
+        try:
+            yield from db.execute("SELECT tx, vout FROM at WHERE height >= ?", (since,))
+        finally:
+            db.close()
 
     @staticmethod
     def _on(db, txid: str, vout: int) -> list[tuple[int, int]]:
@@ -2247,8 +2285,10 @@ class DoginalIndex:
             return None                                  # not a whole chunk yet: nobody scans it; its few blocks read
         if any(lane["c"] == c for lane in self.chunks.lanes) or c in self._fetching():
             return False
-        if self._lane_sources(walking=True):
-            return False                                 # the lanes here take every chunk in line, this one too
+        if getattr(self, "_reading", None) == c and self.own_core():
+            return None                                  # a lane's follow-back was too slow: read here (_help)
+        if self._lane_sources(walking=True) and self._lanes_come_to(c):
+            return False                                 # the lanes here take this chunk next
         lo = chunk_range(c, self.base)[0]
         now = time.time()
         for node, (until, at) in self.chunks.leases.get(c, {}).items():
@@ -2260,6 +2300,15 @@ class DoginalIndex:
             self._reading = c
             self._say_lease({"c": c, "at": self.walker.next_height()})
         return None
+
+    def _lanes_come_to(self, c: int) -> bool:
+        """Whether the lanes here take chunk c next, in their own order (Chunks.choose: the chunks the walk needs, then
+        the lowest one nobody has said). 2026-11-04, Bellscoin: an index walked on another machine and moved here had
+        said only some chunks; the lanes went back to cover the lowest, the walk's chunk at the tip was none of them,
+        and the walk waited on it for good. A chunk the lanes do not come to next, the walk reads itself."""
+        held = {lane["c"] for lane in self.chunks.lanes}
+        first = self._needed() if self.mode() == "walk" else ()
+        return self.chunks.choose(ready_chunks(self.tip, self.base), time.time(), exclude=held, first=first) == c
 
     def _needed(self) -> list[int]:
         """Chunks just ahead of the walk with no notes here, none on their way, and nobody to send them -- said only by
@@ -2499,7 +2548,7 @@ class DoginalIndex:
                 free.remove(via)
             else:
                 self._drop_lane(lane)
-        held = {lane["c"] for lane in lanes}
+        held = {lane["c"] for lane in lanes} | ({self._reading} if getattr(self, "_reading", None) is not None else set())
         while free:
             c = self.chunks.choose(ready, now, exclude=held, first=self._needed() if self.mode() == "walk" else ())
             if c is None or (walking and c - chunk_of(self.walker.next_height(), self.base) > LANES_AHEAD):
@@ -2572,8 +2621,13 @@ class DoginalIndex:
         # FINISH_SECONDS a pass: the walk comes after, on this thread (2026-10-28: Bellscoin's lanes finished two
         # chunks of early 2024 -- ~8,400 follow-backs each, a coin at a time from a hard disk -- and the walk stood still
         # 14 hours). Unfinished, the lane keeps its chunk and the next pass goes on where this one stopped.
+        # The walk's own chunk is finished first, the rest in line after it (2026-10-30: Bellscoin's lanes finished in
+        # the order they were taken, and the walk's chunk, 21st of 24, was reached in no pass for eight hours). Still
+        # unfinished, the walk reads it from its own Core instead: it walked every envelope begun before, so it asks
+        # the Core nothing a coin at a time.
         finish_by = time.monotonic() + self.FINISH_SECONDS
-        for lane in list(lanes):
+        walk_c = chunk_of(self.walker.next_height(), self.base) if walking else None
+        for lane in sorted(lanes, key=lambda lane: lane["c"]):
             c = lane["c"]
             if lane["at"] >= chunk_range(c, self.base)[1]:
                 got = self.store.chunk_line(c)
@@ -2583,6 +2637,15 @@ class DoginalIndex:
                         nd = kept[1]
                     else:
                         finished = self.store.finish_notes(c, rpc, deadline=finish_by)
+                        if finished is False and c == walk_c and self.own_core():
+                            self._reading = c
+                            self._say_lease({"c": c, "at": self.walker.next_height()})
+                            lo, hi = chunk_range(c, self.base)
+                            self.store.x("DELETE FROM pnote WHERE height>=? AND height<?", (lo, hi))
+                            self._drop_lane(lane)
+                            log.info("ord index %s: chunk %d's envelopes are slow to follow back; the walk reads it",
+                                     self.net, c)
+                            continue
                         if finished is False:
                             said = self.__dict__.setdefault("_finishing_said", set())
                             if c not in said:
@@ -3044,6 +3107,8 @@ class DoginalIndex:
             return {"name": self.name(str(question.get("name") or ""))}
         if what == "on":
             return {"on": self.on(str(question.get("txid") or ""), int(question.get("vout") or 0))}
+        if what == "numbers":                            # the Wallet's Doginals, in order (2026-11-05)
+            return {"numbers": self.numbers([str(i) for i in (question.get("ids") or [])[:NUMBERS_MAX]])}
         if what == "note":
             return {"note": self.note(str(question.get("id") or ""))}
         if what == "ticklist":
@@ -3075,7 +3140,13 @@ class DoginalIndex:
         this), the next furthest is asked, down to this arcade's own walk when it walks (which always answers). A
         walker on other rules is never asked (`walkers`)."""
         own = self.walker.next_height() if self.mode() == "walk" else None
-        peers = self.walkers() if self.share is not None and hasattr(self.share, "ask") else []
+        # 2026-11-05: "An arcade should be able to both read its own ORD index along with shared ORD index".
+        # A copy further than this arcade's own is asked even when its last hello is old (LOOKUP_HEARD_WITHIN, not the
+        # five minutes the walk's own sharing needs): on 2026-11-05 every hello stopped for five hours and .25 answered
+        # from its 7% walk though Strawberry's whole copy was linked. One that cannot answer costs a failed ask, then
+        # the next, down to this arcade's own walk.
+        peers = [(n, h) for n, h in self.walkers(LOOKUP_HEARD_WITHIN) if own is None or h > own] \
+            if self.share is not None and hasattr(self.share, "ask") else []
         order: list[tuple[str | None, int]] = peers + ([(None, own)] if own is not None else [])
         order.sort(key=lambda o: (-o[1], o[0] is not None))
         if not order:
@@ -3112,12 +3183,12 @@ class DoginalIndex:
                              f"once it updates")
         raise ValueError("no linked arcade that walks this chain could answer: " + "; ".join(failed))
 
-    def walkers(self) -> list[tuple[str, int]]:
+    def walkers(self, heard_within: float = 300.0) -> list[tuple[str, int]]:
         """Linked arcades that walk this chain, furthest first: (node, the block they have walked to)."""
         # Only arcades on these rules (2026-10-21): an index built under other rules numbers otherwise.
         rows = [(node, int(p.get("walk") or 0)) for node, p in self.chunks.peers.items()
                 if p.get("mode") == "walk" and p.get("rules") == self.rules
-                and time.time() - float(p.get("at") or 0) < 300]
+                and time.time() - float(p.get("at") or 0) < heard_within]
         return sorted(rows, key=lambda r: -r[1])
 
     def where(self, inscription: str) -> dict | None:
@@ -3244,6 +3315,25 @@ class DoginalIndex:
             return int(got) if got is not None else -1
         got = self.store.q("SELECT MAX(rid) FROM insc")[0][0]
         return int(got) - 1 if got else -1
+
+    def numbers(self, ids: list[str]) -> dict:
+        """{id: {number, height, content_type, size, protocol}} for each of these ids the index holds (at most NUMBERS_MAX); an
+        id it does not hold is left out. No owner: the Wallet asks only about its own coins."""
+        out: dict = {}
+        if self.store.old_layout:
+            return out
+        for iid in ids[:NUMBERS_MAX]:
+            key = iid_parts(iid)
+            if not key:
+                continue
+            rows = self.store.q("SELECT i.number, i.height, c.ctype, i.size, i.proto FROM insc i JOIN ctypes c ON c.ct = i.ct "
+                                "WHERE substr(i.tx, 1, 8)=? AND i.tx=? AND i.n=?", (key[0][:8],) + key)
+            if rows:
+                num, height, ctype, size, proto = rows[0]
+                # `protocol`: a JSON body's "p" (drc-20, ...), so the Wallet leaves token operations out of its grid.
+                out[iid.strip().lower()] = {"number": num, "height": height, "content_type": ctype, "size": size,
+                                            "protocol": proto}
+        return out
 
     def inscription(self, number: Any = None, iid: str = "") -> dict:
         """2026-10-21: "display ord 0 of the chain that is selected with arrows to navigate by ord number". One

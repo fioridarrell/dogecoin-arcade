@@ -129,3 +129,17 @@ def test_a_game_on_another_chain_opens_there_for_an_account(client, monkeypatch)
         assert "/create/chain" not in missing.headers.get("location", ""), "a piece on no chain is still missing"
     finally:
         state.set_setting("public_hosts", [])
+
+
+def test_a_game_on_another_chain_opens_there_for_the_operator(client, monkeypatch):
+    """PR #48 (fioridarrell, 2026-10-30): the operator has no per-browser chain to switch to, so an app inscribed on
+    another chain bounced to the NFTs page. It opens on the chain that holds it, with that chain's wallet details; a
+    piece on no chain is "no such piece", not the NFTs page."""
+    test_client, state = client
+    _here, doge = _two_chains(state, monkeypatch)
+    state.token_index(doge).rows[TX_DOGE][0]["content_type"] = "text/html"
+    page = test_client.get(f"/inscriptions/{TX_DOGE}/full", follow_redirects=False)
+    assert page.status_code == 200, (page.status_code, page.headers.get("location"))
+    assert 'network: "doge"' in page.text, "the app's own chain, for its wallet doors"
+    missing = test_client.get(f"/inscriptions/{'ee' * 32}/full", follow_redirects=False)
+    assert missing.status_code == 404, (missing.status_code, missing.headers.get("location"))
