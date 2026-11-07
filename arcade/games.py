@@ -98,10 +98,15 @@ def parse(json_text: Any) -> dict | None:
     # A game that uses the camera or microphone (a video call, 2026-10-22) says so: its card shows the
     # Camera & microphone switch from the start (base.html, CAMERA & MICROPHONE, PER GAME).
     out["media"] = game.get("media") is True
+    # An app that draws the room's pictures itself (Spatial World's 3D screens, 2026-11-02) says so: its card shows the
+    # Pictures in the app switch, off until the player turns it on (base.html, PICTURES IN THE APP).
+    out["pictures"] = game.get("pictures") is True
     # An app that rings players while it is closed (a call) says so: its card shows the Notifications switch.
     out["notify"] = game.get("notify") is True
     # An app that reads the player's address book (arcade.contacts.list) says so: its card shows the Contacts switch.
     out["contacts"] = game.get("contacts") is True
+    # An app that opens the player's group chats (arcade.groups) says so: its card shows the Group chats switch.
+    out["groups"] = game.get("groups") is True
     out["minimized_timeout"] = minimized_timeout(game.get("minimized"))
     family = game.get("family")
     out["family"] = family if isinstance(family, str) and _FAMILY.match(family) else ""

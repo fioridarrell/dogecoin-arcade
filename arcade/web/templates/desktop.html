@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ brand.name }} · Desktop{% endblock %}
 {% block body %}
+{#- DogeFeedX Theme Fonts (Fredoka for headings, Nunito for body) -#}
 {#- THE DESKTOP VIEW (2026-10-28: "lets put a toggle at the top left of the user's desktop view (not the admin side and
     leave mobile view alone) that turns the normal website into a 'Desktop View' similar to how the mobile side of
     things look now - but make it look like old windows 98"; "we should be able to move apps around the screen like
@@ -21,8 +22,8 @@
 <script>
 document.documentElement.setAttribute('data-skin', (function () {
   var v = ''; try { v = localStorage.getItem('arcade.deskview') || ''; } catch (e) {}
-  if (!/^(1|w98|ubuntu)$/.test(v)) v = '{{ desk_default }}' === 'w98' ? 'w98' : 'ubuntu';   // not chosen: the default
-  return v === 'ubuntu' ? 'ubuntu' : 'w98';
+  if (!/^(1|w98|ubuntu|dogefeedx)$/.test(v)) v = '{{ desk_default }}' === 'w98' ? 'w98' : '{{ desk_default }}' === 'dogefeedx' ? 'dogefeedx' : 'ubuntu';
+  return v === 'ubuntu' ? 'ubuntu' : v === 'dogefeedx' ? 'dogefeedx' : 'w98';
 })());
 </script>
 <div id="dk" class="dk" tabindex="-1">
@@ -33,10 +34,14 @@ document.documentElement.setAttribute('data-skin', (function () {
 
 <div class="dk-task" id="dk-task">
   <button type="button" class="dk-start w98-btn" id="dk-start" aria-haspopup="menu" aria-expanded="false">
-    <img src="/icon-32.png" alt="" width="16" height="16"><b>Start</b></button>
+    <img class="dk-brand-icon" src="/icon-32.png" alt="" width="16" height="16"><svg class="dk-df-logo" viewBox="-16 -16 456 472" width="18" height="18" aria-hidden="true"><g transform="translate(-44,-50)"><path d="M90,100 Q94,50 136,74 L222,138 Q256,126 290,138 L376,74 Q418,50 422,100 L440,226 Q462,272 462,318 C462,390 404,444 332,444 L212,444 L100,480 Q62,490 78,454 L106,396 Q50,360 50,304 Q50,266 72,228 Z" fill="#fff6dd" stroke="#fff6dd" stroke-width="32" stroke-linejoin="round"></path><path d="M90,100 Q94,50 136,74 L222,138 Q256,126 290,138 L376,74 Q418,50 422,100 L440,226 Q462,272 462,318 C462,390 404,444 332,444 L212,444 L100,480 Q62,490 78,454 L106,396 Q50,360 50,304 Q50,266 72,228 Z" fill="#f3e3a5"></path><polygon points="124,110 104,196 184,146" fill="#f3e3a5" stroke="#f3e3a5" stroke-width="20" stroke-linejoin="round"></polygon><polygon points="388,110 408,196 328,146" fill="#f3e3a5" stroke="#f3e3a5" stroke-width="20" stroke-linejoin="round"></polygon><path d="M112,354 C132,302 192,300 256,318 C320,300 380,302 400,354 C392,414 330,440 256,440 C182,440 120,414 112,354 Z" fill="#fff6dd"></path><ellipse cx="178" cy="222" rx="20" ry="13" fill="#fff6dd"></ellipse><ellipse cx="334" cy="222" rx="20" ry="13" fill="#fff6dd"></ellipse><ellipse cx="180" cy="274" rx="23" ry="28" fill="#1b1b1b"></ellipse><ellipse cx="332" cy="274" rx="23" ry="28" fill="#1b1b1b"></ellipse><circle cx="188" cy="264" r="7" fill="#fff6dd"></circle><circle cx="340" cy="264" r="7" fill="#fff6dd"></circle><path d="M232,326 C232,313 280,313 280,326 C280,342 266,352 256,352 C246,352 232,342 232,326 Z" fill="#1b1b1b"></path><path d="M256,350 V366 M218,368 C228,384 248,384 256,366 C264,384 284,384 294,368" fill="none" stroke="#1b1b1b" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><b>Start</b></button>
   <span class="dk-grip" aria-hidden="true"></span>
   <div class="dk-tbtns" id="dk-tbtns"></div>
   <div class="dk-tray" id="dk-tray">
+    <span class="dfx-status" id="dfx-status" hidden title="Network Status">
+      <span class="dfx-status-dot" id="dfx-status-dot"></span>
+      <span class="dfx-status-text" id="dfx-status-text">Offline</span>
+    </span>
     <button type="button" class="dk-traybtn" id="dk-bell" title="Notifications" hidden>
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0" stroke="#000" stroke-width="2.2" stroke-linejoin="round"/></svg><span id="dk-bell-n"></span></button>
     <button type="button" class="dk-traybtn" id="dk-mail" title="Messages" hidden>
@@ -202,7 +207,7 @@ body.fullscreen #arc-bot { display: none !important; }
 .dk-tname { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #c0c0c0; }
 .dk-win.on .dk-tname { color: #fff; }
 .dk-tbtn { width: 16px; height: 14px; padding: 0 !important; display: flex; align-items: center; justify-content: center; flex: none; }
-.dk-tbtn + .dk-tbtn[data-a="close"] { margin-left: 2px; }
+.dk-tbtn + .dk-tbtn[data-a="close"], .dk-tbtn[data-a="reload"] + .dk-tbtn { margin-left: 2px; }
 .dk-tbtn svg { display: block; }
 .dk-body { flex: 1; min-height: 0; margin-top: 2px; position: relative; background: #fff;
   box-shadow: inset -1px -1px var(--w98-hi), inset 1px 1px var(--w98-shadow), inset -2px -2px var(--w98-light),
@@ -277,7 +282,7 @@ body.fullscreen #arc-bot { display: none !important; }
 .dk-mi .dk-arrow { margin-left: auto; padding-left: 14px; }
 .dk-mi[disabled] { color: var(--w98-shadow) !important; text-shadow: 1px 1px var(--w98-hi); background: none !important; }
 .dk-hr { height: 2px; margin: 3px 2px; box-shadow: inset 0 1px var(--w98-shadow), inset 0 -1px var(--w98-hi); flex: none; }
-.dk-sub { max-height: calc(100vh - 40px); overflow-y: auto; min-width: 170px; max-width: 280px; display: flex; }
+.dk-sub { max-height: calc(100vh - 40px); overflow-y: auto; min-width: 170px; max-width: 280px; display: flex; z-index: 9210; }
 .dk-sub .dk-mi span:not(.dk-mico) { overflow: hidden; text-overflow: ellipsis; }
 .dk-ctx { min-width: 150px; display: flex; }
 .dk-ctx .dk-mi.def { font-weight: 700; }
@@ -307,6 +312,99 @@ body.fullscreen #arc-bot { display: none !important; }
 .dlg-acts .dlg-note { flex: 1; }
 .dlg-runtop { display: flex; gap: 10px; align-items: flex-start; }
 .dlg-err { color: #a00; }
+/* The App Store (2026-10-30, the operator: "how the App Store works in the PWA ... that's how the App Store should work in
+   the desktop modes"): the home screen's store as a window, its cards and its sheet of what an app asks for. */
+.st { position: relative; }
+.st-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.st-chips .w98-btn { min-width: 0; padding: 2px 8px; }
+.st-chips .w98-btn[aria-pressed="true"] { box-shadow: inset -1px -1px var(--w98-hi), inset 1px 1px var(--w98-shadow), inset -2px -2px var(--w98-light), inset 2px 2px var(--w98-dark); font-weight: 700; }
+.st-sec { display: flex; align-items: baseline; gap: 8px; margin: 0; }
+.st-sec b { flex: 1; font-size: 12px; }
+.st-sec span { font-size: 11px; color: #404040; }
+.st-list { padding: 4px; display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 6px; align-content: start; }
+.st-card { display: flex; gap: 8px; padding: 6px; background: #fff; border: 1px solid #c0c0c0; color: #000; min-width: 0; }
+.st-cover { width: 64px; height: 64px; flex: none; display: flex; align-items: center; justify-content: center; overflow: hidden;
+  background: #6b4fa0; color: #fff; font-size: 10px; text-align: center; }
+.st-cover img { width: 100%; height: 100%; object-fit: cover; }
+.st-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 11px; }
+.st-name { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.st-name b { font-size: 12px; }
+.st-pill { font-size: 10px; padding: 0 4px; border: 1px solid #808080; background: #f0f0f0; white-space: nowrap; }
+.st-by { color: #404040; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.st-desc { margin: 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.st-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 2px; }
+.st-acts .w98-btn { min-width: 0; padding: 2px 10px; }
+.st-acts a { color: #000080; }
+.st-added { color: #006400; font-weight: 700; }
+.st-sheet { position: absolute; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.35); }
+.st-sheet[hidden] { display: none; }
+.st-box { width: min(380px, 94%); max-height: 94%; overflow: auto; background: var(--w98-face, #c0c0c0); padding: 10px; display: flex;
+  flex-direction: column; gap: 8px; color: #000;
+  box-shadow: inset -1px -1px #000, inset 1px 1px var(--w98-light, #dfdfdf), inset -2px -2px var(--w98-shadow, #808080), inset 2px 2px #fff; }
+.st-who { display: flex; gap: 8px; align-items: center; }
+.st-who .st-cover { width: 40px; height: 40px; }
+.st-who b { font-size: 13px; display: block; }
+.st-perm { display: grid; grid-template-columns: auto 1fr; gap: 8px; align-items: start; justify-items: start; text-align: left;
+  font-size: 11px; margin: 0; width: 100%; }
+.st-perm input { width: auto !important; margin: 2px 0 0 !important; }
+.st-perm > span { text-align: left; }
+.st-perm span span { display: block; color: #404040; }
+.st-perm b { display: block; color: #000; }
+/* One app's permissions: the same boxes on both looks; on Ubuntu they wear GNOME's switch and save at once. */
+.pm { padding: 6px; }
+.pm-tabs { display: flex; margin-bottom: -8px; position: relative; z-index: 1; }
+.pm-tab { background: var(--w98-face); border: 0; padding: 3px 12px; margin-top: 2px; font: inherit; color: #000; cursor: pointer;
+  box-shadow: inset 1px 1px #fff, inset -1px 0 #808080, inset -2px 0 #0a0a0a; }
+.pm-tab[aria-selected="true"] { margin-top: 0; padding: 4px 14px 6px; position: relative; z-index: 2; }
+.pm-pg { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 10px; padding: 12px; }
+.pm-pg:not(.ub) { box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #dfdfdf, inset -2px -2px #808080, inset 2px 2px #fff; }
+.pm-pg[hidden] { display: none; }
+.pm-who { display: flex; gap: 12px; align-items: center; }
+.pm-who .st-cover { width: 40px; height: 40px; flex: none; }
+.pm-who b { display: block; font-size: 13px; }
+.pm-list { display: flex; flex-direction: column; gap: 10px; }
+.pm-info { display: grid; grid-template-columns: 90px 1fr; gap: 6px 8px; word-break: break-all; }
+.pm-low { display: flex; align-items: center; gap: 8px; margin-top: auto; }
+.pm-low a { color: #000080; }
+.pm-low .dlg-note { flex: 1; }
+/* The arcade's own question over the desktop wears the desktop's look. It sits on the body, outside the desktop's colour variables. */
+.askcard { background: #c0c0c0 !important; border: 0 !important; border-radius: 0 !important; color: #000; font-size: 11px; padding: 12px !important;
+  box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #dfdfdf, inset -2px -2px #808080, inset 2px 2px #fff, 2px 2px 8px rgba(0,0,0,.3) !important; max-width: 340px; }
+.askcard h3 { font: 700 13px Tahoma, "Microsoft Sans Serif", sans-serif; color: #000; }
+.askcard p { font-size: 11px; color: #000 !important; }
+.askcard button { background: #c0c0c0 !important; color: #000 !important; border: 0 !important; border-radius: 0 !important; min-width: 75px; height: 23px; padding: 0 10px !important;
+  font: inherit !important; box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #fff, inset -2px -2px #808080, inset 2px 2px #dfdfdf !important; }
+[data-skin="ubuntu"] .askcard { background: #fff !important; border-radius: 14px !important; color: #3d3d3d; font-size: 13px; padding: 18px !important;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.1), 0 12px 32px rgba(0,0,0,.35) !important; }
+[data-skin="ubuntu"] .askcard h3 { font: 500 17px Ubuntu, "Ubuntu Sans", Cantarell, sans-serif; color: #2b2b2b; }
+[data-skin="ubuntu"] .askcard p { font-size: 13px; color: #3d3d3d !important; }
+[data-skin="ubuntu"] .askcard button { background: #fff !important; color: #3d3d3d !important; border: 1px solid #cdc7c2 !important; border-radius: 6px !important; height: 32px; box-shadow: none !important; }
+[data-skin="ubuntu"] .askcard button:first-child { background: #e95420 !important; border-color: #c7461b !important; color: #fff !important; }
+[data-skin="ubuntu"] .pm-tabs { display: none; }
+[data-skin="ubuntu"] .pm-pg { box-shadow: none; padding: 8px; }
+[data-skin="ubuntu"] .pm-who .st-cover { width: 56px; height: 56px; }
+[data-skin="ubuntu"] .pm-who b { font-size: 17px; font-weight: 500; }
+[data-skin="ubuntu"] .pm-list { gap: 0; background: #fff; border: 1px solid #e0dcd9; border-radius: 12px; }
+[data-skin="ubuntu"] .pm-list .st-perm { grid-template-columns: 1fr auto; padding: 11px 14px; border-bottom: 1px solid #ebe8e6; align-items: center; }
+[data-skin="ubuntu"] .pm-list .st-perm:last-child { border-bottom: 0; }
+[data-skin="ubuntu"] .pm-list .st-perm input { grid-column: 2; grid-row: 1; appearance: none; width: 44px !important; height: 24px; margin: 0 !important;
+  border-radius: 999px !important; background: #bdb8b4; position: relative; cursor: pointer; }
+[data-skin="ubuntu"] .pm-list .st-perm input::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.3); }
+[data-skin="ubuntu"] .pm-list .st-perm input:checked { background: var(--ub-orange); }
+[data-skin="ubuntu"] .pm-list .st-perm input:checked::after { left: 23px; }
+[data-skin="ubuntu"] .pm-list .st-perm > span { grid-column: 1; grid-row: 1; }
+[data-skin="ubuntu"] .pm-low a { color: var(--ub-orange); }
+[data-skin="ubuntu"] .st-perm b { color: #3d3d3d; }
+.st-sby { display: block; white-space: normal; overflow-wrap: anywhere; }
+.st-warn { margin: 0; font-size: 11px; color: #800000; }
+[data-skin="ubuntu"] .st-card { border: 1px solid #e0dcd9; border-radius: 10px !important; }
+[data-skin="ubuntu"] .st-cover { border-radius: 8px !important; }
+[data-skin="ubuntu"] .st-pill { border: 0; background: #f4f2f1; border-radius: 999px !important; padding: 0 7px; }
+[data-skin="ubuntu"] .st-chips .w98-btn[aria-pressed="true"] { background: var(--ub-orange); color: #fff; box-shadow: none; }
+[data-skin="ubuntu"] .st-acts a { color: var(--ub-orange); }
+[data-skin="ubuntu"] .st-box { background: #fff; border-radius: 12px !important; box-shadow: 0 8px 30px rgba(0,0,0,.35); }
+[data-skin="ubuntu"] .st-warn { color: #c7162b; }
 /* System Information: the tree on the left, its lines on the right */
 .si { flex: 1; min-height: 0; display: flex; gap: 4px; }
 .si-tree { width: 200px; flex: none; overflow: auto; background: #fff; padding: 3px;
@@ -464,6 +562,7 @@ body.fullscreen #arc-bot { display: none !important; }
 [data-skin="ubuntu"] .dk-win.on .dk-title { background: var(--ub-head); color: #fff; border-bottom-color: #1e1e1e; }
 [data-skin="ubuntu"] .dk-title > img, [data-skin="ubuntu"] .dk-title > .dk-tglyph { display: none; }
 [data-skin="ubuntu"] .dk-tname { text-align: center; color: #555; padding-left: 60px; }
+[data-skin="ubuntu"] .dk-win.framed .dk-tname { padding-left: 88px; }
 [data-skin="ubuntu"] .dk-win.on .dk-tname { color: #fff; }
 [data-skin="ubuntu"] .dk-win.dlgwin .dk-tname { padding-left: 0; }
 [data-skin="ubuntu"] .dk-tbtn { width: 24px; height: 24px; border-radius: 50% !important; background: rgba(0,0,0,.08) !important;
@@ -514,6 +613,259 @@ body.fullscreen #arc-bot { display: none !important; }
 [data-skin="ubuntu"] .dlg-item:hover { background: #f4f2f1; }
 [data-skin="ubuntu"] .dlg input[type="checkbox"], [data-skin="ubuntu"] .dp input[type="checkbox"] { accent-color: var(--ub-orange); }
 [data-skin="ubuntu"] .dlg-note, [data-skin="ubuntu"] .dp-note { color: #3d3d3d; font-size: 12px; }
+
+/* ===== DogeFeedX macOS look: DogeFeed branding with gold accent, menu bar top, dock bottom ===== */
+/* Uses DogeFeed's fonts: Fredoka for headings, Nunito for body */
+/* The page behind the dock is the website's light ground. Paint it the same dark as the wallpaper. */
+html[data-skin="dogefeedx"], html[data-skin="dogefeedx"] body {
+  background: #000 !important; }
+[data-skin="dogefeedx"] .dk, [data-skin="dogefeedx"] .dk-task, [data-skin="dogefeedx"] .dk-menu, [data-skin="dogefeedx"] .dk-toast,
+[data-skin="dogefeedx"] .dk-dock, [data-skin="dogefeedx"] .dk-apps {
+  --df-gold: #f3e3a5; --df-gold-dark: #c9b56e; --df-bar: rgba(0,0,0,0.92); --df-dock: rgba(10,10,10,0.88); --df-panel: #0a0a0a;
+  --df-border: #ffffff1f; --df-fg: #fff6dd; --df-muted: #ffffff80;
+  --df-logo-body: #f3e3a5; --df-logo-muzzle: #fff6dd; --df-logo-ink: #1b1b1b;
+  --df-font-heading: "Fredoka", -apple-system, sans-serif;
+  --df-font-body: "Nunito", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font: 13px/1.4 var(--df-font-body);
+  -webkit-font-smoothing: antialiased; }
+[data-skin="dogefeedx"] .dk { top: 28px; left: 0; bottom: 0;
+  background: #000; }
+[data-skin="dogefeedx"] .dk-bg:empty { 
+  background: radial-gradient(ellipse at 30% 18%, rgba(243,227,165,0.18) 0%, transparent 46%),
+              radial-gradient(ellipse at 72% 82%, rgba(243,227,165,0.08) 0%, transparent 40%),
+              #000; }
+/* macOS menu bar at top */
+[data-skin="dogefeedx"] .dk-task { top: 0; bottom: auto; height: 28px; padding: 0 12px; gap: 16px;
+  background: var(--df-bar); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  color: var(--df-fg); box-shadow: 0 1px 0 rgba(255,255,255,0.05); justify-content: space-between; }
+[data-skin="dogefeedx"] .dk-task .dk-grip, [data-skin="dogefeedx"] .dk-tbtns { display: none; }
+[data-skin="dogefeedx"] .dk-start { height: 22px; padding: 0 10px !important; background: none !important; box-shadow: none !important;
+  color: var(--df-gold) !important; border-radius: 4px !important; font-family: var(--df-font-heading); font-weight: 600; font-size: 14px; }
+.dk-df-logo { display: none; }
+[data-skin="dogefeedx"] .dk-start .dk-brand-icon { display: none !important; }
+[data-skin="dogefeedx"] .dk-df-logo { display: block; width: 18px; height: 18px; flex: none; }
+[data-skin="dogefeedx"] .dk-start b { display: none; }
+[data-skin="dogefeedx"] .dk-start::after { content: " DogeFeed"; font-weight: 600; color: var(--df-gold); }
+[data-skin="dogefeedx"] .dk-start:hover, [data-skin="dogefeedx"] .dk-start.down { background: rgba(255,255,255,.1) !important; }
+[data-skin="dogefeedx"] .dk-tray { box-shadow: none; height: 22px; padding: 0; gap: 14px; color: var(--df-fg); }
+[data-skin="dogefeedx"] .dk-clock { position: static; transform: none; font-weight: 500; font-size: 13px; white-space: nowrap;
+  min-width: 0; text-align: right; color: var(--df-fg); }
+/* Status indicator in menu bar */
+[data-skin="dogefeedx"] .dfx-status { display: flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 4px;
+  background: rgba(255,255,255,0.05); cursor: pointer; transition: background 0.15s; }
+[data-skin="dogefeedx"] .dfx-status:hover { background: rgba(255,255,255,0.1); }
+[data-skin="dogefeedx"] .dfx-status-dot { width: 8px; height: 8px; border-radius: 50%; background: #ff3b30; flex-shrink: 0;
+  box-shadow: 0 0 4px currentColor; }
+[data-skin="dogefeedx"] .dfx-status-dot.online { background: #32d74b; }
+[data-skin="dogefeedx"] .dfx-status-dot.syncing { background: #ff9f0a; animation: dfx-pulse 1.5s ease-in-out infinite; }
+[data-skin="dogefeedx"] .dfx-status-text { font-size: 11px; color: #ffffff80; font-weight: 500; }
+@keyframes dfx-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+[data-skin="dogefeedx"] .dk-traybtn { color: var(--df-fg) !important; }
+[data-skin="dogefeedx"] .dk-traybtn svg path { stroke: var(--df-fg); }
+[data-skin="dogefeedx"] .dk-traybtn span { color: #ff3b30; }
+[data-skin="dogefeedx"] .dk-sysbtn { display: flex; gap: 8px; padding: 2px 10px !important; border-radius: 4px !important; }
+[data-skin="dogefeedx"] .dk-sysbtn:hover, [data-skin="dogefeedx"] .dk-sysbtn.down { background: rgba(255,255,255,.1) !important; }
+/* macOS dock at bottom */
+[data-skin="dogefeedx"] .dk-dock { display: flex; position: fixed; left: 50%; bottom: 0; top: auto; width: max-content; max-width: calc(100vw - 12px); z-index: 9050;
+  transform: translateX(-50%); flex-direction: row; flex-wrap: nowrap; align-items: flex-end; gap: 6px; margin: 0; padding: 8px 10px 6px;
+  background: var(--df-dock); backdrop-filter: blur(30px); -webkit-backdrop-filter: blur(30px);
+  border-radius: 18px; border: 1px solid rgba(255,255,255,0.15); box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+  overflow: visible; }
+[data-skin="dogefeedx"] .dk-dock[hidden] { display: none; }
+[data-skin="dogefeedx"] .ub-dockbtn { width: 42px; height: 42px; padding: 0 !important; border: 0 !important; border-radius: 12px !important;
+  background: none !important; box-shadow: none !important; display: flex; align-items: center; justify-content: center;
+  flex: none; cursor: pointer; position: relative; transform-origin: center bottom; }
+[data-skin="dogefeedx"] .ub-dockbtn:hover { background: none !important; }
+[data-skin="dogefeedx"] .dfx-badge { position: absolute; top: -4px; right: -4px; min-width: 16px; height: 16px; padding: 0 4px;
+  border-radius: 8px; background: #ff3b30; color: #fff; font: 700 10px/16px Nunito, sans-serif; text-align: center;
+  box-shadow: 0 0 0 2px rgba(40,40,45,0.9); pointer-events: none; }
+[data-skin="dogefeedx"] .ub-dockbtn.dfx-dock-app { width: 70px; height: 64px; flex-direction: column;
+  align-items: center; justify-content: flex-end; gap: 2px; padding: 0 1px 1px !important; }
+[data-skin="dogefeedx"] .dfx-dock-label { display: block; width: 68px; max-width: 68px; height: 10px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; text-align: center; pointer-events: none; color: #fff6dd;
+  font: 600 8px/10px Nunito, sans-serif; text-shadow: 0 1px 2px rgba(0,0,0,.85); }
+[data-skin="dogefeedx"] .dfx-dock-app .ub-run { bottom: 13px; }
+[data-skin="dogefeedx"] .dfx-dock-app .dfx-badge { top: 0; right: 8px; }
+[data-skin="dogefeedx"] .ub-ico.dfx-mark { background: none; box-shadow: none; overflow: visible; }
+[data-skin="dogefeedx"] .dfx-mark svg { width: 44px; height: 44px; display: block; }
+[data-skin="dogefeedx"] .dk-tglyph.dfx-mark svg { width: 16px; height: 16px; }
+[data-skin="dogefeedx"] .ub-dockbtn.ub-showapps { margin-top: 0; margin-left: 4px; border-left: 1px solid rgba(255,255,255,0.15); padding-left: 8px !important; }
+/* Dock separators for organized groups */
+[data-skin="dogefeedx"] .dfx-dock-sep { width: 1px; height: 36px; background: rgba(255,255,255,0.2); margin: 0 6px; flex-shrink: 0; }
+[data-skin="dogefeedx"] .ub-run { position: absolute; left: 50%; bottom: 2px; width: 4px; height: 4px; margin-left: -2px; margin-top: 0;
+  border-radius: 50%; background: var(--df-gold); }
+[data-skin="dogefeedx"] .ub-ico { width: 44px; height: 44px; border-radius: 12px; overflow: hidden; display: flex; align-items: center;
+  justify-content: center; flex: none; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
+[data-skin="dogefeedx"] .ub-ico img { width: 100%; height: 100%; object-fit: cover; }
+[data-skin="dogefeedx"] .ub-ico .dk-letter { color: #fff; font-weight: 600; font-size: 16px; }
+[data-skin="dogefeedx"] .ub-ico .dk-robot svg { width: 40px; height: 40px; }
+[data-skin="dogefeedx"] .ub-dots { width: 44px; height: 44px; background: rgba(255,255,255,0.1); border-radius: 12px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4); display: grid; grid-template-columns: repeat(3, 5px); gap: 4px;
+  justify-content: center; align-content: center; }
+[data-skin="dogefeedx"] .ub-dots i { width: 5px; height: 5px; border-radius: 50%; background: #fff; }
+/* Launchpad / App Grid */
+[data-skin="dogefeedx"] .dk-apps { display: flex; position: fixed; left: 0; top: 28px; right: 0; bottom: 64px; z-index: 9040;
+  flex-direction: column; align-items: center; background: rgba(0,0,0,.7); backdrop-filter: blur(40px); -webkit-backdrop-filter: blur(40px);
+  color: #fff; overflow-y: auto; }
+[data-skin="dogefeedx"] .dk-apps[hidden] { display: none; }
+[data-skin="dogefeedx"] .dk-apps-top input { background: rgba(255,255,255,.12); border-radius: 8px; }
+[data-skin="dogefeedx"] .dk-apps-top input:focus { box-shadow: 0 0 0 3px rgba(243,227,165,0.45); }
+[data-skin="dogefeedx"] .ub-appgrid { grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 20px; }
+[data-skin="dogefeedx"] .ub-app { padding: 8px 4px 6px !important; border-radius: 10px !important; }
+[data-skin="dogefeedx"] .ub-app:hover, [data-skin="dogefeedx"] .ub-app:focus-visible { background: rgba(255,255,255,.08) !important; }
+[data-skin="dogefeedx"] .ub-app .ub-ico { width: 56px; height: 56px; border-radius: 14px; box-shadow: 0 6px 16px rgba(0,0,0,0.5); }
+[data-skin="dogefeedx"] .ub-applab { font-size: 12px; }
+/* Desktop icons */
+[data-skin="dogefeedx"] .dk-icon { width: 80px; gap: 6px; }
+[data-skin="dogefeedx"] .dk-ico, [data-skin="dogefeedx"] .dk-ico img, [data-skin="dogefeedx"] .dk-ico .dk-glyph { width: 56px; height: 56px; }
+[data-skin="dogefeedx"] .dk-ico img, [data-skin="dogefeedx"] .dk-ico .dk-glyph { border-radius: 14px !important; box-shadow: 0 4px 12px rgba(0,0,0,.5); image-rendering: auto; }
+[data-skin="dogefeedx"] .dk-ico .dk-glyph svg { width: 32px; height: 32px; }
+[data-skin="dogefeedx"] .dk-ico .dk-robot svg { width: 52px; height: 52px; }
+[data-skin="dogefeedx"] .dk-lab { max-width: 80px; font-size: 11px; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.9); border-radius: 4px !important;
+  padding: 2px 6px; background: rgba(0,0,0,0.4); }
+[data-skin="dogefeedx"] .dk-icon.sel .dk-lab { background: var(--df-gold); color: #000; outline: 0; text-shadow: none; }
+[data-skin="dogefeedx"] .dk-icon.sel .dk-ico::after { background: var(--df-gold); opacity: .3; border-radius: 14px !important; }
+[data-skin="dogefeedx"] .dk-arrowmark { border-radius: 50% !important; left: -3px; bottom: -3px; background: #0a0a0a; }
+[data-skin="dogefeedx"] .dk-badge { border-radius: 10px !important; background: #ff3b30; min-width: 18px; height: 18px; font-size: 11px; }
+/* macOS-style windows */
+[data-skin="dogefeedx"] .dk-win { padding: 0; border-radius: 10px !important; overflow: hidden; background: #0a0a0a;
+  box-shadow: 0 20px 60px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,0.1), inset 0 1px 0 rgba(255,255,255,0.05); }
+[data-skin="dogefeedx"] .dk-win.max { border-radius: 0 !important; }
+[data-skin="dogefeedx"] .dk-title { height: 38px; padding: 0 12px; gap: 8px; background: #0a0a0a;
+  color: #fff6dd; font-weight: 500; border-bottom: 1px solid rgba(0,0,0,0.3); }
+[data-skin="dogefeedx"] .dk-win.on .dk-title { background: linear-gradient(180deg, #1a1a1a 0%, #111 100%); }
+/* macOS traffic light buttons - left side */
+[data-skin="dogefeedx"] .dk-title { flex-direction: row-reverse; }
+[data-skin="dogefeedx"] .dk-title > img, [data-skin="dogefeedx"] .dk-title > .dk-tglyph { display: none; }
+[data-skin="dogefeedx"] .dk-tname { text-align: center; flex: 1; color: #ffffff80; padding: 0; }
+[data-skin="dogefeedx"] .dk-win.on .dk-tname { color: #fff; }
+[data-skin="dogefeedx"] .dk-tbtn { width: 12px; height: 12px; border-radius: 50% !important; padding: 0 !important;
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.15) !important; margin: 0 4px 0 0 !important; min-width: 0; min-height: 0;
+  display: flex; align-items: center; justify-content: center; position: relative; }
+[data-skin="dogefeedx"] .dk-tbtn svg { display: none; }
+[data-skin="dogefeedx"] .dk-tbtn[data-a="close"] { background: #ff5f57 !important; order: -2; }
+[data-skin="dogefeedx"] .dk-tbtn[data-a="min"] { background: #ffbd2e !important; order: -1; }
+[data-skin="dogefeedx"] .dk-tbtn[data-a="max"] { background: #28c840 !important; order: 0; }
+[data-skin="dogefeedx"] .dk-win:not(.on) .dk-tbtn { background: #5a5a5c !important; }
+/* Traffic light hover symbols */
+[data-skin="dogefeedx"] .dk-tbtn::after { content: ''; position: absolute; inset: 0; display: flex; align-items: center;
+  justify-content: center; font-size: 10px; font-weight: 700; color: rgba(0,0,0,0.5); opacity: 0; transition: opacity 0.1s; }
+[data-skin="dogefeedx"] .dk-title:hover .dk-tbtn::after { opacity: 1; }
+[data-skin="dogefeedx"] .dk-tbtn[data-a="close"]::after { content: '×'; font-size: 12px; }
+[data-skin="dogefeedx"] .dk-tbtn[data-a="min"]::after { content: '−'; }
+[data-skin="dogefeedx"] .dk-tbtn[data-a="max"]::after { content: '+'; font-size: 11px; }
+[data-skin="dogefeedx"] .dk-win:not(.on) .dk-title:hover .dk-tbtn::after { opacity: 0; }
+[data-skin="dogefeedx"] .dk-body { margin: 0; padding: 0; box-shadow: none; background: #000; }
+[data-skin="dogefeedx"] .dk-body.plain { padding: 16px; background: #000; color: #fff6dd; }
+/* Buttons, fields, menus: macOS dark */
+[data-skin="dogefeedx"] .w98-btn { border-radius: 6px !important; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.15) !important;
+  box-shadow: none !important; padding: 6px 14px; color: #fff6dd; transition: all 0.15s ease; }
+[data-skin="dogefeedx"] .w98-btn:hover { background: rgba(255,255,255,0.15); }
+[data-skin="dogefeedx"] .w98-btn:active, [data-skin="dogefeedx"] .w98-btn.down { background: rgba(255,255,255,0.05); }
+[data-skin="dogefeedx"] .dp-ok, [data-skin="dogefeedx"] .dlg-ok { background: var(--df-gold) !important; border-color: var(--df-gold) !important; color: #000 !important; }
+[data-skin="dogefeedx"] .w98-field { border-radius: 6px !important; border: 1px solid rgba(255,255,255,0.15) !important;
+  box-shadow: none !important; padding: 6px 10px; background: rgba(0,0,0,0.25); color: #fff6dd; }
+[data-skin="dogefeedx"] .w98-field:focus { border-color: var(--df-gold) !important; box-shadow: 0 0 0 3px rgba(217,165,32,0.25) !important; }
+[data-skin="dogefeedx"] .dk-menu { border-radius: 8px !important; padding: 4px; background: rgba(44,44,46,0.95);
+  backdrop-filter: blur(30px); -webkit-backdrop-filter: blur(30px); color: #fff6dd;
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.1), 0 10px 30px rgba(0,0,0,.5); }
+[data-skin="dogefeedx"] .dk-menu .dk-mi { border-radius: 5px !important; padding: 6px 10px !important; color: #fff6dd; font-size: 13px; }
+[data-skin="dogefeedx"] .dk-menu .dk-mi:hover, [data-skin="dogefeedx"] .dk-menu .dk-mi.hot { background: var(--df-gold) !important; color: #000 !important; }
+[data-skin="dogefeedx"] .dk-menu .dk-mi .dk-mico img, [data-skin="dogefeedx"] .dk-menu .dk-mi .dk-tglyph { border-radius: 4px !important; }
+[data-skin="dogefeedx"] .dk-hr { box-shadow: none; height: 1px; background: rgba(255,255,255,0.1); margin: 4px 6px; }
+[data-skin="dogefeedx"] .dk-who { margin: -4px -4px 4px; padding: 10px 12px; background: var(--df-gold); border-radius: 8px 8px 0 0 !important; color: #000; }
+[data-skin="dogefeedx"] .dk-whoface { border-radius: 50% !important; background: #000; color: var(--df-gold); box-shadow: none; }
+[data-skin="dogefeedx"] .dk-banner { display: none; }
+[data-skin="dogefeedx"] .dk-toast { top: 36px; bottom: auto; left: 50%; right: auto; transform: translateX(-50%);
+  background: rgba(44,44,46,0.95); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); color: #fff;
+  border: 0; border-radius: 10px !important; padding: 12px 18px; box-shadow: 0 8px 30px rgba(0,0,0,.5); }
+/* Dialogs in dark mode */
+[data-skin="dogefeedx"] .dp-tabs { margin-bottom: 0; gap: 2px; padding: 0; justify-content: center; }
+[data-skin="dogefeedx"] .dp-tabs button { border-radius: 6px !important; box-shadow: none !important; background: transparent; padding: 6px 14px; color: #ffffff80; }
+[data-skin="dogefeedx"] .dp-tabs button[aria-selected="true"] { background: rgba(255,255,255,0.1); color: #fff; font-weight: 600; }
+[data-skin="dogefeedx"] .dp-page { box-shadow: none; border: 1px solid rgba(255,255,255,0.1); border-radius: 10px !important; background: #000; }
+[data-skin="dogefeedx"] .dp-screen { border-radius: 10px 10px 0 0 !important; background: #000; box-shadow: none; }
+[data-skin="dogefeedx"] .dp-shot { border-radius: 4px !important; box-shadow: none; background-color: var(--df-gold); }
+[data-skin="dogefeedx"] .dp-stand { background: #000; box-shadow: none; border-radius: 0 0 8px 8px !important; }
+[data-skin="dogefeedx"] .dp-grid, [data-skin="dogefeedx"] .dlg-list, [data-skin="dogefeedx"] .si-tree, [data-skin="dogefeedx"] .si-main {
+  border: 1px solid rgba(255,255,255,0.1); border-radius: 8px !important; box-shadow: none; background: rgba(0,0,0,0.2); }
+[data-skin="dogefeedx"] .dp-th { border-radius: 6px !important; background: rgba(255,255,255,0.05); }
+[data-skin="dogefeedx"] .dp-th.on { background: var(--df-gold) !important; border: 1px solid var(--df-gold); }
+[data-skin="dogefeedx"] .si-ti.on { background: var(--df-gold) !important; color: #000 !important; border-radius: 5px !important; }
+[data-skin="dogefeedx"] .si-table th { background: rgba(255,255,255,0.05); box-shadow: inset 0 -1px rgba(255,255,255,0.1); color: #ffffff80; }
+[data-skin="dogefeedx"] .dlg-item { color: #fff6dd; }
+[data-skin="dogefeedx"] .dlg-item:hover { background: rgba(255,255,255,0.08); }
+[data-skin="dogefeedx"] .dlg input[type="checkbox"], [data-skin="dogefeedx"] .dp input[type="checkbox"] { accent-color: var(--df-gold); }
+[data-skin="dogefeedx"] .dlg-note, [data-skin="dogefeedx"] .dp-note { color: #ffffff80; font-size: 12px; }
+[data-skin="dogefeedx"] .st-card { border: 1px solid rgba(255,255,255,0.1); border-radius: 10px !important; background: rgba(255,255,255,0.05); }
+[data-skin="dogefeedx"] .st-cover { border-radius: 10px !important; }
+[data-skin="dogefeedx"] .st-pill { border: 0; background: rgba(255,255,255,0.1); border-radius: 999px !important; padding: 0 8px; color: #ffffff80; }
+/* DogeFeedX App Styles: Terminal, Network, Explorer */
+[data-skin="dogefeedx"] .dfx-term { display: flex; flex-direction: column; height: 100%; background: #0d0d0f; font-family: "SF Mono", "Menlo", "Monaco", Consolas, monospace; }
+[data-skin="dogefeedx"] .dfx-term-output { flex: 1; padding: 12px 16px; overflow-y: auto; font-size: 13px; line-height: 1.5; color: #e0e0e0; }
+[data-skin="dogefeedx"] .dfx-line { white-space: pre-wrap; word-break: break-all; }
+[data-skin="dogefeedx"] .dfx-cmd { color: #ffffff80; }
+[data-skin="dogefeedx"] .dfx-err { color: #ff453a; }
+[data-skin="dogefeedx"] .dfx-term-input { display: flex; align-items: center; gap: 8px; padding: 10px 16px; background: rgba(255,255,255,0.05); border-top: 1px solid rgba(255,255,255,0.1); }
+[data-skin="dogefeedx"] .dfx-prompt { color: #32d74b; font-weight: 600; }
+[data-skin="dogefeedx"] .dfx-term-in { flex: 1; background: transparent !important; border: 0 !important; padding: 0 !important; color: #fff !important; font-family: inherit !important; font-size: 13px; outline: none !important; box-shadow: none !important; }
+[data-skin="dogefeedx"] .dfx-terminal-root .dk-body { padding: 0 !important; }
+/* Network panel */
+[data-skin="dogefeedx"] .dfx-net { padding: 16px; display: flex; flex-direction: column; gap: 20px; }
+[data-skin="dogefeedx"] .dfx-net-sec h3 { margin: 0 0 12px; font-size: 13px; color: #ffffff80; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
+[data-skin="dogefeedx"] .dfx-chains { display: flex; flex-direction: column; gap: 10px; }
+[data-skin="dogefeedx"] .dfx-chain { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px; background: rgba(255,255,255,0.05); border-radius: 8px; }
+[data-skin="dogefeedx"] .dfx-chain-name { font-weight: 600; color: #fff; min-width: 100px; }
+[data-skin="dogefeedx"] .dfx-chain-status { font-size: 12px; padding: 2px 8px; border-radius: 4px; }
+[data-skin="dogefeedx"] .dfx-chain-status.ok { background: rgba(50,215,75,0.2); color: #32d74b; }
+[data-skin="dogefeedx"] .dfx-chain-status.sync { background: rgba(255,159,10,0.2); color: #ff9f0a; }
+[data-skin="dogefeedx"] .dfx-chain-status.off { background: rgba(255,69,58,0.2); color: #ff453a; }
+[data-skin="dogefeedx"] .dfx-progress { flex: 1; min-width: 100px; height: 6px; background: rgba(255,255,255,0.1); border-radius: 3px; overflow: hidden; }
+[data-skin="dogefeedx"] .dfx-progress-bar { height: 100%; background: linear-gradient(90deg, #c9b56e, #f3e3a5); border-radius: 3px; transition: width 0.3s; }
+[data-skin="dogefeedx"] .dfx-mesh { display: flex; flex-direction: column; gap: 8px; }
+[data-skin="dogefeedx"] .dfx-mesh-row { display: flex; justify-content: space-between; padding: 8px 12px; background: rgba(255,255,255,0.03); border-radius: 6px; }
+[data-skin="dogefeedx"] .dfx-mesh-row span:first-child { color: #ffffff80; }
+[data-skin="dogefeedx"] .dfx-mesh-row span:last-child { color: #fff; font-weight: 500; }
+[data-skin="dogefeedx"] .dfx-arcades { display: flex; flex-direction: column; gap: 6px; }
+[data-skin="dogefeedx"] .dfx-arcade { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: rgba(255,255,255,0.03); border-radius: 6px; }
+[data-skin="dogefeedx"] .dfx-arcade-id { font-family: monospace; font-size: 11px; color: #636366; }
+[data-skin="dogefeedx"] .dfx-arcade-name { flex: 1; color: #fff; }
+[data-skin="dogefeedx"] .dfx-arcade-linked { font-size: 11px; padding: 2px 6px; border-radius: 3px; }
+[data-skin="dogefeedx"] .dfx-arcade-linked.yes { background: rgba(50,215,75,0.2); color: #32d74b; }
+[data-skin="dogefeedx"] .dfx-arcade-linked.no { background: rgba(255,255,255,0.05); color: #636366; }
+[data-skin="dogefeedx"] .dfx-network-root .dk-body { padding: 0 !important; }
+[data-skin="dogefeedx"] .dfx-refresh { margin: 16px; }
+/* Explorer */
+[data-skin="dogefeedx"] .dfx-exp { padding: 16px; display: flex; flex-direction: column; gap: 16px; height: 100%; }
+[data-skin="dogefeedx"] .dfx-exp-search { display: flex; gap: 8px; }
+[data-skin="dogefeedx"] .dfx-exp-chain { width: 140px; }
+[data-skin="dogefeedx"] .dfx-exp-q { flex: 1; }
+[data-skin="dogefeedx"] .dfx-exp-result { flex: 1; overflow-y: auto; background: rgba(0,0,0,0.2); border-radius: 8px; padding: 12px; }
+[data-skin="dogefeedx"] .dfx-exp-pre { margin: 0; white-space: pre-wrap; word-break: break-all; font-size: 12px; line-height: 1.5; color: #e0e0e0; }
+[data-skin="dogefeedx"] .dfx-explorer-root .dk-body { padding: 0 !important; }
+/* Common helpers */
+[data-skin="dogefeedx"] .dfx-center { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 16px; padding: 20px; text-align: center; }
+[data-skin="dogefeedx"] .dfx-center p { color: #ffffff80; margin: 0; }
+[data-skin="dogefeedx"] .dfx-signin { background: var(--df-gold) !important; color: #000 !important; font-weight: 600; }
+[data-skin="dogefeedx"] .st-chips .w98-btn[aria-pressed="true"] { background: var(--df-gold) !important; color: #000 !important; box-shadow: none; }
+[data-skin="dogefeedx"] .st-acts a { color: var(--df-gold); }
+[data-skin="dogefeedx"] .st-box { background: rgba(44,44,46,0.95); border-radius: 12px !important;
+  box-shadow: 0 20px 50px rgba(0,0,0,.6); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }
+[data-skin="dogefeedx"] .st-warn { color: #ff453a; }
+[data-skin="dogefeedx"] .askcard { background: rgba(44,44,46,0.95) !important; border-radius: 12px !important; color: #fff6dd; font-size: 13px; padding: 18px !important;
+  box-shadow: 0 20px 50px rgba(0,0,0,.6) !important; backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }
+[data-skin="dogefeedx"] .askcard h3 { font: 500 17px -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif; color: #fff; }
+[data-skin="dogefeedx"] .askcard p { font-size: 13px; color: #ffffff80 !important; }
+[data-skin="dogefeedx"] .askcard button { background: rgba(255,255,255,0.1) !important; color: #fff6dd !important; border: 1px solid rgba(255,255,255,0.15) !important;
+  border-radius: 6px !important; height: 32px; box-shadow: none !important; }
+[data-skin="dogefeedx"] .askcard button:first-child { background: var(--df-gold) !important; border-color: var(--df-gold) !important; color: #000 !important; }
+[data-skin="dogefeedx"] .pm-list { gap: 0; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; }
+[data-skin="dogefeedx"] .pm-list .st-perm { border-bottom: 1px solid rgba(255,255,255,0.08); }
+[data-skin="dogefeedx"] .pm-list .st-perm:last-child { border-bottom: 0; }
+[data-skin="dogefeedx"] .pm-list .st-perm input { background: #5a5a5c; }
+[data-skin="dogefeedx"] .pm-list .st-perm input::after { background: #fff; }
+[data-skin="dogefeedx"] .pm-list .st-perm input:checked { background: var(--df-gold); }
+[data-skin="dogefeedx"] .st-perm b { color: #fff6dd; }
 </style>
 
 <script>
@@ -529,7 +881,41 @@ body.fullscreen #arc-bot { display: none !important; }
   var STORE_ICON = '/apps/store-icon.png';
   var LAYOUT_LS = 'arcade.desktop:' + WHO, BG_LS = 'arcade.deskbg:' + WHO;
   var ID = /^[0-9a-f]{64}i\d{1,6}$/;
-  var SKIN = document.documentElement.getAttribute('data-skin') === 'ubuntu' ? 'ubuntu' : 'w98', UB = SKIN === 'ubuntu';
+  var SKIN = document.documentElement.getAttribute('data-skin') || 'w98';
+  var UB = SKIN === 'ubuntu', DFX = SKIN === 'dogefeedx', MAC_LIKE = UB || DFX;
+  
+  // ---------- DogeFeedX App Registration API ----------
+  // Provides a modular way for other agents to register apps into the DogeFeedX dock.
+  // Each app is registered with: key, name, glyph, opener function.
+  // See AGENTS-DOGEFEEDX.md for documentation.
+  var DFX_APPS = {};   // Registry: key -> {key, name, glyph, opener}
+  window.DogeFeedX = window.DogeFeedX || {
+    /**
+     * Register an app for the DogeFeedX dock.
+     * @param {string} key - Unique app key (e.g. 'dfxterminal', 'dfxnetwork')
+     * @param {Object} config - App configuration
+     * @param {string} config.name - Display name
+     * @param {Array} config.glyph - [fillColor, strokeColor, svgPath] for the icon
+     * @param {Function} config.opener - Function called when app is clicked (receives {dialog, openWin, byKey, SYSTEM} helpers)
+     */
+    registerApp: function (key, config) {
+      DFX_APPS[key] = {
+        key: key,
+        name: config.name,
+        glyph: config.glyph,
+        opener: config.opener
+      };
+      if (window.DogeFeedX._refreshDock) window.DogeFeedX._refreshDock();
+    },
+    /** List registered app keys */
+    listApps: function () { return Object.keys(DFX_APPS); },
+    /** Get app config by key */
+    getApp: function (key) { return DFX_APPS[key]; },
+    /** Internal: set by shell to refresh dock when apps change */
+    _refreshDock: null,
+    /** Version for compatibility checks */
+    version: '1.0.0'
+  };
   var CELL_W = UB ? 88 : 76, CELL_H = UB ? 92 : 76, TOP = 8, LEFT = UB ? 10 : 6, MOST = 8;
   // The names each look gives the same tools.
   function L(w98, ubuntu) { return UB ? ubuntu : w98; }
@@ -564,6 +950,143 @@ body.fullscreen #arc-bot { display: none !important; }
   byKey.run = {key: 'run', kind: 'run', name: 'Run…', glyph: ['#404040', '#fff', 'M5 12h11M12 7l5 5-5 5M19 5v14']};
   byKey.shortcuts = {key: 'shortcuts', kind: 'shortcuts', name: 'Wallet Shortcuts',
                      glyph: ['#d9a520', '#141310', 'M3 7a2 2 0 0 1 2-2h11v4M3 7v11a2 2 0 0 0 2 2h14a1 1 0 0 0 1-1v-9a1 1 0 0 0-1-1H5a2 2 0 0 1-2-2zM12 12l4 4M16 12v4h-4']};
+  // OS X squircles for the dock. One colour each, a gloss cap, then the symbol.
+  function dfxTile(bg, inner) {
+    return '<svg viewBox="0 0 44 44" width="44" height="44" aria-hidden="true">'
+      + '<rect x="1" y="1" width="42" height="42" rx="13" fill="' + bg + '"/>'
+      + '<path d="M14 1h16a13 13 0 0 1 13 13v4H1V14A13 13 0 0 1 14 1z" fill="#ffffff" opacity="0.30"/>'
+      + inner + '</svg>';
+  }
+  function dfxGear() {
+    var teeth = '';
+    for (var i = 0; i < 8; i++) {
+      teeth += '<rect x="19.5" y="6.5" width="5" height="8" rx="1.2" fill="#fff6dd" transform="rotate(' + (i * 45) + ' 22 22)"/>';
+    }
+    return teeth + '<circle cx="22" cy="22" r="7.5" fill="#fff6dd"/><circle cx="22" cy="22" r="3.1" fill="#6b6b70"/>';
+  }
+  var DFX_ICON = {
+    home: dfxTile('#e4bc55',
+      '<path d="M10 23 L22 13 L34 23 V35 H10 Z" fill="#1b1b1b"/>'
+      + '<path d="M19 12 V9 H24 V15" fill="#1b1b1b"/>'
+      + '<rect x="16" y="25" width="12" height="2" rx="1" fill="#f3e3a5"/>'
+      + '<rect x="16" y="29" width="8" height="2" rx="1" fill="#f3e3a5"/>'
+      + '<rect x="16" y="33" width="12" height="2" rx="1" fill="#f3e3a5"/>'),
+    profile: dfxTile('#f4efe4',
+      '<rect x="9" y="8" width="26" height="28" rx="4" fill="#ffffff"/>'
+      + '<path d="M9 12 a4 4 0 0 1 4-4 h18 a4 4 0 0 1 4 4 v5 H9 z" fill="#e4bc55"/>'
+      + '<circle cx="22" cy="22" r="4.2" fill="#1b1b1b"/>'
+      + '<path d="M14.5 33.5 c1.4-4.2 3.8-6.2 7.5-6.2 s6.1 2 7.5 6.2 z" fill="#1b1b1b"/>'),
+    files: dfxTile('#4f8ef7',
+      '<path d="M8 17 h11 l3 3 h14 v15 H8 z" fill="#f7f3e6"/>'
+      + '<path d="M8 17 h11 l2 2 H8 z" fill="#e4bc55"/>'
+      + '<path d="M8 29 h28 v6 H8 z" fill="#e7d7a4"/>'),
+    notifications: dfxTile('#ff5b3a',
+      '<path d="M22 11 a7 7 0 0 1 7 7 v3.5 l2.2 3.2 H12.8 L15 21.5 V18 a7 7 0 0 1 7-7 z" fill="#fff6dd"/>'
+      + '<rect x="19" y="27.5" width="6" height="3.2" rx="1.6" fill="#fff6dd"/>'
+      + '<circle cx="22" cy="10" r="1.5" fill="#fff6dd"/>'),
+    messages: dfxTile('#2f9d68',
+      '<rect x="7" y="11" width="18" height="13" rx="6" fill="#ffffff"/>'
+      + '<path d="M12 24 l-2.4 4.2 6.2-3.2 z" fill="#ffffff"/>'
+      + '<rect x="18" y="19" width="19" height="13" rx="6" fill="#1b1b1b"/>'
+      + '<path d="M31 32 l2.4 4.2 -6.2-3.2 z" fill="#1b1b1b"/>'),
+    explore: dfxTile('#1f5270',
+      '<circle cx="22" cy="23" r="11" fill="none" stroke="#f3e3a5" stroke-width="2"/>'
+      + '<path d="M22 13.5 L25.2 23 L22 21.2 L18.8 23 Z" fill="#ff5b3a"/>'
+      + '<path d="M22 32.5 L18.8 23 L22 24.8 L25.2 23 Z" fill="#fff6dd"/>'
+      + '<circle cx="22" cy="23" r="1.7" fill="#1b1b1b"/>'),
+    market: dfxTile('#c4512a',
+      '<path d="M9 20 h26 l-2.2-6 H11.2 z" fill="#e4bc55"/>'
+      + '<path d="M12 14 h4.2 v6 H12 z M17.6 14 h4.2 v6 h-4.2 z M23.2 14 h4.2 v6 h-4.2 z M28.8 14 h4.2 v6 h-4.2 z" fill="#8a3418"/>'
+      + '<rect x="11" y="20" width="22" height="14" fill="#fff6dd"/>'
+      + '<rect x="19" y="25" width="6" height="9" fill="#1b1b1b"/>'),
+    inscribe: dfxTile('#2c261c',
+      '<circle cx="19" cy="25" r="10" fill="#e4bc55"/>'
+      + '<circle cx="19" cy="25" r="7.2" fill="none" stroke="#1b1b1b" stroke-width="1.2"/>'
+      + '<path d="M16.2 21.4 h3.4 a3.6 3.6 0 0 1 0 7.2 h-3.4 z" fill="none" stroke="#1b1b1b" stroke-width="1.3"/>'
+      + '<path d="M18.6 19.6 v10.8" stroke="#1b1b1b" stroke-width="1.3"/>'
+      + '<path d="M28 9 l7 2.2 -13 15.2 -3.4 1.2 1.1-3.4 z" fill="#fff6dd"/>'),
+    wallet: dfxTile('#6e4524',
+      '<path d="M9 16 h22 a3 3 0 0 1 3 3 v13 a3 3 0 0 1-3 3 H11 a2 2 0 0 1-2-2 V18 a2 2 0 0 1 2-2 z" fill="#f7f3e6"/>'
+      + '<path d="M9 16 h16 v5 H11 a2 2 0 0 1-2-2 v-1 z" fill="#e4bc55"/>'
+      + '<path d="M16 25.2 h3.3 a3.2 3.2 0 0 1 0 6.4 H16 z" fill="none" stroke="#1b1b1b" stroke-width="1.3"/>'
+      + '<path d="M18.3 23.4 v10" stroke="#1b1b1b" stroke-width="1.3"/>'
+      + '<circle cx="29" cy="27" r="2.3" fill="#6e4524"/>'),
+    launchpad: dfxTile('#1b2340',
+      '<path d="M22 8 c6 4 8 11 8 16 l-8 3.5 -8-3.5 c0-5 2-12 8-16 z" fill="#fff6dd"/>'
+      + '<path d="M22 8 c6 4 8 11 8 16 l-4-.6 c-.6-4.4-2.2-9-4-12.4 z" fill="#e4bc55"/>'
+      + '<circle cx="22" cy="18" r="2.3" fill="#1b2340"/>'
+      + '<path d="M14 26 l-5 7 7-2.2 z" fill="#e4bc55"/>'
+      + '<path d="M30 26 l5 7 -7-2.2 z" fill="#e4bc55"/>'
+      + '<path d="M19 31.5 h6 l-1.2 5.2 h-3.6 z" fill="#ff5b3a"/>'
+      + '<path d="M20.4 33.2 h3.2 l-.6 2.6 h-2 z" fill="#ffe08a"/>'),
+    nfts: dfxTile('#f3ead6',
+      '<rect x="8" y="9" width="28" height="26" rx="2" fill="#e4bc55"/>'
+      + '<rect x="11" y="12" width="22" height="20" fill="#7eb6e8"/>'
+      + '<circle cx="16.5" cy="17.5" r="2" fill="#fff6dd"/>'
+      + '<path d="M11 28 l7-7 4 4 5-6 6 9 z" fill="#3d9b4a"/>'),
+    arcade: dfxTile('#2a2a2e',
+      '<rect x="11" y="28" width="22" height="6" rx="2" fill="#5c5c62"/>'
+      + '<rect x="20" y="16" width="4" height="14" rx="1.2" fill="#e8e8ea"/>'
+      + '<circle cx="22" cy="14" r="5.2" fill="#e23b3b"/>'
+      + '<ellipse cx="20.4" cy="12.4" rx="1.6" ry="1" fill="#ffffff" opacity="0.7"/>'),
+    bookmarks: dfxTile('#fff6dd',
+      '<path d="M15 8 h14 v27 l-7-4.5 -7 4.5 z" fill="#d23b3b"/>'
+      + '<path d="M15 8 h14 v6 H15 z" fill="#e4bc55"/>'),
+    memes: dfxTile('#e8923a',
+      '<path d="M11 20 l5-9 5 7 z" fill="#f6e2b8"/>'
+      + '<path d="M23 18 l5-8 6 9 z" fill="#f6e2b8"/>'
+      + '<path d="M13 19 l4-6 3 4 z" fill="#e4bc55"/>'
+      + '<path d="M25 17 l3-5 4 6 z" fill="#e4bc55"/>'
+      + '<circle cx="22" cy="25" r="10" fill="#f6e2b8"/>'
+      + '<circle cx="18" cy="24" r="1.5" fill="#1b1b1b"/>'
+      + '<circle cx="26" cy="24" r="1.5" fill="#1b1b1b"/>'
+      + '<ellipse cx="22" cy="28" rx="1.7" ry="1.2" fill="#1b1b1b"/>'
+      + '<path d="M18 30.2 q4 3 8 0" fill="none" stroke="#1b1b1b" stroke-width="1.2" stroke-linecap="round"/>'),
+    leaderboard: dfxTile('#243044',
+      '<rect x="7" y="24" width="9" height="12" rx="1" fill="#c5ccd4"/>'
+      + '<rect x="17.5" y="14" width="9" height="22" rx="1" fill="#e4bc55"/>'
+      + '<rect x="28" y="28" width="9" height="8" rx="1" fill="#c47a3a"/>'),
+    settings: dfxTile('#6b6b70', dfxGear())
+  };
+  // DogeFeedX dock, in Billy's order. Each one opens a window and is not also a desktop icon.
+  // Every window is DogeFeedX's own look, wired to this arcade (2026-11-03, the operator: "Keep UI/UX elements from
+    // DogefeedX wire them into the existing arcade architecture"): no window asks any other server.
+  var DFX_DOCK = [
+    {k: 'dfxhome', name: 'Home', url: '/dogefeedx/feed', w: 640, h: 620, mark: DFX_ICON.home, glyph: ['#e4bc55', '#1b1b1b', 'M4 11l8-7 8 7v9H4zM8 14h8M8 17h5']},
+    {k: 'dfxprofile', name: 'Profile', url: '/dogefeedx/profile', w: 440, h: 620, mark: DFX_ICON.profile, glyph: ['#f4efe4', '#1b1b1b', 'M6 5h12v14H6zM12 9a2 2 0 1 0 0 4 2 2 0 0 0 0-4M9 17c.5-2 1.5-3 3-3s2.5 1 3 3']},
+    {k: 'dfxfiles', name: 'Files', url: '/dogefeedx/files', w: 760, h: 480, mark: DFX_ICON.files, glyph: ['#4f8ef7', '#1b1b1b', 'M3 7h6l2 2h10v10H3z']},
+    {k: 'dfxnotifications', name: 'Notifications', url: '/dogefeedx/notifications', w: 480, h: 520, mark: DFX_ICON.notifications, glyph: ['#ff5b3a', '#fff6dd', 'M12 3a6 6 0 0 0-6 6c0 7-3 7-3 7h18s-3 0-3-7a6 6 0 0 0-6-6zM10 20a2 2 0 0 0 4 0']},
+    {k: 'dfxmessages', name: 'Messages', url: '/dogefeedx/messages', w: 520, h: 460, mark: DFX_ICON.messages, glyph: ['#2f9d68', '#1b1b1b', 'M3 6h12v7H7l-3 2zM9 12h12v7h-8l-3 2z']},
+    {k: 'dfxexplore', name: 'Explore', url: '/dogefeedx/explore', w: 560, h: 520, mark: DFX_ICON.explore, glyph: ['#1f5270', '#f3e3a5', 'M12 4l2 6 6 2-6 2-2 6-2-6-6-2 6-2z']},
+    {k: 'dfxmarket', name: 'Market', url: '/dogefeedx/market', w: 780, h: 560, mark: DFX_ICON.market, glyph: ['#c4512a', '#1b1b1b', 'M4 10h16l-1-3H5zM5 10h14v9H5zM10 14h4v5h-4z']},
+    {k: 'dfxinscribe', name: 'Inscribe', url: '/dogefeedx/inscribe', w: 640, h: 520, mark: DFX_ICON.inscribe, glyph: ['#2c261c', '#e4bc55', 'M12 20a6 6 0 1 0 0-12 6 6 0 0 0 0 12zM16 6l5-2-8 10']},
+    {k: 'dfxwallet', name: 'Wallet', url: '/dogefeedx/wallet', w: 720, h: 540, mark: DFX_ICON.wallet, glyph: ['#6e4524', '#1b1b1b', 'M3 7h16a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H3zM16 12h3M8 11v4']},
+    {k: 'dfxlaunchpad', name: 'Launchpad', url: '/dogefeedx/launchpad', w: 900, h: 580, mark: DFX_ICON.launchpad, glyph: ['#1b2340', '#fff6dd', 'M12 3c3 3 4 7 4 10l-4 2-4-2c0-3 1-7 4-10zM8 15l-3 4 4-1M16 15l3 4-4-1M12 16v5']},
+    {k: 'dfxnfts', name: 'NFTs', url: '/dogefeedx/nfts', w: 680, h: 520, mark: DFX_ICON.nfts, glyph: ['#f3ead6', '#1b1b1b', 'M5 5h14v14H5zM8 8h8v8H8zM8 14l3-3 2 2 2-2 1 3z']},
+    {k: 'dfxarcade', name: 'Arcade', url: '/dogefeedx/arcade', w: 640, h: 480, mark: DFX_ICON.arcade, glyph: ['#2a2a2e', '#e23b3b', 'M8 18h8v3H8zM11 8h2v10h-2zM12 8a3 3 0 1 0 0-1']},
+    {k: 'dfxbookmarks', name: 'Bookmarks', url: '/dogefeedx/bookmarks', w: 480, h: 420, mark: DFX_ICON.bookmarks, glyph: ['#fff6dd', '#d23b3b', 'M7 3h10v18l-5-3-5 3z']},
+    {k: 'dfxmemes', name: 'Meme Library', url: '/dogefeedx/memes', w: 720, h: 520, mark: DFX_ICON.memes, glyph: ['#e8923a', '#1b1b1b', 'M8 10l3-4 3 3M14 9l3-4 3 4M12 20a6 6 0 1 0 0-10']},
+    {k: 'dfxleaderboard', name: 'Leaderboard', url: '/dogefeedx/leaderboard', w: 640, h: 520, mark: DFX_ICON.leaderboard, glyph: ['#243044', '#e4bc55', 'M4 14h5v6H4zM9 8h6v12H9zM15 16h5v4h-5z']},
+    {k: 'dfxsettings', name: 'Settings', url: '/dogefeedx/settings', w: 480, h: 560, mark: DFX_ICON.settings, glyph: ['#6b6b70', '#fff6dd', 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2']}
+  ];
+  // ---------- DogeFeedX Apps (only shown in DogeFeedX theme) ----------
+  if (DFX) {
+    DFX_DOCK.forEach(function (a) {
+      byKey[a.k] = {key: a.k, kind: a.k, name: a.name, href: a.url, glyph: a.glyph, mark: a.mark};
+    });
+    // Kept so a registered tool can still open. Not dock icons: the dock is the sixteen above.
+    byKey.dfxprofile = byKey.dfxprofile;
+    byKey.dfxmarket = byKey.dfxmarket;
+    byKey.dfxterminal = {key: 'dfxterminal', kind: 'dfxterminal', name: 'Terminal',
+                         glyph: ['#28c840', '#1c1c1e', 'M4 17l6-6-6-6M12 19h8']};
+    byKey.dfxnetwork = {key: 'dfxnetwork', kind: 'dfxnetwork', name: 'Network',
+                        glyph: ['#5856d6', '#1c1c1e', 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM2 12h20M12 2a15 15 0 0 1 4 10 15 15 0 0 1-4 10 15 15 0 0 1-4-10 15 15 0 0 1 4-10']};
+    byKey.dfxexplorer = {key: 'dfxexplorer', kind: 'dfxexplorer', name: 'Explorer',
+                         glyph: ['#ff9500', '#1c1c1e', 'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.35-4.35']};
+    byKey.dfxfeed = {key: 'dfxfeed', kind: 'dfxfeed', name: 'Feed', href: '/dogefeedx/feed',
+                     glyph: ['#f5a623', '#1c1c1e', 'M4 5h16v6H4zM4 13h16v6H4']};
+    byKey.dfxexplore = byKey.dfxexplore;
+  }
 
   var layout = load(LAYOUT_LS, {});
   if (!layout || typeof layout !== 'object' || Array.isArray(layout)) layout = {};
@@ -586,9 +1109,52 @@ body.fullscreen #arc-bot { display: none !important; }
   function save() { keep(LAYOUT_LS, layout); }
   var homeApps = [];     // the apps on this account's phone home screen and its stars: on the desktop too
 
+  // DogeFeedX dock apps: items here appear in the dock, NOT on the desktop (per Billy's design rule)
+  var DFX_DOCK_APPS = DFX_DOCK.map(function (a) { return a.k; });
+  // Old builds remembered a near full-screen rect. Drop those once so each module opens at its own size.
+  if (DFX && layout.dfxWin !== 2) {
+    DFX_DOCK_APPS.forEach(function (k) { delete layout.rects[k]; });
+    layout.dfxWin = 2;
+    save();
+  }
+  // Arcade pages the dock apps already stand in for. Same name, not a second icon.
+  var DFX_COVERS = {
+    '/': 'dfxhome', '/feed': 'dfxhome', '/explore': 'dfxexplore',
+    '/me': 'dfxsettings', '/me/messages': 'dfxmessages', '/messages': 'dfxmessages',
+    '/me/wallet': 'dfxwallet', '/wallet': 'dfxwallet', '/me/nfts': 'dfxnfts', '/nfts': 'dfxnfts',
+    '/notifications': 'dfxnotifications', '/me/notifications': 'dfxnotifications',
+    '/create': 'dfxinscribe', '/create/ord': 'dfxinscribe', '/create/name': 'dfxinscribe',
+    '/tokens': 'dfxinscribe', '/apps': 'dfxarcade', '/mintpad/new': 'dfxlaunchpad',
+    '/contacts': 'dfxprofile', '/me/contacts': 'dfxprofile'
+  };
+  function dfxAddressBook(it) {
+    if (!it) return false;
+    var href = String(it.href || it.url || '').split('?')[0];
+    return href === '/contacts' || href === '/me/contacts' || String(it.name || '').toLowerCase() === 'address book';
+  }
+  
   function onDesk() {
     var keys = TABS.map(function (t) { return t.key; }).concat(['store', 'helper']);
+    // DogeFeedX: dock apps do NOT appear as desktop icons (Billy's design rule, 2026-11-03)
+    // Desktop shows only items not in the dock (files, folders, inscriptions, etc.)
+    // Do NOT add DFX_DOCK_APPS to keys - they are in the dock only
     homeApps.concat(layout.added).forEach(function (k) { if (byKey[k] && keys.indexOf(k) < 0) keys.push(k); });
+    // Filter out dock apps from desktop in DFX mode
+    if (DFX) keys = keys.filter(function (k) { return DFX_DOCK_APPS.indexOf(k) < 0; });
+    // Explore (and Feed) already sit in the dock as DogeFeedX apps. The arcade tab is not a second icon.
+    if (DFX) keys = keys.filter(function (k) { return !DFX_COVERS[tabHref(k)] && !dfxAddressBook(byKey[k]); });
+    // The menu bar and the dock already show these. A DogeFeedX desktop does not repeat them as icons.
+    if (DFX) {
+      var inDock = dockKeys().filter(function (k) { return k.indexOf('|') !== 0; });
+      var dockNames = {};
+      DFX_DOCK_APPS.forEach(function (k) { if (byKey[k]) dockNames[byKey[k].name.toLowerCase()] = true; });
+      keys = keys.filter(function (k) {
+        if (inDock.indexOf(k) >= 0) return false;
+        var it = byKey[k];
+        if (it && (DFX_COVERS[it.href] || dockNames[(it.name || '').toLowerCase()])) return false;
+        return true;
+      });
+    }
     return keys.filter(function (k) { return layout.gone.indexOf(k) < 0; });
   }
 
@@ -597,6 +1163,7 @@ body.fullscreen #arc-bot { display: none !important; }
       + '" stroke="' + g[1] + '" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   }
   function iconHtml(it) {
+    if (it.mark) return it.mark;
     if (it.kind === 'helper') {
       var face = document.getElementById('arc-bot-face');
       return '<span class="dk-robot">' + (face ? face.innerHTML : '') + '</span>';
@@ -607,6 +1174,7 @@ body.fullscreen #arc-bot { display: none !important; }
   }
   function smallIcon(it) {
     if (!it) return '<span class="dk-tglyph"></span>';
+    if (it.mark) return '<span class="dk-tglyph dfx-mark">' + it.mark + '</span>';
     if (it.img) return '<img src="' + esc(it.img) + '" alt="">';
     if (it.glyph) return '<span class="dk-tglyph" style="background:' + it.glyph[0] + '">' + glyphHtml(it.glyph, 12) + '</span>';
     if (it.kind === 'helper') return '<span class="dk-tglyph" style="background:#1f2933"></span>';
@@ -615,7 +1183,12 @@ body.fullscreen #arc-bot { display: none !important; }
 
   // ---------- the icons: anywhere on the desktop, kept where they are dropped ----------
   function deskW() { return dk.clientWidth; }
-  function deskH() { return dk.clientHeight; }
+  function deskH() {
+    var h = dk.clientHeight;
+    /* The dock sits on the wallpaper. Keep icons and windows above it. */
+    if (document.documentElement.getAttribute('data-skin') === 'dogefeedx') h -= 96;
+    return Math.max(80, h);
+  }
   function freeCells(taken) {
     var rows = Math.max(1, Math.floor((deskH() - TOP) / CELL_H)), out = [];
     for (var c = 0; c < 60; c++) for (var r = 0; r < rows; r++) {
@@ -706,7 +1279,7 @@ body.fullscreen #arc-bot { display: none !important; }
     var list = (layout.programs || []).filter(function (x) { return x !== k; });
     if (on) list.push(k);
     layout.programs = list; save();
-    if (UB) paintDock();
+    if (MAC_LIKE) paintDock();
   }
   function removeIcon(k) {
     if (layout.gone.indexOf(k) < 0) layout.gone.push(k);
@@ -725,13 +1298,47 @@ body.fullscreen #arc-bot { display: none !important; }
   function openKey(k) {
     var it = byKey[k]; if (!it) return;
     hideMenus();
+    if (DFX && dfxAddressBook(it)) { openDfxAddressBook(); return; }
     if (it.kind === 'helper') { openHelper(); return; }
     if (it.kind === 'display') { openDisplay(); return; }
     if (it.kind === 'sysinfo') { openSysinfo(); return; }
     if (it.kind === 'run') { openRun(); return; }
     if (it.kind === 'shortcuts') { openShortcuts(); return; }
+    if (it.kind === 'store') { openStore(); return; }
+    if (DFX_DOCK_APPS.indexOf(k) >= 0) {
+      var dock = DFX_DOCK.filter(function (a) { return a.k === k; })[0] || {};
+      openWin({key: k, url: it.href, name: it.name, item: it, w: dock.w || 640, h: dock.h || 520});
+      return;
+    }
+    // DogeFeedX-specific apps: check for registered app first, then fall back to built-in
+    if (DFX && DFX_APPS[k] && typeof DFX_APPS[k].opener === 'function') {
+      DFX_APPS[k].opener(_dfxHelpers()); return;
+    }
+    // Shell-owned DogeFeedX apps
+    if (it.kind === 'dfxfeed') { openDfxFeed(); return; }
+    if (it.kind === 'dfxexplore') { openDfxExplore(); return; }
+    if (it.kind === 'dfxprofile') { openDfxProfile(); return; }
+    if (it.kind === 'dfxmarket') { openDfxMarket(); return; }
+    // Fallback stubs for external apps (if not registered via DogeFeedX.registerApp)
+    if (it.kind === 'dfxterminal') { openDfxTerminal(); return; }
+    if (it.kind === 'dfxnetwork') { openDfxNetwork(); return; }
+    if (it.kind === 'dfxexplorer') { openDfxExplorer(); return; }
     if (it.kind === 'app') openWin({key: k, url: it.app.open, name: it.name, item: it});
     else openWin({key: k, url: it.href, name: it.name, item: it});
+  }
+  // Helper object passed to registered DogeFeedX app openers
+  function _dfxHelpers() {
+    return {
+      dialog: dialog,
+      openWin: openWin,
+      byKey: byKey,
+      SYSTEM: SYSTEM,
+      esc: esc,
+      WHO: WHO,
+      OPERATOR: OPERATOR,
+      focus: focus,
+      wins: wins
+    };
   }
   // The helper (_helper.html) in a window of its own (2026-10-29: "the AI robot helper ... it's not able to be moved
   // around the desktop like the rest of the apps"): its chat box moves into the window and back out when it closes.
@@ -771,8 +1378,11 @@ body.fullscreen #arc-bot { display: none !important; }
     min: '<svg width="8" height="8" viewBox="0 0 8 8" aria-hidden="true"><rect x="1" y="6" width="6" height="2" fill="#000"/></svg>',
     max: '<svg width="9" height="9" viewBox="0 0 9 9" aria-hidden="true"><path d="M0 0h9v9H0zM1 2v6h7V2z" fill="#000" fill-rule="evenodd"/></svg>',
     restore: '<svg width="9" height="9" viewBox="0 0 9 9" aria-hidden="true"><path d="M2 0h7v6H7V2H2zM0 3h7v6H0zM1 5v3h5V5z" fill="#000" fill-rule="evenodd"/></svg>',
+    reload: '<svg width="9" height="9" viewBox="0 0 9 9" aria-hidden="true"><path d="M4.5 0a4.5 4.5 0 0 1 3.4 1.55L9 .5V4H5.5l1.4-1.4A3 3 0 1 0 7.4 6h1.6a4.5 4.5 0 1 1-4.5-6z" fill="#000"/></svg>',
     close: '<svg width="8" height="7" viewBox="0 0 8 7" aria-hidden="true"><path d="M0 0h2l2 2 2-2h2L5 3.5 8 7H6L4 5 2 7H0l3-3.5z" fill="#000"/></svg>'
   };
+  // A ring answered (base.html): the app comes up in a window, and everything else on the desktop stays open.
+  window.arcadeDeskOpen = function (url, name) { openWin({key: 'ring:' + url.split('?')[0], url: url, name: name}); };
   function openWin(o) {
     var dlg = !!o.body && !o.panel;
     if (o.url && !o.body) {
@@ -787,8 +1397,9 @@ body.fullscreen #arc-bot { display: none !important; }
       closeWin(old);
     }
     var el = document.createElement('div');
-    el.className = 'dk-win'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', o.name);
+    el.className = 'dk-win' + (o.body ? '' : ' framed'); el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', o.name);
     el.innerHTML = '<div class="dk-title">' + smallIcon(o.item) + '<span class="dk-tname"></span>'
+      + (o.body ? '' : '<button type="button" class="w98-btn dk-tbtn" data-a="reload" aria-label="Refresh" title="Refresh this window">' + TB_ICONS.reload + '</button>')
       + (dlg ? '' : '<button type="button" class="w98-btn dk-tbtn" data-a="min" aria-label="Minimize">' + TB_ICONS.min + '</button>'
       + '<button type="button" class="w98-btn dk-tbtn" data-a="max" aria-label="Maximize">' + TB_ICONS.max + '</button>')
       + '<button type="button" class="w98-btn dk-tbtn" data-a="close" aria-label="Close">' + TB_ICONS.close + '</button></div>'
@@ -803,7 +1414,7 @@ body.fullscreen #arc-bot { display: none !important; }
     else {
       var f = document.createElement('iframe');
       f.src = o.url; f.title = o.name;
-      f.setAttribute('allow', 'camera; microphone; autoplay; fullscreen; clipboard-write; screen-wake-lock');
+      f.setAttribute('allow', 'camera; microphone; display-capture; autoplay; fullscreen; clipboard-write; screen-wake-lock');
       f.addEventListener('load', function () { framed(w); });
       body.appendChild(f);
       w.frame = f;
@@ -821,7 +1432,17 @@ body.fullscreen #arc-bot { display: none !important; }
       if (t && !w.dialog) { w.name = t; w.el.querySelector('.dk-tname').textContent = t; w.el.setAttribute('aria-label', t); paintTask(); }
       doc.addEventListener('pointerdown', function () { focus(w); }, true);
       doc.addEventListener('focusin', function () { focus(w); }, true);
+      // F5 / Ctrl+R in a window refreshes that window, not the whole desktop.
+      doc.addEventListener('keydown', function (e) {
+        if (e.key === 'F5' || ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === 'r' || e.key === 'R'))) { e.preventDefault(); reloadWin(w); }
+      }, true);
     } catch (e) {}
+  }
+  // One window's page again (2026-11-02: "if you make a post you'll have to normally refresh whole arcade - we should
+  // just be able to refresh every window"): the page it is on now, not the one it opened with.
+  function reloadWin(w) {
+    if (!w.frame) return;
+    try { w.frame.contentWindow.location.reload(); } catch (e) { w.frame.src = w.frame.src; }
   }
   function wireWin(w) {
     var el = w.el, title = el.querySelector('.dk-title');
@@ -830,6 +1451,7 @@ body.fullscreen #arc-bot { display: none !important; }
     title.addEventListener('click', function (e) {
       var a = e.target.closest('button[data-a]'); if (!a) return;
       if (a.dataset.a === 'min') minimize(w);
+      else if (a.dataset.a === 'reload') reloadWin(w);
       else if (a.dataset.a === 'max') toggleMax(w);
       else closeWin(w);
     });
@@ -932,7 +1554,7 @@ body.fullscreen #arc-bot { display: none !important; }
 
   // ---------- the taskbar ----------
   function paintTask() {
-    if (UB) paintDock();
+    if (MAC_LIKE) paintDock();
     var bar = $('dk-tbtns'), on = front();
     bar.innerHTML = '';
     wins.forEach(function (w) {
@@ -957,8 +1579,22 @@ body.fullscreen #arc-bot { display: none !important; }
   tick(); setInterval(tick, 10000);
   var bellHref = (TABS.filter(function (t) { return /notifications$/.test(t.href); })[0] || {}).href;
   var mailHref = (TABS.filter(function (t) { return t.href === '/messages' || t.href === '/me/messages'; })[0] || {}).href;
+  function dfxWalletNow() {
+    try { return localStorage.getItem('dogefeedx.wallet') || ''; } catch (e) { return ''; }
+  }
+  function dfxScopedBadges() {
+    var addr = dfxWalletNow();
+    if (!addr) return null;
+    function num(field) {
+      try { return Number(localStorage.getItem('dogefeedx.badge.' + field + '::' + addr) || 0) || 0; }
+      catch (e) { return 0; }
+    }
+    return {messages: num('messages'), notifications: num('notifications'), market: num('market')};
+  }
   function paintTray() {
-    var n = bellHref ? (badges[bellHref] || 0) : 0, m = mailHref ? (badges[mailHref] || 0) : 0;
+    var scoped = DFX ? dfxScopedBadges() : null;
+    var n = scoped ? (Number(scoped.notifications) || 0) : (bellHref ? (badges[bellHref] || 0) : 0);
+    var m = scoped ? (Number(scoped.messages) || 0) : (mailHref ? (badges[mailHref] || 0) : 0);
     $('dk-bell').hidden = !n; $('dk-bell-n').textContent = n > 99 ? '99+' : (n || '');
     $('dk-mail').hidden = !m; $('dk-mail-n').textContent = m > 99 ? '99+' : (m || '');
   }
@@ -969,11 +1605,23 @@ body.fullscreen #arc-bot { display: none !important; }
       .then(function (j) {
         if (!j || typeof j !== 'object') return;
         var was = JSON.stringify(badges); badges = j;
-        if (JSON.stringify(badges) !== was) { drawIcons(); paintTray(); }
+        if (JSON.stringify(badges) !== was) { drawIcons(); paintTray(); if (DFX) paintDock(); }
       }).catch(function () {});
   }
   setInterval(pollBadges, 45000);
   window.addEventListener('focus', pollBadges);
+  function dfxPingWallet() {
+    document.querySelectorAll('iframe').forEach(function (frame) {
+      try { frame.contentWindow.postMessage({type: 'dogefeedx-wallet'}, location.origin); } catch (e) {}
+    });
+  }
+  window.addEventListener('storage', function (e) {
+    if (!e || !e.key) return;
+    if (e.key !== 'dogefeedx.wallet' && e.key.indexOf('dogefeedx.badge.') !== 0) return;
+    paintTray();
+    if (DFX) paintDock();
+    if (e.key === 'dogefeedx.wallet') dfxPingWallet();
+  });
 
   // ---------- menus: Start, its cascades, and right clicks ----------
   function hideMenus() {
@@ -998,7 +1646,20 @@ body.fullscreen #arc-bot { display: none !important; }
     el.style.top = Math.max(0, Math.min(y, window.innerHeight - h - 2)) + 'px';
     el.onclick = function (e) {
       var b = e.target.closest('.dk-mi'); if (!b || b.disabled) return;
-      var k = b.dataset.k; hideMenus(); run(k);
+      var k = b.dataset.k || '';
+      // A cascade (Switch Theme) stays open and shows its list. Closing here
+      // was why the system menu built that list and never showed it.
+      if (k.indexOf('sub:') === 0) { e.stopPropagation(); openCascade(b, run); return; }
+      hideMenus(); run(k);
+    };
+    el.onmouseover = function (e) {
+      var b = e.target.closest('.dk-mi'); if (!b || el.id === 'dk-sub') return;
+      var k = b.dataset.k || '';
+      if (k.indexOf('sub:') === 0) { if (!b.classList.contains('hot')) openCascade(b, run); }
+      else {
+        $('dk-sub').hidden = true;
+        el.querySelectorAll('.dk-mi.hot').forEach(function (x) { x.classList.remove('hot'); });
+      }
     };
   }
   function blank() { return '<span class="dk-tglyph"></span>'; }
@@ -1025,7 +1686,7 @@ body.fullscreen #arc-bot { display: none !important; }
     {k: 'run', label: 'Run…', icon: smallIcon(byKey.run)},
     {hr: true},
     {k: 'sysinfo', label: 'System Information', icon: smallIcon(byKey.sysinfo)},
-    {k: 'skin:ubuntu', label: 'Switch to the Ubuntu look', icon: blank()},
+    {k: 'sub:themes', label: 'Switch Theme', sub: true, icon: blank()},
     {hr: true},
   ]).concat(WHO !== 'guest' && !OPERATOR ? [{k: 'logoff', label: 'Log Off @' + WHO + '…',
                                                icon: smallIcon({glyph: ['#345d9d', '#fff', 'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9']})}] : [])
@@ -1044,6 +1705,8 @@ body.fullscreen #arc-bot { display: none !important; }
     else if (k === 'mynfts') window.arcadeShell.open('/me/nfts', 'My Inscriptions');
     else if (k === 'logoff') logOff();
     else if (k === 'skin:ubuntu') setSkin('ubuntu');
+    else if (k === 'skin:dogefeedx') setSkin('dogefeedx');
+    else if (k === 'skin:w98') setSkin('w98');
     else openKey(k);
   }
   // Log Off: the same sign-out as Your arcade's (me.html), asked the old way first.
@@ -1067,7 +1730,7 @@ body.fullscreen #arc-bot { display: none !important; }
   }
   $('dk-start').addEventListener('click', function (e) {
     e.stopPropagation();
-    if (UB) { toggleApps(); return; }
+    if (MAC_LIKE) { toggleApps(); return; }
     var m = $('dk-startmenu');
     if (!m.hidden) { hideMenus(); return; }
     hideMenus();
@@ -1095,20 +1758,53 @@ body.fullscreen #arc-bot { display: none !important; }
       {hr: true},
       {k: 'arrange', label: 'Arrange Icons', icon: blank()},
       {k: 'restoreicons', label: 'Restore Desktop Icons', icon: blank()}];
+    if (which === 'themes') return themeChoices();
     var mine = (layout.programs || []).filter(function (k) { return byKey[k]; }).sort(byName);
     return (mine.length ? mine.map(function (k) { return {k: k, label: byKey[k].name, icon: smallIcon(byKey[k])}; })
                         : [{k: 'none', label: '(None yet)', off: true}])
       .concat([{hr: true}, {k: 'store', label: 'App Store', icon: smallIcon(byKey.store)},
                {k: 'addremove', label: 'Add/Remove Programs…', icon: smallIcon({img: STORE_ICON})}]);
   }
-  function openSub(b) {
-    var which = b.dataset.k.slice(4), r = b.getBoundingClientRect(), sub = $('dk-sub');
-    $('dk-items').querySelectorAll('.dk-mi.hot').forEach(function (x) { x.classList.remove('hot'); });
-    b.classList.add('hot');
-    showMenu(sub, subItems(which), r.right - 3, r.top - 3, runStart);
-    sub.dataset.which = which;
-    sub.style.top = Math.max(0, Math.min(r.top - 3, window.innerHeight - 32 - sub.offsetHeight)) + 'px';
+  // The theme list, one place, for the Start menu, the system menu and Show Applications.
+  // Website is the way back out; the marked row is the look on screen. Default is the
+  // arcade's own desk_default, so a chosen look can be put back.
+  var DESK_DEFAULT = '{{ desk_default }}' === 'w98' ? 'w98' : '{{ desk_default }}' === 'dogefeedx' ? 'dogefeedx' : 'ubuntu';
+  function themeMark(id) {
+    return SKIN === id ? smallIcon({glyph: ['#28c840', '#fff', 'M5 13l4 4L19 7']}) : blank();
   }
+  function themeChoices() {
+    function label(id, name) { return name + (DESK_DEFAULT === id ? ' (default)' : ''); }
+    return [
+      {k: 'skin:w98', label: label('w98', 'Windows 98'), icon: themeMark('w98')},
+      {k: 'skin:ubuntu', label: label('ubuntu', 'Ubuntu'), icon: themeMark('ubuntu')},
+      {k: 'skin:dogefeedx', label: label('dogefeedx', 'DogeFeedX (macOS)'), icon: themeMark('dogefeedx')},
+      {hr: true},
+      {k: 'exit', label: 'Website', icon: blank()}
+    ];
+  }
+  function openCascade(b, run) {
+    var which = (b.dataset.k || '').slice(4), r = b.getBoundingClientRect(), sub = $('dk-sub');
+    document.querySelectorAll('.dk-mi.hot').forEach(function (x) { x.classList.remove('hot'); });
+    b.classList.add('hot');
+    showMenu(sub, subItems(which), 0, 0, run || runStart);
+    var sw = sub.offsetWidth, sh = sub.offsetHeight;
+    var left = r.right - 3, top = r.top - 3;
+    // The system button sits in the top-right corner: open the list under it, not off the screen.
+    if (b.closest('#dk-ctx') || b.closest('#dk-sys')) {
+      var host = $('dk-ctx').getBoundingClientRect();
+      top = r.top - 3;
+      left = host.left - sw - 6;
+      if (left < 4) left = host.right + 6;
+    }
+    if (left + sw > window.innerWidth - 4) left = Math.max(4, r.left - sw + 3);
+    if (left < 4) left = 4;
+    if (top + sh > window.innerHeight - 4) top = Math.max(4, window.innerHeight - sh - 4);
+    sub.style.left = left + 'px';
+    sub.style.top = top + 'px';
+    sub.hidden = false;
+    sub.dataset.which = which;
+  }
+  function openSub(b) { openCascade(b, runStart); }
   $('dk-items').addEventListener('mouseover', function (e) {
     var b = e.target.closest('.dk-mi'); if (!b) return;
     if (b.dataset.k.indexOf('sub:') === 0) { if (!b.classList.contains('hot')) openSub(b); }
@@ -1125,12 +1821,18 @@ body.fullscreen #arc-bot { display: none !important; }
     var it = byKey[k], here = onDesk().indexOf(k) >= 0, items = [{k: 'open', label: 'Open', def: true}, {hr: true}];
     if (onDeskIcon) items.push({k: 'remove', label: it.shortcut ? 'Delete shortcut' : 'Remove from desktop'});
     else items.push({k: 'put', label: it.kind === 'coin' ? 'Create shortcut on desktop' : 'Put on desktop', off: here});
-    if (it.kind === 'app') items.push({k: 'prog', label: inPrograms(k) ? 'Remove from Start menu' : 'Add to Start menu'});
+    if (it.kind === 'app') {
+      items.push({k: 'prog', label: inPrograms(k) ? L('Remove from Start menu', 'Remove from your apps') : L('Add to Start menu', 'Add to your apps')});
+      items.push({hr: true}, {k: 'perms', label: L('Properties', 'Permissions')});
+      if (installed(k)) items.push({k: 'gone', label: 'Remove from arcade'});
+    }
     showMenu($('dk-ctx'), items, x, y, function (a) {
       if (a === 'open') openKey(k);
       else if (a === 'remove') removeIcon(k);
       else if (a === 'put') { putOnDesk(k); say(it.name + ' is on the desktop.'); }
       else if (a === 'prog') { var on = !inPrograms(k); setProgram(k, on); say(it.name + (on ? ' is in Start → Programs.' : ' is out of the Start menu.')); }
+      else if (a === 'perms') openPerms(k);
+      else if (a === 'gone') removeFromArcade(k);
     });
   }
   // An item in the Start menu: right click to put it on the desktop, or an app in or out of Programs.
@@ -1166,11 +1868,13 @@ body.fullscreen #arc-bot { display: none !important; }
   });
   function winMenu(w, x, y) {
     hideMenus();
-    showMenu($('dk-ctx'), [{k: 'restore', label: 'Restore', off: !w.min && !w.max},
+    showMenu($('dk-ctx'), [{k: 'reload', label: 'Refresh', off: !w.frame}, {hr: true},
+                           {k: 'restore', label: 'Restore', off: !w.min && !w.max},
                            {k: 'min', label: 'Minimize', off: w.min || w.dialog},
                            {k: 'max', label: 'Maximize', off: w.max || w.dialog}, {hr: true},
                            {k: 'close', label: 'Close', def: true}], x, y, function (a) {
-      if (a === 'restore') { if (w.min) restore(w); else if (w.max) toggleMax(w); focus(w); }
+      if (a === 'reload') reloadWin(w);
+      else if (a === 'restore') { if (w.min) restore(w); else if (w.max) toggleMax(w); focus(w); }
       else if (a === 'min') minimize(w);
       else if (a === 'max') { restore(w); if (!w.max) toggleMax(w); focus(w); }
       else closeWin(w);
@@ -1461,6 +2165,230 @@ body.fullscreen #arc-bot { display: none !important; }
     d.q('.dlg-close').addEventListener('click', function () { closeWin(d.win); });
     draw();
   }
+  // The App Store (2026-10-30, the operator: "You know how the App Store works in the PWA that's how the App Store should work
+  // in the desktop modes"): home.html's store in a window -- search, kinds, cards, and the sheet of what an app asks
+  // for, the same switches as its card (wallet, contacts, camera & microphone, notifications). Adding puts it in
+  // Start -> Programs and on the desktop, where the home screen puts it on the home screen.
+  var ST_GAMES = {rpg: 1, shooter: 1, racing: 1, puzzle: 1, arcade: 1, strategy: 1, sports: 1, card: 1, board: 1};
+  var ST_PERM = {
+    wallet: ['Wallet access', 'Ask your wallet to trade, pay and sign. Each payment still shows its cost first.'],
+    contacts: ['Contacts', 'The names and addresses in your address book, nothing else.'],
+    groups: ['Group chats', 'Read your group chats, post in them as you, and see your address book. Each post is a test-chain transaction.'],
+    media: ['Camera & microphone', 'Only while the app is open. The arcade shows when they are on, with a Stop button.'],
+    pictures: ['Pictures in the app', 'The app draws the cameras and shared screens in its rooms itself, and could keep them. The arcade shows while it gets them.'],
+    notify: ['Notifications', 'People in your address book can ring you in it while it is closed.']
+  };
+  function installed(k) { return inPrograms(k) || onDesk().indexOf(k) >= 0; }
+  function openStore() {
+    var open = wins.filter(function (x) { return x.key === 'store'; })[0];
+    if (open) { if (open.min) restore(open); focus(open); return; }
+    var d = dialog('store', 'App Store', byKey.store,
+      '<div class="dlg-row"><input class="w98-field st-q" type="search" placeholder="Search games, calls, tools…" aria-label="Search apps" autocomplete="off"></div>'
+      + '<div class="st-chips" role="toolbar" aria-label="Kinds of app"></div>'
+      + '<div class="st-sec"><b class="st-h">Popular</b><span class="st-n"></span></div>'
+      + '<div class="dlg-list st-list" role="list"></div>'
+      + '<div class="st-sheet" hidden><div class="st-box" role="dialog" aria-modal="true" aria-label="Add an app">'
+      + '<div class="st-who"><span class="st-cover st-sicon"></span><div><b class="st-stitle"></b><span class="st-by st-sby"></span></div></div>'
+      + '<p class="dlg-note">It asks for these before it is added. You can change them any time: right-click the app, or Permissions on its App Store card.</p>'
+      + '<div class="st-perms"></div><p class="st-warn"></p>'
+      + '<div class="dlg-acts"><button type="button" class="w98-btn st-no">Cancel</button><button type="button" class="w98-btn st-go">Allow and add</button></div>'
+      + '</div></div>', 760, 600);
+    d.root.classList.add('st');
+    var type = 'all', sheetApp = null, grants = {};
+    function chips() {
+      var seen = {}, list = [['All', 'all'], ['Games', 'games']];
+      APPS.forEach(function (a) { if (a.genre) seen[a.genre] = 1; });
+      Object.keys(seen).sort().forEach(function (g) { list.push([g.charAt(0).toUpperCase() + g.slice(1), g]); });
+      if (APPS.some(function (a) { return a.mp; })) list.push(['Multiplayer', 'mp']);
+      d.q('.st-chips').innerHTML = list.map(function (c) {
+        return '<button type="button" class="w98-btn" data-type="' + esc(c[1]) + '" aria-pressed="' + (type === c[1]) + '">' + esc(c[0]) + '</button>';
+      }).join('');
+    }
+    function cover(a) {
+      return a.cover ? '<img src="' + esc(a.cover) + '" alt="" loading="lazy">' : esc(a.name);
+    }
+    function cards() {
+      var s = d.q('.st-q').value.trim().toLowerCase();
+      var got = APPS.filter(function (a) {
+        if (type === 'games' && !ST_GAMES[a.genre]) return false;
+        if (type === 'mp' && !a.mp) return false;
+        if (type !== 'all' && type !== 'games' && type !== 'mp' && a.genre !== type) return false;
+        return !s || (a.name + ' ' + (a.genre || '') + ' ' + (a.by || '') + ' ' + (a.desc || '')).toLowerCase().indexOf(s) >= 0;
+      });
+      var label = (d.q('.st-chips [aria-pressed="true"]') || {}).textContent || 'All';
+      d.q('.st-h').textContent = s ? 'Results' : (type === 'all' ? 'Popular' : 'Popular in ' + label);
+      d.q('.st-n').textContent = got.length + (got.length === 1 ? ' app' : ' apps');
+      d.q('.st-list').innerHTML = got.length ? got.map(function (a) {
+        var meta = ['by ' + a.by, a.version ? 'v' + a.version : '', a.players].filter(Boolean).join(' · ');
+        return '<div class="st-card" role="listitem"><div class="st-cover">' + cover(a) + '</div><div class="st-body">'
+          + '<div class="st-name"><b>' + esc(a.name) + '</b>' + (a.mp ? '<span class="st-pill">multiplayer</span>' : '')
+          + (a.genre ? '<span class="st-pill">' + esc(a.genre) + '</span>' : '')
+          + (a.tdeck ? '<span class="st-pill" title="Also runs on the DogecoinArcade T-Deck">T-Deck</span>' : '') + '</div>'
+          + '<div class="st-by">' + esc(meta) + '</div>'
+          + (a.desc ? '<p class="st-desc">' + esc(a.desc) + '</p>' : '')
+          + '<div class="st-acts">'
+          + (installed(a.key) ? '<span class="st-added">✓ Added</span><button type="button" class="w98-btn" data-open="' + esc(a.key) + '">Open</button>'
+                                + '<button type="button" class="w98-btn" data-perms="' + esc(a.key) + '">Permissions</button>'
+                              : '<button type="button" class="w98-btn" data-add="' + esc(a.key) + '">+ Add</button>')
+          + '<span>♥ ' + (a.likes || 0) + '</span><span>' + (a.comments || 0) + ' comments</span>'
+          + '<a href="/inscriptions/' + esc(a.page) + '/view" data-page="' + esc(a.page) + '">Details</a></div></div></div>';
+      }).join('') : '<p class="dlg-note">No apps match that. Try another word, or pick All.</p>';
+    }
+    function add(k) {
+      var a = byKey[k] && byKey[k].app; if (!a) return;
+      if (!a.perms || !a.perms.length) { finish(a); return; }
+      sheetApp = a; grants = {};
+      a.perms.forEach(function (p) { grants[p] = true; });
+      d.q('.st-sicon').innerHTML = cover(a);
+      d.q('.st-stitle').textContent = 'Add ' + a.name + '?';
+      d.q('.st-sby').textContent = 'published by ' + a.by + ' (' + a.address + ')';
+      d.q('.st-warn').textContent = 'Check that ' + a.by + ' is the app’s real publisher: anybody can publish a copy '
+        + 'of an app under a lookalike name. Anything you leave off, the app asks for again when it needs it.';
+      perms();
+      d.q('.st-sheet').hidden = false;
+      d.q('.st-go').focus();
+    }
+    function perms() {
+      d.q('.st-perms').innerHTML = sheetApp.perms.filter(function (p) { return ST_PERM[p]; }).map(function (p) {
+        return '<label class="st-perm"><input type="checkbox" data-perm="' + p + '"' + (grants[p] ? ' checked' : '') + '>'
+          + '<span><b>' + ST_PERM[p][0] + '</b><span>' + ST_PERM[p][1] + '</span></span></label>';
+      }).join('');
+      var all = sheetApp.perms.every(function (p) { return grants[p]; });
+      d.q('.st-go').textContent = all ? 'Allow and add' : 'Add';
+    }
+    function finish(a) {
+      setProgram(a.key, true);
+      putOnDesk(a.key);
+      cards();
+      say(a.name + ' added to ' + L('Start → Programs', 'your apps') + ' and the desktop');
+    }
+    d.q('.st-q').addEventListener('input', cards);
+    d.q('.st-chips').addEventListener('click', function (e) {
+      var b = e.target.closest('[data-type]'); if (!b) return;
+      type = b.dataset.type; chips(); cards();
+    });
+    d.q('.st-list').addEventListener('click', function (e) {
+      var link = e.target.closest('a[data-page]');
+      if (link) { e.preventDefault(); openWin({key: 'details:' + link.dataset.page, url: link.getAttribute('href'), name: 'Details', item: byKey.store}); return; }
+      var o = e.target.closest('[data-open]'); if (o) { openKey(o.dataset.open); return; }
+      var pm = e.target.closest('[data-perms]'); if (pm) { openPerms(pm.dataset.perms); return; }
+      var b = e.target.closest('[data-add]'); if (b) add(b.dataset.add);
+    });
+    d.q('.st-perms').addEventListener('change', function (e) {
+      var b = e.target.closest('[data-perm]'); if (!b) return;
+      grants[b.dataset.perm] = b.checked; perms();
+    });
+    d.q('.st-no').addEventListener('click', function () { d.q('.st-sheet').hidden = true; sheetApp = null; });
+    d.q('.st-go').addEventListener('click', function () {
+      var a = sheetApp, page = a.page; d.q('.st-sheet').hidden = true; sheetApp = null;
+      // The same switches the app's card has (base.html). A box left off is off, not merely not turned on: adding an
+      // app again is a way to take something back.
+      a.perms.forEach(function (p) { arcadeAppPermSet(p, permIds(a), !!grants[p]).then(function (why) { if (why) say(why); }); });
+      finish(a);
+    });
+    chips(); cards();
+    d.q('.st-q').focus();
+    storeDraw = cards;
+    var closed = d.win.onclose;
+    d.win.onclose = function () { storeDraw = null; if (closed) closed(); };
+  }
+  var storeDraw = null;     // the App Store window's cards, while it is open
+  function permIds(a) { return [a.page].concat(a.card && a.card !== a.page ? [a.card] : []); }
+  // One app's permissions, any time after it was added (2026-11-01, the operator: "once the app is installed, you can no longer
+  // pick the permission ... you have to delete the app and then reinstall it"). The same boxes on both looks: Windows 98's
+  // Properties with OK, Cancel and Apply; on Ubuntu they wear switches and save at once. What the card declares, plus
+  // anything already allowed that it does not: an app may ask for more while it runs, and that must not be out of sight.
+  function openPerms(k) {
+    var a = byKey[k] && byKey[k].app; if (!a) return;
+    var key = 'perms:' + k, open = wins.filter(function (x) { return x.key === key; })[0];
+    if (open) { if (open.min) restore(open); focus(open); return; }
+    var ids = permIds(a), held = {}, boxes = {}, rings = false;
+    ARCADE_PERM_KINDS.forEach(function (p) { held[p] = arcadeAppPerm(p, ids); boxes[p] = held[p]; });
+    var who = '<div class="pm-who"><span class="st-cover">' + (a.cover ? '<img src="' + esc(a.cover) + '" alt="">' : esc(a.name)) + '</span>'
+      + '<div><b>' + esc(a.name) + '</b>published by ' + esc(a.by) + '</div></div>';
+    var d = dialog(key, L(a.name + ' Properties', a.name + ' permissions'), byKey[k],
+      '<div class="pm-tabs" role="tablist"><button type="button" class="pm-tab" role="tab" data-tab="info" aria-selected="false">General</button>'
+      + '<button type="button" class="pm-tab" role="tab" data-tab="perms" aria-selected="true">Permissions</button></div>'
+      + '<div class="pm-pg' + (UB ? ' ub' : '') + '" data-pg="perms">' + who
+      + '<p class="dlg-note">' + esc(a.name) + ' may use these in this browser, on this arcade.</p>'
+      + '<div class="pm-list"></div>'
+      + '<p class="dlg-note">Turning one off does not undo anything the app already did. It has to ask again when it needs it.</p>'
+      + '<div class="pm-low"><button type="button" class="w98-btn pm-all">Turn all off</button>'
+      + '<span class="dlg-note pm-said">' + (UB ? 'Changes save right away.' : '') + '</span><a href="/me/access" class="pm-every">Every app</a></div></div>'
+      + '<div class="pm-pg' + (UB ? ' ub' : '') + '" data-pg="info" hidden>' + who + '<div class="pm-info">'
+      + [['Type', ['App'].concat(a.mp ? ['multiplayer'] : [], a.genre ? [a.genre] : []).join(', ')], ['Version', a.version], ['Players', a.players],
+         ['Publisher', a.by], ['Address', a.address]].filter(function (r) { return r[1]; })
+        .map(function (r) { return '<b>' + esc(r[0]) + '</b><span>' + esc(r[1]) + '</span>'; }).join('') + '</div></div>'
+      + (UB ? '' : '<div class="dlg-acts"><button type="button" class="w98-btn pm-ok">OK</button><button type="button" class="w98-btn pm-no">Cancel</button>'
+                 + '<button type="button" class="w98-btn pm-apply">Apply</button></div>'), 400, UB ? 500 : 480);
+    d.root.classList.add('pm');
+    function shown() { return ARCADE_PERM_KINDS.filter(function (p) { return (a.perms || []).indexOf(p) >= 0 || held[p]; }); }
+    function draw() {
+      var list = shown();
+      d.q('.pm-list').innerHTML = list.length ? list.map(function (p) {
+        return '<label class="st-perm"><input type="checkbox" data-perm="' + p + '"' + (UB ? ' role="switch"' : '') + (boxes[p] ? ' checked' : '')
+          + (p === 'notify' && !rings ? ' disabled' : '') + '><span><b>' + ST_PERM[p][0] + '</b><span>' + ST_PERM[p][1] + '</span></span></label>';
+      }).join('') : '<p class="dlg-note" style="padding:8px">' + esc(a.name) + ' has not asked for anything.</p>';
+      d.q('.pm-all').disabled = !list.some(function (p) { return boxes[p]; });
+      var ap = d.q('.pm-apply'); if (ap) ap.disabled = !list.some(function (p) { return boxes[p] !== held[p]; });
+    }
+    function tell(t) { if (!UB) d.q('.pm-said').textContent = t; }
+    // What changed goes through, one box at a time; a box that could not change goes back to what is true.
+    function apply() {
+      var work = shown().filter(function (p) { return boxes[p] !== held[p]; });
+      return Promise.all(work.map(function (p) {
+        return arcadeAppPermSet(p, ids, boxes[p]).then(function (why) {
+          if (why) { boxes[p] = held[p]; say(why); } else held[p] = boxes[p];
+          return why;
+        });
+      })).then(function (out) { draw(); return !out.some(Boolean); });
+    }
+    d.q('.pm-list').addEventListener('change', function (e) {
+      var b = e.target.closest('[data-perm]'); if (!b) return;
+      boxes[b.dataset.perm] = b.checked; tell(''); draw();
+      if (MAC_LIKE) apply();
+    });
+    d.q('.pm-all').addEventListener('click', function () {
+      shown().forEach(function (p) { boxes[p] = false; }); tell(''); draw();
+      if (MAC_LIKE) apply();
+    });
+    d.q('.pm-every').addEventListener('click', function (e) {
+      e.preventDefault(); openWin({key: 'access', url: '/me/access', name: 'Game access', item: byKey.store});
+    });
+    d.root.querySelectorAll('.pm-tab').forEach(function (t) {
+      t.addEventListener('click', function () {
+        d.root.querySelectorAll('.pm-tab').forEach(function (x) { x.setAttribute('aria-selected', String(x === t)); });
+        d.root.querySelectorAll('.pm-pg').forEach(function (g) { g.hidden = g.dataset.pg !== t.dataset.tab; });
+      });
+    });
+    if (!UB) {
+      d.q('.pm-ok').addEventListener('click', function () { apply().then(function (ok) { if (ok) closeWin(d.win); }); });
+      d.q('.pm-no').addEventListener('click', function () { closeWin(d.win); });
+      d.q('.pm-apply').addEventListener('click', function () { apply().then(function (ok) { if (ok) tell('Saved.'); }); });
+    }
+    draw();
+    fetch('/account/ring/apps', {cache: 'no-store', credentials: 'same-origin'}).then(function (r) { return r.ok ? r.json() : {apps: []}; })
+      .then(function (j) {
+        held.notify = ids.some(function (id) { return (j.apps || []).indexOf(id) >= 0; });
+        boxes.notify = held.notify; rings = true; draw();
+      }).catch(function () {});
+  }
+  // Off the desktop, the Start menu and the dock at once (2026-11-01, the operator: "a remove from arcade option"), and its
+  // permissions with it, so that adding it again starts clean. Its saves stay; the phone's home screen is its own list.
+  function removeFromArcade(k) {
+    var it = byKey[k], a = it.app;
+    arcadeAsk('Remove ' + it.name + ' from your arcade?',
+      'It comes off your ' + L('desktop and Start menu', 'desktop, your apps and the dock') + ', and it closes if it is open. Its permissions are turned off. '
+      + 'Your saves stay, and you can add it again from the App Store.', 'Remove').then(function (yes) {
+      if (!yes) return;
+      wins.filter(function (w) { return w.key === k || w.key === 'perms:' + k; }).forEach(closeWin);
+      setProgram(k, false);
+      removeIcon(k);
+      ARCADE_PERM_KINDS.forEach(function (p) { if (p !== 'notify' || WHO !== 'guest') arcadeAppPermSet(p, permIds(a), false); });
+      if (storeDraw) storeDraw();
+      say(it.name + ' is removed from your arcade.');
+    });
+  }
   // Wallet Shortcuts: one per coin, on the desktop or not.
   function openShortcuts() {
     var open = wins.filter(function (x) { return x.key === 'shortcuts'; })[0];
@@ -1539,6 +2467,7 @@ body.fullscreen #arc-bot { display: none !important; }
     }
     function link(r) {
       var l = r.link || {};
+      if (l.state === 'via') return 'Seen through ' + (l.by ? '@' + l.by : l.by_node || 'a linked arcade');
       return l.state === 'me' ? 'This arcade' : l.state === 'linked' ? 'Linked' + (l.ms != null ? ' (' + l.ms + ' ms)' : '') : (l.state || 'Not linked');
     }
     function nodeName(r) { return (r.tag ? '@' + r.tag : r.node) + (r.me ? ' (this arcade)' : ''); }
@@ -1626,6 +2555,7 @@ body.fullscreen #arc-bot { display: none !important; }
   window.arcadeShell = {
     open: function (url, name) {
       var u = new URL(url, location.href), path = u.pathname + u.search + u.hash;
+      if (DFX && (u.pathname === '/contacts' || u.pathname === '/me/contacts')) { openDfxAddressBook(); return; }
       var app = APPS.filter(function (a) { return a.open === u.pathname; })[0];
       var tab = TABS.filter(function (t) { return t.href === u.pathname && !u.search; })[0];
       if (app) openWin({key: app.key, url: path, name: app.name, item: byKey[app.key]});
@@ -1641,32 +2571,118 @@ body.fullscreen #arc-bot { display: none !important; }
   };
 
   // ---------- the Ubuntu look: the dock, Show Applications and the system menu ----------
-  function bigIcon(it) {
+  function bigIcon(it, key) {
     if (!it) return '<span class="ub-ico"></span>';
+    // DogeFeedX: check for registered app override
+    if (DFX && key && DFX_APPS[key] && DFX_APPS[key].glyph) {
+      var g = DFX_APPS[key].glyph;
+      return '<span class="ub-ico" style="background:' + g[0] + '">' + glyphHtml(g, 28) + '</span>';
+    }
+    if (it.mark) return '<span class="ub-ico dfx-mark">' + it.mark + '</span>';
     if (it.img) return '<span class="ub-ico"><img src="' + esc(it.img) + '" alt="" draggable="false"></span>';
     if (it.glyph) return '<span class="ub-ico" style="background:' + it.glyph[0] + '">' + glyphHtml(it.glyph, 28) + '</span>';
     if (it.kind === 'helper') return '<span class="ub-ico" style="background:#1f2933">' + iconHtml(it) + '</span>';
     return '<span class="ub-ico" style="background:#6b4fa0"><span class="dk-letter">' + esc((it.name || '?').slice(0, 2)) + '</span></span>';
   }
+  function tabHref(k) {
+    var t = TABS.filter(function (x) { return x.key === k; })[0];
+    return t ? t.href : '';
+  }
+  function dockCount(k) {
+    var n = 0;
+    var scoped = DFX ? dfxScopedBadges() : null;
+    if (scoped) {
+      if (k === 'dfxnotifications') n = Number(scoped.notifications) || 0;
+      else if (k === 'dfxmessages') n = Number(scoped.messages) || 0;
+      else if (k === 'dfxmarket') n = Number(scoped.market) || 0;
+      return n > 0 ? n : 0;
+    }
+    if (k === 'dfxnotifications') n = Math.max(badges['/notifications'] || 0, badges['/me/notifications'] || 0);
+    else if (k === 'dfxmessages') n = Math.max(badges['/messages'] || 0, badges['/me/messages'] || 0);
+    else if (k === 'dfxmarket') n = badges['/exchange'] || 0;
+    return n > 0 ? n : 0;
+  }
+  // macOS dock magnification: the icon under the pointer grows, and its neighbours grow less.
+  function magnifyDock(dock, x) {
+    var origin = dock.getBoundingClientRect().left;
+    dock.querySelectorAll('.dfx-dock-app').forEach(function (b) {
+      var scale = 1, lift = 0;
+      if (x != null) {
+        var cx = origin + b.offsetLeft + b.offsetWidth / 2;
+        var influence = Math.max(0, 1 - Math.abs(x - cx) / 130);
+        scale = 1 + influence * 0.9;
+        lift = influence * 14;
+      }
+      b.style.transform = 'translateY(' + (-lift) + 'px) scale(' + scale + ')';
+    });
+  }
   function dockKeys() {
+    // DogeFeedX: exactly the sixteen apps, once each, in Billy's order. Nothing else.
+    if (DFX) return DFX_DOCK_APPS.slice();
     var fav = ['/me', '/', '/me/wallet', '/wallet', '/me/messages', '/messages', '/feed'].map(tabAt)
       .filter(function (k, i, all) { return k && all.indexOf(k) === i; });
     if (fav.indexOf(tabAt('/me')) >= 0) fav = fav.filter(function (k) { return k !== tabAt('/'); });
     fav = fav.concat((layout.programs || []).filter(function (k) { return byKey[k]; }), ['store']);
+    if (DFX) fav = fav.filter(function (k) { return !DFX_COVERS[tabHref(k)]; });
     wins.forEach(function (w) { if (!w.dialog && fav.indexOf(w.key) < 0) fav.push(w.key); });
-    return fav;
+    var seen = {}, out = [];
+    fav.forEach(function (k) {
+      if (k.indexOf('|sep') === 0) { out.push(k); return; }
+      if (seen[k]) return;
+      seen[k] = true;
+      out.push(k);
+    });
+    return out;
+  }
+  // Wire up refresh for registered apps
+  window.DogeFeedX._refreshDock = function () { if (MAC_LIKE) paintDock(); };
+  function paintDfxDock() {
+    var dock = $('dk-dock'), on = front();
+    dock.hidden = false;
+    dock.innerHTML = '';
+    DFX_DOCK_APPS.forEach(function (k) {
+      var it = byKey[k] || {name: k};
+      var mine = wins.filter(function (w) { return w.key === k; });
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'ub-dockbtn dfx-dock-app' + (mine.length && mine[0] === on ? ' on' : '');
+      b.dataset.key = k;
+      b.title = it.name;
+      b.setAttribute('aria-label', it.name);
+      var n = dockCount(k);
+      b.innerHTML = bigIcon(it, k) + '<span class="dfx-dock-label">' + esc(it.name || '') + '</span>'
+        + (mine.length ? '<span class="ub-run"></span>' : '')
+        + (n ? '<span class="dfx-badge">' + (n > 99 ? '99+' : n) + '</span>' : '');
+      b.addEventListener('click', function () {
+        if (mine.length) { var w = mine[0]; if (w === front()) minimize(w); else { restore(w); focus(w); } }
+        else openKey(k);
+      });
+      dock.appendChild(b);
+    });
+    dock.onmousemove = function (e) { magnifyDock(dock, e.clientX); };
+    dock.onmouseleave = function () { magnifyDock(dock, null); };
   }
   function paintDock() {
+    if (DFX) { paintDfxDock(); return; }
     var dock = $('dk-dock'), on = front();
     dock.hidden = false;
     dock.innerHTML = '';
     dockKeys().forEach(function (k) {
+      // DogeFeedX: render dock separators
+      if (DFX && k.indexOf('|sep') === 0) {
+        var sep = document.createElement('div');
+        sep.className = 'dfx-dock-sep';
+        dock.appendChild(sep);
+        return;
+      }
       var it = byKey[k] || (wins.filter(function (w) { return w.key === k; })[0] || {}).item || {name: k};
+      // DogeFeedX: use registered app's name if available
+      var appName = (DFX && DFX_APPS[k] && DFX_APPS[k].name) || it.name;
       var mine = wins.filter(function (w) { return w.key === k; });
       var b = document.createElement('button');
       b.type = 'button'; b.className = 'ub-dockbtn' + (mine.length && mine[0] === on ? ' on' : ''); b.dataset.key = k;
-      b.title = (mine[0] && mine[0].name) || it.name;
-      b.innerHTML = bigIcon(it) + (mine.length ? '<span class="ub-run"></span>' : '');
+      b.title = (mine[0] && mine[0].name) || appName;
+      b.innerHTML = bigIcon(it, k) + (mine.length ? '<span class="ub-run"></span>' : '');
       b.addEventListener('click', function () {
         if (mine.length) { var w = mine[0]; if (w === front()) minimize(w); else { restore(w); focus(w); } }
         else openKey(k);
@@ -1695,12 +2711,30 @@ body.fullscreen #arc-bot { display: none !important; }
     var progs = (layout.programs || []).filter(function (k) { return byKey[k]; }).sort(byName)
       .map(function (k) { return {k: k, name: byKey[k].name, it: byKey[k]}; })
       .concat([{k: 'store', name: 'App Store', it: byKey.store}]);
-    return [
+    var sections = [];
+    // Show Applications is the Start menu in the Ubuntu and DogeFeedX looks. Switch Theme
+    // has to live here too: the classic Start cascade is not what that button opens.
+    if (MAC_LIKE) {
+      sections.push({title: 'Switch Theme', rows: [
+        {k: 'skin:w98', name: DESK_DEFAULT === 'w98' ? 'Windows 98 (default)' : 'Windows 98', it: {glyph: ['#245edb', '#fff', 'M3 5h18v14H3z']}},
+        {k: 'skin:ubuntu', name: DESK_DEFAULT === 'ubuntu' ? 'Ubuntu (default)' : 'Ubuntu', it: {glyph: ['#e95420', '#fff', 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z']}},
+        {k: 'skin:dogefeedx', name: DESK_DEFAULT === 'dogefeedx' ? 'DogeFeedX (default)' : 'DogeFeedX', it: {glyph: ['#d9a520', '#1c1c1e', 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z']}},
+        {k: 'exit', name: 'Website', it: {glyph: ['#3d3d3d', '#fff', 'M4 4h16v16H4z']}}
+      ]});
+    }
+    // DogeFeedX: Featured DFX apps at the top
+    if (DFX) {
+      sections.push({title: 'DogeFeed', rows: DFX_DOCK.map(function (a) {
+        return {k: a.k, name: a.name, it: byKey[a.k]};
+      })});
+    }
+    sections = sections.concat([
       {title: 'Programs', rows: progs},
       {title: 'Pages', rows: TABS.map(function (t) { return {k: t.key, name: t.name, it: byKey[t.key]}; })},
       {title: 'Wallets', rows: COINS.map(function (c) { var k = 'coin:' + c.net; return {k: k, name: byKey[k].name, it: byKey[k]}; })},
       {title: 'Utilities', rows: UTILS.concat([{k: 'helper', name: 'Helper', it: byKey.helper}])}
-    ];
+    ]);
+    return sections;
   }
   function drawApps() {
     var q = $('dk-apps-q').value.trim().toLowerCase(), body = $('dk-apps-body');
@@ -1737,6 +2771,19 @@ body.fullscreen #arc-bot { display: none !important; }
   });
   $('dk-apps').addEventListener('click', function (e) { if (!e.target.closest('.ub-app') && !e.target.closest('input')) toggleApps(false); });
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !$('dk-apps').hidden) toggleApps(false); });
+  // DogeFeedX: macOS-style keyboard shortcuts
+  if (DFX) {
+    document.addEventListener('keydown', function (e) {
+      var isMeta = e.metaKey || e.ctrlKey;
+      if (!isMeta) return;
+      var w = front();
+      if (e.key === 'w' && w) { e.preventDefault(); closeWin(w); }
+      else if (e.key === 'm' && w) { e.preventDefault(); minimize(w); }
+      else if (e.key === 'h') { e.preventDefault(); wins.filter(function(x){return !x.min;}).forEach(minimize); }
+      else if (e.key === ',') { e.preventDefault(); openKey(tabAt('/me')); }
+      else if (e.key === 'k') { e.preventDefault(); toggleApps(true); }
+    });
+  }
   // The system menu, top right: who is signed in, settings, the other look, log out, back to the website.
   $('dk-sys').addEventListener('click', function (e) {
     e.stopPropagation();
@@ -1747,12 +2794,12 @@ body.fullscreen #arc-bot { display: none !important; }
       {k: 'display', label: 'Background…', icon: smallIcon(byKey.display)},
       {k: 'addremove', label: 'Software…', icon: smallIcon({img: STORE_ICON})},
       {k: 'sysinfo', label: 'About This Arcade', icon: smallIcon(byKey.sysinfo)},
-      {k: 'skin:w98', label: 'Switch to the Windows 98 look', icon: blank()},
+      {k: 'sub:themes', label: 'Switch Theme', sub: true, icon: blank()},
       {hr: true}
     ]).concat(WHO !== 'guest' && !OPERATOR ? [{k: 'logoff', label: 'Log Out…', icon: blank()}] : [])
       .concat([{k: 'exit', label: 'Back to the Website', icon: blank()}]);
     showMenu($('dk-ctx'), items, r.right, r.bottom + 4, function (k) {
-      if (k === 'skin:w98') setSkin('w98'); else runStart(k);
+      if (k.indexOf('skin:') === 0) setSkin(k.slice(5)); else runStart(k);
     });
     var m = $('dk-ctx'); m.style.left = Math.max(0, r.right - m.offsetWidth) + 'px';
     $('dk-sys').classList.add('down');
@@ -1760,6 +2807,172 @@ body.fullscreen #arc-bot { display: none !important; }
   function setSkin(s) {
     try { localStorage.setItem('arcade.deskview', s); } catch (e) {}
     location.reload();
+  }
+
+  // ---------- DogeFeedX apps: Profile, Market, Terminal, Network, Explorer ----------
+  function openDfxFeed() {
+    openWin({key: 'dfxfeed', url: '/dogefeedx/feed', name: 'Feed', item: byKey.dfxfeed, w: 640, h: 620});
+  }
+
+  function openDfxExplore() {
+    openWin({key: 'dfxexplore', url: '/dogefeedx/explore', name: 'Explore', item: byKey.dfxexplore, w: 560, h: 520});
+  }
+
+  function openDfxProfile() {
+    openWin({key: 'dfxprofile', url: '/dogefeedx/profile', name: 'Profile', item: byKey.dfxprofile, w: 440, h: 620});
+  }
+
+  function openDfxAddressBook() {
+    var prof = byKey.dfxprofile || {name: 'Profile'};
+    var existing = wins.filter(function (x) { return x.key === 'dfxprofile'; })[0];
+    var w = openWin({key: 'dfxprofile', url: '/dogefeedx/profile?book=1', name: 'Profile', item: prof, w: 440, h: 620});
+    if (!w || !w.frame) return;
+    var ping = function () {
+      try { w.frame.contentWindow.postMessage({type: 'dogefeedx-book'}, location.origin); } catch (e) {}
+    };
+    if (existing) ping();
+    else w.frame.addEventListener('load', ping);
+  }
+
+  function openDfxMarket() {
+    openWin({key: 'dfxmarket', url: '/dogefeedx/market', name: 'Market', item: byKey.dfxmarket, w: 780, h: 560});
+  }
+
+  function openDfxTerminal() {
+    var open = wins.filter(function (x) { return x.key === 'dfxterminal'; })[0];
+    if (open) { focus(open); return; }
+    var d = dialog('dfxterminal', 'Terminal', byKey.dfxterminal,
+      '<div class="dfx-term">'
+      + '<div class="dfx-term-output" id="dfx-term-out"></div>'
+      + '<div class="dfx-term-input"><span class="dfx-prompt">$</span>'
+      + '<input type="text" class="dfx-term-in" id="dfx-term-in" autocomplete="off" spellcheck="false" placeholder="Type a command...">'
+      + '</div></div>', 700, 450);
+    d.root.classList.add('dfx-terminal-root');
+    var out = d.q('#dfx-term-out'), inp = d.q('#dfx-term-in');
+    var history = [], histIdx = -1;
+    function print(text, cls) {
+      var line = document.createElement('div');
+      line.className = 'dfx-line' + (cls ? ' ' + cls : '');
+      line.textContent = text;
+      out.appendChild(line);
+      out.scrollTop = out.scrollHeight;
+    }
+    print('DogeFeedX Terminal v1.0');
+    print("Type 'help' for available commands.");
+    print('');
+    function exec(cmd) {
+      if (!cmd.trim()) return;
+      history.push(cmd); histIdx = history.length;
+      print('$ ' + cmd, 'dfx-cmd');
+      var parts = cmd.trim().split(/\s+/);
+      var name = parts[0].toLowerCase(), args = parts.slice(1).join(' ');
+      if (name === 'clear') { out.innerHTML = ''; return; }
+      fetch('/api/terminal/exec', {
+        method: 'POST', credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({command: name, args: args})
+      }).then(function (r) { return r.json(); }).then(function (j) {
+        if (j.clear) { out.innerHTML = ''; return; }
+        if (j.output) j.output.split('\n').forEach(function (line) { print(line); });
+        if (j.error && !j.output) print('Error: ' + j.error, 'dfx-err');
+      }).catch(function (e) { print('Error: ' + e.message, 'dfx-err'); });
+    }
+    inp.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { exec(inp.value); inp.value = ''; }
+      else if (e.key === 'ArrowUp') { if (histIdx > 0) { histIdx--; inp.value = history[histIdx] || ''; } e.preventDefault(); }
+      else if (e.key === 'ArrowDown') { if (histIdx < history.length - 1) { histIdx++; inp.value = history[histIdx] || ''; } else { histIdx = history.length; inp.value = ''; } e.preventDefault(); }
+    });
+    setTimeout(function () { inp.focus(); }, 30);
+  }
+
+  function openDfxNetwork() {
+    var open = wins.filter(function (x) { return x.key === 'dfxnetwork'; })[0];
+    if (open) { focus(open); return; }
+    var d = dialog('dfxnetwork', 'Network', byKey.dfxnetwork,
+      '<div class="dfx-net">'
+      + '<div class="dfx-net-sec"><h3>Chains</h3><div class="dfx-chains" id="dfx-net-chains"></div></div>'
+      + '<div class="dfx-net-sec"><h3>Mesh</h3><div class="dfx-mesh" id="dfx-net-mesh"></div></div>'
+      + '<div class="dfx-net-sec"><h3>Connected Arcades</h3><div class="dfx-arcades" id="dfx-net-arcades"></div></div>'
+      + '</div>'
+      + '<div class="dlg-acts"><button type="button" class="w98-btn dfx-refresh">Refresh</button></div>', 600, 500);
+    d.root.classList.add('dfx-network-root');
+    function refresh() {
+      fetch('/api/network', {credentials: 'same-origin'}).then(function (r) { return r.json(); }).then(function (j) {
+        var chainsEl = d.q('#dfx-net-chains');
+        chainsEl.innerHTML = (j.chains || []).map(function (c) {
+          var pct = c.ready ? 100 : (c.progress || 0);
+          var status = c.ready ? 'Synced' : (c.online ? 'Syncing ' + pct.toFixed(1) + '%' : 'Offline');
+          return '<div class="dfx-chain">'
+            + '<span class="dfx-chain-name">' + esc(c.label) + '</span>'
+            + '<span class="dfx-chain-status ' + (c.ready ? 'ok' : c.online ? 'sync' : 'off') + '">' + status + '</span>'
+            + '<div class="dfx-progress"><div class="dfx-progress-bar" style="width:' + pct + '%"></div></div>'
+            + '</div>';
+        }).join('') || '<p>No chains available.</p>';
+        var meshEl = d.q('#dfx-net-mesh');
+        var m = j.mesh || {};
+        meshEl.innerHTML = '<div class="dfx-mesh-row"><span>Status:</span><span>' + (m.connected ? 'Connected' : 'Disconnected') + '</span></div>'
+          + '<div class="dfx-mesh-row"><span>Node ID:</span><span>' + esc(m.node_id || 'N/A') + '</span></div>'
+          + '<div class="dfx-mesh-row"><span>Peers:</span><span>' + (m.peers || 0) + '</span></div>'
+          + '<div class="dfx-mesh-row"><span>STUN Servers:</span><span>' + (m.stun_servers || 0) + '</span></div>';
+        var arcadesEl = d.q('#dfx-net-arcades');
+        arcadesEl.innerHTML = (j.arcades || []).map(function (a) {
+          return '<div class="dfx-arcade">'
+            + '<span class="dfx-arcade-id">' + esc(a.id || '?') + '</span>'
+            + '<span class="dfx-arcade-name">' + esc(a.name || 'Unknown') + '</span>'
+            + '<span class="dfx-arcade-linked ' + (a.linked ? 'yes' : 'no') + '">' + (a.linked ? 'Linked' : 'Seen') + '</span>'
+            + '</div>';
+        }).join('') || '<p>No arcades discovered.</p>';
+      }).catch(function (e) {
+        d.q('#dfx-net-chains').innerHTML = '<p>Error loading network info.</p>';
+      });
+    }
+    d.q('.dfx-refresh').addEventListener('click', refresh);
+    refresh();
+  }
+
+  function openDfxExplorer() {
+    var open = wins.filter(function (x) { return x.key === 'dfxexplorer'; })[0];
+    if (open) { focus(open); return; }
+    var d = dialog('dfxexplorer', 'Explorer', byKey.dfxexplorer,
+      '<div class="dfx-exp">'
+      + '<div class="dfx-exp-search">'
+      + '<select class="w98-field dfx-exp-chain" id="dfx-exp-chain"></select>'
+      + '<input type="text" class="w98-field dfx-exp-q" id="dfx-exp-q" placeholder="Search block, tx, address, inscription..." autocomplete="off">'
+      + '<button type="button" class="w98-btn dfx-exp-go">Search</button>'
+      + '</div>'
+      + '<div class="dfx-exp-result" id="dfx-exp-result"><p>Enter a search query above to explore blocks, transactions, addresses, or inscriptions.</p></div>'
+      + '</div>', 750, 500);
+    d.root.classList.add('dfx-explorer-root');
+    var chainSel = d.q('#dfx-exp-chain'), qInput = d.q('#dfx-exp-q'), resultEl = d.q('#dfx-exp-result');
+    SYSTEM.chains.forEach(function (c) {
+      var opt = document.createElement('option');
+      opt.value = c.net; opt.textContent = c.label;
+      chainSel.appendChild(opt);
+    });
+    function search() {
+      var chain = chainSel.value, q = qInput.value.trim();
+      if (!q) { resultEl.innerHTML = '<p>Please enter a search query.</p>'; return; }
+      resultEl.innerHTML = '<p>Searching...</p>';
+      // Use terminal API for search
+      fetch('/api/terminal/exec', {
+        method: 'POST', credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({command: q.length === 64 && /^[0-9a-f]+$/i.test(q) ? 'tx' : q.match(/^[0-9]+$/) ? 'block' : 'address', args: chain + ' ' + q})
+      }).then(function (r) { return r.json(); }).then(function (j) {
+        if (j.output) {
+          resultEl.innerHTML = '<pre class="dfx-exp-pre">' + esc(j.output) + '</pre>';
+        } else if (j.error) {
+          resultEl.innerHTML = '<p class="dfx-err">' + esc(j.error) + '</p>';
+        } else {
+          resultEl.innerHTML = '<p>No results found.</p>';
+        }
+      }).catch(function (e) {
+        resultEl.innerHTML = '<p class="dfx-err">Error: ' + esc(e.message) + '</p>';
+      });
+    }
+    d.q('.dfx-exp-go').addEventListener('click', search);
+    qInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') search(); });
+    setTimeout(function () { qInput.focus(); }, 30);
   }
 
   // ---------- off: back to the website, at the page in front ----------
@@ -1771,11 +2984,50 @@ body.fullscreen #arc-bot { display: none !important; }
   }
 
   // ---------- start ----------
+  // DogeFeedX: Update status indicator in menu bar
+  function updateDfxStatus() {
+    if (!DFX) return;
+    var statusEl = $('dfx-status'), dotEl = $('dfx-status-dot'), textEl = $('dfx-status-text');
+    if (!statusEl) return;
+    statusEl.hidden = false;
+    if (!statusEl._clickBound) {
+      statusEl._clickBound = true;
+      statusEl.addEventListener('click', function () { openKey('dfxnetwork'); });
+    }
+    fetch('/api/network', {credentials: 'same-origin', cache: 'no-store'})
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (data) {
+        if (!data) { dotEl.className = 'dfx-status-dot'; textEl.textContent = 'Offline'; return; }
+        var chains = data.chains || [];
+        var allReady = chains.length > 0 && chains.every(function (c) { return c.ready; });
+        var anySyncing = chains.some(function (c) { return c.online && !c.ready; });
+        var anyOnline = chains.some(function (c) { return c.online; });
+        if (allReady) {
+          dotEl.className = 'dfx-status-dot online';
+          textEl.textContent = 'Synced';
+        } else if (anySyncing) {
+          dotEl.className = 'dfx-status-dot syncing';
+          var syncing = chains.filter(function (c) { return c.online && !c.ready; })[0];
+          textEl.textContent = 'Syncing ' + (syncing.progress || 0).toFixed(0) + '%';
+        } else if (anyOnline) {
+          dotEl.className = 'dfx-status-dot online';
+          textEl.textContent = 'Online';
+        } else {
+          dotEl.className = 'dfx-status-dot';
+          textEl.textContent = 'Offline';
+        }
+      }).catch(function () {
+        dotEl.className = 'dfx-status-dot';
+        textEl.textContent = 'Offline';
+      });
+  }
   function boot() {
-    try { if (!/^(1|w98|ubuntu)$/.test(localStorage.getItem('arcade.deskview') || '')) localStorage.setItem('arcade.deskview', UB ? 'ubuntu' : 'w98'); } catch (e) {}
+    try { if (!/^(1|w98|ubuntu|dogefeedx)$/.test(localStorage.getItem('arcade.deskview') || '')) localStorage.setItem('arcade.deskview', DFX ? 'dogefeedx' : UB ? 'ubuntu' : 'w98'); } catch (e) {}
     loadWallpaper();
     drawIcons();
-    if (UB) paintDock();
+    if (MAC_LIKE) paintDock();
+    // DogeFeedX: show and update status indicator
+    if (DFX) { updateDfxStatus(); setInterval(updateDfxStatus, 30000); }
     var m = /^#open=(.+)$/.exec(location.hash);
     if (m) {
       history.replaceState(null, '', '/desktop');

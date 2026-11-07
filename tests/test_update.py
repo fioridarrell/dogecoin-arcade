@@ -16,6 +16,9 @@ from pathlib import Path
 
 import json
 
+import pathlib
+import shutil
+
 import pytest
 
 from arcade import update
@@ -232,9 +235,54 @@ def test_the_second_half_runs_in_the_code_just_installed(tmp_path, monkeypatch, 
     assert update.update(dry_run=False) == 0
     assert any(a[1:3] == ("install", "-q") for a in ran), ran
     python = str(venv / "bin" / "python")
-    assert handed_off == [[python, "-c", "import arcade"],
+    assert handed_off == [[python, "-c", update.WHOLE_PACKAGE],
                           [python, "-m", "arcade.update", "--services-only"]]
     assert "installed" in capsys.readouterr().out
+
+
+def test_windows_does_not_reinstall_under_a_running_arcade(tmp_path, monkeypatch):
+    """Issue #51 (2026-10-31): on Windows pip could not replace the files a running arcade had open, stopped halfway,
+    and left 176 of 396 files gone. The updater says to stop the arcade first, and runs no pip."""
+    home = tmp_path / ".dogecoinarcade"
+    (home / "venv" / "Scripts").mkdir(parents=True)
+    src = home / "src"
+    (src / ".git").mkdir(parents=True)
+    (src / "pyproject.toml").write_text("[project]\nname='dogecoinarcade'\n")
+    monkeypatch.setattr(update, "HOME", home)
+    monkeypatch.setattr(update, "_find_git", lambda: "git")
+    monkeypatch.setattr(update, "current_revision", lambda _c: "abc1234")
+    monkeypatch.setattr(update, "_serving", lambda port=8420: True)
+    monkeypatch.setattr(update.os, "name", "nt")
+
+    class Done:
+        returncode = 0
+        stdout = stderr = ""
+    ran = []
+    monkeypatch.setattr(update, "_run", lambda *a, **k: ran.append(a) or Done())
+    with pytest.raises(update.UpdateError, match="still running"):
+        update.update(dry_run=False)
+    assert not any("install" in a for a in ran), "no pip under a running arcade"
+
+
+def test_installed_means_the_whole_package_not_just_import_arcade(tmp_path):
+    """`import arcade` passed with config.py and the templates gone (issue #51); the check now needs the modules the
+    interface starts from, its templates, and no "~" folder pip left mid-replace."""
+    import subprocess
+    import sys as _sys
+
+    def check(root):
+        return subprocess.run([_sys.executable, "-c", update.WHOLE_PACKAGE], cwd=root, capture_output=True,
+                              env={"PYTHONPATH": str(root)}).returncode
+    pkg = pathlib.Path(update.__file__).resolve().parent
+    good = tmp_path / "good"
+    shutil.copytree(pkg, good / "arcade", ignore=shutil.ignore_patterns("__pycache__"))
+    assert check(good) == 0
+    (good / "arcade" / "~esh").mkdir()
+    assert check(good) != 0, "a pip leftover fails it"
+    bad = tmp_path / "bad"
+    shutil.copytree(pkg, bad / "arcade", ignore=shutil.ignore_patterns("__pycache__"))
+    (bad / "arcade" / "config.py").unlink()
+    assert check(bad) != 0, "a missing module fails it"
 
 
 def test_services_only_is_the_second_half_and_installs_nothing(tmp_path, monkeypatch):
@@ -537,7 +585,8 @@ def test_a_git_node_on_test_fast_forwards_onto_the_test_branch(tmp_path, monkeyp
 def test_an_archive_node_on_test_fetches_the_test_archive_held_to_its_manifest(tmp_path, monkeypatch):
     home = tmp_path / ".dogecoinarcade"
     (home / "venv" / "bin").mkdir(parents=True)
-    (home / "src").mkdir(parents=True)
+    (home / "src" / "installer").mkdir(parents=True)
+    (home / "src" / "installer" / "install.py").write_text("")
     monkeypatch.setattr(update, "HOME", home)
     monkeypatch.setattr(update, "_find_git", lambda: None)
     monkeypatch.setattr(update, "following", lambda: "test")
@@ -555,3 +604,73 @@ def test_an_archive_node_on_test_fetches_the_test_archive_held_to_its_manifest(t
     assert update.update(dry_run=False) == 0
     assert called[0][1:] == ("fetch_source_archive", home / "src", "ab" * 32,
                              update.TEST_ARCHIVE_URL, update.TEST_REVISION_URL)
+
+
+def _archive_with_installer(tmp_path, body: str) -> bytes:
+    import io
+    import tarfile
+    out = io.BytesIO()
+    with tarfile.open(fileobj=out, mode="w:gz") as tf:
+        data = body.encode()
+        info = tarfile.TarInfo("dogecoinarcade/installer/install.py")
+        info.size = len(data)
+        tf.addfile(info, io.BytesIO(data))
+    return out.getvalue()
+
+
+def _archive_node(tmp_path, monkeypatch, archive: bytes, signed_sha: str):
+    """An archive install whose src lost its installer (a ThinkPad, 2026-11-03)."""
+    home = tmp_path / ".dogecoinarcade"
+    (home / "venv" / "bin").mkdir(parents=True)
+    (home / "src").mkdir(parents=True)
+    monkeypatch.setattr(update, "HOME", home)
+    monkeypatch.setattr(update, "_find_git", lambda: None)
+    monkeypatch.setattr(update, "following", lambda: "live")
+    monkeypatch.setattr(update, "_signed_manifest",
+                        lambda channel="live": {"channel": channel, "sha256": signed_sha, "revision": "f" * 40})
+    monkeypatch.setattr(update, "_remember", lambda m: None)
+
+    class Body:
+        def __init__(self):
+            import io
+            self.f = io.BytesIO(archive)
+
+        def read(self, *a):
+            return self.f.read(*a)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    asked = []
+    monkeypatch.setattr(update.urllib.request, "urlopen", lambda url, **k: asked.append(url) or Body())
+
+    class Done:
+        returncode = 0
+        stdout = stderr = ""
+
+    monkeypatch.setattr(update, "_run", lambda *a, **k: Done())
+    monkeypatch.setattr(update.subprocess, "run", lambda argv, **k: Done())
+    return home, asked
+
+
+def test_a_src_without_its_installer_is_repaired_from_the_signed_archive(tmp_path, monkeypatch, capsys):
+    import hashlib
+    archive = _archive_with_installer(tmp_path, (
+        "def fetch_source_archive(checkout, sha, *rest):\n"
+        "    (checkout / 'pyproject.toml').write_text('ok')\n"
+        "    return ''\n"))                                      # in place, its revision file unread
+    home, asked = _archive_node(tmp_path, monkeypatch, archive, hashlib.sha256(archive).hexdigest())
+    assert update.update(dry_run=False) == 0
+    assert asked == [update.ARCHIVE_URL]
+    assert (home / "src" / "pyproject.toml").read_text() == "ok", "the archive's own installer did the fetch"
+    assert (home / "src" / update.REVISION_FILE).read_text().strip() == "f" * 40, "the signed revision, written down"
+
+
+def test_an_archive_that_is_not_the_signed_one_runs_nothing(tmp_path, monkeypatch):
+    archive = _archive_with_installer(tmp_path, "raise SystemExit('ran an unsigned installer')\n")
+    home, _asked = _archive_node(tmp_path, monkeypatch, archive, "00" * 32)
+    with pytest.raises(update.UpdateError, match="could not fetch the source archive"):
+        update.update(dry_run=False)

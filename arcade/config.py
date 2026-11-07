@@ -216,6 +216,14 @@ class Params:
     #: work this arcade cannot check (a multi-algorithm chain such as DigiByte): its blocks are still
     #: proved by hash, merkle root and linkage, and the admin panel says the work is the sharer's word.
     pow_algo: str = "scrypt"
+    #: The algorithms a test chain's own node mines with, side by side (`generatetoaddress ... <algo>`), for a
+    #: multi-algorithm chain: each has its own difficulty, so a CPU does best on the ones little else mines. Empty:
+    #: the node's one way (2026-11-04, DigiByte testnet).
+    mine_algos: tuple = ()
+    #: Every proof-of-work algorithm a multi-algorithm chain's blocks may use (DigiByte's five), which its node's
+    #: `getblocktemplate` takes as its second argument; empty for a chain of one algorithm (`pow_algo`). What a local
+    #: ASIC can mine is the ones of these it hashes (arcade/stratum.py).
+    algos: tuple = ()
 
     # --- what a chain is, as data (2026-10-18, the operator: "Eventually, we want to add Digi bite and
     # other aux pow chains"): a new chain is a Params entry, not code. -------------------------------
@@ -264,6 +272,13 @@ class Params:
     #: HTLC, an escrow) refunds through CHECKLOCKTIMEVERIFY; where it is a no-op the refunder can take a lock back at
     #: any moment, so a swap there could be robbed (`require_cltv`). Wojakcoin (2026-10-25): BIP65Height is max.
     cltv_enforced: bool = True
+    #: Whether the arcade's own Class B / Class C transactions (its tokens, NFTs, names, posts, inscriptions, offers:
+    #: anything carrying config.MARKER or paying the marker address) are read and sent on this chain. False on
+    #: Litecoin, Litecoin testnet and Kotia (2026-11-05, tbuuol: "Die 3 Chains LTC tLTC und KOT sollten keinerlei Token
+    #: Protokolle benutzen" -- "alles abschalten"): the index follows their coins only (indexer.ArcadeHandler) and the
+    #: token pages do not switch to them. Nothing is checked on a send there (tbuuol: "null Prüfung auf irgendwelche
+    #: Daten"): coins go back and forth as on any plain wallet.
+    class_b: bool = True
 
     @property
     def index_start(self) -> int | None:
@@ -516,6 +531,7 @@ LITECOIN = dataclasses.replace(
     auxpow_chain_id=None,       # scrypt, mined on its own (it is the PARENT Dogecoin merge-mines with)
     addon=True, node_dir=".litecoin", node_conf="litecoin.conf",
     letter="L", family="LTC", net_word="litecoin", real_coins=True, bech32_hrp="ltc", mweb=True,
+    class_b=False,              # no arcade tokens on Litecoin (2026-11-05); Wojakcoin and DigiByte say True again
 )
 
 # Litecoin TESTNET (SadFrog's side, 2026-10-17; plan B, the arcade's own "hello world" inscription).
@@ -547,6 +563,7 @@ LITECOIN_TESTNET = dataclasses.replace(
     # Testnet's 20-minute rule: a block after a long gap may be at the easiest difficulty.
     min_difficulty_blocks=True,
     node_dir=".litecoin-testnet", real_coins=False, bech32_hrp="tltc",
+    class_b=False,              # no arcade tokens on Litecoin testnet (2026-11-05)
 )
 
 # Bellscoin MAINNET (SadFrog's side, 2026-10-22: "integrate them as fully as Dogecoin"). An add-on chain like
@@ -645,6 +662,7 @@ KOTIA = dataclasses.replace(
     letter="T", family="KOT", net_word="kotia", real_coins=True, bech32_hrp="", mweb=False,
     tx_time=True, block_sig=True, scrypt_headers_below=7,
     full_utxo_set=True,         # Kotia only (utxoset.py)
+    class_b=False,              # no arcade tokens on Kotia (2026-11-05): storage (MoonBrix OP_RETURN) and coin only
 )
 
 # Wojakcoin MAINNET. WojakCoin 1.21.3 (wojakcore chainparams.cpp / chainparamsbase.cpp) is Bitcoin Core's code:
@@ -659,6 +677,7 @@ WJK_MAINNET_FLOOR = 228_000
 
 WOJAKCOIN = dataclasses.replace(
     LITECOIN,
+    class_b=True,               # Litecoin's Params, not its "no arcade tokens" (2026-11-05)
     name="wjk",
     rpc_port=20760,
     p2p_port=20759,
@@ -704,6 +723,7 @@ DGB_MAINNET_FLOOR = 24_450_000
 
 DIGIBYTE = dataclasses.replace(
     LITECOIN,
+    class_b=True,               # Litecoin's Params, not its "no arcade tokens" (2026-11-05)
     name="dgb",
     rpc_port=14022,
     p2p_port=12024,
@@ -717,14 +737,79 @@ DIGIBYTE = dataclasses.replace(
     min_fee_per_kb=1_000_000,   # 0.01 DGB/kB: ten times the 0.001 DGB/kB minimum relay fee, and its wallet's fallback fee
     soft_dust=False, dust_limit=10_000,     # no soft-dust fee; change from 0.0001 DGB (P2PKH dust is 5,460 satoshis)
     genesis="7497ea1b465eb39f1c8f507bc877078fe016d6fcb6dfad3a64c98dcc6e1e8496",
-    auxpow_chain_id=None, pow_algo="",
+    auxpow_chain_id=None, pow_algo="", algos=("sha256d", "scrypt", "skein", "qubit", "odo"),
     addon=True, node_dir=".digibyte", node_conf="digibyte.conf",
     # "G": "D" is Dogecoin's badge.
     letter="G", family="DGB", net_word="digibyte", real_coins=True, bech32_hrp="dgb", mweb=False,
 )
 
+# DigiByte TESTNET, "testnet26" (SadFrog's side, 2026-11-04: a DigiByte test chain, for a DigiDollar mint and redeem
+# on a public network with its real oracles). DigiByte Core 9.26.7's reset test chain (kernel/chainparams.cpp
+# CTestNetParams, chainparamsbase.cpp): genesis 2026-05-30, its node's chain in testnet26/, P2P 12033, RPC 14026.
+# P2PKH 126, P2SH 140, WIF 254, bech32 "dgbt". 15-second blocks, no minimum-difficulty rule. Everything is buried
+# from the first blocks: CLTV, CSV, SegWit and Taproot, and DigiDollar from block 600 (Thaw Day 432,100). Keys on
+# coin type 1, as every test chain. Its node needs its RPC lines in a [test] section (core_install), as every
+# Bitcoin-Core-based test chain does. The floor: under the tip of about 595,814 on 2026-11-04.
+DGB_TESTNET_FLOOR = 595_000
+
+DIGIBYTE_TESTNET = dataclasses.replace(
+    DIGIBYTE,
+    name="dgbtest",
+    rpc_port=14026,
+    p2p_port=12033,
+    activation_height=DGB_TESTNET_FLOOR,
+    messaging_start_height=DGB_TESTNET_FLOOR,
+    datadir_subdir="testnet26",
+    pubkeyhash_version=126,
+    scripthash_version=140,
+    coin="DGB TEST",
+    label="DigiByte testnet",
+    genesis="0c9af936f28f7bd0e90c8f6235399063a026ed267bb53da398313b5d7aa55d82",
+    node_dir=".digibyte-testnet", real_coins=False, bech32_hrp="dgbt",
+    # Measured on a 4-core test node on 2026-11-04, one thread each against the whole network: odo 12 kH/s (network
+    # 8 kH/s), qubit 71 kH/s (104 kH/s), skein 661 kH/s (1.07 MH/s), scrypt 2.7 kH/s (29 kH/s), sha256d hardware's.
+    mine_algos=("odo", "qubit", "skein"),
+)
+
+# Flopcoin MAINNET (the operator's side, 2026-11-03). Flopcoin Core v2.0.0.0 (github.com/Flopcoin/Flopcoin, tag v2.0.0.0,
+# chainparams.cpp, chainparamsbase.cpp) is Dogecoin 1.14's code, so Dogecoin's Params fit: scrypt with Dogecoin's
+# powLimit, 0.01 FLOP/kB (policy.h RECOMMENDED_MIN_TX_FEE), the 0.01 soft-dust line, an 83-byte OP_RETURN
+# (standard.h MAX_OP_RETURN_RELAY), one-minute blocks. Merge-mined with chain id 0xA3 (fStrictChainId) from block
+# 110,000; BIP65 (CHECKLOCKTIMEVERIFY) from V3ForkHeight 111,000, so swap locks refund as on Dogecoin; no SegWit.
+# v2.0.0.0 is a mandatory hard fork at 125,000 (a 10% FlopFund output in every coinbase until 600,000: mining only,
+# nothing a send or a lock touches) with new message-start bytes fa bf b5 da, so older nodes are not peers.
+# Ports: RPC 32551, P2P 32552. Versions: P2PKH 35 ("F", no other chain's), P2SH 22 (Dogecoin's and Pepecoin's own
+# script byte, never another chain's key hash, already in txbuild.SCRIPTHASH_VERSIONS), WIF 158 (Dogecoin's and
+# Pepecoin mainnet's 0x9E). Seeds: of seed.flopcoin.net and seed2.flopcoin.net only 216.45.61.204 answered a
+# handshake on 2026-11-03. The floor: below the tip (914,735 on 2026-11-04). It was 917,000 at first, two days ahead,
+# and until the chain got there no arcade had a Flopcoin index: an import's walk (blocks 0 to the index's top) had
+# nothing to read, and no Flopcoin balance showed (2026-11-04, "I imported my flop key, but no balance showed up
+# yet"). No arcade had read a block of it, so lowering it redid nothing.
+FLOP_MAINNET_FLOOR = 914_000
+
+FLOPCOIN = dataclasses.replace(
+    DOGECOIN,
+    name="flop",
+    rpc_port=32551,
+    p2p_port=32552,
+    activation_height=FLOP_MAINNET_FLOOR,
+    messaging_start_height=FLOP_MAINNET_FLOOR,
+    pubkeyhash_version=35,
+    scripthash_version=22,
+    other_pubkeyhash_version=None,
+    coin="FLOP",
+    label="Flopcoin",
+    genesis="1f1037762db00882d3353b8d9dcfd52fc93cbc2d694c62f1ecd6a209cf9d30d0",
+    auxpow_chain_id=0xA3,
+    addon=True, node_dir=".flopcoin", node_conf="flopcoin.conf",
+    letter="F", family="FLOP", net_word="flopcoin", real_coins=True,
+    # Its chainTxData is old: verificationprogress is 0.99988 at a live tip (2026-11-04), and a 1.14 Core says no
+    # initialblockdownload, so caught-up headers say it is synced (as Wojakcoin's).
+    trust_progress=False,
+)
+
 NETWORKS = {p.name: p for p in (MAINNET, TESTNET, REGTEST, DOGECOIN, LITECOIN, LITECOIN_TESTNET,
-                                BELLSCOIN, LUCKYCOIN, KOTIA, WOJAKCOIN, DIGIBYTE)}
+                                BELLSCOIN, LUCKYCOIN, KOTIA, WOJAKCOIN, DIGIBYTE, DIGIBYTE_TESTNET, FLOPCOIN)}
 
 def unpayable_versions(params: "Params") -> frozenset:
     """The version bytes of `params`' own script-hash addresses that another known chain uses for a key hash.
@@ -905,6 +990,8 @@ CHAIN_NAMES = {
     "kot": "main",                  # and Kotia
     "wjk": "main",                  # and Wojakcoin
     "dgb": "main",                  # and DigiByte
+    "dgbtest": "test",
+    "flop": "main",                 # and Flopcoin
 }
 
 

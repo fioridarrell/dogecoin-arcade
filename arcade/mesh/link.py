@@ -37,11 +37,19 @@ VERSION = 2   # 2026-10-12: mesh v2 -- rooms as fingerprints, members in the roo
 MAGIC = b"ARCM"
 MAX_FRAME = 64 * 1024
 HANDSHAKE_TIMEOUT = 10.0
+#: How long one frame may take to go out (2026-11-05: a peer that stopped reading left .25's and Strawberry's links to it
+#: with full send buffers for 5 hours; each side's reader was waiting to send its reply, so neither read again, and the
+#: minute's rebalance -- every ord index's hello with it -- waited behind them). Past this the link is cut; it links again.
+SEND_TIMEOUT = 30.0
 _AUTH_CONTEXT = b"arcade-mesh-auth-v1"
 
 
 class LinkError(Exception):
     """The other side is not a node we can talk to: wrong network, bad proof, or gone."""
+
+
+class PathDown(Exception):
+    """A link's UDP path is gone: use the connection (udp.py)."""
 
 
 @dataclass(frozen=True)
@@ -94,6 +102,8 @@ class Link:
         self._recv_n = 0
         self._lock = asyncio.Lock()
         self.closed = False
+        self.path = None                          # udp.Path while this side sends over UDP; this link is the backup
+        self.incoming = None                      # udp.Path the other side sends over
 
     @property
     def host(self) -> str:
@@ -147,12 +157,67 @@ class Link:
     async def send(self, header: dict, blob: bytes = b"") -> None:
         if self.closed:
             raise LinkError("link is closed")
+        try:
+            await asyncio.wait_for(self._send(header, blob), SEND_TIMEOUT)
+        except asyncio.TimeoutError:
+            self.abort()
+            raise LinkError(f"a frame could not go out in {SEND_TIMEOUT:.0f} s: the other side stopped reading") from None
+
+    async def _send(self, header: dict, blob: bytes) -> None:
         async with self._lock:                    # nonces must go out in order
-            self.writer.write(_frame(self._seal(self.pack(header, blob))))
-            await self.writer.drain()
+            if self.path is not None:
+                if self.path.usable:
+                    try:
+                        await self.path.send_frame(self.pack(header, blob))
+                        return
+                    except PathDown:
+                        pass
+                await self._fall_back(self.path)
+            await self._write(header, blob)
+
+    async def _write(self, header: dict, blob: bytes = b"") -> None:
+        self.writer.write(_frame(self._seal(self.pack(header, blob))))
+        await self.writer.drain()
+
+    async def attach(self, path) -> None:
+        """Send over a UDP path from now on (udp.py). "go" is the last frame by this connection."""
+        async with self._lock:
+            await self._write({"t": "ud", "op": "go"})
+            self.path = path
+
+    async def _fall_back(self, path) -> None:
+        if self.path is not path:
+            return
+        self.path = None
+        for out in path.unfinished():
+            await self._write({"t": "ud", "op": "late", "s": out.seq, "m": out.more}, out.chunk)
+        await self._write({"t": "ud", "op": "end", "n": path.next_seq})
+
+    async def fall_back(self, path) -> None:
+        """The path failed: what it had not delivered goes by this connection, before anything new."""
+        async with self._lock:
+            await self._fall_back(path)
+
+    async def keep_backup(self) -> None:
+        """A frame down the backup while traffic goes by UDP: it must not idle out, and must be seen to work."""
+        async with self._lock:
+            if self.path is not None:
+                await self._write({"t": "ka"})
 
     async def recv(self) -> tuple[dict, bytes]:
         return self.unpack(self._open(await _read_frame(self.reader)))
+
+    def abort(self) -> None:
+        """Cut the connection at once, unsent bytes and all (a close would wait for them to go)."""
+        self.closed = True
+        try:
+            transport = getattr(self.writer, "transport", None)
+            if transport is not None:
+                transport.abort()
+            else:
+                self.writer.close()
+        except (ConnectionError, OSError, RuntimeError):
+            pass
 
     async def close(self) -> None:
         if self.closed:

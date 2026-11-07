@@ -491,8 +491,26 @@ def test_every_account_route_is_one_a_public_node_will_reach(client):
              if (getattr(route, "methods", None) or set()) & {"POST"}
              and route.path.startswith("/account/")}
     listed = {path.rstrip("/") or "/" for path in door.PUBLIC_POST}
+    # A route with a part in its path ({kid}) is listed by its shape (door.PUBLIC_POST_SHAPES), tried with a sample.
+    import re as _re
+    listed |= {p for p in asked if "{" in p and any(shape.match(_re.sub(r"\{[^}]+\}", "0" * 8, p))
+                                                    for shape in door.PUBLIC_POST_SHAPES)}
     assert asked - listed == set(), \
         f"{sorted(asked - listed)} needs adding to door.PUBLIC_POST"
+
+
+def test_every_account_read_is_one_a_public_node_will_reach(client):
+    """The same for the GETs (2026-11-06: /account/digidollar and /account/coins/list answered 404 on
+    app.dogecoinarcade.com, so no DigiDollar address showed there, while every test machine served them)."""
+    import re as _re
+
+    from arcade.web import door
+
+    app, _ = client
+    asked = {route.path for route in app.app.routes
+             if (getattr(route, "methods", None) or set()) & {"GET"} and route.path.startswith("/account")}
+    shut = {p for p in asked if not door.public_path(_re.sub(r"\{[^}]+\}", "0" * 16, p), "GET")}
+    assert shut == set(), f"{sorted(shut)} needs adding to door.py's account reads"
 
 
 def _held(state, address: str) -> list[dict]:

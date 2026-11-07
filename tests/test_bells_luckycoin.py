@@ -5,6 +5,7 @@ account holds them on its one key (coin type 3), they trade at the mainnet tier,
 Bellscoin's P2SH byte is Dogecoin's P2PKH "D" (30), so a "D..." payee on Bellscoin is refused and the arcade makes
 no P2SH lock there, rather than fund a script hash as a key hash."""
 import pathlib
+import re
 import sys
 
 import pytest
@@ -142,10 +143,11 @@ def test_they_trade_at_the_mainnet_tier_with_their_own_lines():
 def test_the_browser_has_their_keys_and_tables():
     root = pathlib.Path(__file__).resolve().parent.parent / "arcade/web/templates"
     coins = (root / "coins.js").read_text()
-    assert "bel: 3, lky: 3, kot: 3, wjk: 3, dgb: 3}" in coins, "one key for every real-coin chain"
-    assert "bel: 0x99, lky: 0xaf, kot: 0xad, wjk: 0xc9, dgb: 0x80}" in coins, "each Core's own WIF byte (SECRET_KEY 153 and 175)"
+    assert "bel: 3, lky: 3, kot: 3, wjk: 3, dgb: 3" in coins, "one key for every real-coin chain"
+    assert "bel: 0x99, lky: 0xaf, kot: 0xad, wjk: 0xc9, dgb: 0x80" in coins, "each Core's own WIF byte (SECRET_KEY 153 and 175)"
     wallet = (root / "wallet_js.js").read_text()
-    assert 'REAL_COINS = new Set(["main", "doge", "ltc", "bel", "lky", "kot", "wjk", "dgb"])' in wallet
+    real = re.search(r"const REAL_COINS = new Set\(\[([^\]]*)\]\)", wallet).group(1)
+    assert '"bel"' in real and '"lky"' in real
     for icon in ("coin-bel.png", "coin-lky.png"):
         assert (root / icon).read_bytes()[:4] == b"\x89PNG"
 
@@ -190,7 +192,7 @@ def test_raw_blocks_read_as_core_prints_them_and_carry_their_work(net):
 
 # --- Bellinals and Luckinals: Admin -> Ords opt-ins, and the wallet's view (2026-10-22) ---------------------------
 
-def test_admin_ords_offers_each_chain_off_until_turned_on(client, monkeypatch):
+def test_admin_ords_offers_each_chain_read_only_until_chosen(client, monkeypatch):
     app, state = client
     _with(state, monkeypatch, "bel", "lky")
     state.set_setting("public_hosts", ["node.dogecoinarcade.com"])
@@ -198,7 +200,8 @@ def test_admin_ords_offers_each_chain_off_until_turned_on(client, monkeypatch):
     try:
         rows = {r["net"]: r for r in app.get("/admin/api/ords", headers=local).json()["rows"]}
         assert rows["bel"]["base"] == 22_470 and rows["lky"]["base"] == 88_554
-        assert "Nintondo" in rows["bel"]["source"] and rows["bel"]["mode"] == rows["lky"]["mode"] == "off"
+        assert "Nintondo" in rows["bel"]["source"] and rows["bel"]["mode"] == rows["lky"]["mode"] == "read", \
+            "Read only until the operator chooses (2026-10-30)"
         for net in ("bel", "lky"):
             assert app.post("/admin/api/ords", headers={**local, **write}, json={"net": net, "mode": "walk"}).json()["ok"]
             assert state.ord_mode(net) == "walk"

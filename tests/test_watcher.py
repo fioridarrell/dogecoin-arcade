@@ -816,3 +816,28 @@ def test_a_wallets_addresses_are_kept_until_it_makes_one(monkeypatch):
     client.call("getnewaddress")
     client.call("getblockcount")
     assert R.ADDRESS_EPOCH == before + 1, "only a call that makes an address bumps it"
+
+
+def test_windows_waits_for_the_arcade_to_stop_before_installing(monkeypatch):
+    """Issue #51 (2026-10-31, a Windows 11 install): pip replacing the package the running arcade is using stopped
+    halfway -- 176 of 396 files gone -- and the next start was a ModuleNotFoundError. On Windows the watcher says an
+    update is ready and installs nothing while it runs."""
+    import types
+
+    from arcade.web import watcher as watcherlib
+    from arcade.web.watcher import BlockWatcher
+
+    state = FakeState(FakeChain(tip=100), FakeChain("main", tip=5))
+    watcher = BlockWatcher(state)
+    monkeypatch.setattr(type(state), "setting", lambda self, name, default=None: True, raising=False)
+    monkeypatch.setattr(type(state), "live_progress", lambda self: False, raising=False)
+    monkeypatch.setattr("arcade.web.watcher.update._layout",
+                        lambda: (pathlib.Path("venv"), pathlib.Path("src"), True))
+    monkeypatch.setattr("arcade.web.watcher.update.check", lambda: ("11c2ad0", "e022d98", True))
+    ran = []
+    monkeypatch.setattr(watcherlib.subprocess, "run", lambda *a, **k: ran.append(a))
+    monkeypatch.setattr(watcherlib, "os", types.SimpleNamespace(**{**vars(watcherlib.os), "name": "nt"}))
+    watcher._auto_update()
+    assert ran == [], "nothing installed while the arcade runs"
+    assert state.update_status["what"].startswith("an update is ready")
+    assert state.update_status["published"] == "e022d98"

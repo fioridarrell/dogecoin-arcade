@@ -20,6 +20,10 @@
 //     room.send({x: 10, y: 4, facing: 'n'});
 //   });
 //
+// A player whose wallet is locked is asked for its password by the viewer first; join waits for them (up to ten
+// minutes) instead of giving up. If they never unlock, room.online is false with room.why starting 'wallet-locked'
+// (any other failure: another why), so a page can say "unlock your wallet to play online" (2026-10-30).
+//
 // A player is {id, address, tag, guest, node}. `id` is unique in the room and
 // is what to key your state by; `address` and `tag` are the player's chain
 // address and @tag, proved by their own key, or null for a guest.
@@ -92,12 +96,46 @@
 //     });
 //     room.media.on('media', function (p, has) { ... });    // has = {video, audio}: they are sending
 //     room.media.on('media-off', function (p) { ... });
+//     room.media.on('speaking', function (p, on) { ... });  // p is talking now (on) or went quiet: you too (p = room.me)
 //     room.media.on('state', function (s) { ... });         // 'on', 'off' (the player pressed Stop too), 'denied'
 //     room.media.share(p.id, {video: false, audio: true});  // one kind only: your voice, not your picture
 //     room.media.start({video: true, audio: true});          // again, mid-call: the camera joins the microphone
+//     room.media.start({video: true, audio: true, facing: 'environment'});  // a phone's rear camera ('user': its front one)
 //     room.media.mute({video: false, audio: true});           // true = muted
 //     room.media.stop();                                      // camera and microphone off, every share ends
 //   });
+//
+// THE SCREEN (2026-10-29), instead of the camera: room.media.screen is true where the browser can share its screen
+// (a computer's; a phone's cannot). start({screen: true, audio: true}) on the player's press opens the browser's own
+// picker (a screen, a window or a tab) and sends that as the picture, with the microphone; {ok: false, error:
+// 'cancelled'} if they closed the picker. The browser's own "Stop sharing" ends the picture only: state 'screen-off'.
+// start({audio: true}) again stops the screen and keeps the voice.
+// WHAT THE SCREEN PLAYS (2026-11-01): add sound: true and the picker offers it, mixed with the microphone into one track;
+// the answer's `sound` says if the browser gave any (the player can leave it out, and many browsers have none to give).
+// Muting then silences the microphone only.
+// room.media.volume(p.id, 0.4): how loud they are for you alone, 0 to room.media.loudest (4). It starts at 1; past 1 it is louder
+// than they send it, held by a limiter.
+// A SCREEN BESIDE THE CAMERA (2026-11-01): room.media.showScreen({sound: true}), on the player's press, sends the screen as a second
+// picture and leaves the camera and microphone as they are. {ok, sound} or {ok: false, error: 'cancelled'}. Everybody you share with
+// gets it; it is drawn and heard under its own name: room.media.place(p.id + '#screen', rect), 'me#screen', and
+// room.media.volume(p.id + '#screen', 0.4). Say so to the others yourself, as you say anything else. hideScreen() ends it, and
+// the browser's own Stop sharing gives state 'screen-off'.
+//
+// PICTURES IN THE APP (2026-11-02, for 3D screens: Spatial World). A card that says "pictures": true gets a Pictures in the
+// app switch; while the player has it on, the app may draw the room's pictures itself instead of placing them:
+//   room.media.frames(p.id, {w: 1280, h: 720, fps: 30});   // also p.id + '#screen', 'me', 'me#screen'; null stops it
+//   room.media.on('frame', function (key, bitmap, t, p) { texture.update(bitmap); bitmap.close(); });   // an ImageBitmap,
+//                                                    // inside w x h, the picture's own shape; t: when it was taken (ms)
+//   room.media.levels([a.id, b.id + '#screen']);     // far screens, twice a second: on('levels', function (by) { ... })
+//                                                    // by[key] = {rgb: [r, g, b] or null, loud: 0..1}; [] stops it
+// {ok: false, error: 'off'} while the switch is off. The sound stays in the arcade: tell it where things are, about ten
+// times a second, in your scene's metres, and it plays each one there (HRTF), faded from `full` to `end` metres and
+// silent past it, and holds each one back by as much as its pictures reach you late, so picture and sound stay together:
+//   room.media.spatial({listener: {p: [x, y, z], f: [fx, fy, fz], u: [0, 1, 0]},
+//                       sources: {[p.id]: {p: [x, y, z], full: 3, end: 16},
+//                                 [p.id + '#screen']: {p: [x, y, z], d: [dx, dy, dz], cone: [90, 240, 0.3], full: 7, end: 24}}});
+//   room.media.spatial(null);                        // back to plain sound
+// volume() still multiplies. The pill shows "pictures shown in the app" while any go to the app.
 //
 // Rectangles are in this page's CSS pixels (getBoundingClientRect), placed again when your layout moves; null hides
 // one. A picture can only be shared over a direct link ('not direct' otherwise: media never goes through the room).
@@ -106,17 +144,26 @@
   if (window.arcade && window.arcade.realtime) return;
   var seq = 0, waiting = {}, rooms = {};
 
+  // A viewer that is waiting on the person (a locked wallet's password, 2026-10-30) says {pending: 'unlock'} first:
+  // the wait grows to PENDING_WAIT, and if it still runs out the reason is 'wallet-locked', not "no viewer".
+  var PENDING_WAIT = 600000;
+
   function ask(message, wait) {
     return new Promise(function (resolve, reject) {
       message.arcade = 'realtime';
       message.seq = ++seq;
-      waiting[message.seq] = {resolve: resolve, reject: reject};
-      setTimeout(function () {
-        if (waiting[message.seq]) {
+      var w = waiting[message.seq] = {resolve: resolve, reject: reject, pending: ''};
+      w.giveUp = function (after) {
+        clearTimeout(w.timer);
+        w.timer = setTimeout(function () {
+          if (waiting[message.seq] !== w) return;
           delete waiting[message.seq];
-          reject(new Error('no viewer is listening: open this page in a DogecoinArcade viewer'));
-        }
-      }, wait || 20000);
+          reject(new Error(w.pending === 'unlock'
+            ? 'wallet-locked: unlock your wallet in the viewer to play online'
+            : 'no viewer is listening: open this page in a DogecoinArcade viewer'));
+        }, after);
+      };
+      w.giveUp(wait || 20000);
       window.parent.postMessage(message, '*');
     });
   }
@@ -131,6 +178,12 @@
     }
     var w = waiting[m.seq];
     if (!w) return;
+    if (m.pending) {                                // not an answer yet: the viewer is waiting on the person
+      w.pending = String(m.pending);
+      w.giveUp(PENDING_WAIT);
+      return;
+    }
+    clearTimeout(w.timer);
     delete waiting[m.seq];
     if (m.ok) w.resolve(m); else w.reject(new Error(m.error || 'refused'));
   });
@@ -145,18 +198,19 @@
     var self = this;
     (said.members || []).forEach(function (p) { self._members[p.id] = p; });
     this.fast = said.fast ? new Fast(this) : null;
-    this.media = said.fast && said.media ? new Media(this) : null;
+    this.media = said.fast && said.media ? new Media(this, !!said.screen) : null;
   }
 
   // CAMERA & MICROPHONE (2026-10-22), on a fast room. The viewer opens them (a sandboxed page cannot), only while the
   // game's card has Camera & microphone on, sends them to the players you name and draws the pictures over your page
   // where you say. See the guide at the top of this file.
-  function Media(room) {
+  function Media(room, screen) {
     this.room = room;
-    this._on = {media: [], 'media-off': [], state: []};
+    this.screen = screen;                           // this browser can share its screen
+    this._on = {media: [], 'media-off': [], state: [], speaking: [], frame: [], levels: []};
   }
   Media.prototype.on = function (type, fn) {
-    if (!this._on[type]) throw new Error('media events are: media, media-off, state');
+    if (!this._on[type]) throw new Error('media events are: media, media-off, state, speaking, frame, levels');
     this._on[type].push(fn);
     return this;
   };
@@ -167,18 +221,37 @@
   };
   Media.prototype.start = function (options) {
     options = options || {video: true, audio: true};
-    return this._ask('start', {video: !!options.video, audio: !!options.audio}, 600000)
-      .then(function (said) { return {ok: true, video: !!said.video, audio: !!said.audio}; },
+    return this._ask('start', {video: !!options.video, audio: !!options.audio, screen: !!options.screen, sound: !!options.sound,
+                               facing: options.facing === 'environment' ? 'environment' : options.facing === 'user' ? 'user' : ''}, 600000)
+      .then(function (said) { var r = {ok: true, video: !!said.video, audio: !!said.audio, screen: !!said.screen}; if (said.sound) r.sound = true; return r; },
             function (err) { return {ok: false, error: err.message}; });
   };
   Media.prototype.stop = function () { return this._ask('stop'); };
+  Media.prototype.showScreen = function (options) {
+    return this._ask('screen', {on: true, sound: !!(options && options.sound)}, 600000)
+      .then(function (said) { return said.sound ? {ok: true, sound: true} : {ok: true}; }, function (err) { return {ok: false, error: err.message}; });
+  };
+  Media.prototype.hideScreen = function () { return this._ask('screen', {on: false}); };
   Media.prototype.share = function (id, on) {
     // on: true / false, or {video, audio} for one kind only (your voice to everybody, your picture to a few)
     var said = on && typeof on === 'object' ? {video: !!on.video, audio: !!on.audio} : on !== false;
     return this._ask('share', {peer: String(id), on: said})
       .then(function () { return {ok: true}; }, function (err) { return {ok: false, error: err.message}; });
   };
+  Media.prototype.frames = function (key, size) {
+    var k = key === 'me' || key === 'me#screen' ? key : String(key);
+    // Long enough for the player to answer, as start() is: a page with no card asks them first.
+    return this._ask('frames', {key: k, size: size ? {w: Number(size.w), h: Number(size.h), fps: Number(size.fps || 15)} : null}, 600000)
+      .then(function () { return {ok: true}; }, function (err) { return {ok: false, error: err.message}; });
+  };
+  Media.prototype.levels = function (keys) {
+    return this._ask('levels', {keys: (keys || []).map(String)}, 600000)
+      .then(function () { return {ok: true}; }, function (err) { return {ok: false, error: err.message}; });
+  };
+  Media.prototype.spatial = function (scene) { return this._ask('spatial', {scene: scene || null}); };
   Media.prototype.hear = function (id, on) { return this._ask('hear', {peer: String(id), on: on !== false}); };
+  Media.prototype.loudest = 4;
+  Media.prototype.volume = function (id, level) { return this._ask('volume', {peer: String(id), level: Number(level)}); };
   // place(id | 'me', {x, y, w, h} in this page's CSS pixels, or null to hide, {fit: 'cover' | 'contain', mirror})
   Media.prototype.place = function (who, rect, options) {
     options = options || {};
@@ -192,6 +265,7 @@
     var m = {};
     if (typeof which.video === 'boolean') m.video = which.video;
     if (typeof which.audio === 'boolean') m.audio = which.audio;
+    if (typeof which.sound === 'boolean') m.sound = which.sound;   // what your shared screen plays, for the others
     return this._ask('mute', m);
   };
   Media.prototype._emit = function (type, a, b) { Room.prototype._emit.call(this, type, a, b); };
@@ -215,6 +289,11 @@
     var m = {arcade: 'realtime', seq: 0, op: 'fast', room: this.room.name, data: data, reliable: !!options.reliable};
     if (options.to != null) m.to = [].concat(options.to).map(String);
     window.parent.postMessage(m, '*');
+  };
+  // How each link really goes, by player id: 'direct', 'relay' (an arcade's), 'cloudflare', 'connecting' or 'none'. Measured by the
+  // browser, not guessed. A relay on the far side reads 'relay' here: only its owner can tell whose it is.
+  Fast.prototype.routes = function () {
+    return ask({op: 'fastroutes', room: this.room.name}).then(function (said) { return said.routes || {}; }, function () { return {}; });
   };
   // With whom this player links directly: an array of player ids, or null for everybody (the default). max: how
   // many links at most (19 unless a host asks for more, up to 60). Answers {ok, fast}.
@@ -260,8 +339,10 @@
     else if (ev.type === 'closed') { this.online = false; this._emit('closed', ev.why || ''); }
     else if (ev.type === 'me') { this.me = p; }    // back after the node restarted, under a new name
     // This page's own seat was taken again (its connection dropped for longer than the
-    // node waits): the others saw it leave and come back, so send your state again.
-    else if (ev.type === 'rejoined') { this.me = p || this.me; this.online = true; this._emit('rejoined', this.me); }
+    // node waits): the others saw it leave and come back, so send your state again. The second
+    // argument says what of the camera, microphone and screen stayed open ({video, audio, screen}, or
+    // null): it goes back on the new links by itself, so a page need not start it again (2026-11-02).
+    else if (ev.type === 'rejoined') { this.me = p || this.me; this.online = true; this._emit('rejoined', this.me, ev.media || null); }
     // The line dropped and the page is taking the seat again by itself, for as long as it takes (2026-10-18):
     // a game can say "reconnecting"; 'rejoined' follows when it is back.
     else if (ev.type === 'reconnecting') { this.online = false; this._emit('reconnecting'); }
@@ -272,6 +353,15 @@
     }
     else if (ev.type === 'media' && this.media) this.media._emit('media', p, {video: !!ev.video, audio: !!ev.audio});
     else if (ev.type === 'media-off' && this.media) this.media._emit('media-off', p);
+    else if (ev.type === 'media-speaking' && this.media) this.media._emit('speaking', p, !!ev.on);
+    else if (ev.type === 'media-frame' && this.media) {
+      // Handed over, then said back: how long the picture took to reach the page holds the sound back as long.
+      var fr = this.media._on.frame;
+      if (!fr.length) { try { ev.bitmap.close(); } catch (err) {} }
+      else fr.forEach(function (fn) { try { fn(ev.key, ev.bitmap, ev.t, p); } catch (err) { setTimeout(function () { throw err; }); } });
+      this.media._ask('shown', {key: ev.key, t: ev.t}).catch(function () {});
+    }
+    else if (ev.type === 'media-levels' && this.media) this.media._emit('levels', ev.levels || {});
     else if (ev.type === 'media-state' && this.media) this.media._emit('state', ev.state);
     else if (ev.type === 'peer' && this.fast) {
       if (ev.state === 'gone') delete this.fast._peers[p.id]; else this.fast._peers[p.id] = ev.state;
@@ -305,7 +395,7 @@
   // its family instead (its registry's id, say) and every version shares rooms.
   function joinOne(name, options) {
     if (rooms[name]) return Promise.resolve(rooms[name]);
-    var m = {op: 'join', room: name, game: options.game || '', fast: !!options.fast};
+    var m = {op: 'join', room: name, game: options.game || '', fast: !!options.fast, waits: true};
     if (Array.isArray(options.link)) m.link = options.link.map(String);
     if (options.max) m.max = options.max | 0;
     return ask(m).then(function (said) {

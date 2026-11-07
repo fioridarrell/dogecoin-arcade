@@ -39,6 +39,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import os
 import subprocess
 import sys
 import threading
@@ -46,6 +47,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .. import modules as modulelib
 from .. import release as releaselib
 from .. import update
 from ..messaging.scanner import (Scanner, repair_announcement_heights,
@@ -81,6 +83,16 @@ SHOP_EVERY = 60.0
 #: about this plus the page's own poll, instead of waiting for the slow pass or the block.
 POOL_SECONDS = 1.5
 
+#: The phases that only read, file or show, by the job each is in arcade/modules.py: left out while their module is
+#: off. Nothing that settles, refunds or pays (swap claims, this node's trades, the cross-chain book, the shops) is
+#: here: what was already agreed finishes whatever the switches say.
+PHASE_JOBS = {
+    "_confirm_sent": "confirm-sent", "_confirm_posts": "confirm-posts", "_check_pending_feed": "pending-feed",
+    "_backfill_history_once": "inscription-history", "_import_listings": "import-listings",
+    "_import_orders": "import-orders", "_scan_collections": "scan-collections",
+    "_check_pending_offers": "pending-offers", "_check_listers": "listers",
+}
+
 
 class BlockWatcher:
     """Scans each chain when its tip moves, on a daemon thread."""
@@ -99,16 +111,26 @@ class BlockWatcher:
         self._thread.start()
         threading.Thread(target=self._run_pool, name="arcade-poolwatch", daemon=True).start()
 
+    def _job_on(self, job: str) -> bool:
+        """Whether a job's module is on here (arcade/modules.py); on when the settings cannot be read."""
+        try:
+            return modulelib.job_on(self.state.settings(), job)
+        except Exception:
+            return True
+
     def _run_pool(self) -> None:
         """The market's mempool, read often and cheaply: one getrawmempool per chain when
         nothing is new (each reader caches by txid)."""
         while not self._stop.is_set():
+            market = self._job_on("pending-offers")
             try:
-                self._check_pending_offers()
+                if market:
+                    self._check_pending_offers()
             except Exception:            # never let it die
                 log.debug("pool watch failed", exc_info=True)
             try:
-                self._check_listers()
+                if market:
+                    self._check_listers()
             except Exception:
                 log.debug("lister watch failed", exc_info=True)
             try:
@@ -118,7 +140,8 @@ class BlockWatcher:
             except Exception:
                 log.debug("talk relay failed", exc_info=True)
             try:
-                self.state.book_relay().tick()       # one swap book across arcades (book_relay.py, 2026-10-19)
+                if self._job_on("book-relay"):
+                    self.state.book_relay().tick()   # one swap book across arcades (book_relay.py, 2026-10-19)
             except Exception:
                 log.debug("book relay failed", exc_info=True)
             try:
@@ -214,6 +237,8 @@ class BlockWatcher:
                       self._keep_faucets,
                       self._run_watch,
                       self._walk_home):
+            if not self._job_on(PHASE_JOBS.get(getattr(phase, "__name__", ""), "")):
+                continue
             try:
                 phase()
             except Exception:
@@ -726,6 +751,38 @@ class BlockWatcher:
         # bid is above somebody's ask, take it (D-102).
         self._shopkeeper.fill_what_crosses()
 
+    def _index_copies(self, chain, index, tip: int) -> None:
+        """Index copies (arcade/ledger_snapshot.py, 2026-11-02): make one for a linked arcade far behind that
+        asked, fetch one when this index is far behind, and confirm one that came here, a bounded pass at a time and
+        only while this arcade is idle. Never stops the index reading its own node."""
+        mesh = getattr(self.state, "mesh", None)
+        share = getattr(mesh, "ledgershare", None)
+        check = getattr(mesh, "indexcheck", None)
+        if not hasattr(self.state, "ledger_snapshots"):
+            return
+        try:
+            snaps = self.state.ledger_snapshots(chain)
+            snaps.make_in_background(tip)
+            seen = self.__dict__.setdefault("_copy_epochs", {})
+            before = seen.setdefault(chain.network, index.epoch)
+            if share is not None and check is not None:
+                floor = chain.params.index_start
+                verify = lambda manifest, maker: check.votes(chain.network, floor, int(manifest["cp"]))  # noqa: E731
+                snaps.step(share, tip, verify=verify)
+                tips = self.state.ledger_tips
+                snaps.keep_fetching(share, lambda: tips.get(chain.network, tip), verify)
+            if index.epoch != before:                          # a copy took the old index's place (on any thread)
+                seen[chain.network] = index.epoch
+                self.state.ledger_tips.pop(chain.network, None)
+                self.state.bump_generation()
+            height = index.indexed_height() or 0
+            turn = getattr(mesh, "turn", None)
+            relaying = bool(getattr(turn, "allocations", None)) if turn is not None else False
+            idle = tip - height <= 20 and snaps.fetch is None and not relaying
+            self.state.ledger_confirmation(chain).step(idle)
+        except Exception:                                      # noqa: BLE001 -- the index reads its node regardless
+            log.warning("%s index copies", chain.params.label, exc_info=True)
+
     def _sync_ledgers(self) -> None:
         """Keep the token indexes in step with their chains.
 
@@ -746,6 +803,7 @@ class BlockWatcher:
                 continue
             moved = tip != self.state.ledger_tips.get(chain.network)
             self.state.ledger_tips[chain.network] = tip
+            self._index_copies(chain, index, tip)
             height = index.indexed_height()
             behind = height is None or height < tip
             if not moved and (not behind or index.stopped is not None):
@@ -1002,6 +1060,14 @@ class BlockWatcher:
             return
         if installed == published or not available:
             self._said("up to date", installed=installed, published=published)
+            return
+        # Not on Windows while this process runs (2026-10-31, issue #51): pip replaces the package this interpreter
+        # is running from, Windows refuses to let go of files in use, and pip stops halfway -- 176 of 396 files gone,
+        # "~"-named leftovers, and the next start a ModuleNotFoundError. Here the update waits for the operator to
+        # stop the arcade and run the updater; the Overview says one is ready.
+        if os.name == "nt":
+            self._said("an update is ready: stop the arcade, then run dogecoinarcade-update",
+                       installed=installed, published=published)
             return
         # Written down BEFORE the subprocess, because the subprocess restarts
         # this service and systemd stops the parent with it. Everything after

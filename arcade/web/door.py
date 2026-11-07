@@ -19,10 +19,9 @@ The cost of that choice is that a new public page has to be added here to
 appear, which is a visible, one-line kind of mistake; the cost of the other
 choice is somebody's coins.
 
-**Almost every POST is refused.** Every FORM in this application spends
-the NODE's wallet — posting to the feed, tipping, inscribing, trading —
-and none of that is per-account yet, so on a public instance none of it
-may be reached.
+**Almost every POST is refused.** Every FORM that spends the NODE's
+wallet — posting to the feed, tipping, inscribing, trading as the node —
+is the operator's, so on a public instance none of it may be reached.
 
 The exceptions are named one at a time and deliberately, and they are the
 routes where an account acts with a key the node never sees: signing in,
@@ -62,6 +61,8 @@ PUBLIC_PAGES = frozenset({
     "/docs",
     "/affiliates",            # who the arcade works with (2026-10-15)
     "/affiliates.json",       # the same, as data: the arcades a game may move a player to (2026-10-23)
+    "/globe",                 # the nodes globe (docs/nodes-globe.html)
+    "/globe.json",            # the city-level list that globe polls
     "/collections",
     "/tokens",
     "/nfts",
@@ -75,11 +76,16 @@ PUBLIC_PAGES = frozenset({
     "/exchange/pairs",            # the "open a pair" box: two token ids to a token/token pair's page
     "/apps",                  # every inscribed app (arcade/games.py; the Apps tab since 2026-10-23)
     "/home",                  # the installed app's home screen (home.html, PWA only, 2026-10-24)
+    "/lite",                  # ARCADE Lite's window: each caller sees what they may (arcade/lite/web.py)
+    "/lite/pages.css",        # ...and the look it gives the full arcade's pages in the Lite edition
+    "/lite/theme.css",        # ...and the theme the asker sees over it (arcade/packages.py)
     "/desktop",               # the Desktop View: the tabs and apps as icons and windows (desktop.html, 2026-10-28)
     "/apps/store-icon.png",   # the App Store's icon on it
     "/games",                 # the old name: redirects to /apps
     "/account/escrows",       # an account's own escrows (needs a session)
     "/account/doginals",      # this account's own Doginals on Dogecoin, to list (needs a session)
+    "/account/doginal-card",  # one of them in full, for the Wallet's card (needs a session)
+    "/account/doginals/page", # one page of them, built by this arcade (2026-11-06, needs a session)
     "/account/segwit/balance",  # the account's registered segwit address (native or P2SH), test chains (needs a session)
     "/account/imported",      # the account's own sealed record of imported wallets, and their addresses (needs a session)
     "/account/imported/busy", # whether an import on a chain must wait for a rescan (needs a session)
@@ -103,11 +109,37 @@ PUBLIC_PAGES = frozenset({
     "/manifest.webmanifest",  # the app, installable (a PWA)
     "/sw.js",                 # its service worker: an offline page and push, no cache of pages
     "/offline",
+    "/terms",                 # a node's terms of use, when it asks for them (terms.py, 2026-11-02)
+    "/terms/left",            # where Leave ends up
     "/push/key",              # the key a browser subscribes to this node's pushes with
     "/account/push/news",     # what woke the phone: who wrote, never what (signed in)
     "/account/ring/apps",     # the apps an account lets ring it (arcade/ring.py, signed in)
+    "/account/ring/live",     # an open page checks in, and hears what is ringing it (signed in)
     "/admin/login",           # the remote admin password page (rate-limited)
-    "/signin.js", "/base.css", "/desk98.css", "/deskubuntu.css",
+    "/signin.js", "/base.css", "/desk98.css", "/deskubuntu.css", "/deskdogefeedx.css",
+    "/api/network",           # DogeFeedX Network window: through the door for signed-in accounts; strangers get 403
+    # DogeFeedX for an account on a public arcade (2026-11-03: "all of this stuff is already available for the
+    # user end ... wire it in"): its windows, their files, and the reads of the arcade's own public data -- the feed,
+    # collections, the ord index, mintpads, apps. The wallet windows read the ASKER's own address (apps._wallets: an
+    # account's own, never the node's watch list); notifications, messages and settings are the account's own. Not
+    # here, so refused: the terminal's node status, peers and address lookups (/dogefeedx/api/status, peers,
+    # balance, address/*, lookup), the Network module's sync (/dogefeedx/network/...), and the operator's two POSTs
+    # (/dogefeedx/api/post, react) -- an account posts and reacts from its own browser.
+    "/dogefeedx/feed", "/dogefeedx/post", "/dogefeedx/profile", "/dogefeedx/explore", "/dogefeedx/search",
+    "/dogefeedx/market", "/dogefeedx/collections", "/dogefeedx/nfts", "/dogefeedx/files", "/dogefeedx/wallet",
+    "/dogefeedx/inscription", "/dogefeedx/leaderboard", "/dogefeedx/notifications", "/dogefeedx/messages",
+    "/dogefeedx/bookmarks", "/dogefeedx/launchpad", "/dogefeedx/inscribe", "/dogefeedx/arcade", "/dogefeedx/memes",
+    "/dogefeedx/settings", "/dogefeedx/explorer",     # not /dogefeedx/terminal: its status/balance calls are the node's
+    "/dogefeedx/aqua.css", "/dogefeedx/shell.js", "/dogefeedx/icon-explorer.png", "/dogefeedx/icon-terminal.png",
+    "/dogefeedx/icon-feed.png", "/dogefeedx/icon-profile.png", "/dogefeedx/icon-market.png",
+    "/dogefeedx/icon-wallet.png",
+    "/dogefeedx/api/feed", "/dogefeedx/api/sidebar", "/dogefeedx/api/leaderboard", "/dogefeedx/api/market/doginals",
+    "/dogefeedx/api/market/drc20", "/dogefeedx/api/price", "/dogefeedx/api/collections",
+    "/dogefeedx/api/collection/items", "/dogefeedx/api/inscription", "/dogefeedx/api/tokens", "/dogefeedx/api/token",
+    "/dogefeedx/api/names", "/dogefeedx/api/name", "/dogefeedx/api/search", "/dogefeedx/api/memes",
+    "/dogefeedx/api/arcade", "/dogefeedx/api/launchpad", "/dogefeedx/api/me", "/dogefeedx/api/whoami",
+    "/dogefeedx/api/local/notifications", "/dogefeedx/api/local/games",
+    "/dogefeedx/api/wallet/addresses", "/dogefeedx/api/wallet/holdings",
     "/coins.js",
     "/wallet.js",
     "/messaging.js",
@@ -144,6 +176,9 @@ PUBLIC_PAGES = frozenset({
     "/account/inscribe/unfinished",
     "/account/dust",                  # coins in this account's own payload outputs
     "/account/coins",                 # this account's own coins on one chain (the Doginals check)
+    "/account/coins/list",            # this account's own coin list, for the browser's copy (coinlist.py; it 404'd
+                                      # on the public site from 2026-10-25 to 11-06)
+    "/account/digidollar",            # this account's DigiDollars and DigiDollar address on a DigiByte chain (digidollar.py)
     "/account/doginal-index",         # how far the chain's ord index has walked (the Doginals fill in as it goes)
     "/account/token20",               # this account's DRC-20 / PRC-20 balances, from the most complete ord index
     "/account/listed",                # what this account's standing listings hold (the Wallet shows them held)
@@ -167,18 +202,24 @@ PUBLIC_PAGES = frozenset({
     "/account/claimpools",            # this account's own prize pools, to withdraw
     "/account/pagesends",             # what pages have asked this account to send
     "/account/run/item",              # one item of this account's own run, as uploaded
+    "/account/keys",                  # this account's own API keys (arcade/apikeys.py; signed in)
 })
 
 #: Prefixes a stranger may read. Everything under them is public, so each
 #: one is a promise about a whole subtree: nothing under these may ever
 #: learn to spend.
 PUBLIC_TREES = (
+    "/api/v1/",               # the API (arcade/apikeys.py): who a key is, the routes; an account's key acts as it
+    "/lite/api/",             # Lite's overview and command list, shaped by who asks (arcade/lite/web.py)
+    "/lite/packages/",        # an installed theme's own fonts (arcade/lite/web.py)
+    "/m/",                    # a node module's pages, read only and sandboxed; each checks its manifest's audience
     "/explore/api/",          # the Explore tab's lookups: GET only, read only, a few a minute per visitor
     "/account/llm/",          # the Exchange's LLM tab: offers, the account's own balance, grant words and keys
     "/exchange/llm/",         # one model's own page on the model exchange (2026-10-23)
     "/v1/models",             # the LLM API's model list, for an API key
     "/signup/",               # is this name free
     "/signin/",               # somebody's encrypted wallet, by name
+    "/peer/address/",         # one bare address's coins, for a signed mesh arcade only (peer_address.py)
     "/coins/walk/",           # the shared walk: whether this arcade reads a chain for others, a job's state (2026-10-25)
     "/vendor/",               # the two vendored crypto libraries
     "/docs/",                 # the whole written record, as shipped
@@ -202,6 +243,9 @@ PUBLIC_TREES = (
     "/exchange/swap-trade/",  # one finished lock-script swap (2026-10-17)
     "/exchange/coins/",       # a coin pair: redirects to its swap market
     "/exchange/ord/",         # a Doginals/Pepinals collection described by an inscription (2026-10-17)
+    "/api/terminal/",         # DogeFeedX Terminal's command list; its commands are for signed-in accounts only
+    "/dogefeedx/api/posts/",  # DogeFeedX: one post of the arcade's feed and its replies (2026-11-03)
+    "/dogefeedx/api/users/",  # DogeFeedX: an arcade account's posts (2026-11-03)
 )
 
 #: Whole paths with something variable in the middle of them, where a tree
@@ -288,6 +332,20 @@ LINKED_FROM_PUBLIC = ("/content/", "/collections", "/feed", "/u/", "/docs",
 #: equally correct; it is named so that nobody reads that 405 as the door having
 #: opened something. (the door census, 2026-09-27)
 PUBLIC_POST = ("/auth/challenge", "/auth/login", "/auth/logout",
+               # DogeFeedX Terminal: read-only commands, signed-in accounts or the operator only, 30 a minute
+               # (app.py _dfx_viewer; reviewed before merging, 2026-11-03)
+               "/api/terminal/exec",
+               # Lite's console: each command checks who may run it, and a visitor's run only read (arcade/lite)
+               "/lite/api/console",
+               # the tabs a signed-in account shows in its own Lite window: that account's choice only (arcade/lite)
+               "/lite/api/tabs",
+               # an account's own API keys, and a console line run as the key's account (arcade/apikeys.py): each
+               # acts only for the account itself, as it would signed in
+               "/account/keys", "/api/v1/run",
+               # a browser's yes to the terms: a cookie in that browser, nothing on this node (terms.py, 2026-11-02)
+               "/terms/accept",
+               # a DigiDollar send offered to the signed-in account's own wallet, signed in its browser (digidollar.py)
+               "/account/digidollar/send",
                # every session of the signed-in account ends, its own only (issue #13, 2026-10-25)
                "/auth/logout-everywhere",
                # the LLM service (llmweb.py, 2026-10-23): each acts only for the signed-in account, its own grants,
@@ -305,6 +363,10 @@ PUBLIC_POST = ("/auth/challenge", "/auth/login", "/auth/logout",
                # caller's own token, and an account joins only as the address
                # its own browser signed for
                "/realtime/join", "/realtime/send", "/realtime/leave",
+               # ...and the one stream all of a page's rooms ride (2026-11-03); attach needs the room's own token,
+               # detach drops only that token's room from its own stream (2026-11-04: left out, every room on a public
+               # host failed to attach and ASHVALE's Bank never answered)
+               "/realtime/hub/attach", "/realtime/hub/detach",
                # a trade between two players in a game: the giver signs a leg for
                # one named buyer (its own piece, its own key); the buyer finishes it
                # with /account/fill like any answered leg
@@ -503,6 +565,8 @@ PUBLIC_POST = ("/auth/challenge", "/auth/login", "/auth/logout",
                "/account/imported/bring", "/account/imported/siblings/drop",
                # what sits on the caller's own coins, many transactions at once (the Wallet's Doginals)
                "/account/doginal-txs",
+               # their numbers and collections, many at once (the Wallet's Doginals in order, 2026-11-05)
+               "/account/doginal-meta",
                # a DRC-20 / PRC-20 send of the caller's own tokens: its three offers, one after the other
                "/account/token20/send",
                # an ord from the caller's own wallet: its commit and reveals, one after the other; its list
@@ -535,6 +599,7 @@ PUBLIC_POST = ("/auth/challenge", "/auth/login", "/auth/logout",
 #: that address's key signed (web/app.py signin_imported_coins; nothing without it).
 PUBLIC_POST_SHAPES = (
     re.compile(r"^/signin/[^/]{1,64}/imported-coins$"),
+    re.compile(r"^/account/keys/[0-9a-f]{8}$"),     # switching off or deleting one of the account's own keys
     re.compile(r"^/coins/walk/job$"),      # another arcade's part of a shared walk: blocks to read, never a spend
 )
 
@@ -663,6 +728,26 @@ def from_outside(headers, host: str, public_hosts: tuple[str, ...],
     if not loopback_peer(peer):
         return True
     return not loopback_host(host, local_hosts)
+
+
+def public_visitor(headers, host: str, public_hosts: tuple[str, ...],
+                   peer=None, local_hosts: tuple[str, ...] = ()) -> bool:
+    """Is this somebody the public side of the node is showing itself to, rather than whoever runs it?
+
+    from_outside, less the LAN: a request naming a LAN address from a LAN machine is not from the internet, whatever
+    that function has to assume for the wallet's sake. Called public are the published names and anything that came
+    through an edge, so a tunnel's name nobody wrote into `public_hosts` is not missed, and a connection from a
+    global address. Whoever is left is the node's own machine and its own network, so they are never asked.
+    """
+    if not from_outside(headers, host, public_hosts, peer=peer, local_hosts=local_hosts):
+        return False
+    if host_name(host) in public_hosts or any(header in headers for header in EDGE_HEADERS):
+        return True
+    try:
+        ip = ipaddress.ip_address(str(peer or ""))
+    except ValueError:
+        return True
+    return (getattr(ip, "ipv4_mapped", None) or ip).is_global
 
 
 #: Methods that change nothing, so a request from another site may make them.

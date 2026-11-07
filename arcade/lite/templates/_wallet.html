@@ -1,0 +1,401 @@
+{#- Send, Receive and Transactions, drawn in the window like the Overview. The keys and the signing are the wallet's own
+    code, never Lite's: wallet.js for an account (the words open in this browser and sign here), node-wallet.js for the
+    operator (the node builds and signs, and holds the send under a ticket until Send is pressed). So a send here is
+    checked as the full arcade's Wallet checks it: the offer against what was typed, its bytes by `checked`, and on a
+    mainnet chain every cost listed on the review before `confirm` (exchange-safety R1). -#}
+{% if not wallet %}
+{% for tab in ('send', 'receive', 'transactions') %}
+<section data-panel="{{ tab }}" hidden><p class="later"><a href="/join">Sign in or make an account</a> to use your
+  wallet.</p></section>
+{% endfor %}
+{% else %}
+<section data-panel="send" hidden>
+  <div class="cols"><div>
+    <fieldset><legend>Send coins</legend>
+      <form id="w-form" class="grid">
+        <label for="w-chain-send">Wallet</label><select id="w-chain-send" data-chain></select>
+        <label for="w-to">Pay to</label><input id="w-to" placeholder="@name or address" autocomplete="off"
+          spellcheck="false" required>
+        <label for="w-amount">Amount</label><span><input id="w-amount" inputmode="decimal" autocomplete="off"
+          required> <span data-unit></span></span>
+        <span></span><span><button type="submit">Review…</button></span>
+      </form>
+    </fieldset>
+    <fieldset id="w-unlock" hidden><legend>Unlock your wallet</legend>
+      <form id="w-unlock-form" class="grid">
+        <label for="w-password">Password</label><input id="w-password" type="password" autocomplete="current-password">
+        <span></span><span><button type="submit">Unlock</button></span>
+      </form>
+      <p class="muted">Your words open in this browser only; the password never leaves it.</p>
+    </fieldset>
+    <fieldset id="w-review" hidden><legend>Review</legend>
+      <dl id="w-terms"></dl>
+      <p id="w-warn" class="warn" hidden>Real coins. A send can't be taken back: check the name and the address.</p>
+      <p class="muted">{{ "Built and signed by this node's own wallet; nothing goes until you press Send." if wallet
+        == 'node' else "Read in this browser from the transaction's own bytes; signed here when you press Send." }}</p>
+      <button type="button" id="w-go">Send</button> <button type="button" id="w-cancel">Cancel</button>
+    </fieldset>
+    <p id="w-said" hidden></p>
+  </div><div>
+    <fieldset><legend>Balances</legend>
+      <table><thead><tr><th>Wallet</th><th class="num">Spendable</th><th class="num">Arriving</th></tr></thead>
+        <tbody id="w-balances"><tr><td class="muted">Loading…</td></tr></tbody></table></fieldset>
+  </div></div>
+</section>
+<section data-panel="receive" hidden>
+  <fieldset><legend>Receive coins</legend>
+    <div class="grid"><label for="w-chain-receive">Wallet</label><select id="w-chain-receive" data-chain></select>
+      <span>Address</span><code id="w-address"></code>
+      <span></span><span><button type="button" id="w-copy">Copy address</button></span></div>
+    <div id="w-qr"></div>
+    <p class="muted" id="w-only"></p>
+  </fieldset>
+</section>
+<section data-panel="transactions" hidden>
+  <fieldset><legend>Transactions</legend>
+    <div class="grid"><label for="w-chain-tx">Wallet</label><select id="w-chain-tx" data-chain></select></div>
+    <table><thead><tr><th>Date</th><th>Type</th><th>With</th><th class="num">Amount</th><th class="num">Confirmations</th>
+      <th>Transaction</th></tr></thead><tbody id="w-history"></tbody></table>
+    <p class="muted" id="w-since"></p>
+  </fieldset>
+</section>
+<script src="/vendor/qrcode.js"></script>
+<script type="module">
+import * as wallet from "{{ '/node-wallet.js' if wallet == 'node' else '/wallet.js' }}";
+const NODE = {{ 'true' if wallet == 'node' else 'false' }};
+const API = NODE ? "/node/wallet" : "/account";
+const ME = {{ me|tojson }}, TAGCHAIN = {{ tagchain|tojson }};
+// DigiDollars, a wallet of their own beside DigiByte's while the DigiDollar module is on (2026-11-06): paid at a
+// DigiDollar address (TD... on the test chain), sent by the module's ddsend and signed here like any of its offers.
+const DIGIDOLLAR = {{ 'true' if digidollar and wallet != 'node' else 'false' }};
+const DD_ON = ["dgbtest", "dgb"], DD = "dd:";
+const ADDRESSY = /^(?:[1-9A-HJ-NP-Za-km-z]{26,35}|[a-z]{1,4}1[02-9ac-hj-np-z]{38,58}|[A-Z]{1,4}1[02-9AC-HJ-NP-Z]{38,58})$/;
+const $ = (id) => document.getElementById(id);
+const coinsOf = (n) => (Number(n || 0) / 1e8).toLocaleString(undefined, {maximumFractionDigits: 8});
+let said = {chains: [], dds: []}, net = "", offer = null, keys = null, ddHeld = {}, ddQueue = Promise.resolve();
+let drawn = 0;                                                          // which load() the Balances rows belong to
+
+function satsOf(text) {
+  const m = /^(\d*)(?:\.(\d{0,8}))?$/.exec(String(text).trim());
+  if (!m || (!m[1] && !m[2])) return null;
+  return Number(m[1] || "0") * 1e8 + Number((m[2] || "").padEnd(8, "0"));
+}
+const wallets = () => said.chains.concat(said.dds);
+const chain = () => wallets().find((c) => c.network === net) || said.chains[0] || {};
+const unit = (c) => c.dd ? "DigiDollar" + (c.mainnet ? "" : " test")
+  : (c.coin || c.label || "") + (c.mainnet === false && !/test/i.test(c.coin || "") ? " test" : "");
+const dollars = (n) => "$" + Number(n || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const ddWord = (c) => c.mainnet ? "main" : "test";
+function tell(text, cls) { const p = $("w-said"); p.textContent = text; p.className = cls || ""; p.hidden = !text; }
+function cell(tr, text, cls) { const td = tr.insertCell(); td.textContent = text; if (cls) td.className = cls; return td; }
+
+async function load() {
+  const base = net.startsWith(DD) ? net.slice(DD.length) : net;           // a DigiDollar wallet reads its DigiByte's
+  try { said = await wallet.state(NODE ? undefined : base); } catch (e) { said = {chains: []}; }
+  said.chains = said.chains || [];
+  said.dds = !DIGIDOLLAR ? [] : said.chains.filter((c) => DD_ON.includes(c.network))
+    .map((c) => ({network: DD + c.network, base: c.network, label: "DigiDollar", mainnet: c.mainnet, dd: true}))
+    .sort((a, b) => Number(a.mainnet) - Number(b.mainnet));                // the test chain's first: it is the one in use
+  if (!net && said.chains.length) net = said.chains[0].network;
+  document.querySelectorAll("[data-chain]").forEach((box) => {
+    box.textContent = "";
+    for (const c of wallets()) box.add(new Option(c.label + (c.mainnet ? "" : " (test)"), c.network));
+    box.value = net;
+  });
+  balances(false);
+  draw();
+}
+/* The Balances list, kept in this browser so a reload shows the last one at once (2026-11-06, SadFrog: "can it be
+ * stored in cache or something similar so if its loaded and then refreshed it remains and then updates everyonce in
+ * awhile"). A balance older than FRESH is read again, one chain at a time; the whole list again every EVERY while the
+ * window is in view. Only what this browser already showed is kept, and a read always replaces it. */
+const FRESH = 2 * 60 * 1000, EVERY = 5 * 60 * 1000, KEPT = "lite_balances_" + (NODE ? "node" : ME || "visitor");
+function kept() { try { return JSON.parse(localStorage.getItem(KEPT) || "{}") || {}; } catch (e) { return {}; } }
+function keep(network, row) {
+  try { const all = kept(); all[network] = {...row, at: Date.now()}; localStorage.setItem(KEPT, JSON.stringify(all)); }
+  catch (e) {}
+}
+const shown = (c, r) => c.dd ? dollars(r.dollars) + " " + unit(c) : r.balance == null ? "—" : coinsOf(r.balance) + " " + unit(c);
+function show(tr, c, r, old) {
+  tr.cells[1].textContent = shown(c, r); tr.cells[1].className = "num" + (old ? " muted" : "");
+  tr.cells[2].textContent = r.arriving ? coinsOf(r.arriving) : "";
+  tr.cells[1].title = old ? `as read ${new Date(r.at).toLocaleTimeString()}; reading again…` : "";
+}
+function balances(force) {
+  const tb = $("w-balances"); tb.textContent = "";
+  const stale = [], mine = ++drawn, was = kept(), now = Date.now();
+  for (const c of wallets()) {
+    const tr = tb.insertRow();
+    cell(tr, c.label + (c.dd && !c.mainnet ? " (test)" : "")); if (c.error) tr.title = c.error;
+    cell(tr, "…", "num"); cell(tr, "", "num");
+    if (!c.dd && !c.lazy && !force) {                                     // read with the page just now
+      const r = {balance: c.balance == null ? null : (c.spendable ?? c.balance), arriving: c.arriving || 0};
+      show(tr, c, r, false); keep(c.network, r);
+      continue;
+    }
+    const before = was[c.network];
+    if (before) show(tr, c, before, true);
+    if (force || !before || now - before.at > FRESH) stale.push([c, tr]);
+    else show(tr, c, before, false);
+  }
+  if (!said.chains.length) cell(tb.insertRow(), "No wallet is ready yet: the chains are still syncing.", "muted");
+  fillIn(stale, mine);
+}
+setInterval(() => { if (document.visibilityState === "visible" && said.chains.length) balances(true); }, EVERY);
+/** The balances the node left out (lazy wallets: only the wallet picked is read with the page), read afterwards one
+ * chain at a time, so the page opens at once and no two borrowed chains are asked together (2026-11-06, SadFrog: "its
+ * not showing most of my other balances either from the borrowed nodes ... until i switch"). */
+async function fillIn(rows, mine) {
+  for (const [c, tr] of rows) {
+    if (mine !== drawn) return;                                          // the page was drawn again meanwhile
+    if (c.dd) {
+      try {
+        const h = await ddHoldings(c);
+        if (mine !== drawn) return;
+        if (h) { const r = {dollars: h.digidollars}; keep(c.network, r); show(tr, c, {...r, at: Date.now()}, false); }
+        else if (!kept()[c.network]) tr.cells[1].textContent = "open your wallet";
+      } catch (x) { if (mine === drawn) { tr.cells[1].textContent = String(x.message || x); tr.cells[1].className = "num bad"; } }
+      continue;
+    }
+    let full = null;
+    try { full = ((await wallet.state(c.network)).chains || []).find((x) => x.network === c.network); } catch (e) {}
+    if (mine !== drawn) return;
+    if (!full || full.lazy) { if (!kept()[c.network]) tr.cells[1].textContent = "—"; continue; }
+    Object.assign(c, full);
+    if (full.error) tr.title = full.error;
+    const r = {balance: full.balance == null ? null : (full.spendable ?? full.balance), arriving: full.arriving || 0};
+    keep(c.network, r); show(tr, c, {...r, at: Date.now()}, false);
+  }
+}
+/** A console line's answer (lite.html runs the same /lite/api/console), with this wallet's public keys when open. */
+async function console_(line) {
+  const pubkeys = window.litePubkeys ? await window.litePubkeys().catch(() => ({})) : {};
+  const r = await fetch("/lite/api/console", {method: "POST", credentials: "same-origin",
+    headers: {"Content-Type": "application/json", "X-Arcade-Lite": "1", "X-Arcade-Admin": "1"},
+    body: JSON.stringify({line, pubkeys})});
+  const j = await r.json();
+  if (!j.ok) throw new Error(j.error || j.detail || "refused");
+  return j.result || {};
+}
+/** What the DigiDollar module says this wallet holds on `c`'s chain (ddreceive), or null while the wallet is shut.
+ * One ask at a time: a module answers one request at a time and tells a second that waits "busy" (modhost.py), so the
+ * Balances rows and Transactions queue here, and an answer under 30 seconds old is used again. */
+function ddAsk(work) {
+  const asked = ddQueue.then(work);
+  ddQueue = asked.catch(() => null);
+  return asked;
+}
+function ddHoldings(c) {
+  const kept = ddHeld[c.network];
+  if (kept && Date.now() - kept.at < 30000) return Promise.resolve(kept.said);
+  return ddAsk(async () => {
+    if (!(await wallet.opened(TAGCHAIN))) return null;
+    const said = await console_(`ddreceive ${ddWord(c)}`);
+    ddHeld[c.network] = {at: Date.now(), said};
+    return said;
+  });
+}
+async function ddAddressOf(to, c) {
+  const r = await fetch(`/lite/api/ddaddress?to=${encodeURIComponent(to)}&chain=${encodeURIComponent(c.base)}`,
+                        {cache: "no-store"});
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.detail || "no DigiDollar address");
+  return j;
+}
+async function draw() {
+  const c = chain();
+  document.querySelectorAll("[data-unit]").forEach((s) => { s.textContent = c.dd ? "dollars, " + unit(c) : unit(c); });
+  $("w-amount").placeholder = c.dd ? "100.00" : "";
+  if (c.dd && !c.address) {
+    $("w-address").textContent = "…";
+    try { c.address = (await ddAddressOf("me", c)).address; } catch (x) { c.address = ""; $("w-only").textContent = String(x.message || x); }
+  }
+  if (chain() !== c) return;                                  // another wallet was picked meanwhile
+  $("w-address").textContent = c.address || "—";
+  if (c.address || !c.dd) $("w-only").textContent = !c.address ? "" : c.dd
+    ? `Send only ${unit(c)} here, from a DigiDollar wallet. ${c.mainnet ? "Real dollars." : "Test dollars have no value."}`
+    : c.mainnet ? `Send only ${unit(c)} here: real coins.` : `Send only ${unit(c)} here. Test coins have no value.`;
+  $("w-qr").textContent = "";
+  if (c.address && typeof qrcode === "function") {
+    const qr = qrcode(0, "M"); qr.addData(c.address); qr.make();
+    $("w-qr").innerHTML = qr.createSvgTag({cellSize: 4, margin: 2});
+  }
+  history();
+}
+async function history() {
+  const tb = $("w-history"); tb.textContent = ""; $("w-since").textContent = "";
+  if (!net) return;
+  const c = chain();
+  if (c.dd) {
+    // The DigiDollars this wallet holds now, coin by coin, as the module reads them (ddreceive).
+    let h = null;
+    try { h = await ddHoldings(c); } catch (x) { cell(tb.insertRow(), String(x.message || x), "bad"); return; }
+    if (!h) { cell(tb.insertRow(), "Open your wallet (Send asks for its password) to read your DigiDollars.", "muted"); return; }
+    for (const coin of h.coins || []) {
+      const tr = tb.insertRow();
+      cell(tr, ""); cell(tr, "Held"); cell(tr, coin.from || "");
+      cell(tr, dollars(coin.dollars), "num ok"); cell(tr, "", "num");
+      cell(tr, String(coin.txid).slice(0, 16) + "…").title = coin.txid;
+    }
+    if (!tb.rows.length) cell(tb.insertRow(), "No DigiDollars here yet.", "muted");
+    $("w-since").textContent = `${dollars(h.digidollars)} in all, at ${h.address || "your DigiDollar address"}.`;
+    return;
+  }
+  let got;
+  try { got = await (await fetch(`${API}/activity?chain=${encodeURIComponent(net)}&limit=50`, {cache: "no-store"})).json(); }
+  catch (e) { cell(tb.insertRow(), "The node did not answer.", "bad"); return; }
+  for (const r of got.rows || []) {
+    const tr = tb.insertRow(), conf = r.confirmations ?? Math.max(0, (got.tip || 0) - r.height + 1);
+    cell(tr, r.time ? new Date(r.time * 1000).toLocaleString() : "");
+    cell(tr, r.net > 0 ? "Received" : r.net < 0 ? "Sent" : "To yourself");
+    cell(tr, r.other_tag ? "@" + r.other_tag : r.other || "");
+    cell(tr, (r.net > 0 ? "+" : "") + coinsOf(r.net), "num " + (r.net < 0 ? "bad" : "ok"));
+    cell(tr, conf ? String(conf) : "unconfirmed", "num" + (conf ? "" : " warn"));
+    cell(tr, String(r.txid).slice(0, 16) + "…").title = r.txid;
+  }
+  if (!tb.rows.length) cell(tb.insertRow(), got.detail || "Nothing yet.", "muted");
+  if (got.since != null) $("w-since").textContent = `Kept from block ${Number(got.since).toLocaleString()}.`;
+}
+document.querySelectorAll("[data-chain]").forEach((box) => {
+  box.onchange = () => { net = box.value; if (NODE) draw(); else load(); };
+});
+document.querySelector('[data-tab="transactions"]').addEventListener("click", history);   // read afresh when opened
+$("w-copy").onclick = () => navigator.clipboard && navigator.clipboard.writeText(chain().address || "");
+
+/** Why the offer is not the send that was typed, or "". */
+function mismatch(o, to, amount, read) {
+  if (Number(o.amount) !== satsOf(amount)) return `The node built a send of ${coinsOf(o.amount)}, and you typed ${amount}.`;
+  if (ADDRESSY.test(to) ? o.to !== to : String(o.to_tag || "").toLowerCase() !== to.replace(/^@/, "").toLowerCase()) {
+    return `The node built a send to ${o.to_tag ? "@" + o.to_tag : o.to}, not ${to}.`;
+  }
+  // An account's review is read from the bytes: the payee and the amount must be in them.
+  if (!NODE && !(read.pays || []).some((p) => !p.mine && p.to === o.to && Number(p.value) === Number(o.amount))) {
+    return "The transaction's own bytes do not pay that address that amount.";
+  }
+  return "";
+}
+function terms(list) {
+  const dl = $("w-terms"); dl.textContent = "";
+  for (const [k, v] of list) {
+    const dt = document.createElement("dt"), dd = document.createElement("dd");
+    dt.textContent = k; dd.textContent = v; dl.append(dt, dd);
+  }
+}
+$("w-form").onsubmit = async (e) => {
+  e.preventDefault();
+  tell(""); $("w-review").hidden = true; offer = null;
+  const c = chain(), to = $("w-to").value.trim(), amount = $("w-amount").value.trim();
+  if (c.dd) return ddReview(c, to, amount);
+  if (!satsOf(amount)) { tell("Type the amount in coins, like 1.5.", "bad"); return; }
+  keys = await wallet.opened(TAGCHAIN);
+  if (!keys) { $("w-unlock").hidden = false; $("w-password").focus(); return; }
+  try {
+    const o = await wallet.offerSend(to, amount, c.network);
+    const read = await wallet.checked(o, keys);
+    const wrong = mismatch(o, to, amount, read);
+    if (wrong) { tell(wrong + " Nothing was signed.", "bad"); return; }
+    const u = unit(c), list = [["To", (o.to_tag ? "@" + o.to_tag + "  " : "") + o.to], ["Amount", `${coinsOf(o.amount)} ${u}`],
+                               ["Network fee", `${coinsOf(read.fee)} ${u}`]];
+    if (NODE) list.push(["Leaves the wallet", `${coinsOf(Number(o.amount) + Number(read.fee || 0))} ${u}`]);
+    else {
+      const costs = wallet.mainnetCosts(o, read);
+      if (costs.operator) list.push(["Arcade's fee", `${coinsOf(costs.operator)} ${u}`]);
+      if (costs.data) list.push(["Data", `${coinsOf(costs.data)} ${u}`]);
+      if (read.change) list.push(["Comes back to you", `${coinsOf(read.change)} ${u}`]);
+      list.push(["Leaves your wallet", `${coinsOf(costs.total)} ${u}`]);
+    }
+    terms(list);
+    $("w-warn").hidden = !c.mainnet;
+    $("w-go").disabled = false; $("w-go").textContent = `Send ${coinsOf(o.amount)} ${u}`;
+    $("w-review").hidden = false; offer = o; $("w-go").focus();
+  } catch (x) { tell(String(x.message || x), "bad"); }
+};
+/** A DigiDollar send: the payee's DigiDollar address (an @name's from its key on the chain), the module's ddsend,
+ * and this wallet's own read of the transaction before anything is signed: it must pay that address those dollars. */
+async function ddReview(c, to, amount) {
+  if (!/^\$?\d+(\.\d{1,2})?$/.test(amount)) { tell("Type the amount in dollars, like 25 or 12.50.", "bad"); return; }
+  const cents = Math.round(Number(amount.replace("$", "")) * 100);
+  keys = await wallet.opened(TAGCHAIN);
+  if (!keys) { $("w-unlock").hidden = false; $("w-password").focus(); return; }
+  try {
+    const payee = await ddAddressOf(to, c);
+    const got = await ddAsk(() => console_(`ddsend ${payee.address} ${(cents / 100).toFixed(2)} ${ddWord(c)}`));
+    const o = got.sign;
+    if (!o) throw new Error(got.how || "the DigiDollar module prepared nothing to sign");
+    const read = await wallet.checked(o, keys);
+    if (!(read.pays || []).some((p) => !p.mine && p.dd === cents && p.to === payee.address)) {
+      tell(`The transaction's own bytes do not pay ${dollars(cents / 100)} to ${payee.address}. Nothing was signed.`, "bad");
+      return;
+    }
+    const back = (read.pays || []).filter((p) => p.mine && p.dd !== undefined).reduce((n, p) => n + p.dd, 0);
+    const list = [["To", (payee.tag ? "@" + payee.tag + "  " : "") + payee.address],
+                  ["Amount", `${dollars(cents / 100)} ${unit(c)}`],
+                  ["Network fee", `${coinsOf(read.fee)} DGB${c.mainnet ? "" : " test"}`]];
+    if (back) list.push(["DigiDollars back to you", dollars(back / 100)]);
+    terms(list);
+    $("w-warn").hidden = !c.mainnet;
+    $("w-go").disabled = false; $("w-go").textContent = `Send ${dollars(cents / 100)} ${unit(c)}`;
+    $("w-review").hidden = false; offer = o; $("w-go").focus();
+  } catch (x) { tell(String(x.message || x), "bad"); }
+}
+$("w-unlock-form").onsubmit = async (e) => {
+  e.preventDefault();
+  if (!ME) { tell("This account's wallet is not kept on this arcade: sign in again to open it here.", "bad"); return; }
+  try {
+    await wallet.unlockHere(ME, $("w-password").value, TAGCHAIN);
+    $("w-password").value = ""; $("w-unlock").hidden = true; $("w-form").requestSubmit();
+  } catch (x) { tell(String(x.message || x), "bad"); }
+};
+$("w-cancel").onclick = () => { offer = null; $("w-review").hidden = true; tell("Not sent.", "muted"); };
+$("w-go").onclick = async () => {
+  if (!offer) return;
+  const o = offer; offer = null; $("w-go").disabled = true;               // one press, one send
+  try {
+    // The review above listed every cost from `checked`, so a mainnet send is not asked about twice.
+    const out = await wallet.confirm(keys, o, {reviewed: true});
+    ddHeld = {};
+    try { localStorage.removeItem(KEPT); } catch (e) {}                 // a send changes balances: read them afresh
+    $("w-review").hidden = true; $("w-to").value = ""; $("w-amount").value = "";
+    tell(`Sent. Transaction ${out.txid}`, "ok");
+    load();
+  } catch (x) { $("w-review").hidden = true; tell(String(x.message || x), "bad"); }
+};
+if (!NODE) {
+  // For the console (lite.html): the public keys this account's wallet holds, by chain, and an offer a node module
+  // prepared, reviewed here and signed only on a yes.
+  const hexOf = (u) => Array.from(u, (b) => b.toString(16).padStart(2, "0")).join("");
+  window.litePubkeys = async () => {
+    const k = await wallet.opened(TAGCHAIN);
+    const out = {};
+    if (k) for (const c of said.chains) { try { out[c.network] = hexOf(wallet.keysOn(k, c.network).pubkey); } catch (e) {} }
+    return out;
+  };
+  window.liteSign = async (o) => {
+    const k = await wallet.opened(TAGCHAIN);
+    if (!k) throw new Error("Open your wallet first (Send asks for its password), then run the command again. Nothing was signed.");
+    const read = await wallet.checked(o, k);
+    const c = said.chains.find((x) => x.network === o.chain) || {};
+    // Every payment as this browser read it from the transaction itself (coins.verifyOffer), never the module's own
+    // words alone (2026-11-05 review: the box said only the module's "what", the fee and the change, so a module could
+    // pay itself the wallet's coins under any description).
+    const paid = (read.pays || []).filter((x) => !x.mine);
+    const lines = [`The module says: ${o.what || "a transaction"}`, "", "This transaction pays:"];
+    for (const x of paid) {
+      lines.push(x.dd !== undefined ? `  $${(x.dd / 100).toFixed(2)} in DigiDollars to ${x.to}`
+                 : x.bytes !== undefined ? `  ${x.bytes} bytes written to the chain${x.value ? ` (${coinsOf(x.value)} ${unit(c)})` : ""}`
+                                         : `  ${coinsOf(x.value)} ${unit(c)} to ${x.to}`);
+    }
+    if (!paid.length) lines.push("  nobody but you");
+    lines.push(`Network fee: ${coinsOf(read.fee)} ${unit(c)}`);
+    if (read.change) lines.push(`Comes back to you: ${coinsOf(read.change)} ${unit(c)}`);
+    // A module's spend on a chain of real coins says so, as Send's review does (w-warn).
+    if (c.mainnet) lines.push("", `Real ${unit(c)}. Once it is in a block it can't be taken back.`);
+    if (!window.confirm(lines.join("\n") + "\n\nSign it with your wallet and send it?")) return "Not sent. Nothing was signed.";
+    const out = await wallet.confirm(k, o, {reviewed: true});
+    load();
+    return `Sent. Transaction ${out.txid}`;
+  };
+}
+load();
+</script>
+{% endif %}

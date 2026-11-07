@@ -32,7 +32,7 @@
     // wallet access card comes up over it when it first reaches for the wallet or asks (the 'access' door below).
     var CHAIN = {network: "{{chain.network}}",
                  version: {{chain.params.pubkeyhash_version}}};
-    var doors = {access: 'viewer', contacts: 'viewer', storage: '/storage/', node: '/node/', swap: '/swap/', owner: '/owner/',
+    var doors = {access: 'viewer', contacts: 'viewer', groups: 'viewer', storage: '/storage/', node: '/node/', swap: '/swap/', owner: '/owner/',
                  realtime: '/realtime/', escrow: '/r/escrow/', state: '/r/state/', llm: 'viewer', app: 'viewer'};
 
     // Realtime rooms (arcade/web/realtime.py, templates/realtime.js): this page
@@ -51,6 +51,27 @@
     // that fails sends the player back to this one. Signed in here, the player is still
     // themselves there: the wallet signs that node's certificate (hello.cert) instead.
     var RT_PICK = 'arcade-rt-base-2';   // -2: picks made before 2026-10-12 17:00 could be this node's own tunnel
+    // A WAY IN THAT ANSWERS BUT NEVER SPEAKS (2026-11-02, a Riffs Lounge: "the box appears instantly, the audio and video are
+    // flaky or never connect"): another node's quick tunnel answered hello fastest and took the join and every send, but its
+    // room stream delivered nothing, not even the ping. The player showed up for everyone and heard nobody, so no offer ever
+    // reached them, and every 15 s of silence they joined again by the same road. A road whose stream says nothing in
+    // RT_FIRST ms, or that dies, is shunned for RT_SHUN ms, in every tab: this node's own road always works.
+    var RT_BAD = 'arcade-rt-bad', RT_FIRST = 8000, RT_SHUN = 6 * 3600 * 1000;
+    function realtimeShunned(){
+      var now = Date.now(), out = {};
+      try {
+        var b = JSON.parse(localStorage.getItem(RT_BAD) || '{}');
+        for (var k in b) if (typeof b[k] === 'number' && b[k] > now) out[k] = b[k];
+      } catch (err) {}
+      return out;
+    }
+    function realtimeShun(base){
+      if (!base) return;
+      var b = realtimeShunned();
+      b[base] = Date.now() + RT_SHUN;
+      try { localStorage.setItem(RT_BAD, JSON.stringify(b)); } catch (err) {}
+      realtimeForget();
+    }
     function realtimeTime(base){
       var t0 = performance.now();
       return Promise.race([
@@ -62,15 +83,16 @@
     function realtimeBase(){
       try {
         var kept = JSON.parse(sessionStorage.getItem(RT_PICK) || 'null');
-        if (kept && Date.now() - kept.at < 600000) return Promise.resolve(kept.base);
+        if (kept && Date.now() - kept.at < 600000 && !(kept.base && realtimeShunned()[kept.base])) return Promise.resolve(kept.base);
       } catch (err) {}
+      var shunned = realtimeShunned();
       return fetch('/realtime/nodes', {cache: 'no-store'}).then(function(r){ return r.json(); })
         .then(function(j){
           // Never this node again by another road (its own tunnel): same rooms, one more hop (2026-10-12 live:
           // players on .25 were carried through .25's own tunnel and lost their room streams there).
           var bases = [''].concat(((j && j.nodes) || []).filter(function(n){ return n.node !== j.self; })
             .map(function(n){ return n.base; })
-            .filter(function(b){ return b && b !== location.origin; }).slice(0, 12));
+            .filter(function(b){ return b && b !== location.origin && !shunned[b]; }).slice(0, 12));
           // two tries each (the first pays for a fresh TLS connection); the better counts
           return Promise.all(bases.map(function(b){
             return realtimeTime(b).then(function(a){ return realtimeTime(b).then(function(c){ return Math.min(a, c); }); });
@@ -86,21 +108,23 @@
     function realtimeForget(){ try { sessionStorage.removeItem(RT_PICK); } catch (err) {} }
     // The words are built by wallet.js from the hello's own node and network and the player's own address, never
     // taken as the node says them (2026-10-26, issue #5, blind signing: realtimeSign).
-    function realtimeProof(hello, base){
-      if (base) return realtimeProofThere(hello);
+    function realtimeProof(hello, base, onWait){
+      if (base) return realtimeProofThere(hello, onWait);
       if (!hello.sign || !hello.who || hello.who.kind !== 'account') return Promise.resolve(null);
-      return realtimeSigned(hello, hello, false);
+      return realtimeSigned(hello, hello, false, onWait);
     }
     // Another node: who the player is comes from THIS node's hello; the node and network named from that one's.
-    function realtimeProofThere(there){
+    function realtimeProofThere(there, onWait){
       if (!there.cert) return Promise.resolve(null);
       return fetch('/realtime/hello', {cache: 'no-store'}).then(function(r){ return r.json(); }).then(function(own){
         if (!own.sign || !own.who || own.who.kind !== 'account' || !own.who.address) return null;
-        return realtimeSigned(own, there, true).then(function(p){ return p && {sig: p.sig, expires: p.expires, address: own.who.address}; });
+        return realtimeSigned(own, there, true, onWait).then(function(p){ return p && {sig: p.sig, expires: p.expires, address: own.who.address}; });
       }).catch(function(){ return null; });
     }
     // `own`: this node's hello (who the player is, which chain's key); `hello`: the node the certificate is for.
-    function realtimeSigned(own, hello, there){
+    // `onWait` (the first join only): told 'unlock' before the wallet asks for its password, so the page waits for the
+    // person instead of giving up after 20 s (2026-10-30: a locked wallet left a Tank Simulator room off the mesh).
+    function realtimeSigned(own, hello, there, onWait){
       var expires = there ? (hello.cert || {}).expires : own.sign.expires;
       var slot = 'arcade-rt-cert:' + [hello.network, hello.node, own.who.address, expires].join(':');
       try {
@@ -109,7 +133,9 @@
       } catch (err) {}
       return import('/wallet.js').then(function(w){
         return w.opened(own.sign.chain).then(function(keys){
-          return keys || arcadeKeys(own.sign.chain, 'Join this game as you? Your wallet signs who you are, once a day.');
+          if (keys) return keys;
+          if (onWait) onWait('unlock');
+          return arcadeKeys(own.sign.chain, 'Join this game as you? Your wallet signs who you are, once a day.');
         }).then(function(keys){
           var mine = keys && keys.on && keys.on[own.sign.chain.network];
           if (!mine || mine.address !== own.who.address) return null;
@@ -130,44 +156,146 @@
         .then(function(r){ return r.json(); });
     }
     // One way into a room, used for the first join and for every rejoin.
-    function realtimeConnectAt(base, name, game, guest){
+    function realtimeConnectAt(base, name, game, guest, onWait){
       return fetch(base + '/realtime/hello', {cache: 'no-store', credentials: base ? 'omit' : 'same-origin'})
         .then(function(r){ return r.json(); })
         .then(function(hello){
           if (!hello.online) return {ok: true, online: false, why: hello.why || 'this node is not on the mesh'};
-          return realtimeProof(hello, base).then(function(proof){
+          return realtimeProof(hello, base, onWait).then(function(proof){
             return realtimePost('/realtime/join', {game: game, room: name, guest: guest || '',
                                 sig: proof && proof.sig, expires: proof && proof.expires,
                                 address: proof && proof.address}, base);
           });
         }).then(function(j){ if (j) j.base = base; return j; });
     }
-    function realtimeConnect(name, game, guest){
+    function realtimeConnect(name, game, guest, onWait){
       return realtimeBase().then(function(base){
-        if (!base) return realtimeConnectAt('', name, game, guest);
-        return realtimeConnectAt(base, name, game, guest).then(function(j){
+        if (!base) return realtimeConnectAt('', name, game, guest, onWait);
+        return realtimeConnectAt(base, name, game, guest, onWait).then(function(j){
           if (j && j.ok && j.token) return j;
           throw new Error('that node said no');
         }).catch(function(){                      // the chosen node failed: this one, and choose again later
           realtimeForget();
-          return realtimeConnectAt('', name, game, guest);
+          return realtimeConnectAt('', name, game, guest, onWait);
         });
       });
     }
-    function realtimeOpen(name, frame, j, game, fast, link, max){
+    // `h`: a rejoin's own room, taken over rather than replaced (2026-11-02): everything that holds it -- the camera and
+    // the screen, their Stop handlers, the game's media calls -- goes on holding the live one.
+    // ONE STREAM FOR ALL OF THIS PAGE'S ROOMS ON ONE NODE (2026-11-03, realtime.py /realtime/hub): a browser opens only 6
+    // connections to a site over plain http, and a page in 6 rooms had none left for its sends. Each room gets a
+    // stand-in with an EventSource's face (onmessage, onopen, onerror, addEventListener, close, readyState), fed from
+    // the one hub stream; a node from before the hub gives its room an EventSource of its own, as before.
+    var rtHubs = {};
+    function realtimeStream(base, token){
+      var fake = {readyState: 0, onmessage: null, onopen: null, onerror: null, _l: {}, token: token,
+        addEventListener: function(t, fn){ (this._l[t] = this._l[t] || []).push(fn); },
+        _fire: function(t, ev){
+          (this._l[t] || []).forEach(function(fn){ fn(ev); });
+          if (t === 'message' && this.onmessage) this.onmessage(ev);
+          if (t === 'open' && this.onopen) this.onopen(ev);
+          if (t === 'error' && this.onerror) this.onerror(ev);
+        },
+        close: function(){
+          this.readyState = 2;
+          if (this.real) { try { this.real.close(); } catch (err) {} }
+          else hubDetach(base, token);
+        }};
+      hubAttach(base, token, fake).catch(function(){
+        var hub = rtHubs[base];
+        if (hub) { delete hub.rooms[token]; if (!Object.keys(hub.rooms).length && !hub.es) delete rtHubs[base]; }
+        if (fake.readyState === 2) return;
+        var es = fake.real = new EventSource(base + '/realtime/stream?token=' + encodeURIComponent(token));
+        es.onmessage = function(ev){ fake._fire('message', ev); };
+        es.onopen = function(ev){ fake.readyState = 1; fake._fire('open', ev); };
+        es.onerror = function(ev){ fake.readyState = es.readyState; fake._fire('error', ev); };
+        ['closed', 'ping'].forEach(function(t){ es.addEventListener(t, function(ev){ fake._fire(t, ev); }); });
+      });
+      return fake;
+    }
+    function hubOpen(base, hub){
+      if (hub.es) { try { hub.es.close(); } catch (err) {} }
+      var es = hub.es = new EventSource(base + '/realtime/hub?id=' + encodeURIComponent(hub.id));
+      es.onopen = function(){ for (var t in hub.rooms) { hub.rooms[t].readyState = 1; hub.rooms[t]._fire('open', {}); } };
+      // Anything on the hub shows the line is alive for every room on it (2026-11-07, found by the GBC session in Pocket
+      // Tide Super): the node pings only after 4 s with nothing at all on the hub, so a silent room beside a busy one
+      // heard nothing, was taken for dead every ~20 s, and every fast-lane link was rebuilt.
+      function alive(but){ for (var t in hub.rooms) if (hub.rooms[t] !== but) hub.rooms[t]._fire('ping', {}); }
+      es.onmessage = function(ev){
+        var d; try { d = JSON.parse(ev.data); } catch (err) { return; }
+        var room = hub.rooms[d.k];
+        if (room) room._fire('message', {data: JSON.stringify(d.ev)});
+        alive(room);
+      };
+      es.addEventListener('ping', function(ev){ for (var t in hub.rooms) hub.rooms[t]._fire('ping', ev); });
+      es.addEventListener('closed', function(ev){
+        var d; try { d = JSON.parse(ev.data); } catch (err) { return; }
+        var room = hub.rooms[d.k];
+        if (room) { delete hub.rooms[d.k]; room._fire('closed', ev); }
+        alive(null);
+      });
+      es.onerror = function(){
+        if (es.readyState !== 2 || hub.es !== es) return;    // reconnecting by itself: the node keeps the hub a minute
+        delete rtHubs[base];                                  // gone (the node restarted): every room takes its seat again
+        for (var t in hub.rooms) { var r = hub.rooms[t]; r.readyState = 2; r._fire('error', {}); }
+      };
+    }
+    function hubAttach(base, token, fake){
+      var hub = rtHubs[base] || (rtHubs[base] = {id: '', es: null, rooms: {}, chain: Promise.resolve()});
+      hub.rooms[token] = fake;                    // before the answer: its first events may come on the stream first
+      // One attach at a time: the first makes the hub, the rest join it (eight rooms joined at once made eight hubs).
+      var go = hub.chain.then(function(){ return realtimePost('/realtime/hub/attach', {token: token, hub: hub.id}, base); });
+      hub.chain = go.catch(function(){});
+      return go.then(function(j){
+        if (!j || !j.ok || !j.hub) { delete hub.rooms[token]; throw new Error('no hub here'); }
+        if (rtHubs[base] !== hub || fake.readyState === 2) return;
+        if (hub.id !== j.hub) {
+          // A new hub (the first, or the node let the last one go): the rooms already on it move over.
+          var old = hub.id; hub.id = j.hub;
+          if (old) for (var t in hub.rooms) if (t !== token) realtimePost('/realtime/hub/attach', {token: t, hub: hub.id}, base).catch(function(){});
+          hubOpen(base, hub);
+        } else if (hub.es && hub.es.readyState === 1) { fake.readyState = 1; fake._fire('open', {}); }
+      });
+    }
+    function hubDetach(base, token){
+      var hub = rtHubs[base];
+      if (!hub || !hub.rooms[token]) return;
+      delete hub.rooms[token];
+      realtimePost('/realtime/hub/detach', {token: token, hub: hub.id}, base).catch(function(){});
+      if (!Object.keys(hub.rooms).length) { try { hub.es.close(); } catch (err) {} delete rtHubs[base]; }
+    }
+    function realtimeOpen(name, frame, j, game, fast, link, max, h){
       var base = j.base || '';
-      var es = new EventSource(base + '/realtime/stream?token=' + encodeURIComponent(j.token));
-      var h = rt[name] = {token: j.token, es: es, me: j.me, members: {}, game: game, base: base, frame: frame,
-                          wantFast: !!fast, link: fastLinkList(link), fastMax: fastMaxOf(max)};
+      var es = realtimeStream(base, j.token);
+      h = h || {};
+      Object.assign(h, {token: j.token, es: es, me: j.me, members: {}, game: game, base: base, frame: frame,
+                        wantFast: !!fast, link: fastLinkList(link), fastMax: fastMaxOf(max), got: false,
+                        rejoining: false, again: null, retry: null});
+      rt[name] = h;
       (j.members || []).forEach(function(p){ h.members[p.id] = p; });
       if (fast) fastStart(name, h);
+      if (base) setTimeout(function(){
+        if (rt[name] === h && h.es === es && !h.got) { realtimeShun(base); realtimeRejoin(name, frame, h); }
+      }, RT_FIRST);
       es.onmessage = function(ev){
-        if (rt[name] !== h) return;              // an old stream, replaced by a rejoin
+        if (rt[name] !== h || h.es !== es) return;   // an old stream, replaced by a rejoin
         var d; try { d = JSON.parse(ev.data); } catch (err) { return; }
         d.room = name;
         if (d.member) {
-          if (d.type === 'join') { h.members[d.member.id] = d.member; fastMeet(name, h, d.member); }
+          if (d.type === 'join') {
+            // Back through another node (2026-11-02, the operator: "if somebody drops out of a riff lounge, they can't
+            // reconnect again for several minutes"): the link we hold is to the page that dropped; start a new one.
+            var was = h.fast && h.fast.peers[d.member.id];
+            if (was && was.p.node && d.member.node && was.p.node !== d.member.node) fastDrop(h, d.member.id, true, true);
+            h.members[d.member.id] = d.member; fastMeet(name, h, d.member);
+            var np = h.fast && h.fast.peers[d.member.id];
+            if (np && !np.s) np.byJoin = true;     // the link to the page that just joined: its 'h' must not restart it
+          }
           if (d.type === 'leave') {
+            // The seat they left behind on the node they dropped from, given up after they came back through
+            // another: they are still here, so neither their link nor the page hears of it.
+            var now = h.members[d.member.id];
+            if (now && now.node && d.member.node && now.node !== d.member.node) return;
             delete h.members[d.member.id];
             if (h.fast && h.fast.peers[d.member.id]) { fastDrop(h, d.member.id); fastSay(name, h, d.member, 'gone'); }
           }
@@ -185,18 +313,18 @@
       };
       // The node let this seat go (idle, or it restarted and has never heard
       // of this token): take a seat again rather than leave the game deaf.
-      es.addEventListener('closed', function(){ realtimeRejoin(name, frame, h); });
-      es.onerror = function(){ if (es.readyState === 2) realtimeRejoin(name, frame, h); };
+      es.addEventListener('closed', function(){ if (h.es === es) realtimeRejoin(name, frame, h); });
+      es.onerror = function(){ if (es.readyState === 2 && h.es === es) realtimeRejoin(name, frame, h); };
       // A stream that went silent without closing (2026-10-18, the operator: ASHVALE "really flaky" -- a phone that slept,
       // a network that changed, a proxy that dropped the line): the node says "ping" every few seconds when the room
       // is quiet, so nothing at all for REALTIME_DEAD ms means the line is dead, and the seat is taken again.
       h.heard = Date.now();
-      es.addEventListener('ping', function(){ h.heard = Date.now(); });
+      es.addEventListener('ping', function(){ if (h.es === es) { h.heard = Date.now(); h.got = true; } });
       var hear = es.onmessage;
-      es.onmessage = function(ev){ h.heard = Date.now(); return hear(ev); };
-      es.onopen = function(){ h.heard = Date.now(); };
-      h.watch = setInterval(function(){
-        if (rt[name] !== h) { clearInterval(h.watch); return; }
+      es.onmessage = function(ev){ if (h.es === es) { h.heard = Date.now(); h.got = true; } return hear(ev); };
+      es.onopen = function(){ if (h.es === es) h.heard = Date.now(); };
+      var watch = h.watch = setInterval(function(){
+        if (rt[name] !== h || h.watch !== watch) { clearInterval(watch); return; }
         if (Date.now() - h.heard > REALTIME_DEAD) realtimeRejoin(name, frame, h);
       }, 5000);
       tradeFrame = frame;
@@ -228,9 +356,14 @@
     function realtimeRejoin(name, frame, h){
       if (rt[name] !== h || h.rejoining) return;
       h.rejoining = true;
-      fastStop(h);                                // the new seat connects again from scratch
+      // The links connect again from scratch; the camera, microphone and screen stay open and go back on them (2026-11-02:
+      // each rejoin closed them, and a shared screen cannot come back without the player's press).
+      var kept = h.media && (h.media.stream || h.media.xstream) ? {video: !!h.media.video, audio: !!h.media.audio,
+                                                                  screen: !!h.media.xstream || !!h.media.screen} : null;
+      fastStop(h, true);
       try { h.es.close(); } catch (err) {}
       clearInterval(h.watch);
+      if (h.base) realtimeShun(h.base);          // another node's road failed: this node's own from now on
       frame.postMessage({arcade: 'realtime', event: {type: 'reconnecting', room: name}}, '*');
       var tries = 0;
       // A line that went silent may still hold its seat on the node: give it up first, so the same guest name is
@@ -247,11 +380,13 @@
             return;
           }
           if (!j || !j.ok || !j.online || !j.token) throw new Error('not yet');
-          var before = h.members, now = realtimeOpen(name, frame, j, h.game, h.wantFast, h.link, h.fastMax);
+          var before = h.members, was = h.me, now = realtimeOpen(name, frame, j, h.game, h.wantFast, h.link, h.fastMax, h);
           // The page's own seat was replaced: say so, every time, so a game can send its
-          // state again -- the others saw this player leave and come back (2026-10-13).
-          frame.postMessage({arcade: 'realtime', event: {type: 'rejoined', room: name, member: now.me}}, '*');
-          if (!h.me || now.me.id !== h.me.id) {
+          // state again -- the others saw this player leave and come back (2026-10-13). `media`: what is still
+          // open and goes back on the new links by itself, so a page need not start it again.
+          frame.postMessage({arcade: 'realtime', event: {type: 'rejoined', room: name, member: now.me,
+                                                         media: kept && now.media ? kept : null}}, '*');
+          if (!was || now.me.id !== was.id) {
             frame.postMessage({arcade: 'realtime', event: {type: 'me', room: name, member: now.me}}, '*');
           }
           for (var id in before) if (!now.members[id]) {
@@ -279,6 +414,8 @@
     // size and rate limits on every node, old ones included. STUN comes from /realtime/ice (nodes first, then a
     // public one); there is no relay unless the game's builder pays for one, so a pair that cannot connect
     // directly carries that link over the room instead, as often as the room allows (state 'room').
+    // FAST_FRESH: a link younger than this is still being made, and a page's 'h' never restarts it.
+    var FAST_FRESH = 8000;
     var RTC = '\u001farcade-rtc:', FAST_WAIT = 12000, FAST_MAX = 16384, FAST_PEERS = 19, RTC_PIECE = 300;
     // WHO TO LINK WITH, TO WHOM TO SEND, AND BYTES (2026-10-27, SadFrog's side for an MMO: "one host, many players").
     // By default every pair links (up to FAST_PEERS) and a send goes to everybody, as text. A game may instead
@@ -322,23 +459,57 @@
       for (var i = 0; i < t.length; i++) u[i] = t.charCodeAt(i);
       return u.buffer;
     }
-    var fastIce = null;
+    var fastIce = null, fastIceAt = 0, ICE_KEEP = 2 * 3600 * 1000;
     function fastServers(){
       // Which app asks: the operator chooses the apps their relay serves (realtime.py relay_for, 2026-10-23).
-      if (!fastIce) fastIce = fetch('/realtime/ice?app=' + encodeURIComponent(here), {cache: 'no-store'}).then(function(r){ return r.json(); })
-        .then(function(j){ return (j && j.iceServers) || []; })
-        .catch(function(){ fastIce = null; return []; });
+      // Relay logins expire: a page left open must not go on handing out a dead one (2026-11-01).
+      if (Date.now() - fastIceAt > ICE_KEEP) fastIce = null;
+      if (!fastIce) {
+        fastIceAt = Date.now();
+        fastIce = fetch('/realtime/ice?app=' + encodeURIComponent(here), {cache: 'no-store'}).then(function(r){ return r.json(); })
+          .then(function(j){ return (j && j.iceServers) || []; })
+          .catch(function(){ fastIce = null; return []; });
+      }
       return fastIce;
+    }
+    // How a link really goes, from the browser's own count of the pair in use (2026-11-01): 'direct', 'relay' (a relay of the
+    // arcades), 'cloudflare', 'connecting' or 'none'. A far side's relay shows here as 'relay': only its owner can tell whose it is.
+    function fastRouteOf(stats){
+      var pairId = '', pair = null, byId = {};
+      stats.forEach(function(r){
+        byId[r.id] = r;
+        if (r.type === 'transport' && r.selectedCandidatePairId) pairId = r.selectedCandidatePairId;
+      });
+      pair = byId[pairId] || null;
+      if (!pair) stats.forEach(function(r){ if (!pair && r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded') pair = r; });
+      if (!pair) return '';
+      var near = byId[pair.localCandidateId] || {}, far = byId[pair.remoteCandidateId] || {};
+      if (near.candidateType === 'relay') return /cloudflare/i.test(near.url || '') ? 'cloudflare' : 'relay';
+      return far.candidateType === 'relay' ? 'relay' : 'direct';
+    }
+    function fastRoutes(h, answer){
+      var out = {}, ids = h.fast ? Object.keys(h.fast.peers) : [];
+      Promise.all(ids.map(function(id){
+        var peer = h.fast.peers[id];
+        if (peer.state !== 'direct' || !peer.pc) { out[id] = peer.state === 'room' ? 'none' : 'connecting'; return null; }
+        return peer.pc.getStats().then(function(stats){ out[id] = fastRouteOf(stats) || 'direct'; }, function(){ out[id] = 'direct'; });
+      })).then(function(){ answer({ok: true, routes: out}); });
     }
     function fastStart(name, h){
       if (typeof RTCPeerConnection !== 'function') return;     // no WebRTC here: the room carries everything
-      h.fast = {peers: {}, out: [], parts: {}, latest: null, reliable: [], k: 0};
-      for (var id in h.members) fastMeet(name, h, h.members[id]);
+      h.fast = {peers: {}, out: [], parts: {}, latest: null, reliable: [], k: 0, s: Math.random().toString(36).slice(2, 10)};
+      for (var id in h.members) {
+        fastMeet(name, h, h.members[id]);
+        // Every page that comes (back) into the room tells those whose call it waits for (a lower id offers) that
+        // this is a new page: a link they still hold to us is to the old one, which may still look connected.
+        if (h.fast.peers[id] && id < h.me.id) fastSignal(name, h, id, {t: 'h', s: h.fast.s});
+      }
     }
-    function fastStop(h){
+    // keep: only the links go (a rejoin); the camera, the screen and what the game asked of them stay for the new links.
+    function fastStop(h, keep){
       if (!h || !h.fast) return;
-      mediaStop(h, true);
-      for (var id in h.fast.peers) fastDrop(h, id, true);
+      if (!keep) mediaStop(h, true);
+      for (var id in h.fast.peers) fastDrop(h, id, true, keep);
       clearInterval(h.fast.pump);
       h.fast = null;
     }
@@ -351,16 +522,17 @@
       if (!h.fast || !h.me || p.id === h.me.id || h.fast.peers[p.id]) return;
       if (!fastLinks(h, p.id)) return;                        // the game does not want this link
       if (Object.keys(h.fast.peers).length >= (h.fastMax || FAST_PEERS)) return;
-      var peer = h.fast.peers[p.id] = {p: p, state: '', tries: 0};
+      var peer = h.fast.peers[p.id] = {p: p, state: '', tries: 0, born: Date.now()};
       fastSay(name, h, p, 'connecting');
       if (h.me.id < p.id) fastOffer(name, h, peer);
       peer.timer = setTimeout(function(){ fastFallback(name, h, peer); }, FAST_WAIT);
     }
-    function fastDrop(h, id, quiet){
+    function fastDrop(h, id, quiet, keep){
       var peer = h.fast && h.fast.peers[id];
       if (!peer) return;
       clearTimeout(peer.timer);
-      mediaGone(h, peer);
+      clearTimeout(peer.stuck);
+      mediaGone(h, peer, keep);
       try { if (peer.pc) peer.pc.close(); } catch (err) {}
       delete h.fast.peers[id];
     }
@@ -537,9 +709,17 @@
         return;
       }
       if (o.t === 'h') {                       // they want the link now and wait for our offer (our id is lower)
-        if (!h.fast.peers[p.id]) fastMeet(name, h, p);
         var ph = h.fast.peers[p.id];
-        if (ph && ph.state !== 'direct' && h.me.id < p.id) fastOffer(name, h, ph);
+        // A new page of theirs (s): a link we hold that is not the one made for it when it joined is to a page of
+        // theirs that dropped, though it may still say connected (a seat kept is announced to nobody). Start again;
+        // what we share with them and hear from them stays.
+        if (ph && o.s && ph.s !== o.s) {
+          if (ph.byJoin && !ph.s) ph.s = o.s;
+          else { fastDrop(h, p.id, true, true); ph = null; }
+        }
+        if (!ph) { fastMeet(name, h, p); ph = h.fast.peers[p.id]; if (ph) ph.s = o.s; return; }   // fastMeet offers
+        if (o.s) ph.s = o.s;
+        if (ph.state !== 'direct' && h.me.id < p.id && !(ph.tries && Date.now() - ph.born < FAST_FRESH)) fastOffer(name, h, ph);
         return;
       }
       if (o.t === 'o') fastAnswer(name, h, p, o);
@@ -583,44 +763,107 @@
     // (negotiated id 2) once it is direct -- whole descriptions, which the room could never carry -- so media is
     // direct only (or through the builder's leased relay): it never falls back to the room. While the camera or
     // microphone is open the viewer shows so, with a Stop button the game cannot cover.
-    var MEDIA_TILES = 16, mediaLayerEl = null, mediaPillEl = null, mediaNoteEl = null;
+    var MEDIA_TILES = 16, MEDIA_LOUDEST = 4, mediaLayerEl = null, mediaPillEl = null, mediaNoteEl = null;
+    // mediaPc: how long the one giving way waits before offering, how long the other waits after being asked to go second,
+    // and how long a pair may sit half way through a renegotiation before that step is undone and asked for again.
+    var MEDIA_YIELD = 1500, MEDIA_AFTER = 4000, MEDIA_STUCK = 10000;
+    function mediaStuck(peer, pc, back){
+      clearTimeout(peer.stuck);
+      if (pc.signalingState === 'stable') return;
+      peer.stuck = setTimeout(function(){
+        if (peer.pc === pc && pc.signalingState !== 'stable') { console.warn('arcade: a media renegotiation got no reply'); back(); }
+      }, MEDIA_STUCK);
+    }
     function mediaEvent(name, h, ev){
       ev.room = name;
       h.frame.postMessage({arcade: 'realtime', event: ev}, '*');
     }
     function mediaOf(h){
       return h.media || (h.media = {stream: null, video: false, audio: false, share: {}, hear: {}, place: {},
-                                    tiles: {}, muted: {video: false, audio: false}});
+                                    tiles: {}, muted: {video: false, audio: false, sound: false}, volume: {}, mix: null, echo: null, amps: {}, ampCtx: null,
+                                    frames: {}, lag: {}, spatial: null, levels: null});
     }
     function mediaPc(name, h, peer, pc){
       var polite = h.me.id > peer.p.id;                    // the one that did not offer the first time gives way
-      peer.making = false; peer.ignoring = false; peer.senders = [];
-      peer.remote = null;
+      peer.making = false; peer.ignoring = false; peer.senders = []; peer.xsenders = [];
+      peer.remote = null; peer.xremote = null; peer.xid = '';
       var mc = peer.m = pc.createDataChannel('m', {negotiated: true, id: 2, ordered: true});
       mc.onopen = function(){ if (peer.pc === pc) mediaPeerUp(name, h, peer); };
-      pc.onnegotiationneeded = function(){
-        if (peer.pc !== pc || mc.readyState !== 'open') return;    // the first time: the fast lane's own offer
+      // NEVER BOTH AT ONCE (2026-11-02, a Riffs Lounge, Firefox and Chrome: no picture either way, for good). When a link
+      // comes up with the camera already on at both ends, both offered in the same instant. Chrome, the one giving way,
+      // then refused Firefox's offer ("RTP extension ID reassignment not supported"): the rollback leaves Chrome's own
+      // numbering on the media section, and Firefox's numbers differ. Reproduced every time. Now the one giving way waits
+      // MEDIA_YIELD ms and offers only if the other has not: their offer goes through first, and ours follows it on the
+      // numbering they agreed. A description that is refused all the same is rolled back and asked for again rather than
+      // dropped, and a pair left half way for MEDIA_STUCK ms starts that step again.
+      // Offers are made only when the browser says one is needed (negotiationneeded, which it says again on getting back to
+      // stable while something is still left over), so two sides can never keep offering at each other.
+      var offer = function(){
+        if (peer.pc !== pc || mc.readyState !== 'open') return;
+        var wait = (peer.wait || 0) - Date.now();
+        if (wait > 0) { soon(wait); return; }                        // they asked to go first
+        if (peer.making || pc.signalingState !== 'stable') return;   // back to stable, the browser asks again
         peer.making = true;
         pc.setLocalDescription()
           .then(function(){ mc.send(JSON.stringify({d: pc.localDescription})); })
-          .catch(function(){})
-          .then(function(){ peer.making = false; });
+          .catch(function(err){ console.warn('arcade: a media offer failed', err); })
+          .then(function(){ peer.making = false; mediaStuck(peer, pc, back); });
+      };
+      var soon = function(ms){
+        clearTimeout(peer.yield);
+        peer.yield = setTimeout(offer, ms != null ? ms : polite ? MEDIA_YIELD : 0);
+      };
+      // Half way and nothing more coming: undo our half, and the browser asks for the offer again once stable.
+      var back = function(){
+        if (peer.pc !== pc) return Promise.resolve();
+        var st = pc.signalingState;
+        return (st === 'have-local-offer' || st === 'have-remote-offer'
+          ? pc.setLocalDescription({type: 'rollback'}).catch(function(){}) : Promise.resolve());
+      };
+      pc.onnegotiationneeded = function(){
+        if (peer.pc !== pc || mc.readyState !== 'open') return;    // the first time: the fast lane's own offer
+        soon();
       };
       mc.onmessage = function(ev){
         if (peer.pc !== pc) return;
         var msg; try { msg = JSON.parse(ev.data); } catch (err) { return; }
+        if (msg && typeof msg.x === 'string') { peer.xid = msg.x; return; }   // which stream is their second picture
+        // They could not take our offer and make one of their own: ours is undone, and we wait for theirs.
+        if (msg && msg.yours) { clearTimeout(peer.yield); peer.wait = Date.now() + MEDIA_AFTER; back(); return; }
         var d = msg && msg.d;
         if (!d || (d.type !== 'offer' && d.type !== 'answer') || typeof d.sdp !== 'string') return;
         var collision = d.type === 'offer' && (peer.making || pc.signalingState !== 'stable');
         peer.ignoring = !polite && collision;
         if (peer.ignoring) return;
-        pc.setRemoteDescription(d).then(function(){
+        if (d.type === 'offer') clearTimeout(peer.yield);           // theirs first; ours, if still needed, after it
+        var ready = collision && pc.signalingState === 'have-local-offer'
+          ? pc.setLocalDescription({type: 'rollback'}) : Promise.resolve();
+        ready.then(function(){ return pc.setRemoteDescription(d); }).then(function(){
           if (d.type !== 'offer') return;
           return pc.setLocalDescription().then(function(){ mc.send(JSON.stringify({d: pc.localDescription})); });
-        }).catch(function(){});
+        }).then(function(){ mediaStuck(peer, pc, back); }, function(err){
+          console.warn('arcade: a media description was refused', d.type, err);
+          back().then(function(){
+            if (d.type !== 'offer') return;                          // our offer, their answer: the browser asks again
+            try { mc.send(JSON.stringify({yours: 1})); } catch (e) {}
+            peer.wait = 0; soon(0);                                  // ours goes first, on our numbering
+          });
+        });
       };
       pc.ontrack = function(ev){
         if (peer.pc !== pc) return;
+        // Their second picture, a screen beside their camera: its own stream, its own box, its own sound.
+        if (ev.streams && ev.streams[0] && peer.xid && ev.streams[0].id === peer.xid) {
+          var extra = peer.xremote || (peer.xremote = new MediaStream()), redraw = function(){ mediaDraw(h); };
+          mediaOf(h);
+          extra.addTrack(ev.track);
+          var gone = function(t){ try { extra.removeTrack(t); } catch (err) {} redraw(); };
+          ev.track.onended = function(){ gone(ev.track); };
+          ev.track.onunmute = redraw;
+          ev.streams[0].onremovetrack = function(e){ gone(e.track); };
+          redraw();
+          return;
+        }
         var stream = peer.remote || (peer.remote = new MediaStream());
         mediaOf(h);
         mediaWatch();
@@ -668,6 +911,22 @@
     function mediaPeerUp(name, h, peer){
       var md = h.media;
       if (md && md.stream && md.share[peer.p.id]) mediaAttach(h, peer);
+      if (md && md.xstream && md.share[peer.p.id]) mediaAttachX(h, peer);
+    }
+    // The second picture goes on its own senders, so that swapping the camera can never touch it. The stream's id is said
+    // first, on the ordered channel that also carries the offer: the track never arrives before its name.
+    function mediaAttachX(h, peer){
+      var md = h.media;
+      if (!peer.pc || !md) return;
+      var kinds = md.share[peer.p.id] || {}, want = md.xstream && kinds.video ? md.xstream.getTracks() : [];
+      if (!want.length || (peer.xfor && peer.xfor !== md.xstream)) {
+        (peer.xsenders || []).forEach(function(s){ try { peer.pc.removeTrack(s); } catch (err) {} });
+        peer.xsenders = []; peer.xfor = null;
+      }
+      if (!want.length || (peer.xsenders || []).length || !peer.m || peer.m.readyState !== 'open') return;
+      peer.m.send(JSON.stringify({x: md.xstream.id}));
+      peer.xfor = md.xstream;
+      peer.xsenders = want.map(function(t){ return peer.pc.addTrack(t, md.xstream); });
     }
     // What goes to this player now: the tracks of the kinds shared with them (2026-10-22: a call of up to
     // 20, where everybody's voice goes to everybody and each sees only a few pictures; and "if somebody doesn't want
@@ -694,12 +953,16 @@
     function mediaDetach(peer){
       (peer.senders || []).forEach(function(s){ try { peer.pc.removeTrack(s); } catch (err) {} });
       peer.senders = [];
+      (peer.xsenders || []).forEach(function(s){ try { peer.pc.removeTrack(s); } catch (err) {} });
+      peer.xsenders = []; peer.xfor = null;
     }
-    function mediaGone(h, peer){
+    // keep: the room is being taken again and this player comes back with it: what the game asked for them stays.
+    function mediaGone(h, peer, keep){
       var md = h.media;
       if (peer.said) { peer.said = ''; mediaEvent(rtName(h), h, {type: 'media-off', member: peer.p}); }
-      peer.remote = null;
-      if (md) { delete md.share[peer.p.id]; delete md.hear[peer.p.id]; delete md.place[peer.p.id]; mediaDraw(h); }
+      peer.remote = null; peer.xremote = null;
+      if (md && !keep) { delete md.share[peer.p.id]; delete md.hear[peer.p.id]; delete md.place[peer.p.id]; }
+      if (md) mediaDraw(h);
     }
     function rtName(h){ for (var k in rt) if (rt[k] === h) return k; return ''; }
     // Camera and microphone off, and every share with them (quiet: the room itself is going).
@@ -707,13 +970,280 @@
       var md = h && h.media;
       if (!md) return;
       if (h.fast) for (var id in h.fast.peers) mediaDetach(h.fast.peers[id]);
+      mediaEchoOff(h, false);
       if (md.stream) md.stream.getTracks().forEach(function(t){ t.stop(); });
       var had = !!md.stream;
-      md.stream = null; md.video = md.audio = false; md.share = {};
-      if (quiet) { h.media = null; mediaDraw(h, true); }
+      mediaUnmix(md.mix); md.mix = null;
+      if (md.xstream) { md.xstream.getTracks().forEach(function(t){ t.stop(); }); md.xstream = null; }
+      md.stream = null; md.video = md.audio = md.screen = false; md.share = {};
+      Object.keys(md.frames || {}).forEach(function(k){ framesStop(md, k); });
+      if (md.levels) { clearInterval(md.levels.timer); md.levels = null; }
+      if (quiet) { mediaOutClose(md.ampOut); md.ampOut = null;
+                   if (md.ampCtx) { md.ampCtx.onstatechange = null; try { md.ampCtx.close(); } catch (err) {} }
+                   if (md.meterCtx) { try { md.meterCtx.close(); } catch (err) {} } h.media = null; mediaDraw(h, true); }
       else { mediaDraw(h); if (had && !silent) mediaEvent(rtName(h), h, {type: 'media-state', state: 'off'}); }
     }
-    function mediaAnyOn(){ for (var k in rt) if (rt[k].media && rt[k].media.stream) return rt[k]; return null; }
+    // What a shared screen plays, as it is (music is no voice: none of the voice cleaning), and WITHOUT this page's own sound (the operator
+    // 2026-11-02: "their screen sharing with audio I hear myself talk through their screen share"): sharing a whole screen takes in
+    // the call playing here, and everybody's voice went back round through it. The browser filters this page out of system audio.
+    function mediaScreenSound(){
+      var a = {echoCancellation: false, noiseSuppression: false, autoGainControl: false}, md0 = navigator.mediaDevices;
+      if (md0 && md0.getSupportedConstraints && md0.getSupportedConstraints().restrictOwnAudio) a.restrictOwnAudio = true;
+      return a;
+    }
+    // A shared screen's sound taken out of the microphone (echo_canceller.js): while a screen is shared with its sound, and only then,
+    // the microphone that goes to the others is the cleaned one, swapped in place. If it cannot start, the bare microphone just stays.
+    function mediaEchoCode(){
+{% include "echo_canceller.js" %}
+    }
+    var mediaEchoUrl = null;
+    function mediaEchoOn(h){
+      var md = h.media, x = md && md.xstream, s = md && md.stream;
+      if (md && md.mix && !md.echo) { mediaEchoInMix(md); return; }
+      if (!x || !s || md.mix || md.echo || !x.getAudioTracks().length || !s.getAudioTracks().length) return;
+      var Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx || !window.AudioWorkletNode) return;
+      var ctx = new Ctx({latencyHint: 'interactive'}), mark = md.echo = {ctx: ctx, mics: [], keep: [], clean: null};
+      mediaEchoUrl = mediaEchoUrl || URL.createObjectURL(new Blob(['(' + mediaEchoCode + ')()'], {type: 'text/javascript'}));
+      if (ctx.state === 'suspended') ctx.resume().catch(function(){});
+      ctx.audioWorklet.addModule(mediaEchoUrl).then(function(){
+        if (md.echo !== mark || md.xstream !== x || md.stream !== s) return;
+        // The reference is a copy of its own: muting the screen for the others does not stop the speakers.
+        var mics = s.getAudioTracks(), ref = x.getAudioTracks().map(function(t){ return t.clone(); });
+        var node = new AudioWorkletNode(ctx, 'arcade-echo', {numberOfInputs: 2, numberOfOutputs: 1, outputChannelCount: [1],
+                                                             channelCount: 1, channelCountMode: 'explicit', channelInterpretation: 'speakers'});
+        var out = ctx.createMediaStreamDestination();
+        ctx.createMediaStreamSource(new MediaStream(mics)).connect(node, 0, 0);
+        ctx.createMediaStreamSource(new MediaStream(ref)).connect(node, 0, 1);
+        node.connect(out);
+        mark.mics = mics; mark.keep = ref; mark.clean = out.stream.getAudioTracks()[0];
+        mics.forEach(function(t){ s.removeTrack(t); });
+        s.addTrack(mark.clean);
+        mediaMutes(md);
+        mediaResend(h);
+      }).catch(function(err){
+        console.warn('arcade: the microphone goes uncleaned', err);
+        if (md.echo === mark) { md.echo = null; try { ctx.close(); } catch (e) {} }
+      });
+    }
+    // A Riffs Lounge screen shared with its sound goes as ONE track, the microphone and the screen mixed (mediaMix), and the
+    // canceller was never put in (Riffs 2026-11-03: the sharer's speakers playing their own video went back in through the
+    // microphone, "both audios at once"): here it goes between the microphone and the mix, in the mix's own context, with
+    // the screen's sound as the reference. If it cannot start, the bare microphone stays in the mix.
+    function mediaEchoInMix(md){
+      var mix = md.mix;
+      if (!mix.micSrc || !mix.soundSrc || !window.AudioWorkletNode || !mix.ctx.audioWorklet) return;
+      var mark = md.echo = {ctx: mix.ctx, mix: mix, node: null, mics: [], keep: [], clean: null};
+      mediaEchoUrl = mediaEchoUrl || URL.createObjectURL(new Blob(['(' + mediaEchoCode + ')()'], {type: 'text/javascript'}));
+      mix.ctx.audioWorklet.addModule(mediaEchoUrl).then(function(){
+        if (md.echo !== mark || md.mix !== mix) return;
+        var node = new AudioWorkletNode(mix.ctx, 'arcade-echo', {numberOfInputs: 2, numberOfOutputs: 1, outputChannelCount: [1],
+                                                                 channelCount: 1, channelCountMode: 'explicit', channelInterpretation: 'speakers'});
+        mix.micSrc.disconnect();
+        mix.micSrc.connect(node, 0, 0);
+        mix.soundSrc.connect(node, 0, 1);
+        node.connect(mix.mic);
+        mark.node = node;
+      }).catch(function(err){
+        console.warn('arcade: the microphone goes uncleaned', err);
+        if (md.echo === mark) md.echo = null;
+      });
+    }
+    // back: the bare microphone goes on in its place. Without it the whole stream is going, and the microphone with it.
+    function mediaEchoOff(h, back){
+      var md = h.media, e = md && md.echo;
+      if (!e) return;
+      md.echo = null;
+      if (e.mix) {                                      // in a mix: the mix's context is the mix's to close
+        if (e.node) { try { e.mix.micSrc.disconnect(); e.mix.soundSrc.disconnect(e.node); e.node.disconnect();
+                            if (back) e.mix.micSrc.connect(e.mix.mic); } catch (err) {} }
+        return;
+      }
+      if (e.clean && md.stream && back) {
+        md.stream.removeTrack(e.clean);
+        e.mics.forEach(function(t){ md.stream.addTrack(t); });
+        mediaMutes(md);
+        mediaResend(h);
+      } else e.mics.forEach(function(t){ t.stop(); });
+      e.keep.forEach(function(t){ t.stop(); });
+      if (e.clean) e.clean.stop();
+      try { e.ctx.close(); } catch (err) {}
+    }
+    function mediaResend(h){
+      if (h.fast) Object.keys(h.media.share).forEach(function(id){ var pr = h.fast.peers[id]; if (pr) mediaAttach(h, pr); });
+    }
+    // Louder than they send (2026-11-02: "amplify the sound ... at least by 200% maybe more"): a video element stops at 1, so past
+    // that their sound goes through a gain, and a limiter so that it gets loud and does not crackle. The element stays, muted: a remote
+    // track gives the audio graph nothing in Chrome without one. False while it cannot play: the element goes on at full volume instead.
+    // Where the amplified and placed sound plays (2026-11-03, Spatial World: "so much feedback between the mic and the
+    // screen"). Chrome's echo cancelling takes out of the microphone only what WebRTC itself plays, never an AudioContext's own
+    // output (crbug 687574), so every voice and screen played here through the panners went back out of the microphone. In
+    // Chromium the graph's output goes round a loopback pair of RTCPeerConnections on this page and plays from an <audio>
+    // element, which the canceller does hear; stereo, so the panning stays. Elsewhere, or if the loopback fails, the speakers.
+    function mediaOut(md, ctx){
+      var o = md.ampOut;
+      if (o) return o.failed ? ctx.destination : o.node;
+      var chromium = !!window.chrome || /Chrom(e|ium)\//.test(navigator.userAgent || "");   // HeadlessChrome too
+      if (!chromium || !window.RTCPeerConnection || !ctx.createMediaStreamDestination) { md.ampOut = {failed: true}; return ctx.destination; }
+      o = md.ampOut = {node: ctx.createMediaStreamDestination(), failed: false, pcs: [], el: null};
+      try {
+        var a = new RTCPeerConnection(), b = new RTCPeerConnection();
+        o.pcs = [a, b];
+        a.onicecandidate = function(e){ if (e.candidate) b.addIceCandidate(e.candidate).catch(function(){}); };
+        b.onicecandidate = function(e){ if (e.candidate) a.addIceCandidate(e.candidate).catch(function(){}); };
+        b.ontrack = function(e){
+          if (md.ampOut !== o) return;
+          if ('jitterBufferTarget' in e.receiver) e.receiver.jitterBufferTarget = 0;   // as little delay as it will take
+          var el = o.el = document.createElement('audio');
+          el.autoplay = true; el.srcObject = new MediaStream([e.track]);
+          el.play().catch(function(){});
+        };
+        o.node.stream.getAudioTracks().forEach(function(t){ a.addTrack(t, o.node.stream); });
+        var stereo = function(d){
+          var pt = /a=rtpmap:(\d+) opus\/48000/i.exec(d.sdp);
+          if (!pt) return d;
+          var line = new RegExp('(a=fmtp:' + pt[1] + ' [^\\r\\n]*)');
+          return {type: d.type, sdp: d.sdp.replace(line, '$1;stereo=1;sprop-stereo=1;maxaveragebitrate=256000')};
+        };
+        a.createOffer().then(function(d){ d = stereo(d); return a.setLocalDescription(d).then(function(){ return b.setRemoteDescription(d); }); })
+          .then(function(){ return b.createAnswer(); })
+          .then(function(d){ d = stereo(d); return b.setLocalDescription(d).then(function(){ return a.setRemoteDescription(d); }); })
+          .catch(function(err){ mediaOutFail(md, o, err); });
+        // Not playing within a few seconds: the speakers, as before.
+        setTimeout(function(){ if (md.ampOut === o && !o.failed && b.connectionState !== 'connected') mediaOutFail(md, o, b.connectionState); }, 4000);
+      } catch (err) { mediaOutFail(md, o, err); }
+      return o.node;
+    }
+    function mediaOutFail(md, o, why){
+      if (md.ampOut !== o || o.failed) return;
+      console.warn('arcade: placed and amplified sound plays to the speakers directly (echo is not cancelled)', why);
+      o.failed = true;
+      mediaOutClose(o);
+      var ctx = md.ampCtx;
+      if (ctx) Object.keys(md.amps).forEach(function(k){
+        var a = md.amps[k];
+        try { a.limit.disconnect(); a.limit.connect(ctx.destination); } catch (err) {}
+      });
+    }
+    function mediaOutClose(o){
+      if (!o) return;
+      o.pcs.forEach(function(pc){ try { pc.close(); } catch (err) {} });
+      o.pcs = [];
+      if (o.el) { o.el.pause(); o.el.srcObject = null; o.el = null; }
+    }
+    function mediaLoud(h, key, stream, level, placed){
+      var md = h.media, a = md.amps[key], track = stream && stream.getAudioTracks()[0];
+      // In a scene or with pictures in the app the sound goes delay -> panner -> distance fade -> gain -> limiter;
+      // otherwise gain -> limiter as before. A change of route builds it again.
+      if (a && (a.track !== track || !!a.pan !== !!placed)) {
+        a.src.disconnect(); a.limit.disconnect(); if (a.pan) { a.delay.disconnect(); a.pan.disconnect(); a.fade.disconnect(); }
+        delete md.amps[key]; a = null;
+      }
+      if (!track) return false;
+      var Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return false;
+      try {
+        var ctx = md.ampCtx;
+        if (!ctx) {
+          ctx = md.ampCtx = new Ctx();
+          ctx.onstatechange = function(){
+            if (h.media !== md) return;
+            // Started by the player's press: the loopback's element may have been refused before it.
+            if (ctx.state === 'running' && md.ampOut && md.ampOut.el && md.ampOut.el.paused) md.ampOut.el.play().catch(function(){});
+            mediaDraw(h);
+          };
+        }
+        if (!a) {
+          a = md.amps[key] = {track: track, src: ctx.createMediaStreamSource(new MediaStream([track])), gain: ctx.createGain(), limit: ctx.createDynamicsCompressor()};
+          a.limit.threshold.value = -3; a.limit.knee.value = 3; a.limit.ratio.value = 20; a.limit.attack.value = 0.003; a.limit.release.value = 0.1;
+          if (placed) {
+            a.delay = ctx.createDelay(1); a.pan = ctx.createPanner(); a.fade = ctx.createGain();
+            a.pan.panningModel = 'HRTF'; a.pan.distanceModel = 'linear'; a.pan.rolloffFactor = 0;   // the fade does distance
+            a.src.connect(a.delay); a.delay.connect(a.pan); a.pan.connect(a.fade); a.fade.connect(a.gain);
+          } else a.src.connect(a.gain);
+          a.gain.connect(a.limit); a.limit.connect(mediaOut(md, ctx));
+        }
+        a.gain.gain.value = level;
+        if (placed) mediaSpatialApply(h);
+        if (ctx.state === 'suspended') ctx.resume().catch(function(){});
+        return ctx.state === 'running';
+      } catch (err) { return false; }
+    }
+    // The screen's sound and the microphone leave as ONE audio track: nothing to renegotiate in the middle of a call, and a
+    // viewer that plays a single track hears both. Muting silences the microphone in the mix, never what is shared.
+    function mediaMix(stream, shown){
+      var sound = shown.getAudioTracks(), Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!sound.length) return null;
+      if (!Ctx) { sound.forEach(function(t){ t.stop(); }); return null; }
+      var ctx = new Ctx(), out = ctx.createMediaStreamDestination(), mic = ctx.createGain(), mics = stream.getAudioTracks();
+      if (ctx.state === 'suspended') ctx.resume().catch(function(){});
+      var micSrc = null, soundSrc = ctx.createMediaStreamSource(new MediaStream(sound));
+      if (mics.length) {
+        micSrc = ctx.createMediaStreamSource(new MediaStream(mics));
+        micSrc.connect(mic);
+        mic.connect(out);
+        mics.forEach(function(t){ stream.removeTrack(t); });
+      }
+      soundSrc.connect(out);
+      out.stream.getAudioTracks().forEach(function(t){ stream.addTrack(t); });
+      // micSrc and soundSrc: for the echo canceller put between the microphone and the mix (mediaEchoOn).
+      return {ctx: ctx, mic: mic, micSrc: micSrc, soundSrc: soundSrc, sound: true, keep: mics.concat(sound)};
+    }
+    function mediaUnmix(mix){
+      if (!mix) return;
+      mix.keep.forEach(function(t){ t.stop(); });
+      try { mix.ctx.close(); } catch (err) {}
+    }
+    function mediaMutes(md){
+      if (!md.stream) return;
+      md.stream.getVideoTracks().forEach(function(t){ t.enabled = !md.muted.video; });
+      if (md.mix) md.mix.mic.gain.value = md.muted.audio ? 0 : 1;
+      else md.stream.getAudioTracks().forEach(function(t){ t.enabled = !md.muted.audio; });
+    }
+    // Your own screen's sound, for the others: its loudness is your computer's business, so all a page can do is this.
+    function mediaSoundMute(md){
+      if (md.xstream) md.xstream.getAudioTracks().forEach(function(t){ t.enabled = !md.muted.sound; });
+    }
+    function mediaAnyOn(){ for (var k in rt) if (rt[k].media && (rt[k].media.stream || rt[k].media.xstream)) return rt[k]; return null; }
+    // A screen beside the camera (2026-11-01): a second picture of a player's own, for any page. The camera and microphone go
+    // on untouched. The browser's own Stop sharing ends this picture only.
+    function mediaXOff(name, h, told){
+      var md = h.media;
+      if (!md || !md.xstream) return;
+      if (!(md.echo && md.echo.mix)) mediaEchoOff(h, true);   // the Lounge mix's canceller is the mix's
+      var x = md.xstream; md.xstream = null;
+      x.getTracks().forEach(function(t){ t.stop(); });
+      if (h.fast) Object.keys(md.share).forEach(function(id){ var pr = h.fast.peers[id]; if (pr) mediaAttachX(h, pr); });
+      mediaDraw(h);
+      if (told) mediaEvent(name, h, {type: 'media-state', state: 'screen-off'});
+    }
+    function mediaXOn(name, h, md, m, answer){
+      var md0 = navigator.mediaDevices;
+      if (!(md0 && typeof md0.getDisplayMedia === 'function')) {
+        answer({ok: false, error: 'no screen', why: 'this browser cannot share its screen (a phone cannot)'}); return;
+      }
+      mediaAllowed().then(function(yes){
+        if (!yes) { answer({ok: false, error: 'off', why: 'Camera & microphone is off on this app\u2019s card'}); return; }
+        return md0.getDisplayMedia({video: {width: {max: 1920}, height: {max: 1080}, frameRate: {max: 15}},
+                                    audio: m.sound ? mediaScreenSound() : false})
+          .then(function(stream){
+            if (rt[name] !== h) { stream.getTracks().forEach(function(t){ t.stop(); }); throw new Error('left the room'); }
+            mediaXOff(name, h, false);
+            md.xstream = stream; md.muted.sound = false;
+            stream.getVideoTracks().forEach(function(t){
+              t.contentHint = 'detail';
+              t.addEventListener('ended', function(){ if (md.xstream === stream) mediaXOff(name, h, true); });
+            });
+            if (h.fast) Object.keys(md.share).forEach(function(id){ var pr = h.fast.peers[id]; if (pr) mediaAttachX(h, pr); });
+            mediaEchoOn(h);
+            mediaDraw(h);
+            answer(Object.assign({ok: true}, stream.getAudioTracks().length ? {sound: true} : {}));
+          });
+      }).catch(function(err){
+        var why = String((err && (err.name || err.message)) || err);
+        answer(err && err.name === 'NotAllowedError' ? {ok: false, error: 'cancelled', why: why} : {ok: false, error: why});
+      });
+    }
     // The card's switch: on, or (a page that is no game, with no card to tick) asked here, as Wallet access is.
     function mediaAllowed(){
       if (arcadeMediaAllowed(here)) return Promise.resolve(true);
@@ -730,42 +1260,96 @@
     }
     function mediaDoor(name, h, m, answer){
       var md = mediaOf(h), peer = h.fast && h.fast.peers[String(m.peer || '')];
-      if (!h.fast) { answer({ok: false, error: 'media needs a room joined with {fast: true}'}); return; }
+      // While the room is taken again there are no links for a moment (2026-11-02: a page's calls in that moment all failed
+      // as if it had never asked for the fast lane). What needs no link works; share and hear say 'reconnecting'.
+      var back = !h.fast && h.wantFast && h.rejoining;
+      if (!h.fast && !back) { answer({ok: false, error: 'media needs a room joined with {fast: true}'}); return; }
+      if (back && (m.do === 'share' || m.do === 'hear')) { answer({ok: false, error: 'reconnecting'}); return; }
       if (m.do === 'start') {
-        if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+        var want = {video: !!m.video, audio: !!m.audio, screen: !!m.screen, sound: !!(m.sound && m.screen)};
+        if (want.screen) want.video = false;
+        if (!want.video && !want.audio && !want.screen) { answer({ok: false, error: 'ask for video, audio, screen or a pair'}); return; }
+        var md0 = navigator.mediaDevices;
+        if (want.screen && !(md0 && typeof md0.getDisplayMedia === 'function')) {
+          answer({ok: false, error: 'no screen', why: 'this browser cannot share its screen (a phone cannot)'}); return;
+        }
+        if ((want.video || want.audio) && !(md0 && typeof md0.getUserMedia === 'function')) {
           answer({ok: false, error: 'denied', why: 'this browser has no camera or microphone here'}); return;
         }
-        var want = {video: !!m.video, audio: !!m.audio};
-        if (!want.video && !want.audio) { answer({ok: false, error: 'ask for video, audio or both'}); return; }
         mediaAllowed().then(function(yes){
           if (!yes) { answer({ok: false, error: 'off', why: 'Camera & microphone is off on this app’s card'}); return; }
-          return navigator.mediaDevices.getUserMedia({
-            // No shape forced: a phone's camera stays portrait, a PC's landscape (2026-10-23: "All should
-            // maintain their aspect ratios"); only capped, for a call of up to 20.
-            video: want.video ? {width: {max: 1280}, height: {max: 1280}} : false, audio: want.audio
+          // THE SCREEN (2026-10-29, Screen Share): the browser's own picker asks which screen, window or tab,
+          // every time, and its own bar can stop it; the screen asked first, while the player's press still counts.
+          var screen = want.screen ? md0.getDisplayMedia({
+            video: {width: {max: 1920}, height: {max: 1080}, frameRate: {max: 15}},
+            // What the screen plays (2026-11-01): asked only by a page that says `sound`, and the browser's
+            // picker still lets the player leave it out. Music is no voice: none of the voice cleaning.
+            audio: want.sound ? mediaScreenSound() : false
+          }).catch(function(err){ err.screen = true; throw err; }) : Promise.resolve(null);
+          return screen.then(function(shown){
+            return (want.video || want.audio ? md0.getUserMedia({
+              // No shape forced: a phone's camera stays portrait, a PC's landscape (2026-10-23: "All should
+              // maintain their aspect ratios"); only capped, for a call of up to 20.
+              // `facing` picks a phone's front or rear camera ('ideal': a computer with one camera still gets it).
+              video: want.video ? Object.assign({width: {max: 1280}, height: {max: 1280}},
+                                                m.facing ? {facingMode: {ideal: m.facing === 'environment' ? 'environment' : 'user'}} : {}) : false,
+              // The browser's own echo cancelling, as it comes. Not 'all' (Chrome 141: everything this computer plays taken out
+              // of the microphone): live, voices came through choppy and lossy (2026-11-02), and a shared screen's sound
+              // is taken out by echo_canceller.js while it is shared.
+              audio: want.audio ? {echoCancellation: true, noiseSuppression: true, autoGainControl: true} : false
+            }) : Promise.resolve(new MediaStream())).then(function(stream){
+              if (shown) shown.getVideoTracks().forEach(function(t){
+                t.contentHint = 'detail';                 // words on a screen stay sharp, at fewer frames
+                stream.addTrack(t);
+              });
+              stream.mix = shown ? mediaMix(stream, shown) : null;
+              return stream;
+            }, function(err){ if (shown) shown.getTracks().forEach(function(t){ t.stop(); }); throw err; });
           }).then(function(stream){
             if (rt[name] !== h) { stream.getTracks().forEach(function(t){ t.stop(); }); throw new Error('left the room'); }
-            var old = md.stream;                            // a second start: the new tracks replace the old
-            md.stream = stream;
+            var old = md.stream, oldMix = md.mix;           // a second start: the new tracks replace the old
+            mediaEchoOff(h, false);
+            md.stream = stream; md.mix = stream.mix || null;
             md.video = stream.getVideoTracks().length > 0; md.audio = stream.getAudioTracks().length > 0;
-            stream.getVideoTracks().forEach(function(t){ t.enabled = !md.muted.video; });
-            stream.getAudioTracks().forEach(function(t){ t.enabled = !md.muted.audio; });
+            md.screen = want.screen && md.video;
+            mediaMutes(md);
+            // Stopped with the browser's own "Stop sharing": the picture leaves every share, the microphone stays.
+            if (md.screen) stream.getVideoTracks().forEach(function(t){
+              t.addEventListener('ended', function(){
+                if (md.stream !== stream) return;
+                stream.removeTrack(t);
+                md.video = false; md.screen = false;
+                if (md.mix) md.mix.sound = false;
+                if (h.fast) Object.keys(md.share).forEach(function(id){ var pr = h.fast.peers[id]; if (pr) mediaAttach(h, pr); });
+                mediaDraw(h);
+                mediaEvent(name, h, {type: 'media-state', state: 'screen-off'});
+              });
+            });
             if (h.fast) Object.keys(md.share).forEach(function(id){
               var pr = h.fast.peers[id];
               if (pr) mediaAttach(h, pr);
             });
             if (old && old !== stream) old.getTracks().forEach(function(t){ t.stop(); });
+            mediaUnmix(oldMix);
+            mediaEchoOn(h);
             mediaDraw(h);
             mediaEvent(name, h, {type: 'media-state', state: 'on'});
-            answer({ok: true, video: md.video, audio: md.audio});
+            answer(Object.assign({ok: true, video: md.video, audio: md.audio, screen: md.screen}, md.mix ? {sound: true} : {}));
           }, function(err){
+            // Closing the screen picker is no refusal of the microphone: 'cancelled', and nothing else changes.
+            var why = String((err && (err.name || err.message)) || err);
+            if (err && err.screen && err.name === 'NotAllowedError') { answer({ok: false, error: 'cancelled', why: why}); return; }
             mediaEvent(name, h, {type: 'media-state', state: 'denied'});
-            answer({ok: false, error: 'denied', why: String((err && (err.name || err.message)) || err)});
+            answer({ok: false, error: 'denied', why: why});
           });
         }).catch(function(err){ answer({ok: false, error: String((err && err.message) || err || 'refused')}); });
         return;
       }
       if (m.do === 'stop') { mediaStop(h); answer({ok: true}); return; }
+      if (m.do === 'screen') {
+        if (m.on) mediaXOn(name, h, md, m, answer); else { mediaXOff(name, h, false); answer({ok: true}); }
+        return;
+      }
       if (m.do === 'share') {
         if (!peer) { answer({ok: false, error: 'no such player'}); return; }
         // on: true (both kinds), false (neither) or {video, audio}
@@ -777,8 +1361,16 @@
         }
         md.share[peer.p.id] = kinds;
         mediaAttach(h, peer);
+        mediaAttachX(h, peer);
         answer({ok: true, sending: !!md.stream});
         return;
+      }
+      // How loud one player is here, 0 to MEDIA_LOUDEST, on this viewer only. Kept by id, so it outlives a link that drops.
+      if (m.do === 'volume') {
+        var level = Number(m.level);
+        if (!isFinite(level)) { answer({ok: false, error: 'a volume is a number from 0 to ' + MEDIA_LOUDEST}); return; }
+        md.volume[String(m.peer || '')] = Math.min(MEDIA_LOUDEST, Math.max(0, level));
+        mediaDraw(h); answer({ok: true}); return;
       }
       if (m.do === 'hear') {
         if (!peer) { answer({ok: false, error: 'no such player'}); return; }
@@ -786,8 +1378,9 @@
         mediaDraw(h); answer({ok: true}); return;
       }
       if (m.do === 'place') {
-        var key = m.who === 'me' ? 'me' : String(m.who || '');
-        if (key !== 'me' && !(h.fast.peers[key])) { answer({ok: false, error: 'no such player'}); return; }
+        var key = m.who === 'me' ? 'me' : String(m.who || '');       // 'id#screen' or 'me#screen': their second picture
+        var owner = key.replace(/#screen$/, '');
+        if (owner !== 'me' && h.fast && !h.fast.peers[owner]) { answer({ok: false, error: 'no such player'}); return; }
         var r = m.rect;
         if (r == null) delete md.place[key];
         else {
@@ -801,13 +1394,175 @@
       if (m.do === 'mute') {
         if (typeof m.video === 'boolean') md.muted.video = m.video;
         if (typeof m.audio === 'boolean') md.muted.audio = m.audio;
-        if (md.stream) {
-          md.stream.getVideoTracks().forEach(function(t){ t.enabled = !md.muted.video; });
-          md.stream.getAudioTracks().forEach(function(t){ t.enabled = !md.muted.audio; });
-        }
+        if (typeof m.sound === 'boolean') { md.muted.sound = m.sound; mediaSoundMute(md); }
+        mediaMutes(md);
         mediaDraw(h); answer({ok: true, muted: md.muted}); return;
       }
-      answer({ok: false, error: 'media ops are start, stop, share, hear, place and mute'});
+      // PICTURES IN THE APP (2026-11-02, for Spatial World: screens in a 3D world): the picture of one key handed to
+      // the app as an ImageBitmap at up to w x h and fps, while the card's Pictures in the app switch is on.
+      if (m.do === 'frames') {
+        var fk = m.key === 'me' || m.key === 'me#screen' ? m.key : String(m.key || '');
+        var fo = fk.replace(/#screen$/, '');
+        if (!m.size) { framesStop(md, fk); mediaPill(); answer({ok: true}); return; }
+        if (fo !== 'me' && h.fast && !h.fast.peers[fo]) { answer({ok: false, error: 'no such player'}); return; }
+        picturesAllowed().then(function(yes){
+          if (!yes) { answer({ok: false, error: 'off', why: 'Pictures in the app is off on this app\u2019s card'}); return; }
+          var sz = m.size, n = function(v, lo, hi){ v = Number(v); return isFinite(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : hi; };
+          framesStart(name, h, fk, {w: n(sz.w, 16, FRAME_MAX_W), h: n(sz.h, 16, FRAME_MAX_H), fps: n(sz.fps, 1, FRAME_MAX_FPS)});
+          mediaPill(); answer({ok: true});
+        });
+        return;
+      }
+      // The app drew frame t of this key: how far its picture runs behind the sound, to hold the sound back as much.
+      if (m.do === 'shown') {
+        var sk = String(m.key || ''), st = Number(m.t);
+        if (md.frames[sk] && isFinite(st)) {
+          var lag = Math.min(FRAME_LAG_MAX, Math.max(0, Date.now() - st));
+          md.lag[sk] = md.lag[sk] == null ? lag : md.lag[sk] * 0.8 + lag * 0.2;
+          mediaSpatialApply(h);
+        }
+        answer({ok: true}); return;
+      }
+      if (m.do === 'spatial') {
+        md.spatial = mediaSpatialClean(m.scene);
+        mediaDraw(h); answer({ok: true}); return;
+      }
+      if (m.do === 'levels') {
+        var keys = Array.isArray(m.keys) ? m.keys.slice(0, MEDIA_TILES).map(String) : [];
+        if (!keys.length) { if (md.levels) clearInterval(md.levels.timer); md.levels = null; mediaPill(); answer({ok: true}); return; }
+        picturesAllowed().then(function(yes){
+          if (!yes) { answer({ok: false, error: 'off', why: 'Pictures in the app is off on this app\u2019s card'}); return; }
+          if (md.levels) clearInterval(md.levels.timer);
+          md.levels = {keys: keys, timer: setInterval(function(){ mediaLevels(name, h); }, 500)};
+          mediaPill(); answer({ok: true});
+        });
+        return;
+      }
+      answer({ok: false, error: 'media ops are start, stop, screen, share, hear, volume, place, mute, frames, spatial and levels'});
+    }
+    var FRAME_MAX_W = 1920, FRAME_MAX_H = 1080, FRAME_MAX_FPS = 30, FRAME_LAG_MAX = 500;
+    function framesStop(md, key){
+      var f = md.frames[key];
+      if (f) clearInterval(f.timer);
+      delete md.frames[key]; delete md.lag[key];
+    }
+    function framesStart(name, h, key, want){
+      var md = h.media;
+      framesStop(md, key);
+      var f = md.frames[key] = {w: want.w, h: want.h, fps: want.fps, busy: false};
+      f.timer = setInterval(function(){
+        if (h.media !== md || md.frames[key] !== f || f.busy) return;
+        var v = md.tiles[key];
+        if (!v || v.readyState < 2 || !v.videoWidth || typeof createImageBitmap !== 'function') return;
+        // Inside w x h, the picture's own shape kept (never stretched).
+        var scale = Math.min(1, f.w / v.videoWidth, f.h / v.videoHeight);
+        var w = Math.max(1, Math.round(v.videoWidth * scale)), hh = Math.max(1, Math.round(v.videoHeight * scale));
+        var t = Date.now();
+        f.busy = true;
+        createImageBitmap(v, {resizeWidth: w, resizeHeight: hh, resizeQuality: scale < 0.5 ? 'medium' : 'low'}).then(function(bm){
+          f.busy = false;
+          if (h.media !== md || md.frames[key] !== f) { bm.close(); return; }
+          var owner = key.replace(/#screen$/, ''), p = owner === 'me' ? h.me : (h.fast && h.fast.peers[owner] ? h.fast.peers[owner].p : null);
+          h.frame.postMessage({arcade: 'realtime', event: {type: 'media-frame', room: name, key: key, member: p, t: t,
+                                                            w: w, h: hh, bitmap: bm}}, '*', [bm]);
+        }, function(){ f.busy = false; });
+      }, Math.round(1000 / want.fps));
+    }
+    // A far screen the app does not fetch frames for: its average colour and how loud it is, a few bytes twice a second.
+    function mediaLevels(name, h){
+      var md = h.media, lv = md && md.levels;
+      if (!lv) return;
+      var c = lv.canvas || (lv.canvas = document.createElement('canvas')), g = c.getContext('2d', {willReadFrequently: true});
+      c.width = 4; c.height = 4;
+      var out = {};
+      lv.keys.forEach(function(key){
+        var v = md.tiles[key], rgb = null, loud = 0;
+        if (v && v.readyState >= 2 && v.videoWidth) {
+          try {
+            g.drawImage(v, 0, 0, 4, 4);
+            var d = g.getImageData(0, 0, 4, 4).data, r = 0, gg = 0, b = 0;
+            for (var i = 0; i < d.length; i += 4) { r += d[i]; gg += d[i + 1]; b += d[i + 2]; }
+            rgb = [Math.round(r / 16), Math.round(gg / 16), Math.round(b / 16)];
+          } catch (err) {}
+        }
+        var owner = key.replace(/#screen$/, ''), pr = h.fast && h.fast.peers[owner];
+        var stream = pr ? (key === owner ? pr.remote : pr.xremote) : null;
+        if (pr && pr.pc && stream && md.hear[owner]) pr.pc.getReceivers().forEach(function(rcv){
+          if (!rcv.track || rcv.track.kind !== 'audio' || !rcv.getSynchronizationSources) return;
+          if (stream.getAudioTracks().indexOf(rcv.track) < 0) return;
+          rcv.getSynchronizationSources().forEach(function(x){ if (x.audioLevel > loud) loud = x.audioLevel; });
+        });
+        out[key] = {rgb: rgb, loud: Math.round(loud * 100) / 100};
+      });
+      mediaEvent(name, h, {type: 'media-levels', levels: out});
+    }
+    // SPATIAL SOUND: each heard key's sound placed in the app's 3D scene (its metres), faded by distance from `full` to
+    // `end` (equal power, nothing past end), and held back by the measured lag of its pictures in the app, so the two
+    // stay together. Without a scene, as before.
+    function mediaSpatialClean(scene){
+      if (!scene || typeof scene !== 'object') return null;
+      var v3 = function(a, d){ return Array.isArray(a) && a.length === 3 && a.every(function(x){ return isFinite(Number(x)); })
+                                 ? a.map(Number) : d; };
+      var l = scene.listener || {}, out = {listener: {p: v3(l.p, [0, 0, 0]), f: v3(l.f, [0, 0, -1]), u: v3(l.u, [0, 1, 0])}, sources: {}};
+      var src = scene.sources && typeof scene.sources === 'object' ? scene.sources : {};
+      Object.keys(src).slice(0, MEDIA_TILES).forEach(function(k){
+        var s0 = src[k] || {}, cone = Array.isArray(s0.cone) ? s0.cone.map(Number) : null;
+        var full = Math.max(0, Number(s0.full) || 0), end = Math.max(full + 0.01, Number(s0.end) || 30);
+        out.sources[String(k)] = {p: v3(s0.p, [0, 0, 0]), d: v3(s0.d, null), full: full, end: end,
+                                  cone: cone && cone.length === 3 && cone.every(isFinite) ? cone : null};
+      });
+      return out;
+    }
+    function mediaFade(dist, full, end){
+      if (dist <= full) return 1;
+      if (dist >= end) return 0;
+      var c = Math.cos(Math.PI / 2 * (dist - full) / (end - full));
+      return c * c;
+    }
+    function mediaSpatialApply(h){
+      var md = h.media, sc = md && md.spatial, ctx = md && md.ampCtx;
+      if (!md || !ctx) return;
+      var L = ctx.listener;
+      if (sc) {
+        var lp = sc.listener.p, lf = sc.listener.f, lu = sc.listener.u;
+        if (L.positionX) {
+          L.positionX.value = lp[0]; L.positionY.value = lp[1]; L.positionZ.value = lp[2];
+          L.forwardX.value = lf[0]; L.forwardY.value = lf[1]; L.forwardZ.value = lf[2];
+          L.upX.value = lu[0]; L.upY.value = lu[1]; L.upZ.value = lu[2];
+        } else { try { L.setPosition(lp[0], lp[1], lp[2]); L.setOrientation(lf[0], lf[1], lf[2], lu[0], lu[1], lu[2]); } catch (err) {} }
+      }
+      Object.keys(md.amps).forEach(function(key){
+        var a = md.amps[key], src = sc && sc.sources[key];
+        if (a.delay) a.delay.delayTime.value = md.frames[key] && md.lag[key] != null ? md.lag[key] / 1000 : 0;
+        if (!a.pan) return;
+        if (!src) { a.fade.gain.value = 1; return; }
+        var p = src.p;
+        if (a.pan.positionX) { a.pan.positionX.value = p[0]; a.pan.positionY.value = p[1]; a.pan.positionZ.value = p[2]; }
+        else { try { a.pan.setPosition(p[0], p[1], p[2]); } catch (err) {} }
+        if (src.d) {
+          if (a.pan.orientationX) { a.pan.orientationX.value = src.d[0]; a.pan.orientationY.value = src.d[1]; a.pan.orientationZ.value = src.d[2]; }
+          else { try { a.pan.setOrientation(src.d[0], src.d[1], src.d[2]); } catch (err) {} }
+        }
+        if (src.cone) { a.pan.coneInnerAngle = src.cone[0]; a.pan.coneOuterAngle = src.cone[1]; a.pan.coneOuterGain = src.cone[2]; }
+        else { a.pan.coneInnerAngle = 360; a.pan.coneOuterAngle = 360; a.pan.coneOuterGain = 1; }
+        var lp2 = sc.listener.p, dx = p[0] - lp2[0], dy = p[1] - lp2[1], dz = p[2] - lp2[2];
+        a.fade.gain.value = mediaFade(Math.sqrt(dx * dx + dy * dy + dz * dz), src.full, src.end);
+      });
+    }
+    // The card's Pictures in the app switch, as mediaAllowed is for Camera & microphone. A card that does not say
+    // "pictures": true never gets them.
+    function picturesAllowed(){
+      if (arcadePicturesAllowed(here)) return Promise.resolve(true);
+      return arcadeGameOf(here).then(function(g){
+        if (g.game) {
+          if (!g.pictures) return false;
+          if (arcadePicturesOn(here, g)) return true;
+          arcadePicturesUsed(here);
+          if (g.opens) arcadePicturesUsed(g.opens);
+          return false;
+        }
+        return arcadePicturesAsk(here, gameName, makerName, maker);
+      });
     }
     // The layer over the game's frame: the pictures where the game placed them, every voice the game hears (a
     // picture not placed still plays its sound), and the on-air pill with its Stop.
@@ -861,17 +1616,24 @@
         if (h.fast) for (var id in h.fast.peers) {
           var pr = h.fast.peers[id];
           if (pr.remote && pr.remote.getTracks().length) keep[id] = pr.remote;
+          if (pr.xremote && pr.xremote.getTracks().length) keep[id + '#screen'] = pr.xremote;
         }
+        if (md.xstream) keep['me#screen'] = md.xstream;
       }
       for (var k in tiles) if (!keep[k]) {
         try { tiles[k].srcObject = null; tiles[k].remove(); } catch (err) {}
         delete tiles[k];
+        if (h.media) mediaLoud(h, k, null);
       }
       if (h.media) h.mediaTiles = md.tiles;
       Object.keys(keep).forEach(function(key){
         var v = mediaTile(md, key), at = md.place[key];
         if (v.srcObject !== keep[key]) { v.srcObject = keep[key]; v.play().catch(function(){}); }
-        v.muted = key === 'me' || !md.hear[key];       // your own sound never; theirs once the game hears them
+        var who = key.replace(/#screen$/, ''), level = key in md.volume ? md.volume[key] : 1, heard = who !== 'me' && !!md.hear[who];
+        var placed = !!(md.spatial && md.spatial.sources[key]) || !!md.frames[key];
+        var loud = mediaLoud(h, key, heard && (level > 1 || placed) ? keep[key] : null, level, placed);
+        v.muted = !heard || loud;                      // your own sound never; theirs once the game hears them
+        v.volume = Math.min(1, level);
         if (at && at.w > 0 && at.h > 0) {
           v.style.display = 'block';
           v.style.left = at.x + 'px'; v.style.top = at.y + 'px';
@@ -882,9 +1644,52 @@
         } else v.style.display = 'none';
       });
       mediaPill();
+      if (h.media && !h.speakWatch) h.speakWatch = setInterval(function(){ mediaSpeak(h); }, 150);
+    }
+    // Who is talking (2026-11-02, the operator: green boxes round whoever speaks in a Riffs Lounge): the level of each
+    // player's voice as it arrives (their screen's sound is not their voice), and of your own microphone, said to the
+    // page as 'media-speaking' on/off. On above SPEAK_ON, off after SPEAK_HOLD ms below it, so a box does not flicker.
+    var SPEAK_ON = 0.04, SPEAK_HOLD = 600;
+    function mediaSpeak(h){
+      var name = rtName(h), md = h.media;
+      if (!name || !md) { clearInterval(h.speakWatch); h.speakWatch = null; return; }
+      var now = Date.now(), said = md.speaking || (md.speaking = {});
+      var level = function(id, lv, p){
+        var st = said[id] || (said[id] = {on: false, at: 0});
+        if (lv > SPEAK_ON) st.at = now;
+        var on = lv > SPEAK_ON || (st.on && now - st.at < SPEAK_HOLD);
+        if (on !== st.on) { st.on = on; mediaEvent(name, h, {type: 'media-speaking', member: p, on: on}); }
+      };
+      if (h.fast) for (var id in h.fast.peers) {
+        var pr = h.fast.peers[id], lv = 0;
+        if (pr.pc && pr.remote && md.hear[id]) pr.pc.getReceivers().forEach(function(r){
+          if (!r.track || r.track.kind !== 'audio' || !r.getSynchronizationSources) return;
+          if (pr.remote.getAudioTracks().indexOf(r.track) < 0) return;       // their screen's sound, not their voice
+          r.getSynchronizationSources().forEach(function(x){ if (x.audioLevel > lv) lv = x.audioLevel; });
+        });
+        level(id, lv, pr.p);
+      }
+      var mic = md.stream && md.audio && !md.muted.audio ? md.stream.getAudioTracks()[0] : null, me = 0;
+      if (mic && (!md.meter || md.meter.track !== mic)) {
+        try {
+          var Ctx = window.AudioContext || window.webkitAudioContext, ctx = md.meterCtx || (md.meterCtx = new Ctx());
+          var an = ctx.createAnalyser(); an.fftSize = 512;
+          ctx.createMediaStreamSource(new MediaStream([mic])).connect(an);
+          md.meter = {track: mic, an: an, buf: new Float32Array(512)};
+        } catch (err) { md.meter = {track: mic}; }
+      }
+      if (mic && md.meter && md.meter.an) {
+        if (md.meterCtx.state === 'suspended') md.meterCtx.resume().catch(function(){});
+        md.meter.an.getFloatTimeDomainData(md.meter.buf);
+        var sum = 0; for (var i = 0; i < md.meter.buf.length; i++) sum += md.meter.buf[i] * md.meter.buf[i];
+        me = Math.sqrt(sum / md.meter.buf.length) * 1.5;
+      }
+      if (h.me) level(h.me.id, me, h.me);
     }
     function mediaPill(){
       var on = mediaAnyOn();
+      // Pictures handed to an app count as on air too, though this page sends nothing itself.
+      if (!on) for (var rk in rt) { var rm = rt[rk].media; if (rm && (Object.keys(rm.frames).length || rm.levels)) { on = rt[rk]; break; } }
       if (!on) { if (mediaPillEl) mediaPillEl.hidden = true; return; }
       if (!mediaPillEl) {
         var el = mediaPillEl = document.createElement('div');
@@ -902,8 +1707,12 @@
         el.append(dot, words, stop);
         mediaLayer().appendChild(el);
       }
-      var md = on.media, what = md.video && md.audio ? 'Camera and microphone on' : md.video ? 'Camera on' : 'Microphone on';
+      var md = on.media, what = md.xstream ? (md.xstream.getAudioTracks().length ? (md.muted.sound ? 'Sharing your screen, its sound muted' : 'Sharing your screen and its sound') : 'Sharing your screen') : md.screen ? (md.mix && md.mix.sound ? 'Sharing your screen and its sound'
+                                             : md.audio ? 'Sharing your screen, microphone on' : 'Sharing your screen')
+        : md.video && md.audio ? 'Camera and microphone on' : md.video ? 'Camera on' : 'Microphone on';
       if (md.muted.video && md.muted.audio) what += ' (muted)';
+      var inApp = Object.keys(md.frames).length || md.levels;
+      if (inApp) what = md.stream || md.xstream ? what + ' \u00b7 pictures shown in the app' : 'Pictures shown in the app';
       mediaPillEl.querySelector('.arcade-media-words').textContent = what;
       mediaPillEl.hidden = false;
     }
@@ -930,7 +1739,26 @@
     }
     // Turned on on the card (in another tab): the note goes.
     window.addEventListener('storage', function(e){
+      // This page is still loading: base.html's script, below this one, has not defined its names yet (2026-11-03,
+      // live: "ARCADE_MEDIA is not defined" whenever another tab wrote to storage while a page loaded).
+      if (typeof ARCADE_MEDIA === 'undefined' || typeof arcadeGameOf !== 'function') return;
+      // Pictures in the app turned off elsewhere: what goes to this app stops now.
+      if (e.key && typeof ARCADE_PICTURES !== 'undefined' && e.key.indexOf(ARCADE_PICTURES) === 0 && e.newValue === null) {
+        arcadeGameOf(here).then(function(g){
+          if (arcadePicturesOn(here, g)) return;
+          for (var k in rt) { var md = rt[k].media; if (!md) continue;
+            Object.keys(md.frames).forEach(function(f){ framesStop(md, f); });
+            if (md.levels) { clearInterval(md.levels.timer); md.levels = null; } }
+          mediaPill();
+        });
+      }
       if (mediaNoteEl && e.key && e.key.indexOf(ARCADE_MEDIA) === 0 && e.newValue === 'yes') { mediaNoteEl.remove(); mediaNoteEl = null; }
+      // Turned off elsewhere (its Permissions window, Remove from arcade, Game access): a camera already on stops now.
+      if (e.key && e.key.indexOf(ARCADE_MEDIA) === 0 && e.newValue === null && mediaAnyOn()) {
+        arcadeGameOf(here).then(function(g){
+          if (!arcadeMediaOn(here, g)) for (var k in rt) if (rt[k].media) mediaStop(rt[k]);
+        });
+      }
     });
     // RINGING (arcade/ring.py): the app asks to ring an address; the viewer adds who is ringing (the player's own
     // certificate, as a realtime join proves it) and WHICH app -- this frame's page, never what the page says -- and
@@ -967,11 +1795,15 @@
       var name = String(m.room || '');
       if (m.op === 'join') {
         var game = m.game || here;
-        realtimeConnect(name, game, '').then(function(j){
+        // Only a page whose realtime.js reads a "pending" answer is sent one (an older copy would take it as a no).
+        var onWait = m.waits ? function(why){ frame.postMessage({arcade: 'realtime', seq: m.seq, pending: why}, '*'); }
+                             : null;
+        realtimeConnect(name, game, '', onWait).then(function(j){
           if (j.ok && j.online === false && !j.token) { answer(j); return; }
           if (!j.ok) { answer({ok: false, error: j.error || 'refused'}); return; }
           var h = realtimeOpen(name, frame, j, game, !!m.fast, m.link, m.max);
-          answer({ok: true, online: true, me: h.me, members: j.members, fast: !!h.fast, media: !!h.fast});
+          answer({ok: true, online: true, me: h.me, members: j.members, fast: !!h.fast, media: !!h.fast,
+                  screen: !!(navigator.mediaDevices && typeof navigator.mediaDevices.getDisplayMedia === 'function')});
         }).catch(function(err){
           answer({ok: false, error: String((err && err.message) || err || 'refused')});
         });
@@ -982,6 +1814,7 @@
       var held = rt[name];
       if (m.op === 'fast') { if (held) fastSend(held, m); return; }   // many a second: never answered
       if (!held) { answer({ok: false, error: 'join the room first'}); return; }
+      if (m.op === 'fastroutes') { fastRoutes(held, answer); return; }
       if (m.op === 'fastlink') { fastLink(name, held, m.link, m.max); answer({ok: true, fast: !!held.fast}); return; }
       if (m.op === 'media') { mediaDoor(name, held, m, answer); return; }
       if (m.op === 'send') {
@@ -1395,6 +2228,130 @@
     // card. An add or remove asked while one is open is refused "busy" (it is not queued: a page that asks
     // again later is asked again later, and a queue would stack cards up behind the one being read).
     var contactsCards = 0;               // contacts cards open now
+    // arcade.groups (2026-10-31, for Riffs): the player's encrypted group chats, for an app whose card has the Group chats
+    // switch turned on. The keys stay on this page, as the wallet's do: an app gets names and words. Every call needs the
+    // wallet unlocked, because the group keys are read with it. A page with no card gets nothing and asks nothing:
+    // a private chat is not something to hand a page nobody published as an app.
+    var groupsMe = null, groupsLooked = 0, groupsSynced = 0, groupsSent = 0, groupsCards = 0;
+    var GROUPS_LOOK_EVERY = 8000, GROUPS_SYNC_EVERY = 60000, GROUPS_SEND_GAP = 400, GROUPS_MAX_WORDS = 2000;
+    function groupsOpen(){
+      return import('/wallet.js').then(function(w){
+        return Promise.all([import('/messaging.js'), arcadeKeys(CHAIN, 'This app opens your group chats, which needs your wallet.')]);
+      }).then(function(got){
+        var mail = got[0], keys = got[1];
+        var me = groupsMe ? Promise.resolve(groupsMe) : mail.identity(keys.phrase);
+        return me.then(function(mine){ groupsMe = mine; return {mail: mail, keys: keys, me: mine}; });
+      });
+    }
+    function groupsFresh(s){
+      var now = Date.now(), jobs = [];
+      if (now - groupsSynced >= GROUPS_SYNC_EVERY) { groupsSynced = now; jobs.push(s.mail.syncMailbox(s.me).catch(function(){})); }
+      if (now - groupsLooked >= GROUPS_LOOK_EVERY) { groupsLooked = now; jobs.push(s.mail.collect(s.me).catch(function(){})); }
+      // Somebody left, and it is this player's turn to make the new key: their browser, with their wallet already open for this.
+      return Promise.all(jobs).then(function(){ return jobs.length && s.mail.settleLeavers(s.keys, s.me).catch(function(){}); });
+    }
+    function groupsOne(s, id){
+      return s.mail.currentGroup(String(id || '')).then(function(group){
+        if (!group) throw new Error('not a group of yours');
+        return group;
+      });
+    }
+    function groupsDoor(m, answer){
+      var op = m.op || 'list';
+      if (viewer !== 'account' || (typeof ARCADE_SIGNED !== 'undefined' && !ARCADE_SIGNED)) {
+        answer({ok: false, error: viewer === 'wallet' ? 'operator: group chats are an account\'s' : 'sign in first'}); return;
+      }
+      arcadeGameOf(here).then(function(g){
+        if (!g.game) throw new Error('no card: only an app with a card can open group chats');
+        if (!arcadeGroupsOn(here, g)) {
+          arcadeGroupsUsed(here);
+          if (g.opens) arcadeGroupsUsed(g.opens);
+          throw new Error('off: turn on Group chats on this app\'s card');
+        }
+        return groupsOpen().then(function(s){ return groupsOp(op, m, s, g); });
+      }).then(function(said){ said.ok = true; answer(said); },
+              function(err){ answer({ok: false, error: String((err && err.message) || err)}); });
+    }
+    function groupsOp(op, m, s, g){
+      if (op === 'list') return groupsFresh(s).then(function(){ return s.mail.groups(); }).then(function(all){
+        var roots = {};
+        all.forEach(function(one){ roots[s.mail.rootOf(one)] = true; });
+        return Promise.all([Promise.all(Object.keys(roots).map(function(id){ return s.mail.currentGroup(id); })), s.mail.leftGroups()]).then(function(got){
+          return {me: s.keys.address, groups: got[0].filter(function(one){ return one && one.current !== false && !got[1].has(s.mail.rootOf(one)); })
+                  .map(s.mail.groupForApp)};
+        });
+      });
+      if (op === 'read') return groupsFresh(s).then(function(){
+        return s.mail.groupLines(String(m.group || ''), {after: +m.after || 0, limit: +m.limit || 200});
+      }).then(function(lines){ return {lines: lines}; });
+      if (op === 'send') {
+        var words = String(m.text == null ? '' : m.text);
+        if (!words.trim()) throw new Error('nothing to send');
+        if (words.length > GROUPS_MAX_WORDS) throw new Error('too long: at most ' + GROUPS_MAX_WORDS + ' characters');
+        if (Date.now() - groupsSent < GROUPS_SEND_GAP) throw new Error('busy: wait a moment');
+        groupsSent = Date.now();
+        return groupsOne(s, m.group).then(function(group){ return s.mail.writeGroup(s.keys, s.me, group, words); })
+          .then(function(said){ return {txid: said.txid, fee: said.fee}; });
+      }
+      if (op === 'seal') return groupsOne(s, m.group).then(function(group){ return {sealed: s.mail.sealLive(group, String(m.text || ''))}; });
+      if (op === 'open') return groupsOne(s, m.group).then(function(group){ return {text: s.mail.openLive(group, m.sealed)}; });
+      if (op === 'create') {
+        var name = String(m.name || '').trim().slice(0, 60), who = Array.isArray(m.members) ? m.members.slice(0, 50).map(String) : [];
+        if (!name || !who.length) throw new Error('a group needs a name and at least one other person');
+        if (groupsCards) throw new Error('busy: this page already has a group question open');
+        groupsCards++;
+        return arcadeAsk('Make a new group chat?', '\u201c' + (g.name || gameName || 'This app') + '\u201d wants to make \u201c' + name
+          + '\u201d with ' + who.join(', ') + '. Each person gets the key in a message from your wallet.', 'Make the group')
+          .then(function(yes){
+            groupsCards--;
+            if (!yes) throw new Error('declined');
+            return s.mail.createGroup(s.keys, s.me, name, who, (typeof ARCADE_ME === 'string' ? ARCADE_ME : '') || '');
+          }).then(function(group){ return {group: s.mail.groupForApp(group)}; });
+      }
+      if (op === 'people') return s.mail.book().then(function(all){
+        return {people: (all || []).filter(function(c){ return c && c.address; })
+                .map(function(c){ return {address: c.address, tag: c.tag || ''}; })};
+      });
+      if (op === 'add') {
+        var more = Array.isArray(m.members) ? m.members.slice(0, 50).map(String) : [];
+        if (!more.length) throw new Error('name somebody to add');
+        if (groupsCards) throw new Error('busy: this page already has a group question open');
+        groupsCards++;
+        return groupsOne(s, m.group).then(function(group){
+          return arcadeAsk('Add to this group chat?', '\u201c' + (g.name || gameName || 'This app') + '\u201d wants to add ' + more.join(', ')
+            + ' to \u201c' + group.name + '\u201d. They get its key in a message from your wallet, so they can read what has been said in it.', 'Add them')
+            .then(function(yes){
+              if (!yes) throw new Error('declined');
+              return s.mail.addToGroup(s.keys, s.me, group, more);
+            });
+        }).then(function(group){ groupsCards--; return {group: s.mail.groupForApp(group)}; },
+                function(err){ groupsCards--; throw err; });
+      }
+      if (op === 'leave') {
+        if (groupsCards) throw new Error('busy: this page already has a group question open');
+        groupsCards++;
+        return groupsOne(s, m.group).then(function(group){
+          return arcadeAsk('Leave this group chat?', '\u201c' + (g.name || gameName || 'This app') + '\u201d wants to take you out of \u201c' + group.name
+            + '\u201d. It costs one small message from your wallet. Somebody who stays then makes a new key you never see; until they do, what the group says is still sealed to the old key. Somebody in the group can ask you back.', 'Leave the group')
+            .then(function(yes){
+              if (!yes) throw new Error('declined');
+              return s.mail.leaveGroup(s.keys, s.me, group);
+            });
+        }).then(function(root){ groupsCards--; return {left: root}; },
+                function(err){ groupsCards--; throw err; });
+      }
+      if (op === 'save') {
+        // An app's frame cannot start a download, so the page does, for bytes the app hands over: a file named by the app,
+        // saved where the player's browser saves things. Only ever a plain download, so it opens nothing by itself.
+        var bytes = m.data instanceof ArrayBuffer ? m.data : null, file = String(m.name || 'file').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').slice(0, 120);
+        if (!bytes) throw new Error('nothing to save');
+        var link = document.createElement('a'), url = URL.createObjectURL(new Blob([bytes], {type: 'application/octet-stream'}));
+        link.href = url; link.download = file; document.body.appendChild(link); link.click(); link.remove();
+        setTimeout(function(){ URL.revokeObjectURL(url); }, 60000);
+        return {saved: file};
+      }
+      throw new Error('groups: op is list, read, send, seal, open, create, add, leave, people or save');
+    }
     function contactsDoor(m, answer){
       var op = m.op || 'list';
       if (op === 'add' || op === 'remove') { contactsChange(op, m, answer); return; }
@@ -1756,6 +2713,7 @@
       if (m.arcade === 'access') { accessDoor(m, answer); return; }
       if (m.arcade === 'app') { appDoor(m, answer); return; }
       if (m.arcade === 'contacts') { contactsDoor(m, answer); return; }
+      if (m.arcade === 'groups') { groupsDoor(m, answer); return; }
       if (m.arcade === 'llm') { llmDoor(m, answer, e.source); return; }
       if (m.arcade === 'escrow') { escrowDoor(m, answer); return; }
       if (m.arcade === 'state' && m.op === 'update') {

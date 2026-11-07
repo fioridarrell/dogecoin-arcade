@@ -56,6 +56,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
+import json
 import logging
 import os
 import re
@@ -223,7 +225,15 @@ class MeshService:
         self.coreshare = None                   # coreshare.CoreShare: Cores shared with, and borrowed from, other arcades
         self.llmshare = None                    # llmshare.LlmShare: the LLM service with other arcades
         self.indexcheck = None                  # indexcheck.IndexCheck: indexes compared with other arcades'
+        self.ledgershare = None                 # ledgershare.LedgerShare: index copies for arcades far behind
+        self.coreboot = None                    # coreboot.CoreBoot: Core chain data copied for arcades far behind
+        self.coverage = None                    # coverage.Coverage: every resource needed, from linked holders
         self.stun = None                        # stun.StunShare: STUN addresses for the fast lane, this node's and others'
+        self.punch = None                       # punch.PunchShare: the direct-UDP probe with a linked node
+        self.udp = None                         # udp.UdpShare: the UDP path beside each link
+        self.introducer = None                  # introduce.Introducer: links with no TCP under them
+        self.turn = None                        # turn.TurnServer: the media relay on the STUN port
+        self.turnshare = None                   # turn.TurnShare: relays borrowed from arcades that can be reached
         self.stun_port: int | None = None       # this node's own STUN server (UDP), or None
         self._stun_transports: list = []
         self.tunnel_url: str | None = None
@@ -240,6 +250,12 @@ class MeshService:
             self.node.add_address(host, port, node_id)
         self.loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
+        # STUN and the media relay (turn.py) run on a loop of their own (2026-11-02: calls on an "Arcade
+        # relay" were "very lossy"). On the mesh loop every relayed packet waited behind links, Core relaying and
+        # the UDP path's acks; measured through .25 and a borrowed relay: no loss, but packets in clumps, 1-3% of the
+        # sound concealed and a 250-400 ms jitter buffer. Here nothing else runs.
+        self.media_loop: asyncio.AbstractEventLoop | None = None
+        self._media_thread: threading.Thread | None = None
         self._sessions: dict[str, Session] = {}
         # Several pages of one member in one room (2026-10-09: ASHVALE and Ziibiing open
         # in two tabs as the same account shared ONE session -- one queue read by both
@@ -281,8 +297,7 @@ class MeshService:
             self._call(self._tunnel_stop(), timeout=15)
         except Exception:                              # noqa: BLE001
             pass
-        for t in self._stun_transports:
-            self.loop.call_soon_threadsafe(t.close)
+        self._stop_media()
         try:
             self._call(self.node.stop(), timeout=10)
         finally:
@@ -300,13 +315,50 @@ class MeshService:
         if (self.tunnel_cmd or self.named_url) and self.node.ws_port:
             self.node._spawn(self._tunneler())
         if self.stun_port:
-            self.node._spawn(self._stun_server())
+            self._start_media()
+
+    def _start_media(self) -> None:
+        """STUN and the media relay on their own thread and loop ("arcade-media"), so relayed sound and pictures
+        never wait for the mesh."""
+        ready = threading.Event()
+
+        def run():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            self.media_loop = loop
+            ready.set()
+            loop.run_forever()
+            loop.close()
+
+        self._media_thread = threading.Thread(target=run, name="arcade-media", daemon=True)
+        self._media_thread.start()
+        ready.wait()
+        asyncio.run_coroutine_threadsafe(self._stun_server(), self.media_loop)
+
+    def _stop_media(self) -> None:
+        loop = self.media_loop
+        if loop is None:
+            return
+
+        def close():
+            if self.turn is not None:
+                self.turn.close()
+            for t in self._stun_transports:
+                t.close()
+            loop.call_soon(loop.stop)              # after the sockets' own closing callbacks
+        loop.call_soon_threadsafe(close)
+        if self._media_thread is not None:
+            self._media_thread.join(timeout=5)
+        self.media_loop = None
 
     async def _stun_server(self) -> None:
+        """Runs on the media loop."""
         from . import stun
         try:
-            self._stun_transports = await stun.serve(port=self.stun_port)
+            self._stun_transports = await stun.serve(port=self.stun_port, turn=self.turn)
             log.info("mesh: STUN on UDP %s", self.stun_port)
+            if self.turn is not None and self._stun_transports:
+                self.turn.transport = self._stun_transports[0]
         except OSError as exc:
             log.warning("mesh: STUN not started on UDP %s: %s", self.stun_port, exc)
             self.stun_port = None
@@ -436,7 +488,8 @@ class MeshService:
             self.reachable = await self.node.reaches_itself(host, port)
             if not self.reachable and self.node.links:
                 said = await self.node.ask_dial_back(port)
-                self.reachable = said["reached"]
+                # Only a peer that dialled THIS address and got through proves it (node.ask_dial_back).
+                self.reachable = host in said.get("reached_at", [])
             if self.reachable:
                 self.meet = None
                 return host, port
@@ -721,6 +774,16 @@ class MeshService:
         return await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(get(), self.loop))
 
 
+def _media_limit(state) -> float:
+    """The operator's monthly limit for the media server, in GB (setting media_server.limit_gb)."""
+    from .turn import MONTH_LIMIT_GB
+    said = (state.settings().get("media_server") or {}) if hasattr(state, "settings") else {}
+    try:
+        return float(said.get("limit_gb", MONTH_LIMIT_GB)) if isinstance(said, dict) else MONTH_LIMIT_GB
+    except (TypeError, ValueError):
+        return MONTH_LIMIT_GB
+
+
 def for_state(state, *, listen_host: str | None = None, listen_port: int | None = DEFAULT_PORT,
               peers: list[tuple[str, int]] | None = None,
               announce_at: tuple[str, int] | None = None,
@@ -813,11 +876,24 @@ def for_state(state, *, listen_host: str | None = None, listen_port: int | None 
     def fingerprints() -> dict:
         for chain in state.token_chains:
             fp = prints.get(chain.network)
-            if fp is None or fp.index is not state.token_index(chain):
+            if fp is None or fp.index is not state.token_index(chain) \
+                    or fp.epoch != getattr(fp.index, "epoch", 0):      # its file replaced by a copy (2026-11-02)
                 prints[chain.network] = Fingerprints(state.token_index(chain), chain.params.index_start)
         return dict(prints)
     service.indexcheck = IndexCheck(fingerprints)
     service.node.add_extension(service.indexcheck)
+    # Index copies for arcades far behind, a piece from each arcade that has one (ledgershare.py,
+    # ledger_snapshot.py, 2026-11-02: "copy on request").
+    if hasattr(state, "ledger_snapshots"):
+        from .ledgershare import LedgerShare
+        service.ledgershare = LedgerShare(lambda: {c.network: state.ledger_snapshots(c) for c in state.token_chains})
+        service.node.add_extension(service.ledgershare)
+    # A chain's Core data copied for an arcade whose installed Core is far behind, from a linked arcade's, automatically
+    # (coreboot.py, arcade/core_copy.py, 2026-11-04).
+    if hasattr(state, "settings") and hasattr(state, "set_setting"):
+        from .coreboot import CoreBoot
+        service.coreboot = CoreBoot(state)
+        service.node.add_extension(service.coreboot)
     # Fruit names for new arcades' operators (fruitshare.py, arcade/fruit.py, 2026-10-20).
     if hasattr(state, "fruit_stand"):
         from .fruitshare import FruitShare
@@ -866,6 +942,11 @@ def for_state(state, *, listen_host: str | None = None, listen_port: int | None 
             return kclib.mode_of(state.setting(kclib.MODE_SETTING)) if hasattr(state, "setting") else "demand"
         service.collectionshare = CollectionShare(state.known_collections, mode=kc_mode)
         service.node.add_extension(service.collectionshare)
+    # Themes an operator offers to the arcades it links with (themeshare.py; Window -> Build, 2026-11-04).
+    if hasattr(state, "settings") and hasattr(state, "home"):
+        from .themeshare import ThemeShare
+        service.themeshare = ThemeShare(state)
+        service.node.add_extension(service.themeshare)
     # Each account's imported wallets, to every arcade that holds the account (importshare.py, 2026-10-21).
     if hasattr(state, "imported_wallets"):
         from .importshare import ImportShare, StateRecords
@@ -888,6 +969,88 @@ def for_state(state, *, listen_host: str | None = None, listen_port: int | None 
         return [h for h in (last.get("host"), v6) if h]
     service.stun = StunShare(own_hosts if stun_port else None, port=stun_port or 3478)
     service.node.add_extension(service.stun)
+    # The punch probe (punch.py): can this node and a linked one reach each other directly over UDP? It maps
+    # through other nodes' STUN (never its own: that would only see the home network).
+    from .punch import LAN_DIAL_SETTING, PunchShare
+
+    def mesh_lan_dial():
+        """punch.lan_dial_mode: auto, on, or off. The environment wins, then settings.json, else auto."""
+        env = os.environ.get("ARCADE_MESH_LAN_DIAL")
+        if env not in (None, ""):
+            return env
+        try:
+            return state.settings().get(LAN_DIAL_SETTING, "auto")
+        except Exception:                              # noqa: BLE001
+            return "auto"
+
+    service.punch = PunchShare(lambda: [a for offers in service.stun.offers.values() for a in offers],
+                               lan_dial=mesh_lan_dial)
+    service.node.add_extension(service.punch)
+    # UDP alongside TCP on every link that can have it (udp.py); ARCADE_MESH_UDP=0 keeps a node on its connections.
+    # mesh-core off does not turn this off: the one UDP socket still punches every link.
+    if os.environ.get("ARCADE_MESH_UDP", "1") != "0":
+        from .udp import UdpShare
+        service.udp = UdpShare(lambda: [a for offers in service.stun.offers.values() for a in offers],
+                               lan_dial=mesh_lan_dial)
+        service.node.add_extension(service.udp)
+        # Links with no TCP under them (introduce.py): met over the mesh, or over the chain's machine layer.
+        from .introduce import Introducer
+
+        intro_cursor = [0]
+
+        def read_intros(topic: str) -> list[dict]:
+            """Introductions published since the last look."""
+            if not state.store_path.exists():
+                return []
+            with state.store() as store:
+                rows = store.node_broadcasts(state.messaging.params.name, topic=topic, after=intro_cursor[0])
+            out = []
+            for row in rows:
+                intro_cursor[0] = max(intro_cursor[0], int(row["id"]))
+                try:
+                    out.append({"txid": row["txid"], "body": json.loads(row["body"])})
+                except (TypeError, ValueError):
+                    continue
+            return out
+
+        service.introducer = Introducer(service.udp, publish=state.send_broadcast, read=read_intros,
+                                        announced=announced)
+        service.node.add_extension(service.introducer)
+    # The media server (turn.py): the relay for games, sound and pictures, on the STUN port. Its logins are keyed
+    # from the mesh key, so they outlive a restart. ARCADE_MESH_TURN=0 turns it off.
+    if stun_port and os.environ.get("ARCADE_MESH_TURN", "1") != "0":
+        from .turn import TurnServer
+        service.turn = TurnServer(
+            hashlib.blake2b(bytes(key), digest_size=32, person=b"arcm-turn").digest(),
+            # Read from the media loop's thread while the mesh loop may change it: a copy, taken at once.
+            lambda: [a for offers in list(service.stun.offers.values()) for a in offers],
+            usage_file=Path(state.home) / "media-usage.json", own_addresses=own_hosts,
+            limit_gb=lambda: _media_limit(state))
+    from .turn import TurnShare
+    service.turnshare = TurnShare(service.turn, lambda: {p: h for p, h in service.stun.offers.items() if h})
+    service.node.add_extension(service.turnshare)
+    # Every resource this arcade needs, from linked arcades that hold it: Cores, ord and token indexes, media relays and
+    # game rooms (coverage.py, 2026-11-02: "at least one node preferably three").
+    from . import coverage as coveragelib
+    service.coverage = coveragelib.Coverage(lambda: coveragelib.holds(state, service),
+                                            lambda: coveragelib.needs(state, service),
+                                            lambda: getattr(service, "introducer", None))
+    service.node.add_extension(service.coverage)
+
+    def mesh_outside() -> list[str]:
+        """What STUN saw for this node's UDP socket, then the address it announced. punch.tcp_targets
+        dials a peer's home address only when that peer lists one of these."""
+        hosts: list[str] = []
+        share = getattr(service, "udp", None)
+        if share is not None:
+            hosts.extend(list(getattr(share, "outside", ()) or ()))
+        last = (service.last_announced or {}).get("host")
+        if isinstance(last, str) and last:
+            hosts.append(last)
+        return hosts
+
+    service.node.lan_dial = mesh_lan_dial
+    service.node.outside_addrs = mesh_outside
     return service
 
 
@@ -900,7 +1063,7 @@ def operator_about(state) -> dict:
     tag = state.operator_tag() if hasattr(state, "operator_tag") else ""
     try:
         from ..web import brand as brandlib
-        name = brandlib.current().name
+        name = brandlib.own().name
     except Exception:                                      # noqa: BLE001
         name = ""
     return {**({"tag": tag} if tag else {}), "name": name,
@@ -910,7 +1073,18 @@ def operator_about(state) -> dict:
             "lora": bool(getattr(getattr(state, "lora", None), "running", False)),
             # What each chain takes on this disk, Core and ord index (arcade/disk_sizes.py, 2026-10-27: "The
             # size of all indexes should be broadcast to the network").
-            **_disk(state)}
+            **_disk(state), **_owner(state)}
+
+
+def _owner(state) -> dict:
+    """{"owner": {a, x, s}}: its owner's signed word that it owns this node (arcade/owner.py), only when the owner
+    ticked "Tell linked arcades I own it" in Admin -> This node and the statement has not run out (2026-11-04)."""
+    try:
+        from .. import owner as ownerlib
+        said = ownerlib.shaped(state.setting("owner_statement")) if state.setting("owner_say") else None
+        return {"owner": said} if said and said["x"] > time.time() else {}
+    except Exception:                                      # noqa: BLE001 -- said without it
+        return {}
 
 
 def _disk(state) -> dict:

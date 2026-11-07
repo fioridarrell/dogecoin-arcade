@@ -251,7 +251,8 @@ export async function asKind(wallet, network, kindId) {
 
 /** Register any address this node does not know yet. Signed-in only. */
 export async function tellTheNode(wallet) {
-  const said = await state();
+  // Addresses only: the full /account reads balances this never looks at (2026-11-05, a 12-18 s unlock).
+  const said = await (await fetch("/account?only=addresses")).json();
   for (const chain of said.chains || []) {
     const keys = wallet.on && wallet.on[chain.network];
     if (!keys || chain.address === keys.address) continue;
@@ -768,6 +769,17 @@ export async function realtimeSign(mine, hello, {there = false} = {}) {
   return {sig: await coins.signWords(mine, words), expires, words};
 }
 
+/** The owner's statement that `mine` ({key, address} on the messaging chain) owns `node`, this arcade's own mesh
+ *  node, for `days` (arcade/owner.py). Asked in words first, and only for the node this wallet keeps as this arcade's. */
+export async function ownerSign(mine, network, node, days = 365) {
+  const expires = Math.floor(Date.now() / 1000) + days * 86400;
+  const words = coins.ownerWords(String(network || ""), String(node || ""), mine.address, expires);
+  if (!await ownNode(node, words)) throw notSigned("you said no");
+  if (!await askToSign(`You own this arcade's node ${String(node).slice(0, 16)}… Linked arcades will be able to check `
+    + "that your name says so. Sign only on a node you run.", words)) throw notSigned("you said no");
+  return {a: mine.address, x: expires, s: await coins.signWords(mine, words)};
+}
+
 /** A grant for `seller`, the other arcade the player picked: `mine` lets it serve the player for `days`. */
 export async function llmGrantSign(mine, seller, days = 3649) {
   seller = String(seller || "");
@@ -817,8 +829,8 @@ export async function llmTopupSign(mine, {seller = "", here = false, network, tx
 //: names are config.py NETWORKS (`real_coins`; tests/test_mainnet_review_names.py holds them to it). A name this file
 //: does not know is mainnet too: asked about, never waved through. The test chains also sign with the m/44'/1' key
 //: (coins.COIN_TYPE), which holds no mainnet coin, so a node calling a mainnet chain "test" gets a signature for nothing.
-export const MAINNETS = new Set(["main", "doge", "ltc", "bel", "lky", "kot", "wjk", "dgb"]);
-export const TESTNETS = new Set(["test", "regtest", "ltctest"]);
+export const MAINNETS = new Set(["main", "doge", "ltc", "bel", "lky", "kot", "wjk", "dgb", "flop"]);
+export const TESTNETS = new Set(["test", "regtest", "ltctest", "dgbtest"]);
 export function isMainnet(network) {
   return !TESTNETS.has(String(network || ""));
 }
@@ -889,8 +901,12 @@ async function signOffer(wallet, offer, given = null, options = null) {
   const shown = await coins.verifyOffer(offer, keys);
   await mainnetOk(offer, shown, network, options);
   const signatures = [];
-  for (const sighash of shown.hashes) {
-    signatures.push(coinsHex(await coins.signInput(keys.key, unhex(sighash))));
+  for (const [n, sighash] of shown.hashes.entries()) {
+    // A Taproot coin (a DigiDollar redeem, 2026-11-04) is signed with Schnorr: by the key itself for a script path,
+    // by its tweaked key for the key path. Every other coin with ECDSA, as always.
+    const how = (shown.signers || [])[n];
+    signatures.push(coinsHex(how ? await coins.signSchnorr(keys.key, unhex(sighash), how === "key")
+                                 : await coins.signInput(keys.key, unhex(sighash))));
   }
   // The wallet's lane (/account/sign) is held only while one broadcast goes out, and claimed before the offer is taken,
   // so "still going" refuses nothing for good: wait a moment and send again (2026-10-25: a collection's lanes sign
@@ -3163,7 +3179,7 @@ export const TRADE = {
   CONFIRMATIONS: 0, CONFIRMATIONS_BIG: 1,       // 0 below the big line, 1 at or above it (2026-10-17; trade.py)
   BIG: {main: 1_000_000 * 100_000_000, doge: 1_000 * 100_000_000, ltc: 2 * 100_000_000,
        bel: 200 * 100_000_000, lky: 20 * 100_000_000, kot: 100 * 100_000_000, wjk: 100 * 100_000_000,
-       dgb: 1_000 * 100_000_000},
+       dgb: 1_000 * 100_000_000, flop: 1_000 * 100_000_000},
   // The most one delegated order may give (node_trader.DELEGATE_CAP, 2026-10-25): its key goes to the node, so the
   // operator could spend it. Another real-coin chain: its BIG line; a test chain: no cap.
   DELEGATE_CAP: {doge: 1_000 * 100_000_000, main: 100_000 * 100_000_000, ltc: 1 * 100_000_000},
@@ -3176,19 +3192,21 @@ export const TRADE = {
   // = htlc.dust_of), and the version bytes it may be paid to (trade.PAYEE_VERSIONS). tests/test_trade_fees.py holds
   // these to the Python numbers.
   CLAIM_FEE: {main: 1_000_000, test: 1_000_000, regtest: 1_000_000, doge: 1_000_000, ltc: 10_000, ltctest: 10_000,
-              bel: 10_000, lky: 1_000_000, kot: 100_000, wjk: 10_000, dgb: 400_000},
+              bel: 10_000, lky: 1_000_000, kot: 100_000, wjk: 10_000, dgb: 400_000, dgbtest: 400_000,
+              flop: 1_000_000},
   FEE_FLOOR: {main: 1_000_000, test: 1_000_000, regtest: 1_000_000, doge: 1_000_000, ltc: 10_000, ltctest: 10_000,
-              bel: 10_000, lky: 1_000_000, kot: 100_000, wjk: 10_000, dgb: 10_000},
+              bel: 10_000, lky: 1_000_000, kot: 100_000, wjk: 10_000, dgb: 10_000, dgbtest: 10_000,
+              flop: 1_000_000},
   FEE_BPS_CEILING: 10_000,
   // The lending arcade's part of a fee on a borrowed chain (trade.SHARE_PERCENT, 2026-10-28).
   SHARE_PERCENT: 20,
-  PAYEE_VERSIONS: [25, 30, 46, 47, 48, 56, 73, 111, 113],
+  PAYEE_VERSIONS: [25, 30, 35, 46, 47, 48, 56, 73, 111, 113, 126],
 };
 //: The real-coin chains (config.py `real_coins`): their legs are mainnet tier (trade.Leg.tier).
 //: Each chain's coin as a leg says it (config.py `coin`).
 const COIN_WORD = {doge: "DOGE", main: "PEP", ltc: "LTC", ltctest: "LTC TEST", bel: "BEL", lky: "LKY", kot: "KOT", wjk: "WJK",
-                   dgb: "DGB"};
-const REAL_COINS = new Set(["main", "doge", "ltc", "bel", "lky", "kot", "wjk", "dgb"]);
+                   dgb: "DGB", flop: "FLOP"};
+const REAL_COINS = new Set(["main", "doge", "ltc", "bel", "lky", "kot", "wjk", "dgb", "flop"]);
 //: Chains whose consensus never enforces CHECKLOCKTIMEVERIFY (config.Params.cltv_enforced): a swap lock there refunds
 //: at any moment, so the side that locked could take it back after the other side claimed. No lock is made on them.
 const NO_CLTV = new Set(["wjk"]);
@@ -3520,7 +3538,7 @@ const TRADES = "arcade-trades";
 //: A lock's address on each chain: P2SH version bytes (arcade/config.py). The node's own
 //: word (/account chains[].p2sh) wins: a chain standing in for another has its own.
 const P2SH_VERSION = {main: 22, doge: 22, ltc: 50, ltctest: 58, test: 196, regtest: 196,   // ltc: "M" (2026-10-17)
-                      bel: 30, lky: 5, kot: 45, wjk: 5, dgb: 63};    // bel: the node refuses a lock there (config.require_p2sh_payable)
+                      bel: 30, lky: 5, kot: 45, wjk: 5, dgb: 63, flop: 22};    // bel: the node refuses a lock there (config.require_p2sh_payable)
 let p2shKnown = null;
 async function p2shOf(network) {
   if (!p2shKnown) {
@@ -4593,8 +4611,15 @@ async function recordKey(password, blob) {
 
 /** What the node keeps for this account's imports: the sealed record (parsed), when it was written, the main
  *  wallet's sealed blob, each chain's imported addresses with balance and read-back state, the main wallets' names. */
-export async function importedOnNode() {
-  const got = await fetch("/account/imported", {cache: "no-store"});
+export async function importedOnNode({recordOnly = false, open = null} = {}) {
+  // `recordOnly`: the record and the vault without each chain's balances (what opening and tidying need; the balances
+  // read every coin of every imported address -- ~4 s for 7,000 coins, 2026-11-05).
+  // `open` ({chain, address}, or {} for none): lazy wallets -- coins read only for the wallet open on the page; every
+  // other comes back `lazy` with its read-back state (2026-11-05).
+  const q = recordOnly ? "?record=1"
+    : open ? "?lazy=1" + (open.chain && open.address
+      ? `&chain=${encodeURIComponent(open.chain)}&address=${encodeURIComponent(open.address)}` : "") : "";
+  const got = await fetch("/account/imported" + q, {cache: "no-store"});
   const said = await got.json().catch(() => ({}));
   if (!got.ok) throw new Error(said.detail || "this arcade did not answer about your imported wallets");
   let record = null;
@@ -4611,7 +4636,7 @@ export function importsOpen(account) {
  *  sign-in: a record sealed under an earlier password (the Restore page set a new one) is marked `stale`. */
 async function openImportsWith(wallet, password) {
   try {
-    const said = await importedOnNode();
+    const said = await importedOnNode({recordOnly: true});
     if (!said.record) { keepImports(wallet.pubkey, {updated: 0, wallets: []}); return; }
     const keyed = await recordKey(password, said.record);
     let opened;
@@ -4624,14 +4649,14 @@ async function openImportsWith(wallet, password) {
     importKey = {account: wallet.pubkey, ...keyed};
     keepImports(wallet.pubkey, {updated: said.updated, version: said.version,
                                 wallets: (opened && opened.wallets) || []});
-    await tidyImports(wallet, password);
+    await tidyImports(wallet, password, said);
   } catch (e) { /* the record is read again on the Wallet page */ }
 }
 
 /** Open a record sealed under an EARLIER password (after a Restore), with that password. Only opens it in this
  *  tab: the next change seals it again under the current password. */
 export async function openStaleImports(wallet, oldPassword) {
-  const said = await importedOnNode();
+  const said = await importedOnNode({recordOnly: true});
   if (!said.record) throw new Error("you have no imported wallets on this arcade");
   const opened = JSON.parse(await openText(said.record, await recordKey(oldPassword, said.record)));
   keepImports(wallet.pubkey, {updated: said.updated, wallets: (opened && opened.wallets) || [], reseal: true});
@@ -4749,9 +4774,10 @@ function trimGone(gone) {
  *  seal it, sign it as the next version, hand it back -- read again and retried when another tab or device wrote it in
  *  between (the node's 409), so neither loses the other's change. `{tidy}`: only save when that changes something
  *  (a copy folded in, or a record from before signatures). */
-async function changeImports(wallet, change, password, {tidy = false} = {}) {
+async function changeImports(wallet, change, password, {tidy = false, read = null} = {}) {
   for (let attempt = 0; attempt < 4; attempt++) {
-    const said = await importedOnNode();
+    // The first try may start from an answer already read (`read`); a retry after a 409 always reads again.
+    const said = (attempt === 0 && read) || await importedOnNode({recordOnly: true});
     const {keyed, reseal} = await keyForChange(wallet, said, password);
     let wallets = reseal ? JSON.parse(JSON.stringify(reseal)) : [];
     const gone = {};
@@ -4809,11 +4835,12 @@ async function changeImports(wallet, change, password, {tidy = false} = {}) {
 
 /** After the record opens with the password: a record from before signatures is saved again, signed, and copies
  *  put aside are folded in (2026-10-21). Never fails an unlock. */
-async function tidyImports(wallet, password) {
+async function tidyImports(wallet, password, read = null) {
   try {
-    const said = await importedOnNode();
+    // `read`: the answer the record was just opened from, not asked for again (2026-11-05: a second ~4 s per unlock).
+    const said = read || await importedOnNode({recordOnly: true});
     if (!said.record || (said.signed && !(said.siblings || []).length)) return;
-    await changeImports(wallet, () => {}, password, {tidy: true});
+    await changeImports(wallet, () => {}, password, {tidy: true, read: said});
   } catch (e) { /* tried again at the next unlock */ }
 }
 
@@ -4933,7 +4960,7 @@ export async function importWallet(chain, {kind, secret, name = "", addrKind = "
       throw new Error("That is your arcade wallet's own key on this coin, already here.");
     }
     // Before anything is registered: the password, when this page does not hold the record's key yet.
-    const said = await importedOnNode();
+    const said = await importedOnNode({recordOnly: true});
     await keyForChange(wallet, said, password);
     const here = importsOpen(wallet.pubkey);
     const dupe = ((here && here.wallets) || []).find((w) => w.chain === chain.network && w.address === mine.address);
@@ -5023,7 +5050,7 @@ export function importsKeyHere(account) {
  *  whose copy was lost). A password that opens the main wallet and not the record means the record was sealed under
  *  an earlier one: said so (`stale`), and `openStaleImports` takes that earlier password. */
 export async function openImports(wallet, password) {
-  const said = await importedOnNode();
+  const said = await importedOnNode({recordOnly: true});
   if (!said.record) { keepImports(wallet.pubkey, {updated: 0, wallets: []}); return []; }
   const keyed = await recordKey(password, said.record);
   try {
@@ -5031,7 +5058,7 @@ export async function openImports(wallet, password) {
     importKey = {account: wallet.pubkey, ...keyed};
     keepImports(wallet.pubkey, {updated: said.updated, version: said.version,
                                 wallets: (opened && opened.wallets) || []});
-    await tidyImports(wallet, password);
+    await tidyImports(wallet, password, said);
     return (importsOpen(wallet.pubkey) || {}).wallets || opened.wallets || [];
   } catch (e) {
     const main = said.vault ? await open(said.vault, password).catch(() => null) : null;

@@ -64,7 +64,7 @@ outside an arcade viewer, or anything else goes wrong, the room has
 | `room.on('message', fn(data, player))` | `data` is parsed JSON when it parses |
 | `room.on('join', fn(player))`, `room.on('leave', fn(player))` | |
 | `room.on('reconnecting', fn())` | the line dropped and the viewer is taking your seat again by itself; `room.online` is `false` until it is back. Show "reconnecting" if you like |
-| `room.on('rejoined', fn(me))` | you were seated again after the line dropped: the others may have seen you leave and come back, so **send your state again** (position, gear) |
+| `room.on('rejoined', fn(me, media))` | you were seated again after the line dropped: the others may have seen you leave and come back, so **send your state again** (position, gear). `media` is `{video, audio, screen}` when your camera, microphone or screen stayed open through it (they go back on the new links by themselves, with whatever you shared and placed), `null` when nothing was open |
 | `room.leave()` | leave the room |
 
 A **player** is `{id, address, tag, guest, node}`. Key your game state by `id`.
@@ -253,15 +253,22 @@ arcade.realtime.join('call-x7', {fast: true}).then(function (room) {
 
 | | |
 |---|---|
+| `start({screen, audio, sound})` | shares a screen instead of the camera. With `sound: true` the browser's picker offers what the screen plays, mixed with the microphone into one track; the answer has `sound: true` if the browser gave any. `mute({audio: true})` then silences the microphone only |
 | `start({video, audio})` | opens the camera, the microphone or both. Called again mid-call, the new tracks replace the old (the camera joins the microphone, say) |
+| `start({screen: true, audio})` | shares the screen as the picture, with the microphone: the browser's own picker opens, and `{ok: false, error: 'cancelled'}` comes back if it is closed. `start({audio})` again stops the screen and keeps the voice |
+| `screen` | `room.media.screen` is `true` where this browser can share its screen (a computer's; a phone's cannot) |
 | `stop()` | camera and microphone off; every share ends |
+| `fast.routes()` | how each link really goes, by player id: `'direct'`, `'relay'` (an arcade's relay), `'cloudflare'`, `'connecting'` or `'none'`. Measured by the browser. A relay on the far side reads `'relay'`: only its owner can tell whose it is |
 | `share(id, on)` | send your picture and sound to one player: `true`, `false`, or `{video, audio}` for one kind only. Refused with `not direct` until that player's link is direct |
 | `hear(id, on)` | play that player's sound. Nobody's sound plays until you say |
+| `showScreen({sound})` | the screen as a second picture, beside the camera: the camera and microphone go on untouched. On the player's press. `hideScreen()` ends it, and the browser's own Stop sharing gives state `'screen-off'` |
+| `place(id + '#screen', rect)` | where a player's second picture goes (`'me#screen'` for yours). `volume(id + '#screen', level)` sets its sound apart from their voice |
+| `volume(id, level)` | how loud that player is for you alone, `0` to `media.loudest` (`4`). It starts at `1`, and they are not told. Past `1` it is louder than they send it, held by a limiter |
 | `place(id or 'me', rect, {fit, mirror})` | where a picture is drawn: `{x, y, w, h}` in your page's CSS pixels, or `null` to hide it. `fit` is `'cover'` or `'contain'`. At most 16 pictures |
 | `mute({video, audio})` | `true` mutes that kind, `false` unmutes it |
 | `on('media', fn(player, {video, audio}))` | a player is sending to you |
 | `on('media-off', fn(player))` | they stopped |
-| `on('state', fn(s))` | `'on'`, `'off'` (the player pressed Stop) or `'denied'` |
+| `on('state', fn(s))` | `'on'`, `'off'` (the player pressed Stop), `'denied'`, or `'screen-off'` (the browser's own Stop sharing ended the picture; the voice goes on) |
 
 * **Share only with the player you mean.** A room's name can be guessed, and
   anybody who joins it is a peer. Check `p.address` before you call `share`

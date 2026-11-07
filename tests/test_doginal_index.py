@@ -483,12 +483,14 @@ def test_ords_witness_envelopes_are_read_on_a_taproot_chain():
 
 
 def test_each_chain_starts_at_its_official_first_inscription_height(tmp_path):
-    assert dx.STARTS == {"doge": 4_600_000, "main": 186_920, "test": 34_237, "ltc": 2_424_429, "ltctest": 2_669_127,
-                         "bel": 22_470, "lky": 88_554, "wjk": 1, "dgb": 0}
-    ltc = dx.DoginalIndex(tmp_path / "ltc.sqlite", None, lambda: "off", net="ltc", mweb=True)
-    assert ltc.base == 2_424_429 and ltc.taproot and ltc.walker.mweb
-    assert dx.chunk_range(0, ltc.base) == (2_424_429, 2_424_429 + dx.CHUNK)
-    assert ltc.status()["source"].startswith("ord-litecoin")
+    # No Litecoin and no Kotia (2026-11-05, tbuuol: no token protocols on LTC, tLTC and KOT).
+    assert dx.STARTS == {"doge": 4_600_000, "main": 186_920, "test": 34_237,
+                         "bel": 22_470, "lky": 88_554, "wjk": 1, "dgb": 0,
+                         "flop": 18_295}
+    bel = dx.DoginalIndex(tmp_path / "bel.sqlite", None, lambda: "off", net="bel")
+    assert bel.base == 22_470 and bel.taproot
+    assert dx.chunk_range(0, bel.base) == (22_470, 22_470 + dx.CHUNK)
+    assert bel.status()["source"].startswith("Nintondo")
 
 
 def test_a_helper_says_how_many_it_found_in_the_chunks_it_read(tmp_path):
@@ -498,6 +500,66 @@ def test_a_helper_says_how_many_it_found_in_the_chunks_it_read(tmp_path):
         helper.step()
     assert helper.status()["walk"] is None
     assert helper.status()["found"] == 3, "births at blocks 0, 3 and 6 of the eight"
+
+
+def test_the_walks_own_chunk_is_finished_first_and_read_by_the_walk_when_its_follow_back_is_slow(tmp_path, monkeypatch):
+    """2026-10-30, Bellscoin: 24 lanes at the ends of their chunks, each following envelopes back a coin at a time from a
+    hard disk, finished in the order they were taken -- the walk's chunk, 21st, was reached in no pass for eight hours
+    and the walk stood still. The walk's chunk is finished first; still unfinished, the lane lets it go and the walk
+    reads it from its own Core, and no lane takes it again. The index is the one a plain walk files."""
+    chain = _busy_chain(16)                                   # four chunks of four
+    index = dx.DoginalIndex(tmp_path / "w.sqlite", lambda: chain, lambda: "walk", cores=lambda: 3)
+    index.tip = int(chain.call("getblockcount"))
+    walk = index.walker.step
+    monkeypatch.setattr(index.walker, "step", lambda rpc, tip, budget, notes=None: None)
+    asked = []
+    finish = index.store.finish_notes
+    monkeypatch.setattr(index.store, "finish_notes", lambda c, rpc=None, deadline=None: asked.append(c) or False)
+    index.chunks.lanes[:] = [{"c": 1, "at": dx.chunk_range(1)[0], "via": ""}, {"c": 0, "at": dx.chunk_range(0)[0], "via": ""}]
+    index._walk(chain, 60)
+    assert asked[:2] == [0, 1], "the walk's chunk first"
+    assert all(l["c"] != 0 for l in index.chunks.lanes), "its lane let go"
+    assert index._notes_for(0) is None, "the walk reads it from its own Core"
+    assert not index.store.q("SELECT 1 FROM pnote WHERE height<?", (dx.chunk_range(0)[1],))
+    asked.clear()
+    index._walk(chain, 60)
+    assert 0 not in asked and all(l["c"] != 0 for l in index.chunks.lanes), "and no lane takes it again"
+    assert any(l["c"] == 1 for l in index.chunks.lanes), "a chunk past the walk's keeps its lane"
+
+    monkeypatch.setattr(index.walker, "step", walk)
+    monkeypatch.setattr(index.store, "finish_notes", finish)
+    for _ in range(12):
+        index.step()
+    plain = dx.DoginalIndex(tmp_path / "p.sqlite", lambda: chain, lambda: "walk")
+    for _ in range(12):
+        plain.step()
+    assert index.walker.next_height() == plain.walker.next_height() == dx.BASE + 16
+    assert _dump(index) == _dump(plain)
+
+
+def test_the_walk_reads_its_own_chunk_when_the_lanes_go_elsewhere_first(tmp_path):
+    """2026-11-04, Bellscoin: an index walked on another machine to the tip and moved to node 2 had said only some of
+    its chunks. Node 2's lanes went back to cover the lowest unsaid chunk first, the walk's chunk was not in their line,
+    and the walk waited on its chunk for good at 1,304,200. It waits only for a chunk the lanes take next; any other it
+    reads from its own Core. The index is the one a plain walk files."""
+    chain = _busy_chain(16)                                   # four chunks of four
+    index = dx.DoginalIndex(tmp_path / "w.sqlite", lambda: chain, lambda: "walk", cores=lambda: 3)
+    index.tip = int(chain.call("getblockcount"))
+    index.walker.step(chain, dx.BASE + 7, budget=60)         # chunks 0 and 1 walked elsewhere, never said
+    assert index.walker.next_height() == dx.BASE + 8 and index._lane_sources(walking=True)
+    index.store.say(0, "", "x", 0)
+    index.store.say(1, "", "y", 0)
+    assert index._notes_for(2) is False, "the cover's next chunk is the walk's: the lanes take it"
+    index.store.x("DELETE FROM seen")
+    assert index._lanes_come_to(2) is False, "the lanes would cover chunk 0 first"
+    assert index._notes_for(2) is None, "so the walk reads its chunk from its own Core"
+    for _ in range(12):
+        index.step()
+    plain = dx.DoginalIndex(tmp_path / "p.sqlite", lambda: chain, lambda: "walk")
+    for _ in range(12):
+        plain.step()
+    assert index.walker.next_height() == plain.walker.next_height() == dx.BASE + 16
+    assert _dump(index) == _dump(plain)
 
 
 def test_cores_are_lanes_each_reading_a_chunk_of_its_own_side_by_side(tmp_path, monkeypatch):
@@ -1094,7 +1156,9 @@ def test_a_chunk_only_an_older_arcade_said_is_scanned_here_not_waited_for(tmp_pa
         for _ in range(3):
             holder.step()
         return holder.walker.next_height() - dx.BASE
-    assert holder_after_three_passes("before", needed=False) == 4, "it waited at chunk 1 for notes nobody has"
+    # Before the needed list it waited at chunk 1 for notes nobody has (4 blocks); since 2026-11-04 a chunk the lanes do
+    # not take next is read by the walk itself, so even without the list it does not wait.
+    assert holder_after_three_passes("before", needed=False) >= 8
     assert holder_after_three_passes("now") >= 8
 
 
@@ -1566,6 +1630,49 @@ def test_the_coin_filter_is_kept_on_disk_and_a_start_adds_only_what_came_since(t
         assert bytes(tx) + vout.to_bytes(4, "little") in again.walker.tracked, "every coin an inscription sits on"
     again.store.reset()
     assert not path.exists(), "a reset lets the kept filter go"
+
+
+def test_a_kept_coin_filter_is_read_back_without_counting_every_coin_and_made_again_once_full(tmp_path, monkeypatch):
+    """2026-11-04: Bellscoin's index, moved to a hard disk, stood still at every start on COUNT(*) FROM at -- the coin
+    index read a page at a time in random order, for hours. A kept filter is checked by its own count; `at` is counted
+    only to make one again, when there is none or the kept one is full."""
+    chain = _story_chain()
+    first = _walker(tmp_path, chain)
+    first.walker.step(chain, dx.BASE + 11, budget=60)
+    again = dx.DoginalIndex(tmp_path / "walk.sqlite", lambda: chain, lambda: "walk")
+    asked = []
+    q = again.store.q
+    monkeypatch.setattr(again.store, "q", lambda sql, args=(): (asked.append(sql), q(sql, args))[1])
+    again.walker._load()
+    assert not any("COUNT(*) FROM at" in sql for sql in asked), "read back without counting `at`"
+    assert not any("FROM at WHERE height" in sql for sql in asked), "the rows since, from the undo records by key"
+    for tx, vout in q("SELECT tx, vout FROM at"):
+        assert bytes(tx) + vout.to_bytes(4, "little") in again.walker.tracked
+
+    import struct
+    path = again.walker._seen_path()
+    raw = bytearray(path.read_bytes())
+    m, capacity, added, since = struct.unpack("<QQQQ", raw[8:40])
+    raw[8:40] = struct.pack("<QQQQ", m, capacity, capacity, 0)          # as full as it was made for
+    path.write_bytes(bytes(raw))
+    full = dx.DoginalIndex(tmp_path / "walk.sqlite", lambda: chain, lambda: "walk")
+    full.walker._load()
+    assert full.walker.tracked.added == len(q("SELECT 1 FROM at")), "made again from every row"
+    assert not full.walker.tracked.full()
+
+
+def test_a_kept_coin_filter_older_than_the_undo_records_adds_the_rows_since_from_all_of_at(tmp_path, monkeypatch):
+    """The undo records reach back UNDO_BLOCKS: a filter kept before them gets the rows placed since from all of `at`."""
+    monkeypatch.setattr(dx, "UNDO_BLOCKS", 2)
+    chain = _story_chain()
+    first = _walker(tmp_path, chain)
+    first.walker.step(chain, dx.BASE + 5, budget=60)
+    first.walker.save_seen()
+    first.walker.step(chain, dx.BASE + 11, budget=60)               # more placed, past the two undo records kept
+    again = dx.DoginalIndex(tmp_path / "walk.sqlite", lambda: chain, lambda: "walk")
+    again.walker._load()
+    for tx, vout in again.store.q("SELECT tx, vout FROM at"):
+        assert bytes(tx) + vout.to_bytes(4, "little") in again.walker.tracked, "every coin an inscription sits on"
 
 
 def test_every_coin_the_walk_saw_is_kept_on_disk_and_never_asked_of_a_core_again(tmp_path):

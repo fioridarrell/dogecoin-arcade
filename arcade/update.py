@@ -39,6 +39,7 @@ REPO_URL = "https://dogecoinarcade.com/repo"
 #: installer/install.py). An installation made that way has no .git, so both
 #: "what is installed" and "what is published" have to be read another way.
 REVISION_URL = "https://dogecoinarcade.com/source.rev"
+ARCHIVE_URL = "https://dogecoinarcade.com/source.tar.gz"
 MANIFEST_URL = "https://dogecoinarcade.com/" + releaselib.MANIFEST
 REVISION_FILE = ".revision"
 #: What was installed last, and when it was published. Kept outside the
@@ -127,6 +128,28 @@ def _find_git() -> str | None:
         if candidate.exists():
             return str(candidate)
     return None
+
+
+#: What "installed" means after pip (2026-10-31, issue #51): `import arcade` alone passed with 176 of 396 files gone.
+#: The modules the interface starts from, its templates, and no "~"-named folder pip left behind mid-replace.
+WHOLE_PACKAGE = """
+import pathlib, arcade, arcade.config, arcade.update, arcade.web.app
+root = pathlib.Path(arcade.__file__).parent
+assert (root / "web" / "templates" / "base.html").is_file(), "templates missing"
+left = [str(p) for p in root.rglob("~*")]
+assert not left, "pip left half-replaced folders: " + ", ".join(left[:5])
+"""
+
+
+def _serving(port: int = 8420) -> bool:
+    import socket
+    with socket.socket() as probe:
+        probe.settimeout(0.4)
+        try:
+            probe.connect(("127.0.0.1", port))
+            return True
+        except OSError:
+            return False
 
 
 def _run(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess:
@@ -270,13 +293,25 @@ def update(dry_run: bool = False) -> int:
         before = current_revision(checkout)
         signed = _signed_manifest(channel)
         test = channel == "test"
-        after = _call_installer(checkout, "fetch_source_archive", checkout, signed["sha256"],
-                                *((TEST_ARCHIVE_URL, TEST_REVISION_URL) if test else ()))
+        args = (checkout, signed["sha256"], *((TEST_ARCHIVE_URL, TEST_REVISION_URL) if test else ()))
+        if (checkout / "installer" / "install.py").is_file():
+            after = _call_installer(checkout, "fetch_source_archive", *args)
+        else:
+            # The checkout lost its installer (a src left half-replaced; a ThinkPad, 2026-11-03: "could not fetch the
+            # source archive" at every check, because the repair needs the installer and the installer lives in what
+            # is being repaired). The signed archive carries it: fetched, held to the signed sha256, and its own
+            # installer does the fetch.
+            after = _with_archive_installer(TEST_ARCHIVE_URL if test else ARCHIVE_URL, signed["sha256"],
+                                            "fetch_source_archive", *args)
         if after is None:
             raise UpdateError(
                 f"could not fetch the source archive into {checkout}.\n"
                 "  Run the installer again from https://dogecoinarcade.com to "
                 "repair this installation.")
+        if not after:                                  # in place, its revision file unread: the signed one
+            after = str(signed.get("revision") or "")
+            if after:
+                (checkout / REVISION_FILE).write_text(after + "\n")
         after = str(after)[:7]
         print(f"  already up to date ({after})" if before == after
               else f"  {before or 'unknown'} -> {after}")
@@ -310,6 +345,13 @@ def update(dry_run: bool = False) -> int:
     if dry_run:
         print("  would reinstall into the existing environment")
     else:
+        # Windows will not let pip replace files a running arcade has open: it stops halfway and the package is left
+        # broken (2026-10-31, issue #51). The code was fetched; it is installed once the arcade is stopped.
+        if os.name == "nt" and _serving():
+            raise UpdateError(
+                "the arcade is still running (something answers on 127.0.0.1:8420).\n"
+                "  Windows cannot replace files it has open: stop arcade-web (its window or scheduled task),\n"
+                "  run dogecoinarcade-update again, then start the arcade.")
         pip = venv / ("Scripts/pip.exe" if os.name == "nt" else "bin/pip")
         result = _run(str(pip), "install", "-q", "--upgrade", f"{checkout}[web]")
         if result.returncode != 0:
@@ -319,8 +361,7 @@ def update(dry_run: bool = False) -> int:
         # in between -- or have it fail there -- and the environment is left with
         # no application in it, which is how a machine reaches the state where
         # every command, this one included, is a ModuleNotFoundError.
-        if subprocess.run([str(python), "-c", "import arcade"],
-                          capture_output=True).returncode != 0:
+        if subprocess.run([str(python), "-c", WHOLE_PACKAGE], capture_output=True).returncode != 0:
             raise UpdateError(
                 "pip finished, but the application no longer imports.\n"
                 f"  Repair it with: {python} {venv.parent / 'repair.py'}")
@@ -331,7 +372,9 @@ def update(dry_run: bool = False) -> int:
         # update late: the machine that most needs it runs the old logic once
         # more and gets it next time. Stdout is inherited so the second half
         # prints in line with the first.
-        return subprocess.run([str(python), "-m", "arcade.update", "--services-only"]).returncode
+        # The new install's own code, never an `arcade/` in the directory this was run from (2026-11-04).
+        from .pyrun import module_cmd
+        return subprocess.run(module_cmd("arcade.update", "--services-only", python=str(python))).returncode
 
     return _update_services(checkout, venv, dry_run)
 
@@ -588,6 +631,38 @@ def _ensure_web_service(checkout: Path, venv: Path) -> bool:
     return bool(_call_installer(checkout, "ensure_web_service", venv))
 
 
+def _with_archive_installer(url: str, sha256: str, function: str, *args):
+    """Run one installer function from the installer inside the release archive, when the checkout has none.
+
+    The archive is checked against `sha256`, the hash out of a manifest whose signature was already checked, before
+    anything in it runs: the site cannot hand over another installer than the one that was signed."""
+    import hashlib
+    import tarfile
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        archive = Path(tmp) / "source.tar.gz"
+        try:
+            with urllib.request.urlopen(url, timeout=120) as response, archive.open("wb") as out:
+                shutil.copyfileobj(response, out)
+        except (urllib.error.URLError, OSError) as exc:
+            print(f"  could not download {url}: {exc}")
+            return None
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        if digest != sha256:
+            print(f"  the archive's sha256 is not the signed one ({digest[:16]}...): not run")
+            return None
+        with tarfile.open(archive) as tf:
+            member = next((m for m in tf.getmembers() if m.isfile() and m.name.count("/") == 2
+                           and m.name.endswith("/installer/install.py")), None)
+            if member is None:
+                print("  the archive carries no installer")
+                return None
+            unpacked = Path(tmp) / "x"
+            tf.extract(member, unpacked, filter="data")
+        root = unpacked / member.name.split("/", 1)[0]
+        return _call_installer(root, function, *args)
+
+
 def _call_installer(checkout: Path, function: str, *args):
     """Run one function from the freshly pulled installer.
 
@@ -597,6 +672,7 @@ def _call_installer(checkout: Path, function: str, *args):
     """
     script = checkout / "installer" / "install.py"
     if not script.is_file():
+        print(f"  no installer at {script}")
         return None
     try:
         import importlib.util

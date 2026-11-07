@@ -18,6 +18,29 @@ def test_a_binding_answer_carries_the_senders_address_both_families():
     assert stun.answer(b"GET / HTTP/1.1\r\n\r\n....", ("1.2.3.4", 1)) is None
 
 
+def test_an_ipv4_asker_on_the_dual_stack_server_gets_an_ipv4_answer():
+    """The server listens on "::", so an IPv4 asker arrives as ::ffff:a.b.c.d (2026-10-29: every arcade answered
+    129.222.44.64 as ::ffff:81de:2c40, an IPv6-family answer a browser asking over IPv4 drops)."""
+    packet, tid = stun.binding_request()
+    reply = stun.answer(packet, ("::ffff:203.0.113.7", 50123, 0, 0))
+    assert reply[20 + 4 + 1] == 1, "family 1: IPv4"
+    assert stun.mapped_address(reply, tid) == ("203.0.113.7", 50123)
+
+    async def run():
+        loop = asyncio.get_running_loop()
+        import socket
+        sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        sock.bind(("::", 0))
+        t, _ = await loop.create_datagram_endpoint(lambda: stun._Server({}), sock=sock)
+        try:
+            return await stun.probe("127.0.0.1", sock.getsockname()[1])
+        finally:
+            t.close()
+    said = asyncio.run(run())
+    assert said and said[0] == "127.0.0.1", said
+
+
 def test_the_server_answers_a_real_probe():
     async def run():
         loop = asyncio.get_running_loop()
@@ -98,11 +121,12 @@ def test_ice_lists_the_nodes_stun_then_the_public_one(tmp_path):
     state.mesh = _Mesh()
     client = TestClient(create_app(state))
     said = client.get("/realtime/ice").json()
-    assert [s["urls"] for s in said["iceServers"]] == [
-        "stun:[2001:db8::1]:3478", "stun:203.0.113.5:3478", "stun:stun.cloudflare.com:3478"]
+    assert [s["urls"] for s in said["iceServers"]] == ["stun:[2001:db8::1]:3478", "stun:203.0.113.5:3478"], \
+        "with arcade STUN known, no outside company is named"
+    _Mesh.stun.offers.clear()
+    assert [s["urls"] for s in client.get("/realtime/ice").json()["iceServers"]] == ["stun:stun.cloudflare.com:3478"]
     state.set_setting("realtime_public_stun", False)
-    assert [s["urls"] for s in client.get("/realtime/ice").json()["iceServers"]] == [
-        "stun:[2001:db8::1]:3478", "stun:203.0.113.5:3478"], "the operator turned the public one off"
+    assert client.get("/realtime/ice").json()["iceServers"] == [], "the operator turned the public one off"
 
 
 class _Answer:
@@ -260,3 +284,21 @@ def test_the_operator_chooses_which_apps_get_the_relay(tmp_path, monkeypatch):
     assert client.get(f"/realtime/ice?app={call}").json()["relay"] is True
     assert client.get(f"/realtime/ice?app={chess}").json()["relay"] is False, "not chosen: direct links only"
     assert client.get("/realtime/ice").json()["relay"] is False, "an asker that names no app gets none"
+
+
+def test_a_spare_link_closing_keeps_the_offer_the_kept_link_brought():
+    """2026-11-07: two arcades that dialed each other at once kept one link; the spare one closing after the kept
+    one came up dropped the kept one's STUN offer, so its relay was never borrowed."""
+    import asyncio
+    from arcade.mesh.stun import StunShare
+
+    class _N: pass
+    share = StunShare(None)
+    share.node = _N()
+    share.node.links = {"bb": object()}
+    share.offers["bb"] = [("198.51.100.2", 3478)]
+    asyncio.run(share.link_down("bb"))
+    assert share.offers["bb"] == [("198.51.100.2", 3478)]
+    del share.node.links["bb"]
+    asyncio.run(share.link_down("bb"))
+    assert "bb" not in share.offers

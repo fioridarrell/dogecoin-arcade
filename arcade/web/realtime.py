@@ -39,6 +39,7 @@ thread while it waits, and it does nothing but wait on the mesh's queue.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 import json
@@ -53,6 +54,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from ..mesh.node import MAX_PAYLOAD, MeshError
 
 log = logging.getLogger("arcade.realtime")
+from ..mesh import punch as punchlib, turn as turnlib
 from ..mesh.service import GUEST, cert_message
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
@@ -347,6 +349,104 @@ def register(app, state, *, account_view: Callable, signed_in: Callable,
                                  headers={"Cache-Control": "no-store",
                                           "X-Accel-Buffering": "no"})
 
+    # ONE STREAM FOR ALL OF A PAGE'S ROOMS (2026-11-03, found by the Garrys mod session for Spatial World; the operator: "Build
+    # it"). A page held one EventSource per room, and over plain http (a local arcade, http://<lan ip>:8420) a browser
+    # opens only 6 connections to a site: a page in 6 rooms (Riffs chat, a Lounge, 4 world cells) had none left for its
+    # sends, which hung for 20 s. Now a page's rooms attach to one hub: POST /realtime/hub/attach {token[, hub]} answers
+    # the hub's id (made here, 128 random bits, the only way in to its stream) and starts pulling that room's events
+    # into it; GET /realtime/hub?id= streams every attached room's events, each as {"k": token, "ev": ...}, a room's
+    # end as event "closed" {k, why}, and "ping" when all are quiet. A hub nobody streams for HUB_IDLE is let go.
+    hubs: dict[str, dict] = {}
+    HUB_IDLE = 60.0
+    HUB_MAX_ROOMS = 64
+
+    def _hub_gone(hid: str) -> None:
+        hub = hubs.pop(hid, None)
+        if hub is not None:
+            for task in hub["pumps"].values():
+                task.cancel()
+
+    def _hub_tidy() -> None:
+        now = time.monotonic()
+        for hid, hub in list(hubs.items()):
+            if not hub["streaming"] and now - hub["at"] > HUB_IDLE:
+                _hub_gone(hid)
+
+    async def _hub_pump(hub: dict, token: str) -> None:
+        svc = mesh()
+        try:
+            while True:
+                ev = await svc.next_event(token, HEARTBEAT)
+                svc.touch(token)
+                if ev is not None:
+                    await hub["q"].put(("data", token, ev))
+        except asyncio.CancelledError:
+            raise
+        except MeshError as exc:
+            await hub["q"].put(("closed", token, str(exc)))
+        finally:
+            hub["pumps"].pop(token, None)
+
+    @app.post("/realtime/hub/attach")
+    async def realtime_hub_attach(request: Request, body: dict):
+        said = body
+        token, hid = str(said.get("token") or ""), str(said.get("hub") or "")
+        try:
+            mesh().session(token)
+        except MeshError as exc:
+            return refused(exc, 404)
+        _hub_tidy()
+        loop = asyncio.get_running_loop()
+        hub = hubs.get(hid)
+        if hub is not None and hub["loop"] is not loop:      # made before this server's loop (a restart in-process)
+            _hub_gone(hid)
+            hub = None
+        if hub is None:
+            hid = _secrets.token_urlsafe(16)
+            hub = hubs[hid] = {"q": asyncio.Queue(maxsize=4096), "pumps": {}, "streaming": 0, "at": time.monotonic(),
+                               "loop": loop}
+        if token not in hub["pumps"]:
+            if len(hub["pumps"]) >= HUB_MAX_ROOMS:
+                return JSONResponse({"ok": False, "error": "too many rooms on one stream"}, status_code=400)
+            hub["pumps"][token] = asyncio.get_running_loop().create_task(_hub_pump(hub, token))
+        return JSONResponse({"ok": True, "hub": hid}, headers={"Cache-Control": "no-store"})
+
+    @app.post("/realtime/hub/detach")
+    async def realtime_hub_detach(body: dict):
+        said = body
+        hub = hubs.get(str(said.get("hub") or ""))
+        task = hub["pumps"].pop(str(said.get("token") or ""), None) if hub else None
+        if task is not None:
+            task.cancel()
+        return JSONResponse({"ok": True})
+
+    @app.get("/realtime/hub")
+    async def realtime_hub(request: Request, id: str = ""):
+        hub = hubs.get(id)
+        if hub is None or hub["loop"] is not asyncio.get_running_loop():
+            return JSONResponse({"ok": False, "error": "no such stream"}, status_code=404)
+
+        async def events():
+            hub["streaming"] += 1
+            try:
+                yield "retry: 2000\n\n"
+                while not await request.is_disconnected():
+                    try:
+                        kind, token, ev = await asyncio.wait_for(hub["q"].get(), HEARTBEAT)
+                    except asyncio.TimeoutError:
+                        yield "event: ping\ndata: {}\n\n"
+                        continue
+                    if kind == "closed":
+                        yield "event: closed\ndata: " + json.dumps({"k": token, "why": ev}) + "\n\n"
+                    else:
+                        yield "data: {\"k\": " + json.dumps(token) + ", \"ev\": " + event_json(ev) + "}\n\n"
+            finally:
+                hub["streaming"] -= 1
+                hub["at"] = time.monotonic()
+
+        return StreamingResponse(events(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
     @app.get("/realtime/nodes")
     def realtime_nodes(request: Request):
         """Ways into the mesh a browser can use (https): this node's own public names, the
@@ -366,10 +466,23 @@ def register(app, state, *, account_view: Callable, signed_in: Callable,
         if svc.tunnel_url:
             add("https://" + svc.tunnel_url[len("wss://"):].rsplit("/mesh", 1)[0], svc.node_id)
         now = time.time()
-        for (host, _port), e in sorted(svc.node.addrs.items(), key=lambda kv: -(kv[1].get("ok") or 0)):
-            if str(host).startswith("wss://") and e.get("id") and (e.get("id") in svc.node.links
-                                                                  or now - (e.get("ok") or 0) < 3600):
-                add("https://" + host[len("wss://"):].rsplit("/mesh", 1)[0], e["id"])
+        # One way in per node: the address it last answered on. A node behind a quick tunnel gets a new name at
+        # every restart, and "the node is linked" kept every old name listed (2026-11-02: eleven dead names for one
+        # node, each costing every browser a lookup before it could join). A name that has never answered is not
+        # listed, however linked its node is.
+        # A linked node this one never dialed by tunnel (it came by another road) has no "ok" on any of its names: then
+        # the newest it announced (addrs keeps the order they arrived in) that has not failed when dialed.
+        named: dict[str, str] = {}
+        tunnels = [(str(host), e) for (host, _port), e in svc.node.addrs.items()
+                   if str(host).startswith("wss://") and e.get("id")]
+        for host, e in sorted(tunnels, key=lambda he: -(he[1].get("ok") or 0)):
+            if e["id"] not in named and now - (e.get("ok") or 0) < 3600:
+                named[e["id"]] = host
+        for host, e in reversed(tunnels):
+            if e["id"] not in named and e["id"] in svc.node.links and not e.get("fail"):
+                named[e["id"]] = host
+        for node_id, host in named.items():
+            add("https://" + host[len("wss://"):].rsplit("/mesh", 1)[0], node_id)
         try:
             if state.store_path.exists():
                 with state.store() as store:
@@ -429,6 +542,39 @@ def register(app, state, *, account_view: Callable, signed_in: Callable,
         relay_kept[address] = (time.time(), servers)
         return servers
 
+    media_kept: dict[str, tuple] = {}
+    RELAY_KEEP = 120.0
+
+    def arcade_relays(request: Request) -> list[dict]:
+        """The arcade network's media servers for a signed-in player (mesh/turn.py): this node's where the player can
+        reach it, and borrowed ones from arcades that anybody can reach."""
+        try:
+            service = mesh()
+        except MeshError:
+            return []
+        server, shared = getattr(service, "turn", None), getattr(service, "turnshare", None)
+        kind, address = identity(request)
+        if kind == "guest" or not address:
+            return []
+        kept = media_kept.get(address)
+        # Two minutes, not the login's three hours (2026-11-07, the GBC session: a player whose first ask came before
+        # the Ashburn relay's arcade linked again kept @banana's slower list for 3 h). A borrowed login lasts
+        # LOGIN_TTL, so asking again sooner costs one mesh round trip and no new relay.
+        if kept and time.time() - kept[0] < (RELAY_KEEP if kept[1] else 60):
+            found = list(kept[1])
+        else:
+            found = []
+            if shared is not None:
+                try:
+                    found = service._call(shared.borrow(address), timeout=5.0) or []
+                except Exception as exc:                 # noqa: BLE001 -- none borrowed this time
+                    log.info("media relay: %s", exc)
+            media_kept[address] = (time.time(), found)
+        asker = request.headers.get("cf-connecting-ip") or (request.client.host if request.client else "")
+        return turnlib.player_relays(server, getattr(service, "stun", None), getattr(service, "stun_port", None),
+                                     punchlib.local_ipv4(), asker, address,
+                                     found)
+
     @app.get("/realtime/ice")
     def realtime_ice(request: Request):
         """The STUN servers a browser should use for the fast lane (2026-10-18, the operator: "Nodes, then public"):
@@ -442,9 +588,13 @@ def register(app, state, *, account_view: Callable, signed_in: Callable,
             share = None
         for host, port in (share.known() if share is not None else [])[:MAX_ICE_NODES]:
             servers.append({"urls": f"stun:[{host}]:{port}" if ":" in host else f"stun:{host}:{port}"})
-        if state.settings().get("realtime_public_stun", True) is not False:
+        # A public STUN only when no arcade's is known: nothing here should need an outside company.
+        if not servers and state.settings().get("realtime_public_stun", True) is not False:
             servers.append({"urls": PUBLIC_STUN})
-        relay = relay_for(request, request.query_params.get("app", ""))
+        # Arcade relays first; the operator's rented one (relay_for) only if no arcade relay can be had
+        # (2026-10-31: "The point of adding UDP so we don't have to rely on Cloudflare at all").
+        own = arcade_relays(request)
+        relay = own or relay_for(request, request.query_params.get("app", ""))
         servers.extend(relay)
         return JSONResponse({"ok": True, "iceServers": servers, "relay": bool(relay)},
                             headers={"Cache-Control": "no-store"})

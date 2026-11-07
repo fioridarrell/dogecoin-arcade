@@ -12,7 +12,7 @@ A DogecoinArcade node is three things running on one machine:
 
 | Part | What it does |
 |---|---|
-| **Pepecoin Core, mainnet** | The ledger: tokens, NFTs, inscriptions and coins |
+| **Pepecoin Core, mainnet** | The ledger: tokens, NFTs, inscriptions and coins. Run here, or borrowed from an arcade that shares it |
 | **Pepecoin Core, testnet** | The Messenger's chain (messaging is testnet-only) |
 | **DogecoinArcade** | The indexer and web interface, served at `http://127.0.0.1:8420` |
 
@@ -117,20 +117,30 @@ are a welcome board, and nothing else trusts them.
    `SHA256SUMS.asc`. It stops on any mismatch.
 4. **Installs the binaries** (`pepecoind`, `pepecoin-cli`, `pepecoin-tx`) into
    `~/.local/bin`. No root needed.
-5. **Writes two configs**: mainnet and testnet. An existing config is never
-   overwritten.
-6. **Registers both nodes as user services** that start at login and keep
+5. **Writes the testnet config.** A fresh install runs Pepecoin testnet only,
+   the message chain (2026-11-02); every other chain, Pepecoin mainnet and
+   Dogecoin included, is borrowed from other arcades over the mesh until you
+   install its Core under Admin -> Chains. An existing config is never
+   overwritten. `--coin both` installs Pepecoin mainnet and Dogecoin as well.
+6. **Registers the node as a user service** that starts at login and keeps
    running after logout.
 7. **Installs DogecoinArcade** into its own virtual environment under
    `~/.dogecoinarcade`.
 8. **Fetches the latest index bootstrap** for each chain, so a new node starts
    near the chain tip instead of indexing from block zero.
-9. **Registers the web interface** as a user service, writes the
+9. **Records its first peer** (`~/.dogecoinarcade/first-peer`): the arcade
+   it was installed from (`--first-peer`, filled in by that arcade's "Run your
+   own" page), else app.dogecoinarcade.com. The new arcade dials it the moment
+   it starts, before anything is synced or announced on chain, learns the
+   other arcades through it, adds UDP beside the link, and syncs Pepecoin
+   testnet from them over the mesh.
+10. **Registers the web interface** as a user service, writes the
    `dogecoinarcade` launcher, adds `~/.local/bin` to your PATH if needed, and
    opens the browser.
 
-The nodes still have to sync their block chains after installation. Testnet
-is small; mainnet is larger. The application shows progress while they do.
+The testnet node still syncs after installation, from the other arcades over
+the mesh; until it has caught up, chain reads go to an arcade that has. The
+application shows progress while it does.
 
 ## Doing it by hand
 
@@ -418,6 +428,20 @@ and keeps nothing. When no node's STUN is known, browsers use a public one
 (Cloudflare's). To turn that off, set `"realtime_public_stun": false` in the
 node's settings.
 
+The mesh does not send to a peer's private, link-local or CGNAT address, over
+UDP or over TCP, and does not tell a remote peer such an address, unless the
+two are behind the same NAT (the peer's outside address is the one STUN saw for
+this node). TCP is how a node reaches a peer when the UDP path is not up, and
+it was still connecting to other operators' home-network addresses (`192.168.1.20:8421`
+and the like) that a neighbour had learned on its own LAN. To always try
+home-network addresses, for several nodes on one LAN that STUN cannot show are
+on the same one, set `"mesh_lan_dial": "on"` in the node's settings. `"off"`
+never tries a home address. `"auto"` is the default and is the rule above.
+`ARCADE_MESH_LAN_DIAL`, when set, overrides the setting. An address given with
+`--mesh-peer` is still dialed, including a home-network one, unless the setting
+is `"off"`. The UDP `{"op": "home"}` exchange, for two nodes that already share
+a NAT, is unchanged.
+
 The web interface prints the node's mesh id when it starts, and says whether it
 is listening.
 
@@ -453,10 +477,12 @@ silent authentication failure.
 
 ## Dogecoin
 
-The installer always installs both coins, with no question: Pepecoin Core
-(a mainnet node and a testnet node) and Dogecoin Core (a mainnet node only).
-They are the arcade's three networks: testnet PEP, mainnet PEP and DOGE.
-There is no Dogecoin testnet node; the arcade's testnet is Pepecoin's.
+A fresh install asks nothing and installs Pepecoin Core for testnet only
+(2026-11-02). Dogecoin and Pepecoin mainnet are borrowed over the mesh until
+their Cores are installed (Admin -> Chains, or `--coin both` / `--coin
+dogecoin` for a scripted install, which installs Pepecoin's mainnet and testnet
+nodes and Dogecoin's mainnet node). There is no Dogecoin testnet node; the
+arcade's testnet is Pepecoin's.
 
 | | Pepecoin | Dogecoin |
 |---|---|---|
@@ -472,13 +498,40 @@ Pepecoin's, and the arcade shows its progress.
 
 ### The other chains
 
-Litecoin, Litecoin testnet, Bellscoin, Luckycoin, Kotia, Wojakcoin and DigiByte are add-on chains. The
+Litecoin, Litecoin testnet, Bellscoin, Luckycoin, Kotia, Wojakcoin, DigiByte and Flopcoin are add-on chains. The
 installer does not install their Cores. In **Admin → Chains** each one is run here (with its node on
 this machine), borrowed from an arcade that shares its Core, or left off. Dogecoin can be borrowed or
 left off too. Pepecoin testnet always runs here; every other chain may be borrowed (see *Shared
 Cores*). **Admin → Coins & chains → Install a node** installs an add-on chain's official Core here in one
-click. The Bellscoin, Luckycoin, Kotia, Wojakcoin and DigiByte pages give each node's version and
+click. The Bellscoin, Luckycoin, Kotia, Wojakcoin, DigiByte and Flopcoin pages give each node's version and
 config.
+
+**The chain's data comes from a linked arcade.** A node the arcade installed that is far behind (20,000
+blocks or more) does not sync the whole chain by itself if a linked arcade has it: the linked arcade with
+the most blocks, on the same Core version, makes a copy of its chain data (its node is stopped for a few
+seconds), and the copy comes over the mesh, a piece at a time, checked as it comes. Then this node is stopped,
+the copy swapped in, checked with no peers (its newest block is on this node's own header chain, its coin
+set's summary is the copy's, the last 288 blocks verify), and the node started again; it syncs the rest
+itself. Anything off and the node's own data goes back. The chain's row on Coins & chains shows the install's
+six steps (download, check, start, chain data, check the copy, ready) with the one going on now: how far, how
+long, what comes next, and two buttons, **Sync on its own instead** and **Cancel install** (its node stopped and
+its chain data deleted, never its wallet file; the chain is borrowed again). Each step is also a notification on
+every Admin tab, and the bell beside the Admin title keeps the list. Afterwards the row says which arcade the
+copy came from: the copy's coin set is that arcade's word (see `exchange-safety.md`).
+Only `blocks/`, `chainstate/` and `indexes/` are copied, never a wallet, config or peers file; a node with a
+wallet catches its wallet up once at the next start. An arcade makes copies for others only of a Core it
+installed itself, runs here and shares (**Admin → Chains**, the share box), and deletes a copy nobody
+fetched for two hours. The setting `core_copy_auto` set to false turns the fetching off.
+
+**Pepecoin's own nodes too.** The Pepecoin testnet (and mainnet) node the installer sets up as a user service takes
+its first chain data the same way: a new install, ARCADE Lite's included, copies it from linked arcades whose own
+installer-made node runs and is synced, instead of reading the whole chain. The arcade stops and starts that node
+through its service (`systemctl --user`), and checks a copy with the daemon run by itself, with no peers.
+
+**From every arcade that has it.** An arcade that installed a copy keeps it for two hours to share on (its files
+linked, not copied again), under the maker's own id. The next arcade asks every linked arcade holding that copy for
+pieces at once, torrent-style, each checked against the one manifest, whoever sent it; the copy's coin set is still its
+maker's word, and the row names the maker.
 
 ### A node you already run
 

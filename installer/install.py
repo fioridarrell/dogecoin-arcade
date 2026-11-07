@@ -173,6 +173,18 @@ DOGECOIN = Coin(
 
 COINS = {c.key: c for c in (PEPECOIN, DOGECOIN)}
 
+#: What a fresh install runs (2026-11-02: "I don't want them to be prompted to install any of the block chains
+#: except for Pepe test"): the message chain's node and nothing else. Pepecoin mainnet, Dogecoin and every other chain
+#: are borrowed from other arcades over the mesh until the operator installs them (Admin -> Chains).
+PEPECOIN_TEST = Coin(
+    key=PEPECOIN.key, name=PEPECOIN.name, version=PEPECOIN.version, repo=PEPECOIN.repo,
+    binaries=PEPECOIN.binaries, prefix=PEPECOIN.prefix, signer=PEPECOIN.signer, key_file=PEPECOIN.key_file,
+    datadir_name=PEPECOIN.datadir_name, app_name=PEPECOIN.app_name, sums=PEPECOIN.sums, networks=("testnet",),
+)
+
+#: The arcade a fresh install meets first, when it was not told one (--first-peer): where its index comes from.
+DEFAULT_FIRST_PEER = "https://app.dogecoinarcade.com"
+
 #: How well each platform is actually supported. Stated plainly, because an
 #: installer that half-works silently is worse than one that says it cannot.
 SUPPORT = {
@@ -1093,7 +1105,140 @@ def fetch_source_archive(checkout: Path, expect_sha256: str | None = None,
 
     info(f"fetched the application into {checkout}"
          + (f" ({revision[:7]})" if revision else ""))
-    return revision
+    # "" rather than None when only the revision file could not be read: the code is in place, and None is what the
+    # updater reads as "the fetch failed" (arcade/update.py, 2026-11-03).
+    return revision or ""
+
+
+#: Where the arcade finds the first peer the installer was given (web/__main__.py reads it at every start). In the
+#: arcade's home, not in the service file, so an update that rewrites the service keeps it.
+FIRST_PEER_FILE = "first-peer"
+
+
+def mesh_peer_url(text: str) -> str:
+    """An arcade's address as the mesh dials it: wss://<name>/mesh. Takes what a person would paste -- the page's
+    https://name, a bare name, or the wss:// form itself. A plain http:// one is refused: an arcade on this
+    machine's own network name is no use to anybody else, and the mesh's own link is encrypted end to end
+    but the WebSocket in front of it should be too."""
+    text = str(text or "").strip()
+    if not text:
+        raise ValueError("no address")
+    if "://" not in text:
+        text = "https://" + text
+    scheme, _, rest = text.partition("://")
+    scheme = scheme.lower()
+    if scheme not in ("https", "wss"):
+        raise ValueError(f"{text} is not an https address")
+    host = rest.split("/", 1)[0].strip()
+    if not host or any(c in host for c in " @?#"):
+        raise ValueError(f"{text} has no host name")
+    return f"wss://{host}/mesh"
+
+
+def write_first_peer(url: str, dry_run: bool) -> None:
+    target = Path.home() / ".dogecoinarcade" / FIRST_PEER_FILE
+    if dry_run:
+        info(f"would meet {url} first on the mesh")
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(url + "\n")
+    info(f"meets {url} first on the mesh")
+
+
+#: The arcade's settings file and the key its edition is kept under (arcade/modules.py). "ask": the operator is asked
+#: in Admin on the first run, because nobody was at the terminal to answer.
+SETTINGS_FILE = "settings.json"
+EDITION_SETTING = "edition"
+EDITIONS = ("full", "lite")
+
+EDITION_QUESTION = """
+Which arcade do you want to install?
+
+  Full         Everything the arcade does: the feed, messages, the exchange,
+               ords and Explore, apps and games.
+  ARCADE Lite  The crypto cores only: the chains and their wallets, send and
+               receive, the address book, accounts, settings, help and the
+               mesh link. Anything else can be switched on later in
+               Admin -> Edition & modules, and nothing is ever deleted.
+"""
+
+
+def existing_arcade(home: Path) -> bool:
+    """Whether an arcade already runs from this home: it has settings, or a message store (state.store_path)."""
+    return (home / SETTINGS_FILE).exists() or any((home / f"{net}.sqlite").exists()
+                                                    for net in ("test", "main", "regtest"))
+
+
+def choose_edition(home: Path, given: str | None, ask=input, interactive: bool | None = None) -> str | None:
+    """The edition this install records, or None to leave the arcade's settings alone.
+
+    --edition wins on any arcade that has not chosen yet. An arcade that already runs is never asked: one that never
+    chose is a full arcade, as it always was. A fresh install asks at the terminal, Full by default; with nobody at
+    the terminal it records "ask" and Admin asks on the first run."""
+    settings = read_settings(home)
+    if settings.get(EDITION_SETTING) in EDITIONS:
+        return None
+    if given in EDITIONS:
+        return given
+    if existing_arcade(home):
+        return None
+    if interactive is None:
+        try:                                               # a person at a terminal: both ends of it are one
+            interactive = sys.stdin.isatty() and sys.stdout.isatty()
+        except (AttributeError, ValueError, OSError):
+            interactive = False
+    if not interactive:
+        return "ask"
+    print(EDITION_QUESTION)
+    for _ in range(3):
+        try:
+            said = ask("Full or Lite? [F/l] ").strip().lower()
+        except (EOFError, OSError):
+            return "ask"
+        if said in ("", "f", "full", "1"):
+            return "full"
+        if said in ("l", "lite", "arcade lite", "2"):
+            return "lite"
+        print("  Type f for the full arcade or l for ARCADE Lite.")
+    return "full"
+
+
+def read_settings(home: Path) -> dict:
+    import json as _json
+    try:
+        data = _json.loads((home / SETTINGS_FILE).read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+#: The face a new arcade starts with (arcade/web/brand.py CORE, "ARCADE"): no coin's look until its operator picks one.
+FIRST_FACE = "core"
+
+
+def write_edition(home: Path, edition: str | None, dry_run: bool, fresh: bool = False) -> None:
+    """Record the edition in the arcade's settings, keeping every other setting; written whole, then renamed. A fresh
+    install also starts with the neutral face, unless a face was chosen; an arcade already running keeps its own."""
+    import json as _json
+    if edition is None:
+        return
+    shown = {"full": "the full arcade", "lite": "ARCADE Lite", "ask": "asked in Admin on the first run"}[edition]
+    if dry_run:
+        info(f"would record the edition: {shown}")
+        return
+    path = home / SETTINGS_FILE
+    if path.exists() and not read_settings(home):
+        info(f"left {path} alone: it could not be read; the edition is asked in Admin")
+        return
+    home.mkdir(parents=True, exist_ok=True)
+    data = read_settings(home)
+    data[EDITION_SETTING] = edition
+    if fresh and not data.get("brand") and not os.environ.get("ARCADE_BRAND"):
+        data["brand"] = FIRST_FACE
+    partial = path.with_suffix(".json.partial")
+    partial.write_text(_json.dumps(data, indent=2))
+    os.replace(partial, path)
+    info(f"edition: {shown}")
 
 
 def fetch_bootstraps(dry_run: bool) -> None:
@@ -1116,7 +1261,7 @@ def fetch_bootstraps(dry_run: bool) -> None:
             info(f"would fetch {BOOTSTRAP_URL}/{net}.sqlite.gz into {target}")
             continue
         try:
-            said = _json.loads(read_url(f"{BOOTSTRAP_URL}/{net}.json", f"{net} bootstrap manifest"))
+            said = _json.loads(bootstrap_manifest(net))
             with tempfile.TemporaryDirectory(prefix="arcade-bootstrap-") as tmp:
                 packed = download(f"{BOOTSTRAP_URL}/{net}.sqlite.gz", Path(tmp) / f"{net}.sqlite.gz",
                                   f"{net} bootstrap")
@@ -1133,6 +1278,32 @@ def fetch_bootstraps(dry_run: bool) -> None:
                  f"(the node carries on from there)")
         except Exception as exc:                      # noqa: BLE001 -- the node can build its own
             warn(f"{net}: no bootstrap ({exc}); the node will build its index itself")
+
+
+#: How long the installer waits for an arcade that is making its first copy of an index (it answers 503 meanwhile).
+BOOTSTRAP_WAIT = 600
+BOOTSTRAP_POLL = 30
+
+
+def bootstrap_manifest(net: str) -> str:
+    """The manifest of one chain's index copy. An arcade making its first copy says so (503) rather than making it
+    inside the request; for the message chain that copy is worth minutes of waiting, against reading the whole testnet
+    from block zero."""
+    import time as _time
+    url, waited = f"{BOOTSTRAP_URL}/{net}.json", 0
+    while True:
+        try:
+            with urllib.request.urlopen(_request(url), timeout=60) as response:
+                return response.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as exc:
+            if exc.code != 503 or waited >= BOOTSTRAP_WAIT:
+                raise InstallError(f"could not download the {net} bootstrap manifest from {url}: {exc}") from exc
+            if not waited:
+                info(f"{net}: the index copy is being made there; waiting for it (up to {BOOTSTRAP_WAIT // 60} minutes)")
+            _time.sleep(BOOTSTRAP_POLL)
+            waited += BOOTSTRAP_POLL
+        except urllib.error.URLError as exc:
+            raise InstallError(f"could not download the {net} bootstrap manifest from {url}: {exc}") from exc
 
 
 def read_url(url: str, label: str, quiet: bool = False) -> str:
@@ -1266,7 +1437,7 @@ def build_failure_hint(output: str) -> str:
 #: comment, and an update rewrites the whole set when the machine's copies are
 #: older. Without that a fix to a command reached only people installing for the
 #: first time, because the updater rewrote shims only when one was missing.
-SHIM_VERSION = 3
+SHIM_VERSION = 4                  # 4 (2026-11-04): the updater shims start in the venv's folder
 
 LAUNCHER = """\
 #!/bin/sh
@@ -1285,6 +1456,9 @@ UPDATER = """\
 # The import test comes first because the updater lives inside the package it
 # updates: with the package gone there is nothing to run, and the command died
 # with ModuleNotFoundError instead of repairing what was wrong.
+# From the venv's own folder (2026-11-04): `python -c` and `-m` put the current directory first on sys.path, so run
+# from a folder holding an `arcade/` (an old one unpacked in $HOME, on the operator's ThinkPad) the update ran THAT code.
+cd "{venv}" || exit 1
 if ! "{venv}/bin/python" -c "import arcade.update" 2>/dev/null; then
     echo "DogecoinArcade is missing from its environment; repairing it first."
     "{venv}/bin/python" "{repair}" || exit 1
@@ -1301,6 +1475,16 @@ if [ ! -x "{venv}/bin/arcade-rpc" ]; then
     "{venv}/bin/python" "{repair}" || exit 1
 fi
 exec "{venv}/bin/arcade-rpc" "$@"
+"""
+
+ARCADE_CLI = """\
+#!/bin/sh
+# The running DogecoinArcade's commands in a terminal (shim {version}): arcade-cli -help lists them.
+if [ ! -x "{venv}/bin/arcade-cli" ]; then
+    echo "DogecoinArcade is missing from its environment; repairing it first."
+    "{venv}/bin/python" "{repair}" || exit 1
+fi
+exec "{venv}/bin/arcade-cli" "$@"
 """
 
 #: Windows has no `exec`, and `||` inside a parenthesised block is a trap, so
@@ -1320,6 +1504,8 @@ WIN_UPDATER = """\
 @echo off
 @rem Update DogecoinArcade to the latest published code (shim {version}).
 @rem Touches only the code: never the identity key, messages or chain data.
+@rem From the venv's own folder: python -c and -m look in the current folder first (2026-11-04).
+cd /d "{venv}" || exit /b 1
 "{venv}\\Scripts\\python.exe" -c "import arcade.update" >NUL 2>&1
 if not errorlevel 1 goto run
 echo DogecoinArcade is missing from its environment; repairing it first.
@@ -1338,6 +1524,17 @@ echo DogecoinArcade is missing from its environment; repairing it first.
 if errorlevel 1 exit /b 1
 :run
 "{venv}\\Scripts\\arcade-rpc.exe" %*
+"""
+
+WIN_ARCADE_CLI = """\
+@echo off
+@rem The running DogecoinArcade's commands in a terminal (shim {version}): arcade-cli -help lists them.
+if exist "{venv}\\Scripts\\arcade-cli.exe" goto run
+echo DogecoinArcade is missing from its environment; repairing it first.
+"{venv}\\Scripts\\python.exe" "{repair}"
+if errorlevel 1 exit /b 1
+:run
+"{venv}\\Scripts\\arcade-cli.exe" %*
 """
 
 #: Written beside the environment rather than inside it, and importing nothing
@@ -1451,7 +1648,7 @@ def write_repair(venv: Path, system: str | None = None) -> Path:
 #: Every command the installer puts on the PATH, in the order it writes them.
 #: The updater checks each of these, so a machine installed before one of them
 #: existed gets it at its next update rather than `command not found`.
-SHIMS = ("dogecoinarcade", "dogecoinarcade-update", "arcade-rpc")
+SHIMS = ("dogecoinarcade", "dogecoinarcade-update", "arcade-rpc", "arcade-cli")
 
 
 def shim_names(system: str) -> list[str]:
@@ -1467,11 +1664,13 @@ def write_launcher(venv: Path, target: Path, system: str) -> Path:
     if system == "Windows":
         shims = [("dogecoinarcade.cmd", WIN_LAUNCHER),
                  ("dogecoinarcade-update.cmd", WIN_UPDATER),
-                 ("arcade-rpc.cmd", WIN_BOT_RPC)]
+                 ("arcade-rpc.cmd", WIN_BOT_RPC),
+                 ("arcade-cli.cmd", WIN_ARCADE_CLI)]
     else:
         shims = [("dogecoinarcade", LAUNCHER),
                  ("dogecoinarcade-update", UPDATER),
-                 ("arcade-rpc", BOT_RPC)]
+                 ("arcade-rpc", BOT_RPC),
+                 ("arcade-cli", ARCADE_CLI)]
     written = []
     for name, template in shims:
         text = template.format(venv=venv, repair=repair, version=SHIM_VERSION)
@@ -1753,8 +1952,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--coin", choices=["pepecoin", "dogecoin", "both"], default=None,
         help="for scripted or partial installs only: which coin's nodes to install. "
-             "Omitted, the installer installs both -- Pepecoin (mainnet and testnet) "
-             "and Dogecoin (mainnet), the arcade's three networks.",
+             "Omitted, the installer installs Pepecoin testnet only, the message chain; "
+             "every other chain is borrowed from other arcades until you install it "
+             "(Admin -> Chains).",
+    )
+    parser.add_argument(
+        "--edition", choices=list(EDITIONS), default=None,
+        help="full, or lite (ARCADE Lite: the crypto cores only; more can be switched on later in Admin). "
+             "Omitted, a fresh install asks; an arcade already installed keeps what it has.")
+    parser.add_argument(
+        "--first-peer", default=None, metavar="URL",
+        help="the arcade this one meets first on the mesh, before anything is synced "
+             f"(the \"Run your own\" page fills it in). Omitted: {DEFAULT_FIRST_PEER}",
     )
     args = parser.parse_args(argv)
 
@@ -1770,13 +1979,25 @@ def main(argv: list[str] | None = None) -> int:
     print("DogecoinArcade installer")
     print("=" * 58)
 
-    # Both, always, with no question (2026-10-13: "that option should be
-    # removed when installing because it should install both"): the arcade runs
-    # on testnet PEP, mainnet PEP and mainnet DOGE.
-    if args.coin and args.coin != "both":
+    # The one question, first (2026-11-03: "at the beginning of the installation of the arcade it asks if the
+    # downloader wants to install full or lite arcade"), and only on a fresh install at a terminal.
+    home = Path.home() / ".dogecoinarcade"
+    fresh = not existing_arcade(home)
+    edition = choose_edition(home, args.edition)
+
+    # No question about the chains, ever (2026-10-13). A fresh install is Pepecoin testnet only (the operator
+    # 2026-11-02); the rest is borrowed over the mesh. --coin is for scripted installs that want a Core of their own.
+    if args.coin == "both":
+        coins = [PEPECOIN, DOGECOIN]
+    elif args.coin:
         coins = [COINS[args.coin]]
     else:
-        coins = [PEPECOIN, DOGECOIN]
+        coins = [PEPECOIN_TEST]
+    try:
+        first_peer = mesh_peer_url(args.first_peer or DEFAULT_FIRST_PEER)
+    except ValueError as exc:
+        print(f"\nERROR: --first-peer: {exc}\n", file=sys.stderr)
+        return 2
     per_coin = 0 if args.skip_core else 2
     total = 4 + len(coins) * (per_coin + 2)
     n = 0
@@ -1794,6 +2015,7 @@ def main(argv: list[str] | None = None) -> int:
         info(f"Python {'.'.join(str(n) for n in sys.version_info[:3])}")
         info(f"binaries  -> {target}")
         info(f"chains    -> {', '.join(c.name for c in coins)}")
+        info(f"edition   -> {'ARCADE Lite' if edition == 'lite' else 'chosen in Admin' if edition == 'ask' else 'full'}")
         # 3.10 is the real floor: the code uses `X | None` annotations and
         # nothing newer. The previous 3.12 requirement was an arbitrary choice
         # that blocked a working machine for no reason.
@@ -1892,6 +2114,8 @@ def main(argv: list[str] | None = None) -> int:
 
         n += 1
         step(n, total, "Finishing up")
+        write_first_peer(first_peer, args.dry_run)
+        write_edition(home, edition, args.dry_run, fresh=fresh)
         if not args.dry_run and not args.no_services:
             install_web_service(venv, system)
         if not args.dry_run:
@@ -1920,9 +2144,12 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  NOTE: {target} is not on your PATH. Either add it, or run")
                 print(f"        {launcher}")
             print()
-        print("  The nodes will take a while to sync before anything works.")
-        print("  Testnet is small; mainnet is larger. The application shows progress.")
+        print("  It joins the other arcades at once and borrows their chains while its")
+        print("  own Pepecoin testnet node syncs. The application shows progress.")
         print()
+        if edition == "lite":
+            print("  ARCADE Lite: switch more on in Admin -> Edition & modules.")
+            print()
 
         if not args.dry_run and not args.no_browser:
             try:

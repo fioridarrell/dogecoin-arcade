@@ -6,6 +6,7 @@ import argparse
 import json
 import pathlib
 import sys
+import pytest
 
 from fastapi.testclient import TestClient
 
@@ -90,7 +91,9 @@ def test_litecoin_runs_here_when_its_node_is_there_or_borrowed_or_off_as_chosen(
     assert got is not None and got.borrowed, "no node, no choice: borrowed"
 
 
-def test_litecoin_coins_are_guarded_like_the_others(app_state, monkeypatch):
+def test_litecoin_coins_are_never_held_for_ords(app_state, monkeypatch):
+    # 2026-11-05 (tbuuol: "Die 3 Chains LTC tLTC und KOT sollten keinerlei Token Protokolle benutzen"): no ord
+    # index and no guard on Litecoin, so no small coin waits "unknown" and none is "held in Litecoin inscriptions".
     # Guards are module state: an earlier test's Dogecoin guard must not answer for this app (it lingered
     # in combined runs and this failed only there).
     monkeypatch.setattr(funding, "GUARD", None)
@@ -99,10 +102,9 @@ def test_litecoin_coins_are_guarded_like_the_others(app_state, monkeypatch):
     _with_ltc(app_state, monkeypatch, ready=True)
     TestClient(__import__("arcade.web.app", fromlist=["create_app"]).create_app(app_state))
     for address in (LTC_L, LTC_M):
-        assert funding.guard_for(address) is not None, f"{address} is watched"
-    ltc_guard = funding.guard_for(LTC_L)
-    assert funding.guard_for(PEP_MAIN) is not None and funding.guard_for(PEP_MAIN) is not ltc_guard, \
-        "Pepecoin keeps its own guard"
+        assert funding.guard_for(address) is None, f"{address} carries no ords here"
+    assert funding.guard_on("ltc") is None
+    assert funding.guard_for(PEP_MAIN) is not None, "Pepecoin keeps its own guard"
     assert funding.guard_for(DOGE) is None, "no Dogecoin node here, so no Dogecoin guard"
 
 
@@ -279,8 +281,9 @@ def test_a_page_reads_the_tag_chain_whatever_the_operators_view(client, monkeypa
     from the Litecoin index. The page API stays on the tag chain, and an address's balances are read on its chain."""
     app, state = client
     ltc = _with_ltc(state, monkeypatch, ready=True)
-    state.switch_token_chain("ltc")
-    assert state.token_chain is ltc
+    with pytest.raises(ValueError):
+        state.switch_token_chain("ltc")             # no arcade tokens on Litecoin (Params.class_b, 2026-11-05)
+    assert state.token_chain is not ltc, "the view stays on a chain with tokens"
     asked = []
     real = state.token_index
     monkeypatch.setattr(state, "token_index", lambda chain: (asked.append(chain.network), real(chain))[1])
@@ -326,3 +329,13 @@ def test_a_page_never_waits_for_a_borrowed_chains_answer(client, monkeypatch):
     while _t.time() < end and not state.chain_sync(ltc).get("ready"):
         _t.sleep(0.05)
     assert state.chain_sync(ltc)["ready"] is True, "and ready once it has answered"
+
+
+def test_create_says_litecoin_carries_coins_only(client, monkeypatch):
+    """2026-11-05 (Params.class_b): Create never switches to Litecoin, and says why instead of "still syncing"."""
+    app, state = client
+    _with_ltc(state, monkeypatch, ready=True)
+    went = app.get("/create/chain?to=ltc&back=/create", follow_redirects=False)
+    assert went.status_code == 303 and "chain=" not in went.headers.get("set-cookie", "")
+    page = app.get("/create").text
+    assert "Litecoin carries coins only" in page and "still syncing" not in page

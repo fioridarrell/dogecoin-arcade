@@ -7,7 +7,7 @@ known (realtime.py `/realtime/ice`, the operator can turn the public one off).
 
 Only a Binding answer (RFC 5389): the request's transaction id back with XOR-MAPPED-ADDRESS, nothing kept, no
 authentication -- it tells a sender its own address and nothing else, so it cannot be used to reach anybody.
-It is not a relay; a relay (TURN) is paid for by a game's builder (the plan, section 6).
+The relay (TURN) on this same port is turn.py.
 
 A node's STUN is offered to browsers only after another node has reached it: `StunShare` asks each linked node to
 send it a Binding request ("st" frames), and only the addresses that answered are offered on the mesh. A node
@@ -44,6 +44,11 @@ def binding_request(tid: bytes | None = None) -> tuple[bytes, bytes]:
 
 def _xor_address(host: str, port: int, tid: bytes) -> bytes:
     ip = ipaddress.ip_address(host.split("%", 1)[0])
+    # The server listens on "::" for both families, so an IPv4 asker arrives as ::ffff:a.b.c.d. It gets its address
+    # back as IPv4: a browser asking over IPv4 drops an IPv6-family answer, and has no address to give its peer
+    # (2026-10-29: every arcade answered 129.222.44.64 as ::ffff:81de:2c40).
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
     xport = port ^ (MAGIC >> 16)
     if ip.version == 4:
         xip = int(ip) ^ MAGIC
@@ -91,8 +96,9 @@ def mapped_address(packet: bytes, tid: bytes) -> tuple[str, int] | None:
 
 
 class _Server(asyncio.DatagramProtocol):
-    def __init__(self, counter: dict):
+    def __init__(self, counter: dict, turn=None):
         self.counter = counter
+        self.turn = turn                       # turn.TurnServer: the media relay, on this same port
 
     def connection_made(self, transport):
         self.transport = transport
@@ -102,9 +108,11 @@ class _Server(asyncio.DatagramProtocol):
         if reply is not None:
             self.counter["answered"] = self.counter.get("answered", 0) + 1
             self.transport.sendto(reply, addr)
+        elif self.turn is not None:
+            self.turn.received(data, addr, self.transport)
 
 
-async def serve(host: str = "::", port: int = PORT, counter: dict | None = None):
+async def serve(host: str = "::", port: int = PORT, counter: dict | None = None, turn=None):
     """Start answering on `host`:`port` (UDP); IPv4 too when the system maps it onto an IPv6 socket.
     Returns the transports (close them to stop)."""
     loop = asyncio.get_running_loop()
@@ -113,12 +121,13 @@ async def serve(host: str = "::", port: int = PORT, counter: dict | None = None)
     try:
         sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
         sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if os.name != "nt":                    # on Windows it would let another program take this port (PR #52)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind((host if ":" in host else "::", port))
-        t, _ = await loop.create_datagram_endpoint(lambda: _Server(counter), sock=sock)
+        t, _ = await loop.create_datagram_endpoint(lambda: _Server(counter, turn), sock=sock)
         out.append(t)
     except OSError:
-        t, _ = await loop.create_datagram_endpoint(lambda: _Server(counter), local_addr=("0.0.0.0", port))
+        t, _ = await loop.create_datagram_endpoint(lambda: _Server(counter, turn), local_addr=("0.0.0.0", port))
         out.append(t)
     return out
 
@@ -208,6 +217,11 @@ class StunShare:
             await link.send({"t": "st", "op": "have", "s": [list(a) for a in self.mine()]})
 
     async def link_down(self, peer_id: str) -> None:
+        # Only when no link to that node is left (2026-11-07: the Ashburn relay was never borrowed after both arcades
+        # restarted -- they had dialed each other at once, and the spare link closing after the kept one came up
+        # took the kept one's offer with it).
+        if self.node is not None and peer_id in getattr(self.node, "links", {}):
+            return
         self.offers.pop(peer_id, None)
 
     async def rebalance(self) -> None:
